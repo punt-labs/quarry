@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast, final
@@ -10,6 +11,7 @@ from quarry.backfill import BackfillRuntime
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from datetime import datetime
     from pathlib import Path
 
@@ -36,15 +38,20 @@ class RecordingWriter:
     """Record every write; raise *error* instead of storing when one is given."""
 
     error: Exception | None = None
+    errors_by_name: dict[str, Exception] = field(default_factory=dict)
+    after_write: Callable[[], None] | None = None
     calls: list[Written] = field(default_factory=list)
 
     def write(
         self, collection: str, session: BackfillSession, snapshot: datetime
     ) -> None:
-        """Record the write, then fail it if this writer was built to."""
+        """Record the write, run the hook, then fail it if this writer was built to."""
         self.calls.append(Written(collection, session.name, session.body, snapshot))
-        if self.error is not None:
-            raise self.error
+        error = self.errors_by_name.get(session.name, self.error)
+        if self.after_write is not None:
+            self.after_write()
+        if error is not None:
+            raise error
 
 
 @final
@@ -63,13 +70,15 @@ class DirectWriter:
             "DaemonContext",
             SimpleNamespace(database=self.database, settings=self.settings),
         )
-        QueuedTranscriptWriter.job_for(collection, session, snapshot).scrub_and_ingest(
-            ctx
-        )
+        job = QueuedTranscriptWriter.job_for(collection, session, snapshot)
+        job.inner.scrub_and_ingest(ctx)
 
 
 def runtime_over(
-    database: Database, writer: RecordingWriter | DirectWriter, registry_path: Path
+    database: Database,
+    writer: RecordingWriter | DirectWriter,
+    registry_path: Path,
+    stop: threading.Event | None = None,
 ) -> BackfillRuntime:
     """Return a backfill run reading *database* and writing through *writer*."""
-    return BackfillRuntime(database, writer, registry_path)
+    return BackfillRuntime(database, writer, registry_path, stop or threading.Event())

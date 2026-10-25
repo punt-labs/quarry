@@ -117,13 +117,13 @@ class MaintenanceRoutes(RouteGroup):
         from quarry.daemon.backfill_task import BackfillTask  # noqa: PLC0415
 
         with task_terminal(state):
-            state.results = await BackfillTask(self.ctx).run(
+            await BackfillTask(self.ctx).run(
+                state,
                 dry_run=args.dry_run,
                 collection=args.collection,
                 project=args.project,
                 limit=args.limit,
             )
-            state.status = "completed"
 
     async def _body_flag(
         self, request: Request, key: str, *, default: bool

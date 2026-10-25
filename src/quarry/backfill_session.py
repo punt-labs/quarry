@@ -47,15 +47,15 @@ class BackfillSession:
         header = format_artifacts_header(self._artifacts)
         return f"{header}\n\n{self._text}" if header else self._text
 
-    def write_capture_file(self) -> None:
+    def write_capture_file(self) -> bool:
         """Write the session's capture file via the shared CaptureWriter.
 
         The writer scrubs secrets, PII, and profanity before any bytes reach the
-        git-tracked capture file, and fails silently.
+        git-tracked capture file; returns whether one landed (``False``: it failed).
         """
         from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
 
-        CaptureWriter().write(
+        return CaptureWriter().write(
             CaptureRequest(
                 project_dir=Path(self._project_path),
                 session_id=self._transcript.stem,

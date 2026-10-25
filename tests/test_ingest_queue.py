@@ -435,7 +435,7 @@ def test_idle_workers_are_reaped_so_client_keys_cannot_accrue() -> None:
             unit = _StubUnit(collection, collection, ledger)
             assert queue.try_submit(_rk(collection), unit, _state(f"j{i}"))
             await asyncio.sleep(0.02)  # let the worker finish and go idle
-            assert len(queue._workers) <= 1  # prior idle worker reaped on next submit
+            assert len(queue._pool) <= 1  # prior idle worker reaped on next submit
         await queue.aclose(drain_timeout=2.0)
         assert len(ledger.completions) == 6
 
@@ -447,7 +447,7 @@ def test_reaped_worker_task_is_retained_then_discarded() -> None:
 
     asyncio keeps only a weak reference to a task, so dropping a reaped worker
     without retaining its still-pending task risks 'Task was destroyed but it is
-    pending'. The queue retains it in ``_reaped`` and the done-callback discards
+    pending'. The pool retains it and the done-callback discards
     it once the cancellation runs out.
     """
 
@@ -457,9 +457,9 @@ def test_reaped_worker_task_is_retained_then_discarded() -> None:
         assert queue.try_submit(_rk("c0"), _StubUnit("c0", "c0", ledger), _state("j0"))
         await asyncio.sleep(0.02)  # c0 finishes its job and goes idle
         assert queue.try_submit(_rk("c1"), _StubUnit("c1", "c1", ledger), _state("j1"))
-        assert queue._reaped  # the reaped c0 task is retained, not garbage
+        assert queue._pool.retains_tasks()  # the reaped c0 task is retained
         await asyncio.sleep(0.02)  # let the cancellation complete
-        assert not queue._reaped  # done-callback discarded the finished task
+        assert not queue._pool.retains_tasks()  # the done-callback discarded it
         await queue.aclose(drain_timeout=2.0)
 
     asyncio.run(_run())
@@ -476,9 +476,9 @@ def test_cancel_workers_retains_aborted_tasks_until_done() -> None:
         assert queue.try_submit(_rk("c"), unit, _state("j"))
         await asyncio.sleep(0.02)  # worker dequeues and runs the blocked job
         queue.cancel_workers()
-        assert queue._reaped  # the aborted task is retained
+        assert queue._pool.retains_tasks()  # the aborted task is retained
         await asyncio.sleep(0.02)  # cancellation runs out
-        assert not queue._reaped  # done-callback discarded it
+        assert not queue._pool.retains_tasks()  # done-callback discarded it
 
     asyncio.run(_run())
 

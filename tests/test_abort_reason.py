@@ -1,0 +1,91 @@
+"""AbortReason: what a drain-aborted job's terminal error says, and what it spools."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, ClassVar, cast, final
+
+from quarry.daemon.abort_reason import AbortReason
+from quarry.daemon.job_spool import JobSpool, SpoolRecord
+
+if TYPE_CHECKING:
+    from quarry.daemon.context import DaemonContext
+    from quarry.daemon.tasks import TaskState
+
+
+class _Spool:
+    """A spool double: writes succeed or fail, and every record is kept."""
+
+    def __init__(self, *, ok: bool = True) -> None:
+        self.ok = ok
+        self.written: list[SpoolRecord] = []
+
+    def write(self, record: SpoolRecord) -> bool:
+        self.written.append(record)
+        return self.ok
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _Unit:
+    record: SpoolRecord | None
+    collection: str = "c"
+
+    async def run(self, ctx: DaemonContext, state: TaskState) -> None:
+        del ctx, state
+
+    def spool_record(self) -> SpoolRecord | None:
+        return self.record
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _Rerunnable:
+    collection: str = "c"
+    rerun_hint: ClassVar[str] = "re-run the thing"
+
+    async def run(self, ctx: DaemonContext, state: TaskState) -> None:
+        del ctx, state
+
+    def spool_record(self) -> SpoolRecord | None:
+        return None
+
+
+def _reason(spool: _Spool, unit: _Unit | _Rerunnable) -> str:
+    return AbortReason(cast("JobSpool", spool)).of(unit)
+
+
+def test_a_unit_with_a_durable_source_says_how_to_run_it_again() -> None:
+    spool = _Spool()
+
+    assert (
+        _reason(spool, _Rerunnable())
+        == "daemon shut down before ingest completed; re-run the thing"
+    )
+    assert spool.written == []
+
+
+def test_a_unit_with_no_record_has_a_durable_copy_elsewhere() -> None:
+    assert _reason(_Spool(), _Unit(None)) == "daemon shut down before ingest completed"
+
+
+def test_a_spooled_record_is_recoverable_only_if_the_write_succeeded() -> None:
+    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
+
+    ok = _reason(_Spool(ok=True), _Unit(record))
+    failed = _reason(_Spool(ok=False), _Unit(record))
+
+    assert ok == "daemon shut down before ingest; spooled for recovery"
+    assert "spool write failed" in failed
+
+
+def test_an_unrecoverable_record_says_to_rerun_the_ingest() -> None:
+    record = SpoolRecord(
+        kind="ingest-unrecoverable",
+        collection="c",
+        name="n",
+        payload="p",
+        recoverable=False,
+    )
+
+    assert "re-run the ingest" in _reason(_Spool(), _Unit(record))

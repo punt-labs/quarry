@@ -26,7 +26,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from quarry.api import HealthResponse, SearchResponse, StatusResponse
-from quarry.backfill import BackfillStats
+from quarry.backfill_stats import BackfillStats
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon import routes
 from quarry.daemon.app import build_app
@@ -4278,7 +4278,7 @@ class TestMaintenance:
                 project=config.project_filter,  # type: ignore[attr-defined]
                 limit=config.limit,  # type: ignore[attr-defined]
             )
-            return BackfillStats(ingested=3, skipped_existing=1)
+            return BackfillStats(would_ingest=3, skipped_existing=1)
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -4300,7 +4300,8 @@ class TestMaintenance:
             "limit": 5,
         }
         results = data["results"]
-        assert results["ingested"] == 3
+        assert results["would_ingest"] == 3
+        assert "ingested" not in results  # a dry run stores nothing
         assert results["skipped_existing"] == 1
         assert results["dry_run"] is True
 

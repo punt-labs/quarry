@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.daemon.job_spool import JobSpool
+from quarry.daemon.abort_reason import AbortReason
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -94,6 +94,10 @@ class CollectionWorker:
         """Await the worker's natural completion (after it drains to the sentinel)."""
         await self._task
 
+    def is_alive(self) -> bool:
+        """Return whether the worker's consumer task is still running."""
+        return not self._task.done()
+
     def is_reapable(self) -> bool:
         """Return whether the worker holds no work and runs no job (safe to drop)."""
         return not self._running and self._queue.empty()
@@ -126,44 +130,16 @@ class CollectionWorker:
         returned so a sync caller can retain it the way ``aclose`` awaits it.
         """
         self._task.cancel()
-        spool = JobSpool.for_settings(self._ctx.settings)
+        reason = AbortReason.for_settings(self._ctx.settings)
         while True:
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 return self._task
             if item is not None:
-                self._fail_aborted(item, spool)
-
-    def _fail_aborted(self, item: _Queued, spool: JobSpool) -> None:
-        """Fail a still-queued job, spooling it when it has no durable copy."""
-        item.state.status = "failed"
-        item.state.error = self._abort_reason(item.job, spool)
-        self._release_admit()
-
-    @staticmethod
-    def _abort_reason(job: IngestUnit, spool: JobSpool) -> str:
-        """Return the truthful terminal error for a drain-aborted job.
-
-        A job with a durable client copy (a capture's transcript ``.md``) is
-        recoverable via ``quarry backfill``.  One without is spooled — but ONLY a
-        spool write that actually succeeded may claim recoverability, so a failed
-        write (already logged) records the loss truthfully rather than a false
-        "spooled" claim that would hide the exact silent-loss this path prevents.
-        """
-        record = job.spool_record()
-        if record is None:
-            return "daemon shut down before ingest completed"
-        if spool.write(record):
-            if not record.recoverable:
-                return (
-                    "daemon shut down before ingest; URL not recoverable "
-                    "(query or parameters not persisted), re-run the ingest"
-                )
-            return "daemon shut down before ingest; spooled for recovery"
-        return (
-            "daemon shut down before ingest; spool write failed, content not recovered"
-        )
+                item.state.status = "failed"
+                item.state.error = reason.of(item.job)
+                self._release_admit()
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""
@@ -191,17 +167,13 @@ class CollectionWorker:
                 # remember/ingest is never silently lost, then let the
                 # cancellation propagate.  This also covers a job cancelled while
                 # still awaiting the embed gate (its task_terminal never ran).
-                self._mark_aborted(item)
+                item.state.status = "failed"
+                item.state.error = AbortReason.for_settings(self._ctx.settings).of(
+                    item.job
+                )
                 raise
             finally:
                 self._running = False
                 self._last_active = monotonic()
                 self._release_admit()
                 self._queue.task_done()
-
-    def _mark_aborted(self, item: _Queued) -> None:
-        """Record a drain-cancelled in-flight job as failed, spooling it first."""
-        item.state.status = "failed"
-        item.state.error = self._abort_reason(
-            item.job, JobSpool.for_settings(self._ctx.settings)
-        )

@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.backfill import BackfillConfig, BackfillStats, backfill_sessions
+from quarry.backfill import BackfillConfig, backfill_sessions
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.backfill_session import BackfillSession
-from quarry.backfill_writer import BackfillWriteError
+from quarry.backfill_stats import BackfillStats, BackfillTally
+from quarry.backfill_writer import BackfillWriteError, WriteOutcome
 from quarry.config import Settings
+from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.facade import Database
+from quarry.results import DocumentSummary
 from quarry.sync_registry import DirectoryRegistration
 from quarry.transcript_reader import TranscriptReader
 from tests.transcript_writers import DirectWriter, RecordingWriter, runtime_over
@@ -334,10 +340,11 @@ def _run(
     env: dict[str, Path],
     writer: RecordingWriter | DirectWriter,
     config: BackfillConfig | None = None,
+    stop: threading.Event | None = None,
 ) -> BackfillStats:
     """Backfill *env* through *writer*, reading the env's (empty) database."""
     database = Database.connect(env["db_path"])
-    runtime = runtime_over(database, writer, env["registry_path"])
+    runtime = runtime_over(database, writer, env["registry_path"], stop)
     with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]):
         return backfill_sessions(config or BackfillConfig(), runtime)
 
@@ -360,27 +367,14 @@ def _stored_doc(timestamp: str) -> dict[str, object]:
     }
 
 
-class TestBackfillStats:
-    def test_results_carry_every_count_and_the_dry_run_flag(self) -> None:
-        stats = BackfillStats(ingested=3, skipped_existing=1, errors=["a: boom"])
-
-        assert stats.as_results(dry_run=True) == {
-            "ingested": 3,
-            "skipped_existing": 1,
-            "skipped_unregistered": 0,
-            "skipped_empty": 0,
-            "errors": ["a: boom"],
-            "dry_run": True,
-        }
-
-
 class TestBackfillSessions:
     def test_dry_run_no_writes(self, tmp_path: Path) -> None:
         writer = RecordingWriter()
         stats = _run(_registered_env(tmp_path), writer, BackfillConfig(dry_run=True))
 
         assert writer.calls == []
-        assert stats.ingested == 1
+        assert stats.would_ingest == 1
+        assert stats.ingested == 0
         assert stats.skipped_existing == 0
 
     def test_skip_unregistered_projects(self, tmp_path: Path) -> None:
@@ -472,7 +466,7 @@ class TestBackfillSessions:
         bad, good = tmp_path / "bad", tmp_path / "good"
         bad.mkdir()
         good.mkdir()
-        with patch("quarry.backfill.StoredSessions.record") as record:
+        with patch("quarry.backfill_project.StoredSessions.record") as record:
             _run(_registered_env(bad), RecordingWriter(OSError("x")))
             record.assert_not_called()
             _run(_registered_env(good), RecordingWriter())
@@ -492,7 +486,7 @@ class TestBackfillSessions:
 
         stats = _run(env, RecordingWriter(), BackfillConfig(dry_run=True, limit=1))
 
-        assert stats.ingested == 1
+        assert stats.would_ingest == 1
 
     def test_collection_override(self, tmp_path: Path) -> None:
         writer = RecordingWriter()
@@ -559,6 +553,321 @@ class TestBackfillSessions:
         assert email not in joined
         assert "[REDACTED:gh-pat]" in joined
         assert "[REDACTED:email]" in joined
+
+
+def _write_sessions(env: dict[str, Path], *stems: str, text: str = "hello") -> None:
+    """Add a transcript with *text* in it for each *stem* (its session id prefix)."""
+    for stem in stems:
+        _make_transcript(
+            env["project_dir"] / f"{stem}-0000-0000-0000-000000000000.jsonl",
+            [_user_message(text), _assistant_message("ok")],
+        )
+
+
+def _add_project(env: dict[str, Path], tmp_path: Path, name: str) -> Path:
+    """Register a second project, with one transcript, under its own collection."""
+    from quarry.sync_registry import SyncRegistry
+
+    project = tmp_path / name
+    project.mkdir()
+    directory = env["projects_dir"] / ProjectMappingResolver.encode(
+        str(project.resolve())
+    )
+    directory.mkdir()
+    _make_transcript(
+        directory / "feed0001-0000-0000-0000-000000000000.jsonl",
+        [_user_message("other project"), _assistant_message("ok")],
+    )
+    conn = SyncRegistry(env["registry_path"])
+    try:
+        conn.register_directory(project, name)
+    finally:
+        conn.close()
+    return project
+
+
+def _library_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name.startswith("quarry.backfill")]
+
+
+class TestUnindexableTranscripts:
+    def test_unindexable_ones_ahead_of_good_ones_do_not_consume_the_limit(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "aaaa0001", "aaaa0002", "aaaa0003", "bbbb0001")
+        nothing = BackfillWriteError("nothing was stored").as_outcome(
+            WriteOutcome.UNINDEXABLE
+        )
+        writer = RecordingWriter(
+            errors_by_name={f"session-aaaa000{i}": nothing for i in (1, 2, 3)}
+        )
+
+        stats = _run(env, writer, BackfillConfig(limit=1))
+
+        assert stats.skipped_empty == 3
+        assert stats.ingested == 1  # the first good one; limit 1 stops there
+        assert [c.name for c in writer.calls] == [
+            "session-aaaa0001",
+            "session-aaaa0002",
+            "session-aaaa0003",
+            "session-abcd1234",
+        ]
+
+    def test_a_second_run_does_not_retry_the_unchanged_ones(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "aaaa0001")
+        nothing = BackfillWriteError("nothing was stored").as_outcome(
+            WriteOutcome.UNINDEXABLE
+        )
+        _run(env, RecordingWriter(errors_by_name={"session-aaaa0001": nothing}))
+
+        again = RecordingWriter()
+        stats = _run(env, again)
+
+        assert "session-aaaa0001" not in [c.name for c in again.calls]
+        assert stats.skipped_empty == 1
+        assert stats.failed == 0
+
+    def test_a_transcript_that_changed_is_tried_again(self, tmp_path: Path) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "aaaa0001")
+        nothing = BackfillWriteError("nothing was stored").as_outcome(
+            WriteOutcome.UNINDEXABLE
+        )
+        _run(env, RecordingWriter(errors_by_name={"session-aaaa0001": nothing}))
+        changed = env["project_dir"] / "aaaa0001-0000-0000-0000-000000000000.jsonl"
+        later = changed.stat().st_mtime + 60
+        os.utime(changed, (later, later))
+
+        again = RecordingWriter()
+        _run(env, again)
+
+        assert "session-aaaa0001" in [c.name for c in again.calls]
+
+    def test_a_dry_run_records_nothing(self, tmp_path: Path) -> None:
+        env = _registered_env(tmp_path)
+        env["transcript"].write_text("")
+
+        stats = _run(env, RecordingWriter(), BackfillConfig(dry_run=True))
+
+        assert stats.skipped_empty == 1
+        assert not env["registry_path"].with_name("backfill-unindexable.json").exists()
+
+
+class TestEmptyAndUnreadable:
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_they_are_counted_apart_in_a_real_run_and_a_dry_run(
+        self, tmp_path: Path, *, dry_run: bool
+    ) -> None:
+        env = _registered_env(tmp_path)
+        (env["project_dir"] / "dddd0001-0000.jsonl").write_text("")
+        (env["project_dir"] / "eeee0001-0000.jsonl").mkdir()  # not a readable file
+
+        stats = _run(env, RecordingWriter(), BackfillConfig(dry_run=dry_run))
+
+        assert stats.skipped_empty == 1
+        assert stats.skipped_unreadable == 1
+        assert stats.would_ingest + stats.ingested == 1
+
+
+class TestStopping:
+    def test_a_stop_between_transcripts_ends_the_run_with_the_rest_not_attempted(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002")
+        runtime_stop = threading.Event()
+        writer = RecordingWriter(after_write=runtime_stop.set)
+
+        with caplog.at_level(logging.INFO):
+            stats = _run(env, writer, stop=runtime_stop)
+
+        assert stats.ingested == 1
+        assert stats.not_attempted == 2
+        assert stats.errors == ["backfill stopped: stopped before finishing"]
+        loud = [r for r in _library_records(caplog) if r.levelno >= logging.WARNING]
+        assert len(loud) == 1  # one line, with the count: not a traceback per file
+        assert "2 not attempted" in loud[0].getMessage()
+        assert loud[0].exc_info is None
+
+    def test_a_writer_that_says_the_run_cannot_go_on_stops_it(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002")
+        writer = RecordingWriter(
+            BackfillWriteError("daemon shutting down").as_outcome(WriteOutcome.ABORTED)
+        )
+
+        stats = _run(env, writer)
+
+        assert len(writer.calls) == 1  # no waiting out each of the others
+        assert stats.ingested == 0
+        assert stats.failed == 0
+        assert stats.not_attempted == 3
+        assert stats.errors == ["backfill stopped: daemon shutting down"]
+
+    def test_a_queue_that_stays_full_stops_the_run_after_a_few(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002", "bbbb0003", "bbbb0004")
+        writer = RecordingWriter(
+            BackfillWriteError("ingest queue full").as_outcome(
+                WriteOutcome.NOT_ADMITTED
+            )
+        )
+
+        stats = _run(env, writer)
+
+        assert len(writer.calls) == BackfillTally.MAX_UNADMITTED
+        assert stats.failed == BackfillTally.MAX_UNADMITTED
+        assert stats.not_attempted == 2
+        assert stats.errors[-1] == "backfill stopped: ingest queue stayed full"
+
+    def test_a_store_that_takes_a_transcript_resets_the_count(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002", "bbbb0003", "bbbb0004")
+        full = BackfillWriteError("ingest queue full").as_outcome(
+            WriteOutcome.NOT_ADMITTED
+        )
+        writer = RecordingWriter(
+            errors_by_name={
+                "session-abcd1234": full,
+                "session-bbbb0001": full,
+                "session-bbbb0003": full,
+                "session-bbbb0004": full,
+            }
+        )
+
+        stats = _run(env, writer)
+
+        assert stats.ingested == 1  # bbbb0002 got in, so the run went on
+        assert stats.not_attempted == 0
+
+
+class TestOneLinePerFailure:
+    def test_a_refusal_is_one_warning_with_its_message_and_no_traceback(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        writer = RecordingWriter(BackfillWriteError("collection is read-only"))
+
+        with caplog.at_level(logging.INFO):
+            _run(env, writer)
+
+        [line] = [
+            r
+            for r in _library_records(caplog)
+            if env["transcript"].name in r.getMessage()
+        ]
+        assert line.levelno == logging.WARNING
+        assert "collection is read-only" in line.getMessage()
+        assert line.exc_info is None
+
+    def test_any_other_failure_is_one_error_with_its_class_and_no_message(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        writer = RecordingWriter(OSError("/home/jane/hidden-path"))
+
+        with caplog.at_level(logging.INFO):
+            _run(env, writer)
+
+        [line] = [
+            r
+            for r in _library_records(caplog)
+            if env["transcript"].name in r.getMessage()
+        ]
+        assert line.levelno == logging.ERROR
+        assert "OSError" in line.getMessage()
+        assert line.exc_info is not None
+        shown = logging.Formatter().formatException(line.exc_info)
+        assert "hidden-path" not in line.getMessage() + shown
+        assert "hidden-path" not in caplog.text
+
+    def test_a_capture_file_that_could_not_be_written_is_a_failure(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        writer = RecordingWriter()
+
+        with patch("quarry.capture.CaptureWriter.write", return_value=False):
+            stats = _run(env, writer)
+
+        assert writer.calls == []  # not handed on as if it had been written
+        assert stats.failed == 1
+        assert stats.errors == [
+            f"{env['transcript'].name}: capture file could not be written"
+        ]
+
+
+class TestTheRunReport:
+    def test_a_clean_run_logs_one_info_summary(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO):
+            _run(_registered_env(tmp_path), RecordingWriter())
+
+        [summary] = [
+            r for r in _library_records(caplog) if " ingested," in r.getMessage()
+        ]
+        assert summary.levelno == logging.INFO
+        assert "1 ingested, 0 skipped, 0 failed, 0 not" in summary.getMessage()
+
+    def test_a_run_that_fell_short_logs_the_summary_as_a_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001")
+        writer = RecordingWriter(errors_by_name={"session-bbbb0001": OSError("x")})
+
+        with caplog.at_level(logging.INFO):
+            _run(env, writer)
+
+        [summary] = [
+            r for r in _library_records(caplog) if " ingested," in r.getMessage()
+        ]
+        assert summary.levelno == logging.WARNING
+        assert "1 ingested, 0 skipped, 1 failed, 0 not" in summary.getMessage()
+
+
+class TestProjectsAreIsolated:
+    def test_a_store_read_failure_on_one_project_leaves_the_others_running(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        project = _add_project(env, tmp_path, "other")
+        real = ChunkCatalog.list_documents
+
+        def broken_for_the_first(
+            self: ChunkCatalog, **kwargs: Any
+        ) -> list[DocumentSummary]:
+            if kwargs.get("collection_filter") == "myproject-captures":
+                msg = "/home/jane/hidden-path"
+                raise RuntimeError(msg)
+            return real(self, **kwargs)
+
+        writer = RecordingWriter()
+        with (
+            patch.object(ChunkCatalog, "list_documents", broken_for_the_first),
+            caplog.at_level(logging.INFO),
+        ):
+            stats = _run(env, writer)
+
+        assert [c.collection for c in writer.calls] == ["other-captures"]
+        assert stats.ingested == 1
+        assert stats.not_attempted == 1
+        assert len(stats.errors) == 1
+        assert stats.errors[0].endswith(": internal error: RuntimeError")
+        assert str(env["real_project"]) in stats.errors[0]
+        assert "hidden-path" not in caplog.text
+        assert project.exists()
 
 
 # ---------------------------------------------------------------------------

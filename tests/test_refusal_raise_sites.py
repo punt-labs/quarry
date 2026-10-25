@@ -43,7 +43,10 @@ _ALLOWED: dict[str, int] = {
     "ingestion/fetch_refused.py": 5,
     "ingestion/sitemap_reader.py": 1,
     "daemon/refusal_aware_terminal.py": 1,
-    "daemon/queued_transcript_writer.py": 1,  # a job's state.error: a FailureReason
+    # A job's state.error (a FailureReason), and the daemon's own fixed refusals
+    # re-raised across the thread boundary as backfill's.
+    "daemon/queued_transcript_writer.py": 3,
+    "daemon/ingest_refusal.py": 1,  # the factory: its callers pass fixed reasons
     "extractors/sheet_tables.py": 0,
 }
 
