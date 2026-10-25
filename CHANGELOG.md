@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-10-25
+
 ### Changed
 
 - tool: plugin session start no longer adds allow rules to your user-global
