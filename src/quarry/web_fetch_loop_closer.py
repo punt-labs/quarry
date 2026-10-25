@@ -86,7 +86,6 @@ class WebFetchLoopCloser:
 
     @staticmethod
     def _suggested_query(redacted_url: str) -> str:
-        """Return the URL's last path segment, or its host when the path is bare."""
-        parts = urlsplit(redacted_url)
-        segment = parts.path.rstrip("/").rsplit("/", 1)[-1]
-        return segment or parts.hostname or redacted_url
+        """Return the URL's host: a path segment can be an opaque token the
+        scrubber does not recognise, so no part of the path is suggested."""
+        return urlsplit(redacted_url).hostname or redacted_url

@@ -1498,3 +1498,4 @@
 {"ts":"2026-10-25T13:16:05Z","commit":"1132bfb","source":null,"files_scored":329,"files_improved":0,"files_regressed":1,"verdict":"fail","reason":null,"deltas":{}}
 {"ts":"2026-10-25T13:16:23Z","commit":"1132bfb","source":"PR #554","files_scored":329,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"the URL-source filter ignores the scheme's case, like the name match (Copilot review)","deltas":{"src/quarry/db/name_prefix.py":{"module_size":[58.0,59.0]}}}
 {"ts":"2026-10-25T13:16:24Z","commit":"1132bfb","source":null,"files_scored":329,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-10-25T13:27:47Z","commit":"2c0f415","source":null,"files_scored":329,"files_improved":1,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{"src/quarry/web_fetch_loop_closer.py":{"avg_complexity":[2.25,2.0],"module_size":[76.0,75.0]}}}
