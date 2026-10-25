@@ -1201,7 +1201,7 @@ class TestWebFetchLoopCloser:
         assert output["hookEventName"] == "PostToolUse"
         context = str(output["additionalContext"])
         assert "https://example.com/…(segments=2)" in context
-        assert "'example.com'" in context
+        assert "search its content with find" in context
         assert "guide" not in context
         assert "Indexed as" not in context
 
@@ -1297,7 +1297,7 @@ class TestWebFetchLoopCloser:
         assert "https://example.com/…(segments=1)" in context
         assert "?q" not in context
 
-    def test_suggested_query_never_carries_a_path_token(self) -> None:
+    def test_the_nudge_never_carries_a_path_token(self) -> None:
         from quarry.api import CapturesLookupResponse
 
         client = MagicMock()
@@ -1312,20 +1312,6 @@ class TestWebFetchLoopCloser:
         context = str(output["additionalContext"])
         assert "7Qp4mT9v2Lk6rX8s" not in context
         assert "reset" not in context
-        assert "'example.com'" in context
-
-    def test_suggested_query_falls_back_to_host_for_bare_path(self) -> None:
-        from quarry.api import CapturesLookupResponse
-
-        client = MagicMock()
-        client.captures_lookup.return_value = CapturesLookupResponse(matched=True)
-        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/"}}
-        with patch("quarry.client.TargetResolver.connect", return_value=client):
-            result = handle_post_web_fetch(payload)
-
-        output = result["hookSpecificOutput"]
-        assert isinstance(output, dict)
-        assert "'example.com'" in str(output["additionalContext"])
 
 
 class TestHookImportsNoEngine:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from typing import Self, final
-from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +14,7 @@ class WebFetchLoopCloser:
 
     Owns both halves of the loop-closer feature: the daemon round-trip (fail-
     open on any client error) and the ``additionalContext`` wording an agent
-    can act on — the URL in its log form, a suggested ``find`` query, and a note if
+    can act on — the URL in its log form, a pointer to ``find``, and a note if
     the page is indexed under an older spelling; no stored name is printed.  Called
     from :func:`quarry.hooks.handle_post_web_fetch` BEFORE the capture send: a
     lookup run after would always match, since the send that follows would
@@ -55,21 +54,21 @@ class WebFetchLoopCloser:
         return self._output(legacy=resp.legacy)
 
     def _output(self, *, legacy: bool) -> dict[str, object]:
-        """Build the hookSpecificOutput envelope naming the URL and a find query.
+        """Build the hookSpecificOutput envelope naming the URL and pointing to find.
 
         Shows the log form of the URL, never ``self._url`` raw and never a stored
         name — this text lands in the session transcript via ``additionalContext``,
         so a token in the query, or in a name an older build stored, must not
-        survive into it.
+        survive into it.  No query is suggested: ``find`` searches page text,
+        which this hook never reads, and a path segment can be an opaque token.
         """
         from quarry.web_fetch_name import WebFetchName  # noqa: PLC0415
 
-        query = self._suggested_query(WebFetchName.of(self._url))
         shown = WebFetchName.shown(self._url)
         lines = [
             (
-                f"You already fetched {shown} earlier — use find "
-                f"with a query like {query!r} instead of re-fetching next time."
+                f"You already fetched {shown} earlier and quarry has it — "
+                "search its content with find instead of re-fetching next time."
             )
         ]
         if legacy:
@@ -83,9 +82,3 @@ class WebFetchLoopCloser:
                 "additionalContext": "\n".join(lines),
             },
         }
-
-    @staticmethod
-    def _suggested_query(redacted_url: str) -> str:
-        """Return the URL's host: a path segment can be an opaque token the
-        scrubber does not recognise, so no part of the path is suggested."""
-        return urlsplit(redacted_url).hostname or redacted_url

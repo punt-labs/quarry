@@ -4243,7 +4243,7 @@
     "avg_params": 1.0,
     "max_complexity": 3.0,
     "avg_complexity": 2.0,
-    "module_size": 75.0,
+    "module_size": 69.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
