@@ -223,6 +223,10 @@ class TestSurfaceComplete:
         for tool in asyncio.run(mcp.list_tools()):
             assert tool.description, f"{tool.name} has no description"
 
+    def test_ingest_says_a_stored_url_is_skipped_without_overwrite(self) -> None:
+        [ingest] = [t for t in asyncio.run(mcp.list_tools()) if t.name == "ingest"]
+        assert "if false, skip it" in (ingest.description or "")
+
 
 class TestFind:
     def test_returns_results(self, harness: _ToolHarness) -> None:

@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.fetched_body import FetchedBody

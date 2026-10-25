@@ -19,8 +19,8 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry.client import QuarryClient, TargetResolver
 from quarry.content_guard import BinaryContent
-from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.daemon.tasks import TaskState
 from quarry.mcp_server import McpTools
 from tests.inproc_daemon import InProcessDaemon

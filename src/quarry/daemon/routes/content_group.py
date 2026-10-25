@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from quarry.content_guard import BinaryContent, UnindexableContentError
-from quarry.daemon.captured_body_ingest import IngestLabels
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.daemon.routes.base import RouteGroup
 from quarry.db.row_budget import RowBudget, RowBudgetError
 from quarry.http_guards import RequestGuards

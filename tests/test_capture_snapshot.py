@@ -17,8 +17,8 @@ import pytest
 
 from quarry.capture_snapshot import CaptureSnapshot
 from quarry.config import Settings
-from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import ScrubbedIngestJob
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.db.facade import Database
 from quarry.stored_sessions import StoredSessions
 from tests.fakes import FakeEmbeddingBackend, patched_embedder

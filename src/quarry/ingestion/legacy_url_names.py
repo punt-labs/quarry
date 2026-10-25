@@ -7,16 +7,13 @@ import threading
 from typing import TYPE_CHECKING, Self, final
 from urllib.parse import urlsplit
 
-from quarry.display_name import DisplayName
 from quarry.http_url import HttpUrl
+from quarry.ingestion.legacy_twins import LegacyTwins
 
 if TYPE_CHECKING:
     from quarry.db.facade import Database
 
 logger = logging.getLogger(__name__)
-
-# What a LanceDB call raises on a fault: the codebase's convention.
-_STORE_ERRORS = (OSError, RuntimeError, ValueError)
 
 
 @final
@@ -152,10 +149,6 @@ class LegacyUrlNames:
         legacy = self.aliases(name, collection)
         return legacy[0] if legacy else None
 
-    def exists(self, name: str, collection: str) -> bool:
-        """Return whether *name*, or a legacy spelling of it, is stored."""
-        return self.stored_as(name, collection) is not None
-
     def replace_prior(self, name: str, collection: str, *, overwrite: bool) -> None:
         """Delete *name* from *collection* when *overwrite*, before the insert."""
         if overwrite:
@@ -166,38 +159,8 @@ class LegacyUrlNames:
     def drop_twins(self, name: str, collection: str) -> None:
         """Delete the legacy spellings of *name* once *name* is stored.
 
-        Called only for a page fetched from a URL, overwriting or not: a legacy
-        spelling is the same page under a name this build no longer writes, and
-        the new document must not sit beside it.  It runs after the insert, so a
-        failed embed or write leaves the old copy in place.  A document someone
-        named with a URL is a label and is never touched.
+        Called only for a page fetched from a URL, overwriting or not.  It runs
+        after the insert, so a failed embed or write leaves the old copy in place.
+        A document someone named with a URL is a label and is never touched.
         """
-        try:
-            twins = self.aliases(name, collection)
-        except _STORE_ERRORS:
-            logger.exception(
-                "stored %s but could not look up its legacy-named twins; "
-                "re-ingest with overwrite to replace them",
-                DisplayName(name).redacted(),
-            )
-            return
-        for legacy in twins:
-            logger.warning(
-                "replacing legacy-named document %s with %s",
-                DisplayName(legacy).redacted(),
-                DisplayName(name).redacted(),
-            )
-            try:
-                self._database.store.delete_document(
-                    legacy, collection=collection, count=False
-                )
-            except _STORE_ERRORS:
-                # The page is stored; a twin that stays is a duplicate, not a loss.
-                logger.exception(
-                    "stored %s but could not delete its legacy-named twin %s; "
-                    "re-ingest with overwrite to replace it",
-                    DisplayName(name).redacted(),
-                    DisplayName(legacy).redacted(),
-                )
-                continue
-            self.dropped([legacy], collection)
+        LegacyTwins(self, self._database).drop(name, collection)

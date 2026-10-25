@@ -16,13 +16,13 @@ from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
-from quarry.web_fetch_name import WebFetchName
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
+    from quarry.daemon.ingest_labels import IngestLabels
     from quarry.daemon.tasks import TaskState
     from quarry.http_url import HttpUrl
 
@@ -113,22 +113,10 @@ class IngestJob:
         already stored under its name is reported as skipped, the way the content
         jobs do, not fetched and written on top of itself.
         """
-        held = self._held_name(ctx)
-        if held is None:
-            return self._captured().run(ctx)
-        return {
-            "document_name": held,
-            "collection": self.collection,
-            "chunks": 0,
-            "skipped": "exists",
-        }
-
-    def _held_name(self, ctx: DaemonContext) -> str | None:
-        """Return the capture's name if it is held and is not being overwritten."""
-        name = WebFetchName.maybe(self.source.fetch_url)
-        if self.labels.overwrite or name is None:
-            return None
-        return name if self.labels.holds(ctx, name, url_sourced=True) else None
+        captured = self._captured()
+        if existing := captured.existing(ctx):
+            return dict(existing.skip())
+        return captured.run(ctx)
 
     def _ingest_plain(self, ctx: DaemonContext) -> dict[str, object]:
         """Run a plain, unscrubbed ``quarry ingest``: sitemap-aware, byte-for-byte."""

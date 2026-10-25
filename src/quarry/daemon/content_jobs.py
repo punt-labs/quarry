@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 
@@ -25,16 +25,12 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from quarry.daemon.context import DaemonContext
+    from quarry.daemon.ingest_labels import IngestLabels
     from quarry.daemon.tasks import TaskState
     from quarry.http_url import HttpUrl
     from quarry.ingestion.web_ingest import FormatHint
 
 logger = logging.getLogger(__name__)
-
-# The result key a create-if-absent skip carries.  It is the one way to tell a
-# skip (``chunks: 0`` because the document is already stored) from an empty
-# extraction (``chunks: 0`` because the page yielded nothing).
-_SKIPPED = "skipped"
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +103,7 @@ class ScrubbedIngestJob:
 
         The pipeline redacts content AND metadata.  The existence check uses the
         name the pipeline stores (:meth:`InlineIngest.stored_name`), computed once,
-        and a skip reports it, never the name as sent.
+        and a skip reports the name the store holds, never the name as sent.
         """
         from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
         from quarry.ingestion.web_ingest import (  # noqa: PLC0415
@@ -121,16 +117,10 @@ class ScrubbedIngestJob:
             content_scrubber=self._scrubbed,
             url_sourced=self.url_sourced,
         )
-        stored = self._stored_name()
-        if not self.labels.overwrite and self.labels.holds(
-            ctx, stored, url_sourced=self.url_sourced
+        if existing := self.labels.existing(
+            ctx, self._stored_name(), url_sourced=self.url_sourced
         ):
-            return {
-                "document_name": stored,
-                "collection": self.collection,
-                "chunks": 0,
-                _SKIPPED: "exists",
-            }
+            return dict(existing.skip())
         return dict(
             ingest_content(
                 inline,

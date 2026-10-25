@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, TypedDict, final
 from quarry.ingest_collection import IngestCollection
 from quarry.ingestion.bulk_ingest import BulkIngestRunner, BulkOptions
 from quarry.ingestion.crawl_guard import CrawlGuard
+from quarry.ingestion.existing_page import ExistingPage
 from quarry.ingestion.fetch_refused import FetchRefusedError
-from quarry.ingestion.legacy_url_names import LegacyUrlNames
 from quarry.ingestion.safe_entry_selector import SafeEntrySelector
 from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
@@ -156,17 +156,9 @@ class SitemapIngest:
         A page already stored under its name is reported as skipped, the way the
         content jobs do, instead of being fetched and written on top of itself.
         """
-        name = url.document_name
-        if not context.overwrite and LegacyUrlNames(context.database).exists(
-            name, context.collection
-        ):
+        if existing := ExistingPage.page(url.document_name, context):
             progress("Already stored, skipping")
-            return {
-                "document_name": name,
-                "collection": context.collection,
-                "chunks": 0,
-                "skipped": "exists",
-            }
+            return existing.skip()
         return ingest_url(
             UrlIngest(url=url, timeout=options.timeout), progress, context
         )

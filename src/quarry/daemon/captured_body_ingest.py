@@ -1,79 +1,24 @@
-"""Fetch a captured URL and route its body; the labels a daemon ingest carries."""
+"""Fetch a captured URL and route its body by media type."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.capture_marker import CaptureMarker
 from quarry.content_guard import UnindexableContentError
 from quarry.ingestion import ingest_context, web_ingest
-from quarry.ingestion.ingest_context import IngestContext, MemoryType
-from quarry.ingestion.legacy_url_names import LegacyUrlNames
+from quarry.ingestion.existing_page import ExistingPage
 from quarry.ingestion.web_fetch import WebFetcher
 from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from quarry.daemon.context import DaemonContext
+    from quarry.daemon.ingest_labels import IngestLabels
     from quarry.http_url import HttpUrl
     from quarry.ingestion.fetched_body import FetchedBody
 
 # WebFetcher is frozen, so one shared instance carries the default policy.
 _DEFAULT_FETCHER = WebFetcher()
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class IngestLabels:
-    """Where an ingest writes and how it is tagged, validated once at the route.
-
-    Routes build this from the request and the jobs carry it unchanged, so the
-    narrowing of ``memory_type`` to its storage vocabulary happens exactly once
-    (:class:`MemoryTypeGuard`) and every job turns it into the pipeline's
-    :class:`IngestContext` the same way.
-    """
-
-    overwrite: bool
-    collection: str
-    agent_handle: str
-    memory_type: MemoryType
-    summary: str
-
-    def context(self, ctx: DaemonContext) -> IngestContext:
-        """Return the pipeline context writing to *ctx*'s database with these labels."""
-        return IngestContext(
-            ctx.database,
-            ctx.settings,
-            overwrite=self.overwrite,
-            collection=self.collection,
-            agent_handle=self.agent_handle,
-            memory_type=self.memory_type,
-            summary=self.summary,
-        )
-
-    @staticmethod
-    def stored_name(
-        name: str, scrub: Callable[[str], str], *, url_sourced: bool
-    ) -> str:
-        """Return the name an inline ingest stores *name* under; safe to log."""
-        return web_ingest.InlineIngest(
-            "", content_scrubber=scrub, url_sourced=url_sourced
-        ).stored_name(name)
-
-    def holds(self, ctx: DaemonContext, name: str, *, url_sourced: bool) -> bool:
-        """Return whether the target collection holds a document called *name*.
-
-        For a capture (*url_sourced*), a document an older build stored under a
-        former spelling of the same URL counts, so the decision agrees with the one
-        the funnel makes when it replaces.  A name someone chose (``remember``,
-        ``learn``) is a label, whatever its format hint: only that exact name
-        counts.
-        """
-        if url_sourced:
-            return LegacyUrlNames(ctx.database).exists(name, self.collection)
-        return ctx.database.catalog.document_exists(name, self.collection)
 
 
 @final
@@ -112,6 +57,10 @@ class CapturedBodyIngest:
         self._labels = labels
         self._fetcher = fetcher
         return self
+
+    def existing(self, ctx: DaemonContext) -> ExistingPage | None:
+        """Return the stored capture of ``source`` that makes a re-ingest a skip."""
+        return ExistingPage.capture(self._source, self._labels.context(ctx))
 
     def subject(self) -> str:
         """Return the source's log form, ``scheme://host[:port]/…(segments=N)``."""

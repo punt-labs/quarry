@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.daemon.tasks import TaskState
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
