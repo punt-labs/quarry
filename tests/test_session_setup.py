@@ -141,7 +141,7 @@ class TestPluginNameSlugValidation:
         plugin_root = _make_plugin(tmp_path / "plugin", {"name": name})
         setup = _SessionSetup.open(plugin_root)
         assert setup is not None
-        assert setup._plugin_name == name
+        assert setup._is_dev is name.endswith("-dev")
 
     @pytest.mark.parametrize(
         ("name", "reason"),

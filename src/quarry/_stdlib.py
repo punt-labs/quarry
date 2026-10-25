@@ -200,7 +200,8 @@ class _SessionSetup:
     Grants no permissions: plugin startup never edits a Claude settings file.
     The allow rules are the operator's to grant, via ``quarry enable`` (#552).
     Owns the vocabulary the former free helpers shared as parameters
-    (``plugin_root``, ``plugin_name``, ``commands_dir``).
+    (``plugin_root``, ``commands_dir``); the plugin name only selects the
+    command variant (``_is_dev``).
     Constructed by :meth:`open` after a successful plugin-name read; call
     :meth:`dispatch` to run the bootstrap and collect human-readable actions.
     """
@@ -208,19 +209,16 @@ class _SessionSetup:
     __slots__ = (
         "_commands_dir",
         "_is_dev",
-        "_plugin_name",
         "_plugin_root",
     )
 
     _commands_dir: Path
     _is_dev: bool
-    _plugin_name: str
     _plugin_root: Path
 
     def __new__(cls, plugin_root: Path, plugin_name: str) -> Self:
         self = super().__new__(cls)
         self._plugin_root = plugin_root
-        self._plugin_name = plugin_name
         self._is_dev = plugin_name.endswith("-dev")
         self._commands_dir = Path.home() / ".claude" / "commands"
         return self
