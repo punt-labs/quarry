@@ -33,7 +33,7 @@ class ShutdownPolicy:
     # Beyond the teardown's own budget: uvicorn's graceful phase, the queue's abort
     # wait, the task drain's floor, and the process exit.  The margin must cover
     # their sum (see :attr:`GRACEFUL_S`).
-    MARGIN_S: ClassVar[float] = 10.0
+    MARGIN_S: ClassVar[float] = 12.0
     # The most an aborted queue waits for its workers to unwind, beyond the budget.
     ABORT_WAIT_S: ClassVar[float] = 5.0
     # The least the task drain waits, even with the budget spent, so a task that
@@ -41,6 +41,9 @@ class ShutdownPolicy:
     TASK_FLOOR_S: ClassVar[float] = 1.0
     # What is left of the margin for the process exit itself.
     EXIT_SLACK_S: ClassVar[float] = 1.0
+    # What the margin keeps unspent: the worst case is this far below the stop
+    # timeout, never at it.
+    HEADROOM_S: ClassVar[float] = 2.0
     WATCH_SHARE: ClassVar[float] = 0.2
     QUEUE_MIN_SHARE: ClassVar[float] = 0.5
     SCAN_SHARE: ClassVar[float] = 0.4
@@ -52,7 +55,7 @@ class ShutdownPolicy:
     # graceful phase plus budget plus abort wait plus task floor, stays inside
     # the total plus the margin.
     GRACEFUL_S: ClassVar[int] = int(
-        MARGIN_S - ABORT_WAIT_S - TASK_FLOOR_S - EXIT_SLACK_S
+        MARGIN_S - ABORT_WAIT_S - TASK_FLOOR_S - EXIT_SLACK_S - HEADROOM_S
     )
     # The environment variable the installed daemon reads the total from, so the
     # stop timeout baked at install and the budget the daemon spends are one number.
@@ -101,6 +104,18 @@ class ShutdownPolicy:
     def scan_bound_s(self) -> float:
         """Return how long after a stop a scan thread is waited for."""
         return min(self.SCAN_CAP_S, self._total_s * self.SCAN_SHARE)
+
+    @staticmethod
+    def total_bounds() -> tuple[float, float]:
+        """Return the least and the most a configured total may be, in seconds.
+
+        Read off the setting itself, so the bounds an installed definition is
+        checked against are the ones the daemon would refuse it by.
+        """
+        metadata = Settings.model_fields["ingest_drain_timeout_s"].metadata
+        low = next(m.ge for m in metadata if hasattr(m, "ge"))
+        high = next(m.le for m in metadata if hasattr(m, "le"))
+        return low, high
 
     @classmethod
     def cancel_s(cls, timeout: float) -> float:

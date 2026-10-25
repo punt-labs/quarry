@@ -153,11 +153,12 @@ class IngestQueue:
                     exc_info=RedactedFailure.of(failure),
                 )
         logger.warning(
-            "ingest queue: drain did not finish within %.1fs; aborted %d job(s), "
-            "%d of them spooled for recovery%s",
+            "ingest queue: drain did not finish within %.1fs; aborted %d job(s): "
+            "%d spooled for recovery, %d spooled but not recoverable%s",
             window_s,
             sum(worker.aborted for worker in workers),
             sum(worker.spooled for worker in workers),
+            sum(worker.unrecoverable for worker in workers),
             f"; {len(pending)} worker(s) did not stop within {self.ABORT_WAIT_S:g}s"
             if pending
             else "",

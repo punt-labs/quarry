@@ -283,3 +283,9 @@ class WatchdogSource:
         """Stop the observer and join its thread under a bounded timeout."""
         self._observer.stop()
         self._observer.join(timeout=_JOIN_TIMEOUT_S)
+        if self._observer.is_alive():
+            logger.warning(
+                "watch: the observer thread did not stop within %.1fs; "
+                "it may still be running",
+                _JOIN_TIMEOUT_S,
+            )

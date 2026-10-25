@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import logging
 import os
 import platform
 import plistlib
@@ -303,55 +305,101 @@ class TestWriteEnvFile:
         assert '"first"' not in content
 
     def test_fd_closed_and_tmp_removed_when_fdopen_raises(self, tmp_path: Path) -> None:
-        """If os.fdopen raises, the raw fd must be closed and tmp file removed."""
-        import os as _os
-
+        """If os.fdopen raises, the fd os.open returned is closed and tmp removed."""
         env_file = tmp_path / "quarry.env"
-        closed_fds: list[int] = []
-        real_close = _os.close
+        opened: list[int] = []
+        closed: list[int] = []
+        real_open, real_close = os.open, os.close
 
-        def fake_close(fd: int) -> None:
-            closed_fds.append(fd)
+        def recording_open(path: str, flags: int, mode: int = 0o777) -> int:
+            fd = real_open(path, flags, mode)
+            if flags & os.O_EXCL:
+                opened.append(fd)
+            return fd
+
+        def recording_close(fd: int) -> None:
+            closed.append(fd)
             real_close(fd)
 
         with (
             patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.service.os.open", recording_open),
             patch("quarry.service.os.fdopen", side_effect=OSError("injected")),
-            patch("quarry.service.os.close", side_effect=fake_close),
+            patch("quarry.service.os.close", recording_close),
             pytest.raises(OSError, match="injected"),
         ):
             _write_env_file("k1")
 
-        # No .tmp files should remain
         assert not any(tmp_path.glob("*.tmp"))
-        # The raw fd must have been closed
-        assert closed_fds, "os.close was never called after os.fdopen failure"
+        assert len(opened) == 1
+        assert opened[0] in closed  # that exact descriptor, not just some close
 
-    def test_a_stale_temp_file_is_replaced_not_reused(self, tmp_path: Path) -> None:
-        """A crashed write's leftover temp is removed and the create retried."""
+    def test_a_leftover_temp_under_the_old_name_is_never_reused(
+        self, tmp_path: Path
+    ) -> None:
+        """The temp name is the writer's own each time, so a leftover is ignored."""
         env_file = tmp_path / "quarry.env"
-        stale = tmp_path / "quarry.env.tmp"
-        stale.write_text("STALE=1\n")
-        stale.chmod(0o666)  # a mode the writer did not choose
+        leftover = tmp_path / "quarry.env.tmp"
+        leftover.write_text("STALE=1\n")
         with patch("quarry.service._ENV_FILE", env_file):
             _write_env_file("k1")
 
         assert "STALE" not in env_file.read_text()
-        assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
-        assert not stale.exists()
+        assert leftover.read_text() == "STALE=1\n"  # untouched, not adopted
 
-    def test_a_symlink_at_the_temp_is_removed_not_written_through(
-        self, tmp_path: Path
+    def test_two_installs_never_share_a_temp_name(self, tmp_path: Path) -> None:
+        env_file = tmp_path / "quarry.env"
+        names: list[str] = []
+        real_open = os.open
+
+        def recording(path: str, flags: int, mode: int = 0o777, **kw: int) -> int:
+            if flags & os.O_EXCL:
+                names.append(Path(path).name)
+            return real_open(path, flags, mode, **kw)
+
+        with (
+            patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.service.os.open", recording),
+        ):
+            _write_env_file("first")
+            _write_env_file("second")
+
+        assert len(set(names)) == 2
+        assert all(name.startswith("quarry.env.") for name in names)
+
+    def test_the_config_directory_is_created_owner_only(self, tmp_path: Path) -> None:
+        env_file = tmp_path / "config" / "quarry.env"
+        old = os.umask(0)
+        try:
+            with patch("quarry.service._ENV_FILE", env_file):
+                _write_env_file("k1")
+        finally:
+            os.umask(old)
+
+        assert stat.S_IMODE(env_file.parent.stat().st_mode) == 0o700
+
+    def test_a_failed_directory_sync_is_a_warning_not_a_failure(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         env_file = tmp_path / "quarry.env"
-        victim = tmp_path / "victim"
-        victim.write_text("precious")
-        (tmp_path / "quarry.env.tmp").symlink_to(victim)
-        with patch("quarry.service._ENV_FILE", env_file):
-            _write_env_file("k1")
+        real_fsync = os.fsync
 
-        assert victim.read_text() == "precious"
-        assert 'QUARRY_API_KEY="k1"' in env_file.read_text()
+        def fsync(fd: int) -> None:
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(errno.EIO, "injected")
+            real_fsync(fd)
+
+        with (
+            patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.service.os.fsync", fsync),
+            caplog.at_level(logging.WARNING, logger="quarry.service"),
+        ):
+            _write_env_file("k1")  # does not raise
+
+        assert 'QUARRY_API_KEY="k1"' in env_file.read_text()  # the file is in place
+        [record] = caplog.records
+        assert "directory sync failed (EIO)" in record.getMessage()
+        assert "durability not guaranteed" in record.getMessage()
 
     def test_the_temp_file_is_0600_from_creation_whatever_the_umask(
         self, tmp_path: Path

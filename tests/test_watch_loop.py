@@ -11,6 +11,7 @@ would hand to the real DES-042 queue.
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import sqlite3
 import threading
@@ -1579,7 +1580,7 @@ def test_a_cancel_during_the_observer_join_still_tears_down_and_says_so(
 
         with (
             patch.object(_FakeSource, "stop", _blocking_stop(release)),
-            caplog.at_level(logging.WARNING, logger="quarry.daemon.watch_loop"),
+            caplog.at_level(logging.WARNING, logger="quarry.daemon.watch_stop"),
         ):
             stopping = asyncio.create_task(loop.stop())
             await asyncio.sleep(0.1)  # in the observer join
@@ -1623,5 +1624,60 @@ def test_a_cancel_while_the_safety_task_retires_is_not_swallowed(
         assert _is_torn_down(loop)
         release.set()
         await asyncio.sleep(0.1)
+
+    asyncio.run(_run())
+
+
+def test_a_crash_of_the_safety_loop_is_logged_when_it_happens_and_noted_at_stop(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue(), safety_scan_s=0.05)
+        loop = WatchLoop(ctx, source=_FakeSource())
+
+        async def boom(_self: WatchReconciler) -> None:
+            msg = "reconcile secret detail"
+            raise RuntimeError(msg)
+
+        with (
+            patch.object(WatchReconciler, "run_once", boom),
+            caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"),
+        ):
+            await loop.start()
+            await asyncio.sleep(0.3)  # the loop has crashed by now
+
+            assert "safety reconcile loop crashed" in caplog.text  # at once
+            assert "RuntimeError" in caplog.text
+            assert "reconcile secret detail" not in caplog.text
+            await loop.stop()
+
+        assert "had already crashed before stop" in caplog.text
+
+    asyncio.run(_run())
+
+
+def test_each_cleanup_failure_in_stop_is_logged_where_it_happens(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue())
+        loop = WatchLoop(ctx, source=_FakeSource())
+        await loop.start()
+
+        with (
+            patch.object(
+                WatchRoster, "unwatch_all", side_effect=RuntimeError("unwatch failed")
+            ),
+            patch.object(
+                WatchRoster, "close", side_effect=OSError(errno.EIO, "close failed")
+            ),
+            caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"),
+            pytest.raises(OSError),
+        ):
+            await loop.stop()
+
+        assert "watch: unwatching the roster failed" in caplog.text
+        assert "watch: closing the roster failed" in caplog.text
+        assert _is_torn_down(loop)
 
     asyncio.run(_run())

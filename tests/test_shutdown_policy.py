@@ -98,3 +98,27 @@ def test_the_cancel_share_is_part_of_the_timeout(timeout: float) -> None:
 def test_the_collaborators_use_the_policys_constants() -> None:
     assert IngestQueue.ABORT_WAIT_S == ShutdownPolicy.ABORT_WAIT_S
     assert TaskDrain.FLOOR_S == ShutdownPolicy.TASK_FLOOR_S
+
+
+@pytest.mark.parametrize("total", ShutdownPolicy.total_bounds())
+def test_the_worst_case_is_strictly_below_the_stop_timeout_at_both_bounds(
+    total: float,
+) -> None:
+    worst = (
+        ShutdownPolicy.GRACEFUL_S
+        + total
+        + ShutdownPolicy.ABORT_WAIT_S
+        + ShutdownPolicy.TASK_FLOOR_S
+        + ShutdownPolicy.EXIT_SLACK_S
+    )
+
+    assert worst < ShutdownPolicy.stop_timeout_for(total)
+    assert ShutdownPolicy.stop_timeout_for(total) - worst >= ShutdownPolicy.HEADROOM_S
+
+
+def test_the_bounds_are_the_settings_own() -> None:
+    low, high = ShutdownPolicy.total_bounds()
+
+    assert 0 < low < high
+    assert Settings(ingest_drain_timeout_s=low).ingest_drain_timeout_s == low
+    assert Settings(ingest_drain_timeout_s=high).ingest_drain_timeout_s == high

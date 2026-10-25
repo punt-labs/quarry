@@ -18,8 +18,6 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self, final
 
-from starlette.concurrency import run_in_threadpool
-
 from quarry.daemon.debounce import DebouncedDispatcher
 from quarry.daemon.fs_events import NullFsEventSource
 from quarry.daemon.fs_watchdog import WatchdogSource
@@ -28,6 +26,7 @@ from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TERMINAL_STATUSES
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
+from quarry.daemon.watch_stop import WatchStop
 from quarry.daemon.watch_submit import WatchSubmitter
 from quarry.scratch_paths import ScratchGuard
 
@@ -148,6 +147,8 @@ class WatchLoop:
             self._safety_task = self._loop.create_task(
                 self._reconciler.run_safety_loop()
             )
+            # A crash of the loop is named when it happens, not only at shutdown.
+            self._safety_task.add_done_callback(WatchStop.safety_ended)
         else:
             logger.warning(
                 "watch: watch_safety_scan_s=0 disables the periodic reconcile "
@@ -159,54 +160,29 @@ class WatchLoop:
     async def stop(self) -> None:
         """Tear down the observer + roster before the queue drain (any watch state).
 
-        Safe to cancel: whatever the cancel interrupts, the roster is closed and
-        the built collaborators are dropped, so a later ``start()`` rebuilds
-        cleanly.  Only the observer's join can outlive a cancel, and it says so.
+        Safe to cancel: the loop forgets its collaborators before the teardown
+        begins, so whatever the teardown meets (a failure, a cancel) a later
+        ``start()`` rebuilds cleanly.  The sequence itself is :class:`WatchStop`.
         """
         roster = self._roster
         if roster is None:  # start() never ran
             return
         self._started = False
-        source = self._source
-        try:
-            if self._safety_task is not None:
-                self._safety_task.cancel()
-                # Wait for the task to be fully retired (a bare cancel() can
-                # leave "Task was destroyed but it is pending").  ``wait`` does
-                # not raise the retired task's cancellation, so a cancel of THIS
-                # coroutine (the teardown's timeout) is never mistaken for it.
-                await asyncio.wait({self._safety_task})
-            if self._submitter is not None:
-                self._submitter.cancel_pending()  # cancel outstanding backoff re-arms
-            if self._dispatcher is not None:
-                self._dispatcher.cancel_all()
-            roster.unwatch_all()
-        finally:
-            try:
-                roster.close()  # drop sibling conns so a restart can't leak them
-            finally:
-                # Drop the built collaborators so a subsequent start() rebuilds
-                # cleanly — a joined watchdog observer cannot be restarted (reusing
-                # it watches nothing).  A fresh start() reconstructs source + roster.
-                self._safety_task = None
-                self._reconciler = None
-                self._source = self._roster = None
-                self._dispatcher = self._submitter = None
-                if source is not None:
-                    await self._join_observer(source)
-
-    @staticmethod
-    async def _join_observer(source: FsEventSource) -> None:
-        """Join the observer thread off the loop; warn if a cancel leaves it running."""
-        join = asyncio.ensure_future(run_in_threadpool(source.stop))
-        try:
-            await asyncio.shield(join)
-        except asyncio.CancelledError:
-            logger.warning(
-                "watch loop: stopped while the observer was being joined; "
-                "its thread may still be running"
-            )
-            raise
+        sequence = WatchStop(
+            roster,
+            self._source,
+            self._safety_task,
+            self._submitter,
+            self._dispatcher,
+        )
+        # A joined watchdog observer cannot be restarted (reusing it watches
+        # nothing): a fresh start() reconstructs source + roster.  The teardown
+        # holds its own references, and an event that arrives meanwhile finds no
+        # dispatcher and is dropped.
+        self._safety_task = None
+        self._reconciler = None
+        self._source = self._roster = self._dispatcher = self._submitter = None
+        await sequence.run()
 
     def start_watching(self, collection: str, resolved_root: Path) -> None:
         """Begin watching *collection* in the active database + submit its scan."""
@@ -231,7 +207,7 @@ class WatchLoop:
         ``quarry sync``. ``"degraded"`` — tracked, but either the last
         ``schedule()`` returned no handle (e.g. an exhausted inotify
         budget) or a handle exists but its background thread has since
-        died (djb minor) — either way the same reliance on the safety
+        died — either way the same reliance on the safety
         scan, but silently, unlike a collection that was never registered.
         ``"watched"`` — a live observer handle backs it, with a live
         thread behind it.
@@ -333,7 +309,7 @@ class WatchLoop:
         ``resolve()`` raised (ELOOP symlink cycle, permission) — a root the
         daemon cannot resolve is not one it should walk.  Both fail closed so a
         single bad registration skips-and-continues, never aborting an on-demand
-        sync or the roster start (Class-2 exception boundary).
+        sync or the roster start (an exception boundary).
         """
         try:
             resolved = root.resolve()
@@ -368,7 +344,7 @@ class WatchLoop:
         """Observer-thread callback: filter, then marshal onto the event loop.
 
         Never propagates: a raising marshal (loop closed mid-shutdown) is logged,
-        so the observer thread survives (bug-class 2).
+        so the observer thread survives.
         """
         if self._loop is None or self._dispatcher is None or self._roster is None:
             return

@@ -16,10 +16,15 @@ if TYPE_CHECKING:
 @final
 @dataclass(frozen=True, slots=True)
 class Aborted:
-    """How a drain-aborted job ended: the words, and whether it was spooled."""
+    """How a drain-aborted job ended: the words, and what became of its spool.
+
+    ``spooled`` says a record was written; ``recoverable`` says it can be run
+    again from that record (a URL without its query cannot).
+    """
 
     reason: str
     spooled: bool = False
+    recoverable: bool = False
 
 
 @final
@@ -65,7 +70,9 @@ class AbortReason:
             )
         if record.recoverable:
             return Aborted(
-                "daemon shut down before ingest; spooled for recovery", spooled=True
+                "daemon shut down before ingest; spooled for recovery",
+                spooled=True,
+                recoverable=True,
             )
         return Aborted(
             "daemon shut down before ingest; URL not recoverable "

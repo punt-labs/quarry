@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import plistlib
+import time
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -13,11 +14,13 @@ import pytest
 from quarry.daemon.bind_options import BindOptions
 from quarry.daemon.launcher import DaemonLauncher
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.installed_budget import BudgetState
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.shutdown_policy import ShutdownPolicy
 from quarry.stop_timeout_verdict import StopTimeoutState
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 _BUDGET = 47.0  # not the default: the verdict must follow the budget it is given
@@ -204,34 +207,183 @@ def test_a_commented_directive_does_not_count(tmp_path: Path) -> None:
     assert _state(unit) is _STATE.SHORT
 
 
-def test_the_budget_comes_from_the_installed_definition_when_it_carries_one(
+_LOW, _HIGH = ShutdownPolicy.total_bounds()
+
+
+def _with_env(path: Path, **env: object) -> Path:
+    return _plist(path, EnvironmentVariables=env)
+
+
+def test_the_budget_comes_from_the_installed_definition_when_it_sets_one(
     tmp_path: Path,
 ) -> None:
-    plist = _plist(
-        tmp_path / "q.plist",
-        EnvironmentVariables={ShutdownPolicy.ENV_NAME: "61"},
-    )
+    plist = _with_env(tmp_path / "q.plist", **{ShutdownPolicy.ENV_NAME: "61"})
     env_file = tmp_path / "quarry.env"
     env_file.write_text(f'MALLOC_CONF="x"\n{ShutdownPolicy(83.0).env_line()}\n')
     unit = _unit(tmp_path / "q.service")
 
-    assert InstalledStopTimeout(plist).budget(10.0) == (
-        61.0,
-        "the installed service definition",
-    )
-    assert InstalledStopTimeout(unit, env_file).budget(10.0)[0] == 83.0
-    assert InstalledStopTimeout(unit).budget(10.0) == (10.0, "settings")
+    from_plist = InstalledStopTimeout(plist).budget()
+    from_env_file = InstalledStopTimeout(unit, env_file).budget()
+
+    assert (from_plist.state, from_plist.value) == (BudgetState.VALID, 61.0)
+    assert (from_env_file.state, from_env_file.value) == (BudgetState.VALID, 83.0)
 
 
-@pytest.mark.parametrize("raw", ["inf", "nan", "-3", "soon", ""])
-def test_an_installed_budget_that_cannot_be_used_falls_back_to_settings(
-    tmp_path: Path, raw: str
+def test_a_definition_that_sets_no_budget_is_absent_not_invalid(
+    tmp_path: Path,
 ) -> None:
-    plist = _plist(
-        tmp_path / "q.plist", EnvironmentVariables={ShutdownPolicy.ENV_NAME: raw}
+    unit = _unit(tmp_path / "q.service")
+    empty_env = tmp_path / "quarry.env"
+    empty_env.write_text('MALLOC_CONF="x"\n')
+
+    assert InstalledStopTimeout(unit).budget().state is BudgetState.ABSENT
+    assert InstalledStopTimeout(unit, empty_env).budget().state is BudgetState.ABSENT
+    assert InstalledStopTimeout(_plist(tmp_path / "q.plist")).budget().state is (
+        BudgetState.ABSENT
+    )
+    assert InstalledStopTimeout(tmp_path / "gone.plist").budget().state is (
+        BudgetState.ABSENT
     )
 
-    assert InstalledStopTimeout(plist).budget(10.0) == (10.0, "settings")
+
+def test_the_last_env_file_assignment_wins(tmp_path: Path) -> None:
+    env_file = tmp_path / "quarry.env"
+    env_file.write_text(
+        f'{ShutdownPolicy.ENV_NAME}="{_LOW}"\n{ShutdownPolicy.ENV_NAME}="{_HIGH}"\n'
+    )
+
+    budget = InstalledStopTimeout(_unit(tmp_path / "q.service"), env_file).budget()
+
+    assert budget.value == _HIGH
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        ("soon", "is not a number"),
+        ("inf", "outside"),
+        ("nan", "outside"),
+        ("-3", "outside"),
+        (str(_LOW - 1), "outside"),
+        (str(_HIGH + 1), "outside"),
+    ],
+)
+def test_an_installed_budget_that_cannot_be_used_is_invalid_with_its_reason(
+    tmp_path: Path, raw: str, reason: str
+) -> None:
+    plist = _with_env(tmp_path / "q.plist", **{ShutdownPolicy.ENV_NAME: raw})
+
+    budget = InstalledStopTimeout(plist).budget()
+
+    assert budget.state is BudgetState.INVALID
+    assert reason in budget.reason
+    assert "quarry install" in budget.message
+    assert str(plist) in budget.message
+
+
+def test_the_bounds_themselves_are_valid_installed_budgets(tmp_path: Path) -> None:
+    for bound in (_LOW, _HIGH):
+        plist = _with_env(tmp_path / "q.plist", **{ShutdownPolicy.ENV_NAME: str(bound)})
+
+        assert InstalledStopTimeout(plist).budget().value == bound
+
+
+@pytest.mark.parametrize(
+    ("env", "reason"),
+    [
+        ({ShutdownPolicy.ENV_NAME: {"a": 1}}, "dict, not a string"),
+        ({ShutdownPolicy.ENV_NAME: 30}, "int, not a string"),
+        ({ShutdownPolicy.ENV_NAME: [1]}, "list, not a string"),
+    ],
+)
+def test_an_installed_budget_that_is_not_a_string_is_invalid(
+    tmp_path: Path, env: dict[str, object], reason: str
+) -> None:
+    plist = _with_env(tmp_path / "q.plist", **env)
+
+    budget = InstalledStopTimeout(plist).budget()
+
+    assert budget.state is BudgetState.INVALID
+    assert reason in budget.reason
+
+
+def test_a_plist_whose_environment_is_not_a_dictionary_is_invalid(
+    tmp_path: Path,
+) -> None:
+    plist = _plist(tmp_path / "q.plist", EnvironmentVariables=["x"])
+
+    budget = InstalledStopTimeout(plist).budget()
+
+    assert budget.state is BudgetState.INVALID
+    assert "EnvironmentVariables is not a dictionary" in budget.reason
+
+
+def test_an_array_rooted_or_broken_plist_gives_an_invalid_budget(
+    tmp_path: Path,
+) -> None:
+    array = tmp_path / "a.plist"
+    array.write_bytes(plistlib.dumps(["x"]))
+    broken = tmp_path / "b.plist"
+    broken.write_bytes(b"<plist><dict>")
+
+    assert "root is not a dictionary" in InstalledStopTimeout(array).budget().reason
+    assert "cannot be parsed" in InstalledStopTimeout(broken).budget().reason
+
+
+def test_a_directory_where_the_env_definition_should_be_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "q.plist"
+    directory.mkdir()
+
+    budget = InstalledStopTimeout(directory).budget()
+
+    assert budget.state is BudgetState.INVALID
+    assert "EISDIR" in budget.reason
+
+
+def test_a_bare_zero_timeout_is_infinite_as_systemd_treats_it(tmp_path: Path) -> None:
+    unit = _unit(tmp_path / "q.service", "TimeoutStopSec=0")
+
+    assert _state(unit, _BUDGET * 100) is _STATE.INFINITE
+
+
+def test_a_unit_that_sets_only_timeout_sec_uses_it(tmp_path: Path) -> None:
+    long_enough = _unit(tmp_path / "a.service", f"TimeoutSec={_NEEDED}")
+    too_short = _unit(tmp_path / "b.service", "TimeoutSec=1")
+
+    assert _state(long_enough) is _STATE.OK
+    assert _state(too_short) is _STATE.SHORT
+
+
+def test_the_later_of_timeout_sec_and_timeout_stop_sec_wins(tmp_path: Path) -> None:
+    stop_last = _unit(
+        tmp_path / "a.service", "TimeoutSec=1", f"TimeoutStopSec={_NEEDED}"
+    )
+    sec_last = _unit(
+        tmp_path / "b.service", f"TimeoutStopSec={_NEEDED}", "TimeoutSec=1"
+    )
+
+    assert _state(stop_last) is _STATE.OK
+    assert _state(sec_last) is _STATE.SHORT
+
+
+def test_a_hostile_time_span_is_read_in_linear_time(tmp_path: Path) -> None:
+    terms = "1s " * 5000
+    hostile = [
+        _unit(tmp_path / "a.service", f"TimeoutStopSec={terms}junk"),
+        _unit(tmp_path / "b.service", f"TimeoutStopSec={'9' * 100_000}"),
+        _unit(tmp_path / "c.service", f"TimeoutStopSec={' ' * 50_000}x"),
+        _unit(tmp_path / "d.service", f"TimeoutStopSec={terms}"),
+    ]
+
+    started = time.monotonic()
+    states = [_state(path) for path in hostile]
+    elapsed = time.monotonic() - started
+
+    assert states[:3] == [_STATE.UNRECOGNIZED] * 3
+    assert states[3] is _STATE.OK  # 5000 seconds of terms, and they all parse
+    assert elapsed < 2.0  # the bound; a backtracking regex takes minutes
 
 
 def test_report_logs_a_short_stop_timeout_at_error(
@@ -260,16 +412,20 @@ def test_report_logs_any_other_problem_at_warning(
     assert record.levelno == logging.WARNING
 
 
-def test_report_is_silent_for_nothing_installed_and_for_a_good_value(
+def test_report_logs_an_info_line_when_nothing_is_wrong(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    good = _plist(tmp_path / "q.plist", ExitTimeOut=_NEEDED)
+    good = _plist(tmp_path / "good.plist", ExitTimeOut=_NEEDED)
+    forever = _unit(tmp_path / "forever.service", "TimeoutStopSec=infinity")
+    absent = tmp_path / "absent.plist"
 
-    with caplog.at_level(logging.DEBUG, logger="quarry.installed_stop_timeout"):
-        InstalledStopTimeout(good).report(_BUDGET)
-        InstalledStopTimeout(tmp_path / "absent.plist").report(_BUDGET)
+    for path in (good, forever, absent):
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="quarry.installed_stop_timeout"):
+            InstalledStopTimeout(path).report(_BUDGET)
 
-    assert caplog.records == []
+        [record] = caplog.records
+        assert record.levelno == logging.INFO
 
 
 def test_report_never_raises_even_when_the_check_itself_breaks(
@@ -437,3 +593,86 @@ def test_each_platform_reads_its_own_service_definition(system: str, name: str) 
     assert reader.path.name.startswith(
         "com.punt-labs.quarry" if system == "Darwin" else "quarry"
     )
+
+
+def test_doctor_names_an_invalid_installed_budget_instead_of_saying_settings(
+    tmp_path: Path,
+) -> None:
+    bad = _with_env(
+        tmp_path / "quarry.plist", **{ShutdownPolicy.ENV_NAME: str(_HIGH + 1)}
+    )
+
+    with patch.object(
+        InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(bad)
+    ):
+        check = DaemonDiagnostics.stop_timeout()
+
+    assert not check.passed
+    assert "outside" in check.message
+    assert str(bad) in check.message
+    assert "quarry install" in check.message
+    assert "from settings" not in check.message
+
+
+@pytest.mark.parametrize(
+    ("make", "reason"),
+    [
+        (lambda p: p.write_bytes(plistlib.dumps([])), "root is not a dictionary"),
+        (
+            lambda p: p.write_bytes(
+                plistlib.dumps(
+                    {"EnvironmentVariables": {ShutdownPolicy.ENV_NAME: {"x": 1}}}
+                )
+            ),
+            "dict, not a string",
+        ),
+    ],
+)
+def test_doctor_reports_the_reason_for_an_unusable_installed_definition(
+    tmp_path: Path, make: Callable[[Path], object], reason: str
+) -> None:
+    path = tmp_path / "quarry.plist"
+    make(path)
+
+    with patch.object(
+        InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(path)
+    ):
+        check = DaemonDiagnostics.stop_timeout()
+
+    assert not check.passed
+    assert reason in check.message
+
+
+def test_doctor_says_from_settings_only_when_the_installed_budget_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ShutdownPolicy.ENV_NAME, f"{_BUDGET:g}")
+    plist = _plist(tmp_path / "quarry.plist", ExitTimeOut=_NEEDED)
+
+    with patch.object(
+        InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(plist)
+    ):
+        check = DaemonDiagnostics.stop_timeout()
+
+    assert check.passed
+    assert f"budget {_BUDGET:g}s from settings" in check.message
+
+
+def test_doctor_names_the_settings_when_they_are_what_is_wrong(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plist = _plist(tmp_path / "quarry.plist", ExitTimeOut=_NEEDED)
+
+    with (
+        monkeypatch.context() as scoped,
+        patch.object(
+            InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(plist)
+        ),
+    ):
+        scoped.setenv(ShutdownPolicy.ENV_NAME, "nonsense")
+        check = DaemonDiagnostics.stop_timeout()
+
+    assert not check.passed
+    assert "settings are invalid" in check.message
+    assert "ingest_drain_timeout_s" in check.message
+    assert "installed service" not in check.message

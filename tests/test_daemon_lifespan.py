@@ -246,7 +246,7 @@ async def test_a_cancel_during_a_step_is_logged_and_skips_the_later_steps(
         with pytest.raises(asyncio.CancelledError):
             await teardown
 
-    assert "teardown: cancelled during watch-loop stop; later steps skipped" in (
+    assert "teardown: CancelledError during watch-loop stop; later steps skipped" in (
         caplog.text
     )
     assert reached == []  # the queue drain did not run
@@ -258,3 +258,20 @@ def test_uvicorn_is_given_the_graceful_phase_the_margin_leaves(
     config = _server(tmp_path)._uvicorn_config(Starlette())
 
     assert config.timeout_graceful_shutdown == ShutdownPolicy.GRACEFUL_S
+
+
+async def test_a_non_cancel_base_exception_is_named_for_what_it_is(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    ctx = _context(tmp_path, budget_s=300.0)
+
+    async def exits() -> None:
+        raise SystemExit(3)
+
+    cast("SimpleNamespace", ctx).aclose_watch_loop = exits
+
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit):
+        await _tear_down(tmp_path, ctx)
+
+    assert "SystemExit during watch-loop stop" in caplog.text
+    assert "CancelledError" not in caplog.text

@@ -9,13 +9,17 @@ import plistlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, Self, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 from xml.parsers.expat import ExpatError
 
 from quarry.failure_reason import FailureReason
+from quarry.installed_budget import BudgetState, InstalledBudget
 from quarry.redacted_failure import RedactedFailure
 from quarry.shutdown_policy import ShutdownPolicy
 from quarry.stop_timeout_verdict import StopTimeoutState, StopTimeoutVerdict
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +39,16 @@ class _Reading:
     """What reading a service file's stop timeout found, before the policy judges it."""
 
     value: float | None = None  # seconds; None: the file sets none
-    problem: StopTimeoutState | None = None
+    problem: StopTimeoutState | None = None  # None: the file read cleanly
     detail: str = ""
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _Invalid:
+    """What an installed definition holds in place of a usable setting."""
+
+    reason: str
 
 
 @final
@@ -52,16 +64,14 @@ class InstalledStopTimeout:
 
     The budget the verdict is judged against is the daemon's own at start.
     Doctor, which runs in a different process, takes it from the installed
-    definition when that carries one (:meth:`budget`) and from settings otherwise,
-    and says which.
+    definition when that sets one (:meth:`budget`), and from settings only when
+    the definition truly does not; an unusable one is reported, not replaced.
     """
 
-    _UNIT_LINE: ClassVar[re.Pattern[str]] = re.compile(
-        r"^[ \t]*TimeoutStopSec[ \t]*=[ \t]*(.*?)[ \t]*$", re.MULTILINE
-    )
     _NUMBER: ClassVar[str] = r"(?<!\d)\d{1,9}(?:\.\d{1,9})?(?!\d)"
-    _SPAN: ClassVar[re.Pattern[str]] = re.compile(rf"(?:\s*{_NUMBER}\s*[a-z]*)+")
     _TERM: ClassVar[re.Pattern[str]] = re.compile(rf"({_NUMBER})\s*([a-z]*)")
+    # The keys that set a unit's stop timeout, the last assignment of either wins.
+    _STOP_KEYS: ClassVar[frozenset[str]] = frozenset({"TimeoutStopSec", "TimeoutSec"})
     # systemd time-span units, in seconds; a bare number is seconds.
     _UNITS: ClassVar[dict[str, float]] = {
         "": 1.0,
@@ -139,17 +149,37 @@ class InstalledStopTimeout:
             return self._verdict(StopTimeoutState.SHORT, needed, value=found)
         return self._verdict(StopTimeoutState.OK, needed, value=found)
 
-    def budget(self, settings_total: float) -> tuple[float, str]:
-        """Return the teardown budget to judge by, and where it came from.
+    def budget(self) -> InstalledBudget:
+        """Return the teardown budget the installed definition sets, or why not.
 
-        The installed definition's ``INGEST_DRAIN_TIMEOUT_S`` (the number the
-        stop timeout was computed from) when it carries one that parses; else
-        *settings_total*.
+        ``INGEST_DRAIN_TIMEOUT_S`` is the number the stop timeout was computed
+        from.  A definition that does not set it is ``ABSENT``, and only then do
+        the settings decide; one that sets something unusable (not a number, not
+        finite, outside the settings' own bounds, or unreadable) is ``INVALID``
+        with the reason, never silently replaced.
         """
-        installed = self._installed_budget()
-        if installed is None:
-            return settings_total, "settings"
-        return installed, "the installed service definition"
+        try:
+            raw = self._environment_value(ShutdownPolicy.ENV_NAME)
+        except FileNotFoundError:
+            return InstalledBudget(BudgetState.ABSENT, self._path)
+        except OSError as exc:
+            return self._invalid(f"cannot be read ({FailureReason.os_name(exc)})")
+        except _PLIST_ERRORS as exc:
+            return self._invalid(f"cannot be parsed ({type(exc).__name__})")
+        if isinstance(raw, _Invalid):
+            return self._invalid(raw.reason)
+        if raw is None:
+            return InstalledBudget(BudgetState.ABSENT, self._path)
+        try:
+            value = float(raw)
+        except ValueError:
+            return self._invalid(f"{raw[:40]!r} is not a number")
+        low, high = ShutdownPolicy.total_bounds()
+        if not math.isfinite(value) or not low <= value <= high:
+            return self._invalid(
+                f"installed budget {value:g}s is outside {low:g}-{high:g}s"
+            )
+        return InstalledBudget(BudgetState.VALID, self._path, value=value)
 
     def report(self, total_s: float) -> None:
         """Log the verdict: ERROR when short, WARNING for another problem; never raise.
@@ -169,6 +199,8 @@ class InstalledStopTimeout:
             logger.error("%s", verdict.message)
         elif verdict.is_problem:
             logger.warning("%s", verdict.message)
+        else:
+            logger.info("%s", verdict.message)
 
     def _verdict(
         self,
@@ -205,50 +237,97 @@ class InstalledStopTimeout:
 
     @classmethod
     def _unit(cls, raw: bytes) -> _Reading:
-        """Return the unit's last ``TimeoutStopSec``, or why it cannot be read."""
+        """Return the unit's stop timeout, or why it cannot be read.
+
+        The last ``TimeoutStopSec=`` or ``TimeoutSec=`` assignment wins, as in
+        systemd.  An empty one resets to the default, and ``infinity`` and ``0``
+        both mean no timeout at all.
+        """
         text = raw.decode("utf-8", errors="replace")
-        assignments = cls._UNIT_LINE.findall(text)
-        if not assignments or not assignments[-1]:
-            return _Reading()  # none, or empty: systemd resets to its own default
-        value = assignments[-1]
-        if value == "infinity":
+        assigned = ""
+        for key, value in cls._assignments(text):
+            if key in cls._STOP_KEYS:
+                assigned = value
+        if not assigned:
+            return _Reading()  # none, or empty: systemd uses its own default
+        if assigned == "infinity":
             return _Reading(math.inf)
-        seconds = cls._timespan(value)
-        if seconds is None:
-            return _Reading(problem=StopTimeoutState.UNRECOGNIZED, detail=value[:40])
-        return _Reading(seconds)
+        try:
+            seconds = cls._timespan(assigned)
+        except ValueError:
+            return _Reading(problem=StopTimeoutState.UNRECOGNIZED, detail=assigned[:40])
+        return _Reading(math.inf if seconds == 0 else seconds)
+
+    @staticmethod
+    def _assignments(text: str) -> Iterator[tuple[str, str]]:
+        """Yield each ``key=value`` line of *text* in order, comments skipped.
+
+        One pass over the lines with no backtracking, so a hostile file costs time
+        linear in its size.
+        """
+        for line in text.splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                yield key.strip(), value.strip()
 
     @classmethod
-    def _timespan(cls, text: str) -> float | None:
-        """Return a systemd time span in seconds, ``None`` if it is not one."""
+    def _timespan(cls, text: str) -> float:
+        """Return a systemd time span in seconds.
+
+        Terms are read left to right, each a number and an optional unit, with
+        nothing skipped but whitespace.
+
+        Raises:
+            ValueError: *text* is empty, has a term that is not a number and a
+                known unit, or has anything after the last term.
+        """
         lowered = text.lower()
-        if not cls._SPAN.fullmatch(lowered):
-            return None
-        total = 0.0
-        for number, unit in cls._TERM.findall(lowered):
-            factor = cls._UNITS.get(unit)
-            if factor is None:
-                return None
-            total += float(number) * factor
+        position, total, terms = 0, 0.0, 0
+        while True:
+            while position < len(lowered) and lowered[position].isspace():
+                position += 1
+            if position == len(lowered):
+                break
+            term = cls._TERM.match(lowered, position)
+            factor = cls._UNITS.get(term.group(2)) if term else None
+            if term is None or factor is None:
+                msg = "not a systemd time span"
+                raise ValueError(msg)
+            total += float(term.group(1)) * factor
+            position, terms = term.end(), terms + 1
+        if terms == 0:
+            msg = "an empty time span"
+            raise ValueError(msg)
         return total
 
-    def _installed_budget(self) -> float | None:
-        """Return ``INGEST_DRAIN_TIMEOUT_S`` as the installed definition sets it."""
-        try:
-            raw = self._environment_value(ShutdownPolicy.ENV_NAME)
-            value = float(raw) if raw is not None else None
-        except (OSError, ValueError, *_PLIST_ERRORS):
-            return None
-        usable = value is not None and math.isfinite(value) and value > 0
-        return value if usable else None
+    def _invalid(self, reason: str) -> InstalledBudget:
+        """Return an unusable budget for this definition, with *reason*."""
+        return InstalledBudget(BudgetState.INVALID, self._path, reason=reason)
 
-    def _environment_value(self, name: str) -> str | None:
-        """Return *name* from the plist's environment or the env file, if set."""
+    def _environment_value(self, name: str) -> str | _Invalid | None:
+        """Return *name* from the plist's environment or the env file.
+
+        ``None`` when the definition does not set it; an :class:`_Invalid` when
+        what it holds is not a string setting.  The last assignment in an env
+        file wins, as when systemd reads it.
+        """
         if self._path.suffix == ".plist":
-            env = plistlib.loads(self._path.read_bytes()).get("EnvironmentVariables")
-            return env.get(name) if isinstance(env, dict) else None
+            root = plistlib.loads(self._path.read_bytes())
+            if not isinstance(root, dict):
+                return _Invalid("root is not a dictionary")
+            env = root.get("EnvironmentVariables")
+            if env is None:
+                return None
+            if not isinstance(env, dict):
+                return _Invalid("EnvironmentVariables is not a dictionary")
+            value = env.get(name)
+            if value is None or isinstance(value, str):
+                return value
+            return _Invalid(f"{name} is a {type(value).__name__}, not a string")
         if self._env_file is None:
             return None
-        pattern = re.compile(rf'^{name}="?([^"\n]*)"?$', re.MULTILINE)
-        match = pattern.search(self._env_file.read_text())
-        return match.group(1) if match else None
+        found: str | None = None  # None: not set in the file
+        for key, value in self._assignments(self._env_file.read_text()):
+            if key == name:
+                found = value.strip('"')
+        return found

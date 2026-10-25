@@ -41,9 +41,9 @@ class Teardown:
     End to end, the worst case is uvicorn's graceful phase (``GRACEFUL_S``), then
     the budget, then the queue's abort wait (``ABORT_WAIT_S``) and the task floor
     (``TASK_FLOOR_S``) that sit beyond it, then the process exit
-    (``EXIT_SLACK_S``).  ``MARGIN_S`` is, by construction, the sum of those four,
-    so the service stop timeout (the budget plus ``MARGIN_S``) is never reached by
-    a teardown that stays inside its parts.
+    (``EXIT_SLACK_S``): the budget plus ``MARGIN_S`` less ``HEADROOM_S``, because
+    ``GRACEFUL_S`` is what the margin leaves after those and the headroom.  So the
+    service stop timeout, the budget plus ``MARGIN_S``, is strictly above it.
 
     Each step runs on its own: one that fails is logged by class and frames and
     the next still runs, so a broken watch loop cannot leave the queue undrained.
@@ -83,8 +83,10 @@ class Teardown:
             await step
         except Exception as exc:
             logger.error("teardown: %s failed", name, exc_info=RedactedFailure.of(exc))
-        except BaseException:
-            logger.error("teardown: cancelled during %s; later steps skipped", name)
+        except BaseException as exc:
+            logger.error(
+                "teardown: %s during %s; later steps skipped", type(exc).__name__, name
+            )
             raise
 
     async def _stop_watch(self, policy: ShutdownPolicy) -> None:

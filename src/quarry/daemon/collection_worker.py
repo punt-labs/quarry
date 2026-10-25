@@ -57,6 +57,7 @@ class CollectionWorker:
         "_running",
         "_spooled",
         "_task",
+        "_unrecoverable",
     )
 
     _aborted: int
@@ -68,6 +69,7 @@ class CollectionWorker:
     _running: bool
     _spooled: int
     _task: asyncio.Task[None]
+    _unrecoverable: int
 
     def __new__(
         cls,
@@ -81,7 +83,7 @@ class CollectionWorker:
         self._queue = asyncio.Queue()
         self._release_admit = release_admit
         self._running = False
-        self._aborted = self._spooled = 0
+        self._aborted = self._spooled = self._unrecoverable = 0
         self._last_active = monotonic()
         # Start the resident consumer now; try_submit only ever runs inside a
         # request handler, so a running loop is guaranteed at creation.
@@ -153,8 +155,13 @@ class CollectionWorker:
 
     @property
     def spooled(self) -> int:
-        """Return how many of those were spooled for recovery."""
+        """Return how many of those were spooled and can be recovered."""
         return self._spooled
+
+    @property
+    def unrecoverable(self) -> int:
+        """Return how many were spooled but cannot be run again from the record."""
+        return self._unrecoverable
 
     def _fail(self, item: _Queued) -> None:
         """Fail *item* with the truthful reason, spooling it first if it needs it."""
@@ -162,7 +169,8 @@ class CollectionWorker:
         aborted = AbortReason.for_settings(self._ctx.settings).of(item.job)
         item.state.error = aborted.reason
         self._aborted += 1
-        self._spooled += aborted.spooled
+        self._spooled += aborted.spooled and aborted.recoverable
+        self._unrecoverable += aborted.spooled and not aborted.recoverable
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""

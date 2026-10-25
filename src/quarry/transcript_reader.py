@@ -47,7 +47,7 @@ class TranscriptReader:
 
         The one parse every extraction shares, done once, here: a SubagentStop
         asks one reader for the conversation text and for the final turn, and a
-        500 KB transcript must not be parsed again per question.  A caller that
+        large transcript must not be parsed again per question.  A caller that
         must tell a read fault from an empty conversation reads the file
         itself, strictly, and hands the text it got to this.
         """
@@ -84,11 +84,20 @@ class TranscriptReader:
         """
         fitted = self._parsed.fit(self._MAX_CHARS)
         if fitted.cost:
+            what = [
+                part
+                for part in (
+                    f"dropped {fitted.dropped} oldest entries"
+                    if fitted.dropped
+                    else "",
+                    "cut the newest to its tail" if fitted.cut else "",
+                )
+                if part
+            ]
             logger.warning(
-                "transcript: %s: dropped %d oldest entries%s past the character budget",
+                "transcript: %s: %s past the character budget",
                 self._path.name,
-                fitted.dropped,
-                " and cut the newest to its tail" if fitted.cut else "",
+                " and ".join(what),
             )
         return fitted.text
 

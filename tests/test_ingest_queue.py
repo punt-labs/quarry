@@ -450,7 +450,9 @@ def test_a_drain_that_times_out_says_the_window_and_what_it_aborted(
     [record] = [r for r in caplog.records if "drain did not finish" in r.getMessage()]
     assert "0.1s" in record.getMessage() or "0.0s" in record.getMessage()
     assert "aborted 2 job(s)" in record.getMessage()
-    assert "spooled for recovery" in record.getMessage()
+    assert "0 spooled for recovery, 0 spooled but not recoverable" in (
+        record.getMessage()
+    )
 
 
 def test_the_wait_after_an_abort_is_bounded(
@@ -459,6 +461,7 @@ def test_the_wait_after_an_abort_is_bounded(
     class _Stubborn:
         aborted = 1
         spooled = 0
+        unrecoverable = 0
 
         def __init__(self) -> None:
             self.task: asyncio.Task[None] | None = None
@@ -797,6 +800,7 @@ def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
     class _Dying:
         aborted = 0
         spooled = 0
+        unrecoverable = 0
 
         def abort(self) -> asyncio.Task[None]:
             async def dies() -> None:

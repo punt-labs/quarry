@@ -308,3 +308,29 @@ def test_module_load_logs_an_error_when_the_linux_import_fails(
         # pruned observer, not the forced-failure state this test set up.
         monkeypatch.undo()
         importlib.reload(fs_watchdog)
+
+
+def test_stop_warns_when_the_observer_thread_outlives_the_join(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
+    with (
+        patch.object(source._observer, "join"),
+        patch.object(source._observer, "is_alive", return_value=True),
+        caplog.at_level(logging.WARNING, logger="quarry.daemon.fs_watchdog"),
+    ):
+        source.stop()
+
+    assert "observer thread did not stop" in caplog.text
+    source._observer.join()  # let the real thread end
+
+
+def test_stop_is_quiet_when_the_observer_ends_inside_the_join(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
+
+    with caplog.at_level(logging.WARNING, logger="quarry.daemon.fs_watchdog"):
+        source.stop()
+
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []

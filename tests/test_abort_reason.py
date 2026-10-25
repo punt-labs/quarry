@@ -102,3 +102,22 @@ def test_only_a_job_whose_record_was_written_is_marked_spooled() -> None:
     assert not _outcome(_Spool(ok=False), _Unit(record)).spooled
     assert not _outcome(_Spool(), _Unit(None)).spooled
     assert not _outcome(_Spool(), _Rerunnable()).spooled
+
+
+def test_a_url_that_cannot_be_rerun_is_spooled_but_not_recoverable() -> None:
+    record = SpoolRecord(
+        kind="ingest", collection="c", name="n", payload="p", recoverable=False
+    )
+
+    outcome = _outcome(_Spool(ok=True), _Unit(record))
+
+    assert (outcome.spooled, outcome.recoverable) == (True, False)
+    assert "not recoverable" in outcome.reason
+
+
+def test_a_recoverable_record_is_spooled_and_recoverable() -> None:
+    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
+
+    outcome = _outcome(_Spool(ok=True), _Unit(record))
+
+    assert (outcome.spooled, outcome.recoverable) == (True, True)

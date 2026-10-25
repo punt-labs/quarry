@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import secrets
 import socket
 import subprocess
 import textwrap
@@ -22,6 +23,7 @@ from typing import Protocol, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
 from quarry.config import DEFAULT_PORT
+from quarry.failure_reason import FailureReason
 from quarry.fd_config import FdServiceLimits
 from quarry.net import LoopbackPolicy
 from quarry.shutdown_policy import ShutdownPolicy
@@ -65,23 +67,21 @@ def _write_env_file(api_key: str = "") -> None:
     stop timeout was computed from.  Writes QUARRY_API_KEY only when *api_key* is
     non-empty.
 
-    The temp sibling is created ``O_EXCL`` and ``O_NOFOLLOW`` with mode 0600 from
-    the first byte — no chmod race window, and never written through a planted
-    symlink.  A leftover temp (a crashed write's) is removed and the create tried
-    once more.  The file is synced before the rename and the directory after it,
-    so a crash leaves the old file or the new one, never neither.
+    The temp sibling has a name of its own (``mkstemp`` semantics), so two
+    installs at once never share one, and is created ``O_EXCL`` and
+    ``O_NOFOLLOW`` with mode 0600 from the first byte: no chmod race window, and
+    never written through a planted symlink.  The file is synced before the rename
+    and the directory after it; a failed directory sync is a warning, since the
+    file is already in place.  A crash can leave a temp behind, under its own
+    name, which nothing reuses.
 
     Args:
         api_key: The API key value to store.  Empty string omits the line.
     """
-    _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _ENV_FILE.with_name(_ENV_FILE.name + ".tmp")
+    _ENV_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp_path = _ENV_FILE.with_name(f"{_ENV_FILE.name}.{secrets.token_hex(6)}.tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-    try:
-        fd = os.open(str(tmp_path), flags, 0o600)
-    except FileExistsError:
-        tmp_path.unlink(missing_ok=True)
-        fd = os.open(str(tmp_path), flags, 0o600)
+    fd = os.open(str(tmp_path), flags, 0o600)
     try:
         f = os.fdopen(fd, "w")
     except BaseException:
@@ -98,14 +98,20 @@ def _write_env_file(api_key: str = "") -> None:
             f.flush()
             os.fsync(f.fileno())
         tmp_path.replace(_ENV_FILE)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    try:
         directory = os.open(str(_ENV_FILE.parent), os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
         finally:
             os.close(directory)
-    except BaseException:
-        tmp_path.unlink(missing_ok=True)
-        raise
+    except OSError as exc:
+        logger.warning(
+            "env file written; directory sync failed (%s); durability not guaranteed",
+            FailureReason.os_name(exc),
+        )
 
 
 def _quarryd_exec_args() -> list[str]:
@@ -216,7 +222,7 @@ def _launchd_plist_content() -> str:
     )
     # Bake the descriptor ceiling into the plist: launchd raises the daemon's hard
     # limit above the 256 a fresh bootstrap inherits, so the in-daemon FdEnvelope
-    # can lift the soft limit off it instead of clamping to 256 (DES-046 / quarry-fnzh).
+    # can lift the soft limit off it instead of clamping to 256.
     fd_limits_block = FdServiceLimits.from_settings().launchd_fragment()
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
@@ -342,7 +348,7 @@ def _systemd_unit_content() -> str:
     env_file_path = str(_ENV_FILE)
     # Bake the descriptor ceiling into the unit: systemd raises the daemon's hard
     # limit above the login-session default so the in-daemon FdEnvelope lifts the
-    # soft limit off it instead of clamping to it (DES-046 / quarry-fnzh).
+    # soft limit off it instead of clamping to it.
     fd_limits_directive = FdServiceLimits.from_settings().systemd_directive()
     return textwrap.dedent(f"""\
         [Unit]
