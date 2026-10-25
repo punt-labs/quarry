@@ -1,12 +1,10 @@
 """Session-setup regression tests (quarry-ridg round-2 Copilot findings).
 
-Four separately failing behaviors:
+Separately failing behaviors:
 
-* ``_allow_mcp_tools`` used to write ``mcp__plugin_quarry_quarry__*`` — the
-  retired proxy namespace disconnected in quarry-ydym (PR #493).  The native
-  server exposes tools under ``mcp__quarry__*`` / ``mcp__quarry-dev__*``; the
-  old allow-list entry granted nothing and left every native call subject to
-  a permission prompt.
+* Session setup used to add quarry's MCP and ``Skill()`` allow rules to the
+  user-global ``~/.claude/settings.json`` without asking (#552).  It now only
+  deploys commands; ``quarry enable`` grants the rules, per project.
 * ``_read_plugin_name`` used ``data["name"]`` on a JSON document that may be
   a list or map an unexpected type for ``name``.  A ``TypeError`` or
   ``AttributeError`` slipped past ``open``'s ``(OSError, KeyError, ValueError)``
@@ -15,10 +13,9 @@ Four separately failing behaviors:
   after the ``CLAUDE_PLUGIN_ROOT`` and ``open`` checks, so early-skip
   breadcrumbs rendered ``config=?, payload_ok=?`` instead of the honest
   ``config=on, payload_ok=Y`` those paths deserve.
-* ``_read_plugin_name`` accepted the plugin name verbatim into a
-  ``mcp__<name>__*`` wildcard grant.  A hostile ``plugin.json`` carrying
-  ``*``, whitespace, ``/``, or ``.`` in the name could broaden the grant
-  beyond the plugin's own tools or malform the entry so it never matches.
+* ``_read_plugin_name`` accepted any plugin name verbatim.  A hostile
+  ``plugin.json`` carrying ``*``, whitespace, ``/``, or ``.`` in the name is
+  now refused, and setup fails open.
 """
 
 from __future__ import annotations
@@ -54,63 +51,46 @@ def _make_plugin(root: Path, manifest: object) -> Path:
     return root
 
 
-class TestAllowMcpTools:
-    """``_allow_mcp_tools`` grants the native mcp__<plugin>__ namespace."""
+def _make_commands(plugin_root: Path, *names: str) -> None:
+    """Write an empty ``commands/<name>.md`` for each of *names*."""
+    commands = plugin_root / "commands"
+    commands.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (commands / f"{name}.md").write_text(f"# {name}\n")
 
-    def test_grants_native_namespace(self, fake_home: Path, tmp_path: Path) -> None:
-        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "quarry"})
-        setup = _SessionSetup.open(plugin_root)
-        assert setup is not None
-        setup._allow_mcp_tools()
 
-        settings = json.loads((fake_home / ".claude" / "settings.json").read_text())
-        allow = settings["permissions"]["allow"]
-        assert "mcp__quarry__*" in allow
+class TestDispatchGrantsNoPermissions:
+    """Session setup deploys commands and never edits a settings file (#552)."""
 
-    def test_does_not_grant_retired_proxy_namespace(
-        self, fake_home: Path, tmp_path: Path
+    @pytest.mark.parametrize("plugin_name", ["quarry", "quarry-dev"])
+    def test_dispatch_leaves_settings_byte_identical(
+        self, fake_home: Path, tmp_path: Path, plugin_name: str
     ) -> None:
-        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "quarry"})
-        setup = _SessionSetup.open(plugin_root)
-        assert setup is not None
-        setup._allow_mcp_tools()
-
-        settings = json.loads((fake_home / ".claude" / "settings.json").read_text())
-        allow = settings["permissions"]["allow"]
-        assert not any("plugin_quarry" in entry for entry in allow)
-
-    def test_dev_plugin_grants_dev_namespace(
-        self, fake_home: Path, tmp_path: Path
-    ) -> None:
-        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "quarry-dev"})
-        setup = _SessionSetup.open(plugin_root)
-        assert setup is not None
-        setup._allow_mcp_tools()
-
-        settings = json.loads((fake_home / ".claude" / "settings.json").read_text())
-        allow = settings["permissions"]["allow"]
-        assert "mcp__quarry-dev__*" in allow
-
-    def test_grants_wildcard_when_narrower_entry_exists(
-        self, fake_home: Path, tmp_path: Path
-    ) -> None:
-        """A pre-seeded narrower entry must not shadow the wildcard.
-
-        Guards against a substring-match check that mistakes any string
-        containing ``mcp__<plugin>__`` (e.g. a single-tool entry) for the
-        wildcard already being present, leaving native tools prompt-gated.
-        """
         settings_path = fake_home / ".claude" / "settings.json"
-        settings_path.write_text(
-            json.dumps({"permissions": {"allow": ["mcp__quarry__some_specific_tool"]}})
-        )
-        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "quarry"})
+        original = '{"permissions": {"allow": ["Bash(ls:*)"]}, "theme": "dark"}\n'
+        settings_path.write_text(original)
+        plugin_root = _make_plugin(tmp_path / "plugin", {"name": plugin_name})
+        _make_commands(plugin_root, "find", "find-dev")
         setup = _SessionSetup.open(plugin_root)
         assert setup is not None
-        setup._allow_mcp_tools()
 
-        allow = json.loads(settings_path.read_text())["permissions"]["allow"]
-        assert "mcp__quarry__*" in allow
+        actions = setup.dispatch()
+
+        assert settings_path.read_text() == original
+        assert not any("allow" in action.lower() for action in actions)
+
+    def test_dispatch_creates_no_settings_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "quarry"})
+        _make_commands(plugin_root, "find")
+        setup = _SessionSetup.open(plugin_root)
+        assert setup is not None
+
+        assert setup.dispatch() == ["Deployed commands: /find"]
+        assert (tmp_path / "home" / ".claude" / "commands" / "find.md").is_file()
+        assert not (tmp_path / "home" / ".claude" / "settings.json").exists()
 
 
 class TestOpenFailOpen:
@@ -148,11 +128,9 @@ class TestOpenFailOpen:
 class TestPluginNameSlugValidation:
     """``_read_plugin_name`` accepts only conservative-slug names.
 
-    Names flow into ``settings.json`` as ``mcp__<name>__*`` wildcard grants;
-    an unsafe character (``*``, ``/``, ``.``, whitespace, newline, ``[``, etc.)
-    could broaden the grant beyond the plugin's own tools or malform the
-    entry so it never matches.  ``open`` catches the ``ValueError`` and
-    returns ``None`` — the fail-open path already exercised in round 2.
+    An unsafe character (``*``, ``/``, ``.``, whitespace, newline, ``[``,
+    etc.) marks an untrusted manifest.  ``open`` catches the ``ValueError``
+    and returns ``None`` — the fail-open path already exercised in round 2.
     """
 
     @pytest.mark.parametrize(
@@ -199,12 +177,7 @@ class TestPluginNameSlugValidation:
     def test_unsafe_name_leaves_settings_untouched(
         self, fake_home: Path, tmp_path: Path
     ) -> None:
-        """An unsafe manifest must not reach ``permissions.allow`` at all.
-
-        Guards against a slip where ``open`` returns a setup for an unsafe
-        name and ``dispatch`` writes ``mcp__foo*__*`` — the exact hostile
-        wildcard the slug validator exists to block.
-        """
+        """An unsafe manifest yields no setup, so nothing touches settings."""
         settings_path = fake_home / ".claude" / "settings.json"
         original = settings_path.read_text()
         plugin_root = _make_plugin(tmp_path / "plugin", {"name": "foo*"})

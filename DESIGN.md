@@ -3492,3 +3492,46 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
 - **A regex log filter alone.** It is a backstop, not a guarantee. A space
   inside a query string defeats it, so admission and `HttpUrl` carry the
   guarantee.
+
+## DES-058: `quarry enable` grants quarry's permissions, per project
+
+**Date:** 2026-10-25
+**Status:** ACCEPTED
+**Topic:** Who grants Claude Code permission to call quarry, and where
+**Issue:** #552
+
+### Context
+
+The plugin's SessionStart hook added `mcp__quarry__*` and a `Skill(<cmd>)`
+rule per deployed command to the user-global `~/.claude/settings.json` on
+every session, without asking. Those rules applied in every project on the
+machine. punt-kit's permissions standard (§ 6) forbids a plugin granting
+itself standing permission: rules land when the user asks, in the project.
+
+### Decision
+
+1. Session start only deploys commands. It never reads or writes a Claude
+   settings file.
+2. `quarry enable` is the consent. The operator chose this: running enable
+   already states intent to use quarry in that project. It adds the fixed
+   `QUARRY_RULES` set to `<repo>/.claude/settings.json` (tool-enable-disable.md
+   § 2.8) and prints each rule it added.
+3. `quarry disable` removes the same set by exact value. No tag schema.
+4. The edit is locked (`FileLock`), symlink-safe (`SafeRepoPath`),
+   order-preserving, idempotent, and skips the write when nothing changes.
+   Malformed JSON or a wrong-shaped `permissions`/`allow` is reported and left
+   untouched. A project at `$HOME` is refused, because its `.claude/settings.json`
+   is the global file. A permission failure is reported, not raised: the rules
+   are a convenience, and quarry still works with prompts.
+
+### Rejected alternatives
+
+- **Keep auto-grant and add an opt-out.** It still grants before the user
+  asks.
+- **Ask once on first session.** It adds prompt state and a second consent
+  path, when `enable` already captures intent.
+- **A separate `quarry permissions` command.** It adds a step the operator
+  judged redundant with `enable`.
+- **Remove the rules earlier versions added globally.** The plugin cannot tell
+  its own entries from identical ones the user wrote, so deleting them silently
+  repeats the original problem. They are documented instead.

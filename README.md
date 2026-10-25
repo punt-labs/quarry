@@ -253,6 +253,17 @@ knowledge automatically, with no action from you:
 Every hook fails open — a hook failure never blocks Claude Code — and each is
 independently toggleable in `.punt-labs/quarry/config.md`.
 
+**Permissions.** The plugin never edits a Claude settings file on its own.
+Running `quarry enable` is your consent: it adds quarry's allow rules
+(`mcp__quarry__*` plus `Skill(find)`, `Skill(ingest)`, and the other quarry
+commands) to that project's `.claude/settings.json`, so Claude calls quarry
+without a prompt in that project only, and prints each rule it added. Every
+other setting and rule in the file is kept. `quarry disable` removes exactly
+those rules. To be asked before each quarry call, delete them from
+`permissions.allow` after enabling. Earlier versions added the same rules to
+your user-global `~/.claude/settings.json` at session start; those entries
+stay until you delete them.
+
 Captures are scrubbed at write time (secrets, paths, emails, hostnames)
 through a single choke point before they ever reach disk. The scrub is
 pattern-based and best-effort, not a formal guarantee of catching every

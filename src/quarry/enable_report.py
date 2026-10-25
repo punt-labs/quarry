@@ -58,6 +58,10 @@ class EnableReport:
                 (r.gitignore_ensured, "  .gitignore excludes captures and lock files"),
             )
         )
+        lines += r.permissions.lines(
+            "Allowed quarry tools in",
+            unchanged="  Quarry tools already allowed in .claude/settings.json",
+        )
         return lines + self._ethos_lines()
 
     def _ethos_lines(self) -> list[str]:
@@ -131,4 +135,4 @@ class DisableReport:
                 ),
             )
         )
-        return lines
+        return lines + r.permissions.lines("Removed quarry tool permissions from")

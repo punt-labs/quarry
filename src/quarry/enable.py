@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, final
 
+from quarry.claude_permissions import PermissionChange, ProjectPermissions
 from quarry.ethos_memory import EthosMemoryBootstrap, EthosMemoryResult
 from quarry.safe_paths import SafeRepoPath
 
@@ -47,7 +48,8 @@ class EnableResult:
     The four CLAUDE.md/.gitignore fields track the § 2.3 steps: guide
     deposit, ``enabled`` marker, ``@``-import line, and ``.gitignore`` entry.
     ``ethos`` is the bootstrap's own per-handle outcome, carried whole rather
-    than flattened into parallel lists.
+    than flattened into parallel lists. ``permissions`` is the § 2.8 allow-rule
+    grant in the repo's ``.claude/settings.json`` (#552).
     """
 
     directory: str
@@ -60,6 +62,7 @@ class EnableResult:
     import_registered: bool = False
     gitignore_ensured: bool = False
     ethos: EthosMemoryResult = field(default_factory=EthosMemoryResult)
+    permissions: PermissionChange = field(default_factory=PermissionChange)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +82,7 @@ class DisableResult:
     config_removed: bool = False
     import_pruned: bool = False
     enabled_marker_removed: bool = False
+    permissions: PermissionChange = field(default_factory=PermissionChange)
 
 
 _CONFIG_TEMPLATE = """\
@@ -155,6 +159,9 @@ def enable_project(
     if claudemd.import_registered:
         logger.info("Registered quarry @-import in CLAUDE.md")
     config_path = _write_project_config(directory)
+    # Running enable is the operator's consent to quarry's allow rules (#552);
+    # they land last, once the project is otherwise fully enabled.
+    permissions = ProjectPermissions(directory).grant()
 
     return EnableResult(
         directory=str(directory),
@@ -167,6 +174,7 @@ def enable_project(
         import_registered=claudemd.import_registered,
         gitignore_ensured=claudemd.gitignore_ensured,
         ethos=ethos,
+        permissions=permissions,
     )
 
 
@@ -248,6 +256,7 @@ class _DisableOrchestrator:
         """Drive the ordered steps and assemble the result."""
         config_removed = self._remove_config_file()
         claudemd = self._disable_enablement()
+        permissions = ProjectPermissions(self._directory).revoke()
         removed = self._deregister_covering()
         self._purge_captures()
         collection = self._covering.collection if self._covering is not None else ""
@@ -259,6 +268,7 @@ class _DisableOrchestrator:
             config_removed=config_removed,
             import_pruned=claudemd.import_pruned,
             enabled_marker_removed=claudemd.enabled_marker_removed,
+            permissions=permissions,
         )
 
     def _remove_config_file(self) -> bool:
