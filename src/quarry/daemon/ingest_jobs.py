@@ -64,8 +64,9 @@ class IngestJob:
         """Return a snapshot of the source URL; an ``ingest`` has no client copy.
 
         The source is the recoverable unit — re-issuing the ingest re-fetches it.
-        It is stored as given (a plain ingest already persists the URL verbatim),
-        so recovery has the exact URL to retry.
+        It is spooled in its stored form, never verbatim: the spool is on disk, so
+        a query secret is kept only as its digest and userinfo and fragment are
+        dropped.  A URL that carried a query must be re-issued by the operator.
         """
         return SpoolRecord(
             kind="ingest",

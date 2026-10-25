@@ -188,6 +188,21 @@ class TestOverwriteReplacesTheLegacyName:
         _store(db, "https://example.com/page", overwrite=False)
         assert _names(db) == {"https://example.com/page"}
 
+    def test_a_failed_store_keeps_the_legacy_twin(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(*_args: object, **_kwargs: object) -> int:
+            msg = "disk full"
+            raise OSError(msg)
+
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        monkeypatch.setattr(
+            "quarry.ingestion.chunk_store_funnel.DocumentStreamer.insert", fail
+        )
+        with pytest.raises(OSError, match="disk full"):
+            _store(db, "https://example.com/caf%C3%A9", overwrite=True)
+        assert _names(db) == {"https://example.com/café"}
+
     def test_a_label_that_looks_like_a_url_is_never_replaced(
         self, db: Database
     ) -> None:

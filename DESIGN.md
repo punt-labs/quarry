@@ -3189,7 +3189,8 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      ratio. One 677-character page measured 0.341.
    - A refused payload or a failed fetch fails with a URL-free reason on every
      surface (CLI, HTTP, MCP and task) and never logs a traceback. A refusal is
-     always an exception; it is never an empty "completed" result.
+     always an exception; it is never an empty "completed" result. The plugin's
+     hooks reach the same daemon routes, so the refusal covers that surface too.
    - A job that stores nothing fails as well. `RefusalAwareTerminal` is the one
      place that decides a task's terminal state: a plain ingest, bulk crawl,
      capture, or remember that wrote no rows fails with a fixed reason chosen

@@ -429,6 +429,17 @@ class TestOversizedLabels:
         )
         self._assert_refused(resp.status_code, resp.json(), "summary", daemon)
 
+    def test_remember_refuses_an_oversized_non_string_label(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        resp = http.post(
+            "/v1/remember",
+            json={"name": "n.md", "content": _CLEAN, "summary": [self._BIG]},
+        )
+        assert resp.status_code == 400
+        assert "row budget exceeded: summary" in resp.json()["error"]
+        assert len(daemon.ctx.tasks) == 0
+
     def test_remember_refuses_an_oversized_name(
         self, http: TestClient, daemon: InProcessDaemon
     ) -> None:

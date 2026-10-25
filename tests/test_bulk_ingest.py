@@ -148,6 +148,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
                 }
             ],
@@ -171,6 +172,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
                 }
             ],
@@ -197,6 +199,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "not-a-timestamp",
                 }
             ],
@@ -227,6 +230,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
                 }
             ],
@@ -254,6 +258,7 @@ class TestPartition:
             [
                 {
                     "document_name": "https://example.com/p",
+                    "document_path": "https://example.com/p",
                     "ingestion_timestamp": "2025-01-01T00:00:00+00:00",
                 }
             ],
@@ -581,6 +586,7 @@ def test_dedup_treats_a_legacy_named_document_as_the_existing_one() -> None:
     legacy = [
         {
             "document_name": "https://example.com/caf\u00e9?utm=1",
+            "document_path": "https://example.com/caf\u00e9?utm=1",
             "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
         }
     ]
@@ -589,3 +595,26 @@ def test_dedup_treats_a_legacy_named_document_as_the_existing_one() -> None:
     ):
         to_ingest, skipped = SafeEntrySelector().partition([entry], _context())
     assert (to_ingest, skipped) == ([], 1)
+
+
+def test_dedup_ignores_a_label_that_only_looks_like_the_page() -> None:
+    from datetime import UTC, datetime
+    from unittest.mock import patch
+
+    from quarry.sitemap import SitemapEntry
+
+    entry = SitemapEntry(
+        loc="https://example.com/p", lastmod=datetime(2025, 1, 1, tzinfo=UTC)
+    )
+    label = [
+        {
+            "document_name": "https://example.com/p",
+            "document_path": "",
+            "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
+        }
+    ]
+    with patch(
+        "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=label
+    ):
+        to_ingest, skipped = SafeEntrySelector().partition([entry], _context())
+    assert (to_ingest, skipped) == ([(HttpUrl("https://example.com/p"), None)], 0)

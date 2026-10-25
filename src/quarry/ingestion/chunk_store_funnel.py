@@ -79,17 +79,19 @@ class ChunkStoreFunnel:
         return chunks
 
     @staticmethod
-    def _replace_prior(chunks: list[Chunk], context: IngestContext) -> None:
-        """Delete what the document replaces: its earlier chunks, if overwriting.
+    def _replace_prior(chunks: list[Chunk], context: IngestContext) -> list[str]:
+        """Delete the document's earlier chunks, if overwriting; return its twins.
 
-        A copy an older build stored under a former spelling of the same URL goes
-        too, overwriting or not, when this document was fetched from a URL, so a
-        re-ingest leaves one document, not two.  Every chunk of a document carries
-        its name.  Whether it was fetched from a URL is the caller's fact, carried on
-        the *context*, not read back from the document's path: a label that merely
-        looks like a URL is not a page.
+        A copy an older build stored under a former spelling of the same URL is
+        replaced too, overwriting or not, when this document was fetched from a
+        URL, so a re-ingest leaves one document, not two.  That copy is returned,
+        not deleted: it goes only once the new document is stored.
+
+        Every chunk of a document carries its name.  Whether it was fetched from a
+        URL is the caller's fact, carried on the *context*, not read back from the
+        document's path: a label that merely looks like a URL is not a page.
         """
-        RunContext.legacy_names_of(context).replace_prior(
+        return RunContext.legacy_names_of(context).replace_prior(
             chunks[0].document_name,
             context.collection,
             overwrite=context.overwrite,
@@ -103,14 +105,18 @@ class ChunkStoreFunnel:
         progress: Progress,
         context: IngestContext,
     ) -> int:
-        """Delete the prior document (if overwriting), then embed and store."""
-        ChunkStoreFunnel._replace_prior(chunks, context)
+        """Delete the prior document (if overwriting), embed and store, then drop
+        any legacy-named copy the stored document replaces."""
+        twins = ChunkStoreFunnel._replace_prior(chunks, context)
         progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
         inserted = DocumentStreamer(context.settings).insert(
             chunks, context.database.store, document_name
         )
         RunContext.note_stored(context, document_name)
+        RunContext.legacy_names_of(context).drop_legacy(
+            chunks[0].document_name, twins, context.collection
+        )
         logger.info(
             "pipeline: embedded + stored %d chunks in %.2fs",
             inserted,
