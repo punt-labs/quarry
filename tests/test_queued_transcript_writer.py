@@ -146,7 +146,7 @@ async def test_a_job_that_never_finishes_aborts_the_run(
     ):
         await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
     await ctx.ingest_queue.aclose(drain_timeout=1.0)
-    assert raised.value.outcome is WriteOutcome.ABORTED
+    assert raised.value.outcome is WriteOutcome.ABORTED_RUNNING  # it had started
 
 
 def test_a_closed_loop_aborts_the_run_at_once(tmp_path: Path) -> None:
@@ -197,11 +197,13 @@ async def test_a_cancelled_job_means_the_daemon_is_shutting_down(
     ctx = ctx_with_queue(tmp_path)
     writer = writer_for(ctx, asyncio.get_running_loop())
 
-    async def cancelled(_self: QueuedIngest, _job: object) -> TaskState:
+    async def cancelled(
+        _self: QueuedIngest, _job: object, _state: TaskState
+    ) -> TaskState:
         raise asyncio.CancelledError
 
     with (
-        patch.object(QueuedIngest, "run", cancelled),
+        patch.object(QueuedIngest, "run_tracked", cancelled),
         pytest.raises(BackfillWriteError, match="daemon shutting down") as raised,
     ):
         await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
@@ -221,9 +223,91 @@ async def test_a_stop_is_honored_within_a_second_whatever_the_policy_allows(
     started = time.monotonic()
 
     with pytest.raises(BackfillWriteError, match="task cancelled") as raised:
-        await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
+        await asyncio.to_thread(
+            writer.write, "proj-captures", _session(tmp_path), _SNAPSHOT
+        )
 
     assert time.monotonic() - started < 3.0
     assert raised.value.outcome is WriteOutcome.ABORTED
     gate.set()
     await ctx.ingest_queue.aclose(drain_timeout=2.0)
+
+
+async def test_a_stop_while_the_job_is_queued_behind_another_never_lets_it_write(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    stop = StopSignal()
+    writer = writer_for(ctx, asyncio.get_running_loop(), stop)
+    gate = asyncio.Event()
+    admit_like_a_hook(ctx, BlockingUnit(gate))  # the worker is held by a hook's job
+    wrote: list[str] = []
+
+    async def records(_self: ScrubbedIngestJob, _ctx: object, state: TaskState) -> None:
+        wrote.append("written")
+        state.status = "completed"
+
+    asyncio.get_running_loop().call_later(0.2, stop.set, "task cancelled")
+    with (
+        patch.object(ScrubbedIngestJob, "run", records),
+        pytest.raises(BackfillWriteError, match="task cancelled") as raised,
+    ):
+        await asyncio.to_thread(
+            writer.write, "proj-captures", _session(tmp_path), _SNAPSHOT
+        )
+    gate.set()  # the worker is free again: the abandoned job must not run
+    await ctx.ingest_queue.aclose(drain_timeout=2.0)
+
+    assert raised.value.outcome is WriteOutcome.ABORTED
+    assert wrote == []
+
+
+async def test_a_stop_while_the_job_is_running_counts_it_as_having_run(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    stop = StopSignal()
+    writer = writer_for(ctx, asyncio.get_running_loop(), stop)
+    gate = asyncio.Event()
+
+    async def holds(_self: ScrubbedIngestJob, _ctx: object, state: TaskState) -> None:
+        await gate.wait()
+        state.status = "completed"
+
+    asyncio.get_running_loop().call_later(0.3, stop.set, "task cancelled")
+    with (
+        patch.object(ScrubbedIngestJob, "run", holds),
+        pytest.raises(BackfillWriteError) as raised,
+    ):
+        await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
+    gate.set()
+    await ctx.ingest_queue.aclose(drain_timeout=2.0)
+
+    assert raised.value.outcome is WriteOutcome.ABORTED_RUNNING
+
+
+async def test_a_job_that_times_out_still_queued_never_writes_later(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    writer = writer_for(ctx, asyncio.get_running_loop(), policy=_QUICK)
+    gate = asyncio.Event()
+    admit_like_a_hook(ctx, BlockingUnit(gate))  # a hung worker holds the FIFO
+    wrote: list[str] = []
+
+    async def records(_self: ScrubbedIngestJob, _ctx: object, state: TaskState) -> None:
+        wrote.append("written")
+        state.status = "completed"
+
+    with (
+        patch.object(ScrubbedIngestJob, "run", records),
+        pytest.raises(BackfillWriteError, match="did not finish within") as raised,
+    ):
+        await asyncio.to_thread(
+            writer.write, "proj-captures", _session(tmp_path), _SNAPSHOT
+        )
+    gate.set()
+    await ctx.ingest_queue.aclose(drain_timeout=2.0)
+
+    assert raised.value.outcome is WriteOutcome.ABORTED
+    assert wrote == []

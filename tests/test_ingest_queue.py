@@ -22,7 +22,8 @@ from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskRegistry, TaskState, task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
+from quarry.daemon.tasks import TaskRegistry, TaskState
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
@@ -94,7 +95,7 @@ class _StubUnit:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Record entry, wait as configured, then record a terminal status."""
         del ctx  # the stub ignores the daemon context; the queue passes it through
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             self.ledger.enter(self.collection)
             try:
                 if self.gate is not None:

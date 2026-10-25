@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
 from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
 
@@ -59,7 +59,7 @@ class CollectionFinalizeJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the coalesced FTS rebuild + optimize off-thread (DES-045 §9)."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             await run_in_threadpool(self._finalize)
             state.status = "completed"
 
@@ -101,7 +101,7 @@ class CollectionPurgeJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete the collection's chunks off-thread, recording the count."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             deleted = await run_in_threadpool(self._purge)
             state.status = "completed"
             state.results = {"deleted": deleted}

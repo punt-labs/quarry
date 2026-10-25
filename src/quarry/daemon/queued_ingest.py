@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
+from quarry.daemon.job_admission import JobAdmission
+from quarry.daemon.job_claim import JobClaim
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskState
 
@@ -16,8 +18,6 @@ if TYPE_CHECKING:
     from quarry.daemon.ingest_unit import IngestUnit
 
 _POLL_S = 0.05
-_FIRST_BACKOFF_S = 0.05
-_MAX_BACKOFF_S = 1.0
 _TERMINAL = frozenset({"completed", "failed"})
 
 
@@ -61,8 +61,9 @@ class QueuedIngest:
     in a refusal that says which, never a drop and never a hang.
     """
 
-    __slots__ = ("_ctx", "_kind", "_policy")
+    __slots__ = ("_admission", "_ctx", "_kind", "_policy")
 
+    _admission: JobAdmission
     _ctx: DaemonContext
     _kind: str
     _policy: QueuePolicy
@@ -77,45 +78,42 @@ class QueuedIngest:
         self._ctx = ctx
         self._kind = kind
         self._policy = policy
+        self._admission = JobAdmission(ctx, policy.admit_timeout_s, policy.reserve)
         return self
 
+    def new_state(self) -> TaskState:
+        """Return the private state a job submitted here reports through."""
+        return TaskState(
+            task_id=f"{self._kind}-{uuid.uuid4().hex[:12]}",
+            kind=self._kind,
+            status="new",
+        )
+
     async def run(self, job: IngestUnit) -> TaskState:
-        """Return *job*'s terminal state once its worker has finished it.
+        """Return *job*'s terminal state once its worker has finished it."""
+        return await self.run_tracked(job, self.new_state())
+
+    async def run_tracked(self, job: IngestUnit, state: TaskState) -> TaskState:
+        """Return *job*'s terminal state, reporting through *state*.
+
+        The caller keeps *state* (from :meth:`new_state`), so a producer that
+        stops waiting can withdraw the job and learn whether it had started.
+        A job still waiting when this wait ends for any reason is withdrawn: its
+        worker skips it, so nothing the producer gave up on is written later.
 
         Raises:
             IngestRefusedError: The daemon is shutting down, the queue had no
                 room within the wait, the worker died, or the job did not finish
                 within the deadline; its ``reason`` says which.
         """
-        state = TaskState(
-            task_id=f"{self._kind}-{uuid.uuid4().hex[:12]}", kind=self._kind
-        )
         key = RouteKey(self._ctx.database_name, job.collection)
-        await self._admit(key, job, state)
-        await self._finish(key, state)
+        try:
+            await self._admission.take(key, job, state)
+            await self._finish(key, state)
+        except (asyncio.CancelledError, IngestRefusedError):
+            JobClaim(state).withdraw()
+            raise
         return state
-
-    async def _admit(self, key: RouteKey, job: IngestUnit, state: TaskState) -> None:
-        """Wait for a slot, backing off, but never past the deadline or a shutdown."""
-        queue = self._ctx.ingest_queue
-        gate = queue.gate
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._policy.admit_timeout_s
-        delay = _FIRST_BACKOFF_S
-        # One synchronous step (no await between the look and the take), so a
-        # hook cannot slip into the headroom this producer was told it had.
-        while not (
-            gate.has_room(self._policy.reserve) and queue.try_submit(key, job, state)
-        ):
-            if gate.closing:
-                msg = "daemon shutting down"
-                raise IngestRefusedError.because(IngestRefusal.SHUTTING_DOWN, msg)
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                msg = "ingest queue full; not admitted in time"
-                raise IngestRefusedError.because(IngestRefusal.NOT_ADMITTED, msg)
-            await gate.wait_released(min(delay, remaining))
-            delay = min(delay * 2, _MAX_BACKOFF_S)
 
     async def _finish(self, key: RouteKey, state: TaskState) -> None:
         """Wait for a terminal state while the worker lives and the deadline holds."""

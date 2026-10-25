@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from quarry.daemon.tasks import TaskState, task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
+from quarry.daemon.tasks import TaskState
 from quarry.failure_reason import FailureReason
 from quarry.refusal import RefusalError
 from quarry.reported_error import ReportedError
@@ -47,12 +48,12 @@ def _fail(exc: Exception) -> None:
 class TestTheTaskTerminal:
     def test_a_reported_error_ends_the_task_with_the_recorded_class(self) -> None:
         state = TaskState(task_id="t", kind="ingest")
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             _fail(ReportedError("ValueError"))
         assert (state.status, state.error) == ("failed", "internal error: ValueError")
 
     def test_a_plain_exception_ends_the_task_with_its_class(self) -> None:
         state = TaskState(task_id="t", kind="ingest")
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             _fail(KeyError("k"))
         assert state.error == "internal error: KeyError"

@@ -8,29 +8,20 @@ than as a four-argument task function.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import final
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskState, task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
+from quarry.daemon.tasks import TaskState
 from quarry.http_guards import RequestGuards
 
 # Both bodies carry only small option dicts.
 MAX_MAINTENANCE_BODY_BYTES = 16 * 1024
-
-
-@dataclass(frozen=True, slots=True)
-class BackfillArgs:
-    """The validated backfill options, bundled as one value."""
-
-    dry_run: bool
-    collection: str
-    project: str
-    limit: int
 
 
 @final
@@ -99,7 +90,7 @@ class MaintenanceRoutes(RouteGroup):
         skip is ``False`` with a ``reason``, never a false success — and reads
         the fragment count from the outcome so the table is scanned only once.
         """
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             opt = self.ctx.database.optimizer
             outcome = await run_in_threadpool(lambda: opt.optimize(force=force))
             state.status = "completed"
@@ -116,14 +107,8 @@ class MaintenanceRoutes(RouteGroup):
         """Run the transcript backfill in a worker thread and record its stats."""
         from quarry.daemon.backfill_task import BackfillTask  # noqa: PLC0415
 
-        with task_terminal(state):
-            await BackfillTask(self.ctx).run(
-                state,
-                dry_run=args.dry_run,
-                collection=args.collection,
-                project=args.project,
-                limit=args.limit,
-            )
+        with TaskTerminal.recording(state):
+            await BackfillTask(self.ctx).run(state, args)
 
     async def _body_flag(
         self, request: Request, key: str, *, default: bool

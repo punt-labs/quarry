@@ -1,4 +1,4 @@
-"""Background-task bookkeeping for the daemon: state, GC, and terminal recording.
+"""Background-task bookkeeping for the daemon: state and GC.
 
 Every long-running REST operation (sync, ingest, remember, delete, register,
 deregister) runs as an asyncio task and reports progress through a ``TaskState``
@@ -11,16 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Self, final
-
-from quarry.failure_reason import FailureReason
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
+from typing import Self, final
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +30,13 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed"})
 
 @dataclass(slots=True)
 class TaskState:
-    """Tracks the state of an in-progress or completed background task."""
+    """Tracks the state of an in-progress or completed background task.
+
+    ``holds_thread`` is set while a scan thread this task started is alive: the
+    singleton guard counts the task as running until the thread has returned,
+    whatever ``status`` says.  ``claim`` is the lock under which a job is run
+    or withdrawn, never both (:class:`~quarry.daemon.job_claim.JobClaim`).
+    """
 
     task_id: str
     kind: str  # "sync", "ingest", "remember", "delete", "register", "deregister"
@@ -43,30 +44,10 @@ class TaskState:
     results: dict[str, object] = field(default_factory=dict)
     error: str = ""
     created_at: float = field(default_factory=time.monotonic)
-
-
-@contextmanager
-def task_terminal(state: TaskState) -> Generator[None]:
-    """Record *state*'s terminal status when its background body exits.
-
-    Cancellation is recorded and re-raised; any other exception is logged and recorded
-    as ``FailureReason.of`` words it: a refusal's text, else ``internal error: <Class>``
-    (a ReportedError's carried class); a body that sets no terminal status fails.
-    """
-    try:
-        yield
-    except asyncio.CancelledError:
-        state.status = "failed"
-        state.error = "task was cancelled"
-        raise
-    except Exception as exc:
-        logger.exception("Background %s failed", state.kind)
-        state.status = "failed"
-        state.error = FailureReason.of(exc)
-    finally:
-        if state.status == "running":
-            state.status = "failed"
-            state.error = "task exited without setting terminal status"
+    holds_thread: bool = False
+    claim: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
 
 @final
@@ -195,6 +176,8 @@ class TaskRegistry:
     def running_of_kind(self, kind: str) -> TaskState | None:
         """Return a still-running task of *kind*, or ``None`` if none is active.
 
+        A task whose scan thread is still alive is running, however it ended.
+
         ``None`` is the documented contract — the sync route uses it to decide
         whether to reject a concurrent request with 409.
         """
@@ -202,7 +185,7 @@ class TaskRegistry:
             (
                 t
                 for t in self._states.values()
-                if t.kind == kind and t.status == "running"
+                if t.kind == kind and (t.status == "running" or t.holds_thread)
             ),
             None,
         )

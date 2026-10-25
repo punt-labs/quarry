@@ -98,8 +98,8 @@ class IngestQueue:
         """Admit *job* onto *key*'s FIFO worker; ``False`` if it cannot.
 
         Non-blocking: reaps stale workers, takes an admission slot without
-        waiting, marks the task ``queued``, lazily starts the route key's
-        worker, and hands off.  Returns ``False`` (the caller 503s) when the
+        waiting, lazily starts the route key's worker, and hands off (the worker
+        marks the task ``queued``).  Returns ``False`` (the caller 503s) when the
         depth bound is hit or the worker cap is full of busy route keys — never
         awaits I/O, so the hook's 202 stays immediate (I-NOBLOCK).
         """
@@ -109,7 +109,6 @@ class IngestQueue:
         if worker is None:
             self._gate.release()
             return False
-        state.status = "queued"
         worker.enqueue(job, state)
         return True
 

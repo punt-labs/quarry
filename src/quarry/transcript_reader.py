@@ -8,7 +8,7 @@ import logging
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, final
 
 from quarry.transcript_turns import TurnText
 
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@final
 class TranscriptReader:
     """Reads a Claude Code JSONL transcript into conversation text and archives it.
 
@@ -38,27 +39,42 @@ class TranscriptReader:
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
         self._path = path
-        # Read once, here: a SubagentStop asks one reader for the conversation
-        # text and for the final turn, and a 500 KB transcript must not be
-        # parsed again per question.
-        self._records = tuple(cls._parse(path))
+        self._records = tuple(cls._parse(cls._read_leniently(path)))
         return self
 
-    @staticmethod
-    def _parse(path: Path) -> Iterator[dict[str, object]]:
-        """Yield each parsed JSON object in *path*, in file order.
+    @classmethod
+    def from_text(cls, path: Path, raw: str) -> Self:
+        """Return the reader for *path*'s conversation, given the *raw* text it held.
 
-        The one read every extraction shares: a missing or unreadable file
-        yields nothing, and a line that is not a JSON object is skipped, so
-        no extraction ever sees a partial or malformed record.
+        The one parse every extraction shares, done once, here: a SubagentStop
+        asks one reader for the conversation text and for the final turn, and a
+        500 KB transcript must not be parsed again per question.  A caller that
+        must tell a read fault from an empty conversation reads the file
+        itself, strictly, and hands the text it got to this.
         """
+        reader = super().__new__(cls)
+        reader._path = path
+        reader._records = tuple(cls._parse(raw))
+        return reader
+
+    @staticmethod
+    def _read_leniently(path: Path) -> str:
+        """Return *path*'s text; a missing or unreadable file yields ``""``."""
         if not path.is_file():
-            return
+            return ""
         try:
-            raw = path.read_text()
+            return path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             logger.warning("transcript: could not read %s", path)
-            return
+            return ""
+
+    @staticmethod
+    def _parse(raw: str) -> Iterator[dict[str, object]]:
+        """Yield each parsed JSON object in *raw*, in file order.
+
+        A line that is not a JSON object is skipped, so no extraction ever sees a
+        partial or malformed record.
+        """
         for line in raw.splitlines():
             try:
                 obj = json.loads(line)

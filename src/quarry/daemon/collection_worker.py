@@ -18,6 +18,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.abort_reason import AbortReason
+from quarry.daemon.job_claim import JobClaim
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,6 +85,7 @@ class CollectionWorker:
 
     def enqueue(self, job: IngestUnit, state: TaskState) -> None:
         """Append a job (with its task state) to this FIFO queue (never blocks)."""
+        JobClaim(state).enqueue()
         self._queue.put_nowait(_Queued(job, state))
 
     def stop(self) -> None:
@@ -150,15 +152,13 @@ class CollectionWorker:
                 return
             self._running = True
             try:
-                item.state.status = "running"  # queued -> running on dequeue
                 # No coroutine-level timeout: job.run offloads the ingest to a
                 # non-cancellable threadpool thread, so asyncio.wait_for could
                 # not interrupt a hang — it would await the thread anyway and
                 # hold the gate for the whole hang.  The one genuinely unbounded
                 # wait is the web fetch, bounded by its own total deadline + size
                 # cap (web_fetch.py); embed + LanceDB write are finite.
-                async with self._embed_gate:  # global embed-concurrency bound
-                    await item.job.run(self._ctx, item.state)  # records terminal
+                await JobClaim(item.state).run(item.job, self._ctx, self._embed_gate)
             except asyncio.CancelledError:
                 # The drain-timeout abort cancels this task through the await
                 # chain, so the in-flight job is aborted HERE — not in abort(),
@@ -166,7 +166,7 @@ class CollectionWorker:
                 # capture returns None; its .md survives) so an admitted
                 # remember/ingest is never silently lost, then let the
                 # cancellation propagate.  This also covers a job cancelled while
-                # still awaiting the embed gate (its task_terminal never ran).
+                # still awaiting the embed gate (its TaskTerminal never ran).
                 item.state.status = "failed"
                 item.state.error = AbortReason.for_settings(self._ctx.settings).of(
                     item.job

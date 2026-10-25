@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry import backfill
-from quarry.daemon.guarded_scan import GuardedScan
+from quarry.daemon.bounded_scan import BoundedScan
 from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
+from quarry.daemon.run_record import RunRecord
 from quarry.daemon.thread_call import ThreadCall
 from quarry.stop_signal import StopSignal
 
 if TYPE_CHECKING:
+    from quarry.daemon.backfill_args import BackfillArgs
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
 
@@ -25,34 +27,35 @@ class BackfillTask:
     did; every write goes through :class:`QueuedTranscriptWriter`, the single
     writer each collection has, so backfill holds no connection of its own.  The
     run's stop signal is set (with its reason) when the queue closes and when
-    this task is cancelled (:class:`GuardedScan`).  The task ends ``failed``
+    this task is cancelled (:class:`BoundedScan`).  The task ends ``failed``
     when it stored nothing and left something undone, else ``completed``.
     """
 
-    __slots__ = ("_ctx",)
+    # Seconds the run waits for the scan thread to return after a stop.  The
+    # scan checks the stop before every step it controls, so the longest it can
+    # still be busy is one step it cannot interrupt (a transcript's read, scrub
+    # or capture write, seconds even on a slow disk): half a minute fires only
+    # on a hang, never on a slow step.
+    STOP_BOUND_S: ClassVar[float] = 30.0
 
+    __slots__ = ("_bound_s", "_ctx")
+
+    _bound_s: float
     _ctx: DaemonContext
 
-    def __new__(cls, ctx: DaemonContext) -> Self:
+    def __new__(cls, ctx: DaemonContext, bound_s: float = STOP_BOUND_S) -> Self:
         self = super().__new__(cls)
         self._ctx = ctx
+        self._bound_s = bound_s
         return self
 
-    async def run(
-        self,
-        state: TaskState,
-        *,
-        dry_run: bool,
-        collection: str,
-        project: str,
-        limit: int,
-    ) -> None:
-        """Backfill, recording the stats and the outcome on *state*."""
+    async def run(self, state: TaskState, args: BackfillArgs) -> None:
+        """Backfill as *args* says, recording the stats and the outcome on *state*."""
         config = backfill.BackfillConfig(
-            dry_run=dry_run,
-            collection_override=collection,
-            project_filter=project,
-            limit=limit,
+            dry_run=args.dry_run,
+            collection_override=args.collection,
+            project_filter=args.project,
+            limit=args.limit,
         )
         stop = StopSignal()
         call = ThreadCall.here(stop, DEFAULT_QUEUE_POLICY.total_s)
@@ -61,12 +64,8 @@ class BackfillTask:
             self._ctx.database, writer, self._ctx.settings.registry_path, stop
         )
         with self._ctx.ingest_queue.gate.stopping(stop):
-            stats = await GuardedScan(stop).run(
-                partial(backfill.Backfill.sessions, config, runtime)
+            await BoundedScan(stop, self._bound_s).run(
+                partial(backfill.Backfill.sessions, config, runtime),
+                state,
+                RunRecord(state, dry_run=args.dry_run).stats,
             )
-        state.results = stats.as_results(dry_run=dry_run)
-        if stats.stored_nothing:
-            state.status = "failed"
-            state.error = f"backfill stored nothing: {stats.errors[0]}"
-        else:
-            state.status = "completed"

@@ -62,14 +62,12 @@ class ThreadCall:
             msg = "event loop closed"
             raise ThreadCallAbortedError(msg) from exc
         deadline = time.monotonic() + self._total_s
-        while True:
-            try:
-                return future.result(timeout=_POLL_S)
-            except (concurrent.futures.CancelledError, asyncio.CancelledError) as exc:
-                msg = "daemon shutting down"
-                raise ThreadCallAbortedError(msg) from exc
-            except TimeoutError:
-                self._give_up_if_due(future, deadline)
+        while not concurrent.futures.wait((future,), timeout=_POLL_S).done:
+            self._give_up_if_due(future, deadline)
+        if future.cancelled():
+            msg = "daemon shutting down"
+            raise ThreadCallAbortedError(msg)
+        return future.result()
 
     def _give_up_if_due[T](
         self, future: concurrent.futures.Future[T], deadline: float

@@ -10,9 +10,11 @@ from typing import TYPE_CHECKING, final
 import pytest
 
 from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
+from quarry.daemon.job_claim import JobClaim
 from quarry.daemon.queued_ingest import QueuedIngest, QueuePolicy
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskState, task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
+from quarry.daemon.tasks import TaskState
 from tests.queue_fixtures import ctx_with_queue
 
 if TYPE_CHECKING:
@@ -53,7 +55,7 @@ class _Unit:
             raise _WorkerDied
         if self.silent:
             return  # no terminal state: the worker lives and the job never ends
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             self.events.append(("start", self.name))
             try:
                 if self.gate is not None:
@@ -253,3 +255,39 @@ async def test_hooks_are_admitted_while_a_backfill_waits_for_headroom(
     state = await backfill
     await ctx.ingest_queue.aclose(drain_timeout=2.0)
     assert state.status == "completed"
+
+
+async def test_a_withdrawn_job_is_skipped_by_its_worker_and_frees_its_slot(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path, depth=2)
+    events: list[tuple[str, str]] = []
+    gate = asyncio.Event()
+    assert _hook_submit(ctx, _Unit("hook", events, gate=gate))
+    state = TaskState(task_id="w", kind="backfill")
+    key = RouteKey("db", _COLLECTION)
+    assert ctx.ingest_queue.try_submit(key, _Unit("w", events), state)
+
+    assert JobClaim(state).withdraw()  # its producer stopped waiting
+    gate.set()
+    await ctx.ingest_queue.aclose(drain_timeout=2.0)
+
+    assert ("start", "w") not in events
+    assert state.status == "withdrawn"
+
+
+async def test_a_job_withdrawn_before_it_is_enqueued_never_runs(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    events: list[tuple[str, str]] = []
+    state = TaskState(task_id="w", kind="backfill", status="new")
+    assert JobClaim(state).withdraw()  # its producer gave up while it waited for a slot
+
+    assert ctx.ingest_queue.try_submit(
+        RouteKey("db", _COLLECTION), _Unit("w", events), state
+    )
+    await ctx.ingest_queue.aclose(drain_timeout=2.0)
+
+    assert events == []
+    assert state.status == "withdrawn"

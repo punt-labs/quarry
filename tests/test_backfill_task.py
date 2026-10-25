@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from quarry.backfill_stats import BackfillStats
+from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.backfill_task import BackfillTask
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
+from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskState
 from tests.queue_fixtures import ctx_with_queue
 
@@ -31,6 +33,9 @@ def _waited_for(stop: StopSignal, seconds: float = 10.0) -> bool:
     return False
 
 
+_ARGS = BackfillArgs(dry_run=False, collection="", project="", limit=0)
+
+
 async def _run(tmp_path: Path, stats: BackfillStats) -> TaskState:
     ctx = ctx_with_queue(tmp_path)
     state = TaskState(task_id="t", kind="backfill")
@@ -39,9 +44,7 @@ async def _run(tmp_path: Path, stats: BackfillStats) -> TaskState:
         return stats
 
     with patch("quarry.backfill.Backfill.sessions", fake):
-        await BackfillTask(ctx).run(
-            state, dry_run=False, collection="", project="", limit=0
-        )
+        await BackfillTask(ctx).run(state, _ARGS)
     return state
 
 
@@ -89,11 +92,7 @@ async def test_a_queue_that_closes_stops_the_scan_on_its_thread(tmp_path: Path) 
         )
 
     with patch("quarry.backfill.Backfill.sessions", waits_for_stop):
-        task = asyncio.create_task(
-            BackfillTask(ctx).run(
-                state, dry_run=False, collection="", project="", limit=0
-            )
-        )
+        task = asyncio.create_task(BackfillTask(ctx).run(state, _ARGS))
         await asyncio.sleep(0.1)
         await ctx.ingest_queue.aclose(drain_timeout=1.0)
         await asyncio.wait_for(task, timeout=10)
@@ -118,11 +117,7 @@ async def test_a_cancelled_task_stops_the_scan_on_its_thread(tmp_path: Path) -> 
         return BackfillStats()
 
     with patch("quarry.backfill.Backfill.sessions", waits_for_stop):
-        task = asyncio.create_task(
-            BackfillTask(ctx).run(
-                state, dry_run=False, collection="", project="", limit=0
-            )
-        )
+        task = asyncio.create_task(BackfillTask(ctx).run(state, _ARGS))
         await asyncio.sleep(0.1)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -141,9 +136,7 @@ async def test_the_run_writes_through_the_fifo_over_the_daemons_registry(
 
     with patch("quarry.backfill.Backfill.sessions", records_the_runtime):
         state = TaskState(task_id="t", kind="backfill")
-        await BackfillTask(ctx).run(
-            state, dry_run=False, collection="", project="", limit=0
-        )
+        await BackfillTask(ctx).run(state, _ARGS)
 
     assert state.results["ingested"] == 2
     assert isinstance(seen[0].writer, QueuedTranscriptWriter)
@@ -161,11 +154,7 @@ async def test_a_cancelled_task_gives_its_reason_to_the_scan(tmp_path: Path) -> 
         return BackfillStats()
 
     with patch("quarry.backfill.Backfill.sessions", records_the_reason):
-        task = asyncio.create_task(
-            BackfillTask(ctx).run(
-                state, dry_run=False, collection="", project="", limit=0
-            )
-        )
+        task = asyncio.create_task(BackfillTask(ctx).run(state, _ARGS))
         await asyncio.sleep(0.1)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -207,11 +196,7 @@ async def test_a_cancelled_run_is_not_over_until_its_thread_returns(
         return BackfillStats()
 
     with patch("quarry.backfill.Backfill.sessions", lingers_after_the_stop):
-        task = asyncio.create_task(
-            BackfillTask(ctx).run(
-                state, dry_run=False, collection="", project="", limit=0
-            )
-        )
+        task = asyncio.create_task(BackfillTask(ctx).run(state, _ARGS))
         await asyncio.sleep(0.1)
         task.cancel()
         await asyncio.sleep(0.3)
@@ -225,3 +210,85 @@ async def test_a_cancelled_run_is_not_over_until_its_thread_returns(
 
     assert finished.is_set()
     assert task.cancelled()
+
+
+async def test_a_cancelled_run_reports_the_reason_it_really_stopped_for(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    state = TaskState(task_id="t", kind="backfill")
+
+    def stops_for_the_shutdown(
+        _config: object, runtime: BackfillRuntime
+    ) -> BackfillStats:
+        _waited_for(runtime.stop)
+        return BackfillStats(
+            not_attempted=1,
+            stopped=runtime.stop.reason,
+            errors=[f"backfill stopped: {runtime.stop.reason}"],
+        )
+
+    with patch("quarry.backfill.Backfill.sessions", stops_for_the_shutdown):
+        task = asyncio.create_task(BackfillTask(ctx).run(state, _ARGS))
+        await asyncio.sleep(0.1)
+        await ctx.ingest_queue.aclose(drain_timeout=1.0)  # the daemon is stopping
+        task.cancel()  # ... and then the task is cancelled
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert state.results["stop_reason"] == "daemon shutting down"
+
+
+async def test_a_double_cancel_does_not_abandon_the_scan_thread(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    state = TaskState(task_id="t", kind="backfill")
+    release = threading.Event()
+
+    def lingers(_config: object, _runtime: BackfillRuntime) -> BackfillStats:
+        release.wait(timeout=10)
+        return BackfillStats()
+
+    with patch("quarry.backfill.Backfill.sessions", lingers):
+        task = asyncio.create_task(BackfillTask(ctx).run(state, _ARGS))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        await asyncio.sleep(0.1)
+        task.cancel()
+        await asyncio.sleep(0.3)
+
+        assert not task.done()
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert task.cancelled()
+
+
+async def test_a_thread_that_will_not_stop_keeps_the_guard_shut_after_the_bound(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    state = ctx.tasks.begin("backfill")
+    release = threading.Event()
+
+    def blocked(_config: object, _runtime: BackfillRuntime) -> BackfillStats:
+        release.wait(timeout=10)  # a read the stop cannot interrupt
+        return BackfillStats()
+
+    with patch("quarry.backfill.Backfill.sessions", blocked):
+
+        async def as_the_route_runs_it() -> None:
+            with TaskTerminal.recording(state):
+                await BackfillTask(ctx, bound_s=0.3).run(state, _ARGS)
+
+        task = asyncio.create_task(as_the_route_runs_it())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+        assert task.cancelled()  # the loop is not held for the hung thread
+        assert ctx.tasks.running_of_kind("backfill") is state  # the guard still is
+        release.set()
+        await asyncio.sleep(0.3)
+
+    assert ctx.tasks.running_of_kind("backfill") is None

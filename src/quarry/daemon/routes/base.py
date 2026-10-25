@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Self
 
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskState, task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
 from quarry.http_guards import RequestGuards
 from quarry.memory_types import MemoryType
 
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
+    from quarry.daemon.tasks import TaskState
 
 
 class RouteGroup:
@@ -152,12 +153,10 @@ class RouteGroup:
             status_code=202,
         )
 
-    def accept(self, state: TaskState, coro: Coroutine[Any, Any, None]) -> JSONResponse:
-        """Schedule *coro* as a tracked background task, return 202 Accepted.
-
-        ``coro`` is typed with ``Any`` to match ``asyncio.create_task``'s own
-        ``Coroutine[Any, Any, T]`` signature.
-        """
+    def accept(
+        self, state: TaskState, coro: Coroutine[object, object, None]
+    ) -> JSONResponse:
+        """Schedule *coro* as a tracked background task, return 202 Accepted."""
         task = asyncio.create_task(coro)
         self._ctx.tasks.track(state, task)
         return JSONResponse(
@@ -194,7 +193,7 @@ class RouteGroup:
         Shared by document and collection deletion, which differ only in the
         store method invoked and the ``type`` label reported to the client.
         """
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             count = await run_in_threadpool(delete_call)
             state.status = "completed"
             state.results = {"deleted": count, "name": name, "type": kind_label}

@@ -1,16 +1,11 @@
-"""How backfill files a transcript: through whoever owns the store's writes."""
+"""Why a backfilled transcript was not stored: the writer's failure and its outcome."""
 
 from __future__ import annotations
 
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Protocol, Self
+from typing import Self
 
 from quarry.refusal import RefusalError
-
-if TYPE_CHECKING:
-    from datetime import datetime
-
-    from quarry.backfill_session import BackfillSession
 
 
 class WriteOutcome(Enum):
@@ -19,7 +14,8 @@ class WriteOutcome(Enum):
     FAILED = auto()  # this transcript only; the run goes on
     UNINDEXABLE = auto()  # nothing to index in it; storing it again changes nothing
     NOT_ADMITTED = auto()  # the queue had no room within the wait
-    ABORTED = auto()  # the run cannot go on: shutting down, worker or loop gone
+    ABORTED = auto()  # the run cannot go on; the transcript's job will never run
+    ABORTED_RUNNING = auto()  # ... and the job had started: it may still be stored
 
 
 class BackfillWriteError(RefusalError):
@@ -36,22 +32,3 @@ class BackfillWriteError(RefusalError):
     def outcome(self) -> WriteOutcome:
         """Return what the run should make of this failure."""
         return self._outcome
-
-
-class TranscriptWriter(Protocol):
-    """The one way backfill writes: the daemon's collection FIFO, never its own store.
-
-    A second writer to a collection interleaves its delete and insert with the
-    collection's worker, so backfill owns no connection to write through.
-    """
-
-    def write(
-        self, collection: str, session: BackfillSession, snapshot: datetime
-    ) -> None:
-        """Store *session* in *collection* as it read at *snapshot*.
-
-        Raises:
-            BackfillWriteError: The transcript was not stored; the message says why
-                and :attr:`~BackfillWriteError.outcome` says what the run should do.
-        """
-        ...

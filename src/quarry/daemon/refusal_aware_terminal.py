@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.content_guard import UnindexableContentError
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
 from quarry.refusal import RefusalError
 
 if TYPE_CHECKING:
@@ -22,12 +22,12 @@ logger = logging.getLogger(__name__)
 class RefusalAwareTerminal:
     """Bind a task's state to the way its body is allowed to end.
 
-    :func:`task_terminal` logs every exception with a traceback.  A refusal
+    :meth:`TaskTerminal.recording` logs every exception with a traceback.  A refusal
     (:class:`RefusalError`: binary content, a refused media type, a failed or
     refused fetch, a refused registration) is an expected answer, so it ends the task
     ``failed`` with the reason and one WARN naming the task, no traceback.  Any
     other exception fails closed: the task error is client-visible and such a
-    message can quote a URL, a path or a credential, so :func:`task_terminal`
+    message can quote a URL, a path or a credential, so :meth:`TaskTerminal.recording`
     records ``internal error: <Class>`` and logs the detail, redacted.  This class
     is the single owner of the refusal write.
 
@@ -85,7 +85,7 @@ class RefusalAwareTerminal:
     @contextmanager
     def record(self) -> Generator[None]:
         """Run the body, recording the task's terminal state when it exits."""
-        with task_terminal(self._state):
+        with TaskTerminal.recording(self._state):
             try:
                 yield
             except RefusalError as exc:

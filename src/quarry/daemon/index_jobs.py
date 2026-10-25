@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync import sync_collection
 from quarry.sync_registry import SyncRegistry
@@ -56,9 +56,9 @@ class FileIndexJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Index the file off-thread, recording per-file success or a soft error."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        # task_terminal so an UNEXPECTED failure records ``failed`` and never
+        # TaskTerminal so an UNEXPECTED failure records ``failed`` and never
         # escapes to crash the queue worker (the queue's per-job contract).
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             outcome = await run_in_threadpool(self._index)
             if outcome.error is not None:
                 state.status = "failed"
@@ -112,7 +112,7 @@ class DocumentDeleteJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete every document's chunks + registry rows off-thread."""
         del ctx
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             deleted = await run_in_threadpool(self._delete)
             state.status = "completed"
             state.results = {"documents": len(self.documents), "deleted": deleted}
@@ -158,7 +158,7 @@ class CollectionSyncJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the bulk collection sync off-thread, recording its counts."""
         del ctx
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             result = await run_in_threadpool(self._sync)
             state.status = "completed"
             state.results = {

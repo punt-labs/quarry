@@ -1,10 +1,14 @@
-"""BackfillStats and BackfillTally: what a run counted, and when it gives up."""
+"""BackfillStats: what a run counted, and the line that tells it."""
 
 from __future__ import annotations
 
-from quarry.backfill_report import BackfillReport
-from quarry.backfill_stats import BackfillStats, BackfillTally
-from quarry.stop_signal import StopSignal
+import logging
+from typing import TYPE_CHECKING
+
+from quarry.backfill_stats import BackfillStats
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestBackfillStats:
@@ -39,10 +43,7 @@ class TestBackfillStats:
             ingested=5, skipped_existing=2, skipped_empty=1, failed=3, not_attempted=4
         )
 
-        assert (
-            BackfillReport(stats).summary()
-            == "5 ingested, 3 skipped, 3 failed, 4 not attempted"
-        )
+        assert stats.summary() == "5 ingested, 3 skipped, 3 failed, 4 not attempted"
 
     def test_a_run_stored_nothing_only_when_something_was_left_and_none_stored(
         self,
@@ -60,7 +61,7 @@ class TestBackfillStats:
             ingested=1, not_examined=3, stopped="daemon shutting down"
         )
 
-        assert BackfillReport(stats).summary() == (
+        assert stats.summary() == (
             "1 ingested, 0 skipped, 0 failed, 0 not attempted, 3 not examined; "
             "stopped: daemon shutting down"
         )
@@ -74,59 +75,20 @@ class TestBackfillStats:
         assert results["stop_reason"] == "task cancelled"
         assert BackfillStats().as_results(dry_run=False)["stopped"] is False
 
-    def test_the_stop_is_the_first_error_and_the_others_follow(self) -> None:
-        tally = BackfillTally(StopSignal())
-        tally.errors.append("a.jsonl: boom")
-        tally.abort("daemon shutting down")
+    def test_a_run_that_fell_short_is_logged_at_warning_in_one_line(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="quarry.backfill_stats"):
+            BackfillStats(ingested=1, not_attempted=2).log(dry_run=False)
 
-        assert tally.stats(0).errors == [
-            "backfill stopped: daemon shutting down",
-            "a.jsonl: boom",
-        ]
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+        assert "2 not attempted" in caplog.records[0].getMessage()
 
+    def test_a_clean_dry_run_is_logged_at_info_and_says_it_was_one(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="quarry.backfill_stats"):
+            BackfillStats(would_ingest=3).log(dry_run=True)
 
-class TestBackfillTally:
-    def test_it_halts_once_the_stop_event_is_set(self) -> None:
-        stop = StopSignal()
-        tally = BackfillTally(stop)
-        assert not tally.halted()
-
-        stop.set("task cancelled")
-
-        assert tally.halted()
-        assert tally.stats(0).errors == ["backfill stopped: task cancelled"]
-
-    def test_the_first_reason_a_run_stopped_for_is_kept(self) -> None:
-        tally = BackfillTally(StopSignal())
-
-        tally.abort("daemon shutting down")
-        tally.abort("something later")
-
-        assert tally.stats(0).errors == ["backfill stopped: daemon shutting down"]
-
-    def test_the_stats_name_the_stop_in_the_errors(self) -> None:
-        tally = BackfillTally(StopSignal())
-        tally.abort("daemon shutting down")
-
-        assert tally.stats(0).errors == ["backfill stopped: daemon shutting down"]
-
-    def test_a_run_gives_up_after_enough_unadmitted_transcripts_in_a_row(self) -> None:
-        tally = BackfillTally(StopSignal())
-
-        for _ in range(BackfillTally.MAX_UNADMITTED - 1):
-            tally.not_admitted()
-        assert not tally.halted()
-        tally.not_admitted()
-
-        assert tally.halted()
-        assert tally.stats(0).errors == ["backfill stopped: ingest queue stayed full"]
-
-    def test_an_admitted_transcript_resets_the_count(self) -> None:
-        tally = BackfillTally(StopSignal())
-
-        for _ in range(BackfillTally.MAX_UNADMITTED - 1):
-            tally.not_admitted()
-        tally.admitted()
-        tally.not_admitted()
-
-        assert not tally.halted()
+        assert [r.levelno for r in caplog.records] == [logging.INFO]
+        assert caplog.records[0].getMessage().startswith("backfill (dry run): 3")

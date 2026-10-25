@@ -11,7 +11,7 @@ from quarry.failure_reason import FailureReason
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from quarry.backfill_stats import BackfillTally
+    from quarry.backfill_tally import BackfillTally
     from quarry.backfill_unindexable import UnindexableTranscripts
     from quarry.refusal import RefusalError
     from quarry.transcript_read import TranscriptRead
@@ -24,10 +24,12 @@ class TranscriptOutcomes:
     """Keep the tally for one run as its transcripts end.
 
     A transcript the writer refuses ends by what the run should make of the
-    refusal: an abort stops the run, nothing-to-index is a skip, anything else
-    is a failure.  Every outcome but the abort went through the queue and was
-    answered, so it ends (or extends) the not-admitted streak; a failure before
-    the queue (the capture file, a fault in the writer) does neither.
+    refusal: an abort stops the run (a job that never ran is not attempted; one
+    that had started is a failure, since it may still be stored), nothing-to-index
+    is a skip, anything else is a failure.  Every outcome but the abort went
+    through the queue and was answered, so it ends (or extends) the not-admitted
+    streak; a failure before the queue (the capture file, a fault in the writer)
+    does neither.
     """
 
     __slots__ = ("_dry_run", "_tally", "_unindexable")
@@ -51,18 +53,15 @@ class TranscriptOutcomes:
 
     def stored(self) -> None:
         """Count a transcript the writer stored."""
-        self._tally.ingested += 1
-        self._tally.processed += 1
-        self._tally.admitted()
+        self._tally.stored()
 
     def would_store(self) -> None:
         """Count a transcript a dry run would have stored."""
-        self._tally.would_ingest += 1
-        self._tally.processed += 1
+        self._tally.would_store()
 
     def unindexable(self, read: TranscriptRead) -> None:
         """Count a transcript with nothing to index, and remember it for later runs."""
-        self._tally.skipped_empty += 1
+        self._tally.skip_empty()
         if not self._dry_run:
             self._unindexable.record(read)
 
@@ -74,23 +73,20 @@ class TranscriptOutcomes:
 
     def refused(self, read: TranscriptRead, exc: RefusalError) -> None:
         """Count a transcript the writer refused, by what the refusal means."""
-        outcome = exc.outcome if isinstance(exc, BackfillWriteError) else None
-        if outcome is WriteOutcome.ABORTED:
-            self._tally.abort(str(exc))
-            self._tally.not_attempted += 1
-        elif outcome is WriteOutcome.UNINDEXABLE:
+        outcome = (
+            exc.outcome if isinstance(exc, BackfillWriteError) else WriteOutcome.FAILED
+        )
+        if outcome is WriteOutcome.UNINDEXABLE:
             self.unindexable(read)
-            self._tally.admitted()
+            self._tally.answered()
+        elif outcome is WriteOutcome.ABORTED:
+            self._tally.abort(str(exc))
+            self._tally.leave(1)
         else:
             logger.warning("backfill: %s not stored: %s", read.transcript.name, exc)
             self.failed(read.transcript, exc)
-            if outcome is WriteOutcome.NOT_ADMITTED:
-                self._tally.not_admitted()
-            else:
-                self._tally.admitted()
+            self._tally.refused(outcome, str(exc))
 
     def failed(self, transcript: Path, exc: Exception) -> None:
         """Count an attempted transcript that was not stored."""
-        self._tally.errors.append(FailureReason.line(transcript.name, exc))
-        self._tally.failed += 1
-        self._tally.processed += 1
+        self._tally.fail(FailureReason.line(transcript.name, exc))

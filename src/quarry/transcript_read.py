@@ -9,17 +9,18 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
+    from quarry.file_stamp import FileStamp
+
 
 @final
 @dataclass(frozen=True, slots=True)
 class TranscriptRead:
-    """A transcript with its mtime and the moment the read began.
+    """A transcript with its stamp and the moment the read began.
 
-    The mtime is taken before the read and the snapshot before that, so a write
-    after either is newer than what is stored or recorded, whatever happens
-    between the read and the store.
+    The snapshot is taken before the read, so a write after it is newer than
+    what is stored or recorded, whatever happens between the read and the store.
     """
 
     transcript: Path
-    mtime_ns: int
+    stamp: FileStamp
     snapshot: datetime

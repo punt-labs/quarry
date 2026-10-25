@@ -4,31 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.backfill_writer import BackfillWriteError, WriteOutcome
 from quarry.daemon.backfill_job import BackfillTranscriptJob
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.daemon.ingest_labels import IngestLabels
-from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
 from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY, QueuedIngest, QueuePolicy
-from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
-from quarry.daemon.thread_call import ThreadCall, ThreadCallAbortedError
-
-# What each way the wait can end means for the backfill run.  An unfinished job
-# aborts it as a dead worker does: a hung worker would otherwise collect one
-# orphaned job, and one full wait, per transcript.
-_OUTCOMES = {
-    IngestRefusal.SHUTTING_DOWN: WriteOutcome.ABORTED,
-    IngestRefusal.WORKER_STOPPED: WriteOutcome.ABORTED,
-    IngestRefusal.NOT_ADMITTED: WriteOutcome.NOT_ADMITTED,
-    IngestRefusal.UNFINISHED: WriteOutcome.ABORTED,
-}
+from quarry.daemon.queued_job import QueuedJob
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from quarry.backfill_session import BackfillSession
     from quarry.daemon.context import DaemonContext
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.thread_call import ThreadCall
 
 
 @final
@@ -44,10 +31,11 @@ class QueuedTranscriptWriter:
     closed loop fails the run rather than blocking the thread for good.
     """
 
-    __slots__ = ("_call", "_queued")
+    __slots__ = ("_call", "_ctx", "_policy")
 
     _call: ThreadCall
-    _queued: QueuedIngest
+    _ctx: DaemonContext
+    _policy: QueuePolicy
 
     def __new__(
         cls,
@@ -57,7 +45,8 @@ class QueuedTranscriptWriter:
     ) -> Self:
         self = super().__new__(cls)
         self._call = call
-        self._queued = QueuedIngest(ctx, "backfill", policy)
+        self._ctx = ctx
+        self._policy = policy
         return self
 
     @staticmethod
@@ -86,26 +75,5 @@ class QueuedTranscriptWriter:
         self, collection: str, session: BackfillSession, snapshot: datetime
     ) -> None:
         """Store *session* in *collection*; raise if the worker did not store it."""
-        job = self.job_for(collection, session, snapshot)
-        state = self._submit(job)
-        if state.status == "completed":
-            return
-        error = BackfillWriteError(state.error)
-        if state.error == RefusalAwareTerminal.NOTHING_STORED:
-            error.as_outcome(WriteOutcome.UNINDEXABLE)
-        raise error
-
-    def _submit(self, job: BackfillTranscriptJob) -> TaskState:
-        """Run *job* on the loop and return its terminal state, or raise the refusal."""
-        try:
-            return self._call.result(self._queued.run(job))
-        except IngestRefusedError as exc:
-            outcome = _OUTCOMES[exc.reason]
-            raise BackfillWriteError(str(exc)).as_outcome(outcome) from exc
-        except ThreadCallAbortedError as exc:
-            raise self._aborted(str(exc)) from exc
-
-    @staticmethod
-    def _aborted(reason: str) -> BackfillWriteError:
-        """Return the error that stops the run for *reason*."""
-        return BackfillWriteError(reason).as_outcome(WriteOutcome.ABORTED)
+        queued = QueuedIngest(self._ctx, "backfill", self._policy)
+        QueuedJob(self._call, queued).store(self.job_for(collection, session, snapshot))

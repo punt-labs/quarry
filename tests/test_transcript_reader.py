@@ -6,12 +6,13 @@ import errno
 import json
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-import pytest
-
-from quarry.strict_transcript_reader import StrictTranscriptReader
 from quarry.transcript_reader import TranscriptReader
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestText:
@@ -310,18 +311,16 @@ class TestAReadFaultIsNotAnEmptyConversation:
 
         assert TranscriptReader(transcript).text() == ""
 
-    def test_a_strict_reader_raises_the_fault(
+    def test_a_reader_built_from_text_parses_that_text_and_never_reads_the_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text("{}")
+        transcript = tmp_path / "gone.jsonl"  # no file: only the text is used
         self._failing_read(monkeypatch)
+        record = {
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
+        }
 
-        with pytest.raises(OSError, match="Too many open files"):
-            StrictTranscriptReader(transcript)
+        reader = TranscriptReader.from_text(transcript, json.dumps(record))
 
-    def test_a_strict_reader_reads_a_good_file_as_before(self, tmp_path: Path) -> None:
-        transcript = tmp_path / "session.jsonl"
-        transcript.write_text("")
-
-        assert StrictTranscriptReader(transcript).text() == ""
+        assert "Hi" in reader.text()

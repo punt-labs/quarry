@@ -12,7 +12,8 @@ import asyncio
 
 import pytest
 
-from quarry.daemon.tasks import TaskRegistry
+from quarry.daemon.job_claim import JobClaim
+from quarry.daemon.tasks import TaskRegistry, TaskState
 
 
 async def _completed_task() -> asyncio.Task[None]:
@@ -101,3 +102,30 @@ class TestDrain:
             await registry.drain(timeout=0.01)
 
         assert task.cancelled()  # wrapper cancelled as best-effort cleanup
+
+
+def test_a_task_whose_thread_is_alive_still_counts_as_running() -> None:
+    registry = TaskRegistry()
+    state = registry.begin("backfill")
+    state.status = "failed"  # reported, but its scan thread has not returned
+    state.holds_thread = True
+
+    assert registry.running_of_kind("backfill") is state
+
+    state.holds_thread = False
+    assert registry.running_of_kind("backfill") is None
+
+
+def test_a_queued_job_can_be_withdrawn_but_not_a_running_one() -> None:
+    queued = TaskState(task_id="q", kind="backfill", status="queued")
+    running = TaskState(task_id="r", kind="backfill", status="queued")
+    assert JobClaim(running).start()
+
+    assert JobClaim(queued).withdraw()
+    assert JobClaim(queued).withdraw()  # again: it still never runs
+    assert not JobClaim(queued).start()  # the worker skips it
+    assert not JobClaim(running).withdraw()  # it is running; counted, not cancelled
+
+
+def test_a_job_that_was_never_submitted_is_withdrawn() -> None:
+    assert JobClaim(TaskState(task_id="n", kind="backfill", status="new")).withdraw()

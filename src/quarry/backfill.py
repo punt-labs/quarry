@@ -7,18 +7,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 from quarry.backfill_mapping import ProjectMappingResolver
-from quarry.backfill_project import BackfillRun
-from quarry.backfill_report import BackfillReport
-from quarry.backfill_stats import BackfillStats, BackfillTally
-from quarry.backfill_unindexable import UnindexableTranscripts
+from quarry.backfill_run import BackfillRun
 from quarry.stop_signal import StopSignal
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
-    from quarry.backfill_writer import TranscriptWriter
+    from quarry.backfill_stats import BackfillStats
     from quarry.db.facade import Database
-
-_UNINDEXABLE_FILE = "backfill-unindexable.json"
+    from quarry.transcript_writer import TranscriptWriter
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,17 +65,8 @@ class Backfill:
         mappings = ProjectMappingResolver.filter_by_project(
             all_mappings, config.project_filter
         )
-        tally = BackfillTally(runtime.stop)
-        unindexable = UnindexableTranscripts(
-            runtime.registry_path.with_name(_UNINDEXABLE_FILE)
+        stats = BackfillRun.open(config, runtime).execute(
+            mappings, ProjectMappingResolver.count_unmapped(all_mappings)
         )
-        run = BackfillRun(runtime, config, tally, unindexable)
-
-        try:
-            run.process(mappings)
-        finally:
-            run.close()
-
-        stats = tally.stats(ProjectMappingResolver.count_unmapped(all_mappings))
-        BackfillReport(stats).log(dry_run=config.dry_run)
+        stats.log(dry_run=config.dry_run)
         return stats

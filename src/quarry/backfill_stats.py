@@ -1,12 +1,12 @@
-"""What a backfill run counted: the tally it keeps, and the stats it returns."""
+"""What a backfill run counted, as the stats it returns and the line that tells them."""
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, final
+from typing import final
 
-if TYPE_CHECKING:
-    from quarry.stop_signal import StopSignal
+logger = logging.getLogger(__name__)
 
 
 @final
@@ -42,8 +42,7 @@ class BackfillStats:
         Whenever it is true ``errors`` is not empty: a failure, the stop, or the
         project that could not be read each leave a line.
         """
-        left = self.failed + self.not_attempted + self.not_examined
-        return not (self.ingested or self.would_ingest) and left > 0
+        return not self._stored and self._left > 0
 
     def as_results(self, *, dry_run: bool) -> dict[str, object]:
         """Return the stats as a task's results (a dry run says ``would_ingest``)."""
@@ -67,69 +66,44 @@ class BackfillStats:
             "dry_run": dry_run,
         }
 
-
-@final
-@dataclass(slots=True)
-class BackfillTally:
-    """The counters a run keeps as it goes, and the reason it stopped, if it did.
-
-    ``processed`` counts transcripts attempted for writing (or, in a dry run,
-    that would be): the number ``--limit`` caps.  A transcript that is skipped,
-    empty, unreadable or unindexable never consumes it.
-    """
-
-    # Consecutive "queue stayed full" outcomes after which the run gives up: the
-    # queue is not draining, and each further transcript would wait out the same
-    # deadline for the same answer.
-    MAX_UNADMITTED: ClassVar[int] = 3
-
-    stop: StopSignal
-    ingested: int = 0
-    would_ingest: int = 0
-    skipped_existing: int = 0
-    skipped_empty: int = 0
-    skipped_unreadable: int = 0
-    failed: int = 0
-    not_attempted: int = 0
-    not_examined: int = 0
-    processed: int = 0
-    errors: list[str] = field(default_factory=list)
-    _abort: str = field(default="", init=False)
-    _unadmitted: int = field(default=0, init=False)
-
-    def halted(self) -> bool:
-        """Return whether the run must stop before its next transcript."""
-        if self.stop.is_set():
-            self.abort(self.stop.reason)
-        return bool(self._abort)
-
-    def abort(self, reason: str) -> None:
-        """Stop the run for *reason* (the first one given is kept)."""
-        self._abort = self._abort or reason
-
-    def admitted(self) -> None:
-        """Note that a transcript went through the queue and was answered."""
-        self._unadmitted = 0
-
-    def not_admitted(self) -> None:
-        """Note a transcript the queue would not take; give up if they keep coming."""
-        self._unadmitted += 1
-        if self._unadmitted >= self.MAX_UNADMITTED:
-            self.abort("ingest queue stayed full")
-
-    def stats(self, skipped_unregistered: int) -> BackfillStats:
-        """Return the run's stats, the stop (if any) first among the errors."""
-        stop = [f"backfill stopped: {self._abort}"] if self._abort else []
-        return BackfillStats(
-            ingested=self.ingested,
-            would_ingest=self.would_ingest,
-            skipped_existing=self.skipped_existing,
-            skipped_unregistered=skipped_unregistered,
-            skipped_empty=self.skipped_empty,
-            skipped_unreadable=self.skipped_unreadable,
-            failed=self.failed,
-            not_attempted=self.not_attempted,
-            not_examined=self.not_examined,
-            stopped=self._abort,
-            errors=[*stop, *self.errors],
+    def summary(self) -> str:
+        """Return ``N ingested, M skipped, K failed, R not attempted`` and the rest."""
+        return (
+            f"{self._stored} ingested, {self._skipped} skipped, "
+            f"{self.failed} failed, {self.not_attempted} not attempted"
+            f"{self._examined_note()}{self._stop_note()}"
         )
+
+    def log(self, *, dry_run: bool) -> None:
+        """Log the summary: always one line, a WARNING if the run fell short."""
+        label = "backfill (dry run)" if dry_run else "backfill"
+        level = logging.WARNING if self._fell_short else logging.INFO
+        logger.log(level, "%s: %s", label, self.summary())
+
+    @property
+    def _stored(self) -> int:
+        """Return the transcripts stored, or that a dry run would have stored."""
+        return self.ingested or self.would_ingest
+
+    @property
+    def _skipped(self) -> int:
+        """Return the transcripts skipped for any reason a run skips one."""
+        return self.skipped_existing + self.skipped_empty + self.skipped_unreadable
+
+    @property
+    def _left(self) -> int:
+        """Return the transcripts that failed or were left undone."""
+        return self.failed + self.not_attempted + self.not_examined
+
+    @property
+    def _fell_short(self) -> bool:
+        """Return whether anything failed, was left, or stopped the run."""
+        return bool(self._left or self.stopped)
+
+    def _examined_note(self) -> str:
+        """Return the summary's note of the transcripts never looked at, or ``""``."""
+        return f", {self.not_examined} not examined" if self.not_examined else ""
+
+    def _stop_note(self) -> str:
+        """Return the summary's note of why the run stopped, or ``""``."""
+        return f"; stopped: {self.stopped}" if self.stopped else ""

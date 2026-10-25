@@ -4,40 +4,52 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import inspect
 import json
 import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
+from quarry.api import BackfillRequest
 from quarry.atomic_file import AtomicFile
 from quarry.backfill import Backfill, BackfillConfig, BackfillRuntime
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
-from quarry.backfill_project import BackfillRun
-from quarry.backfill_report import BackfillReport
+from quarry.backfill_run import BackfillRun
 from quarry.backfill_session import BackfillSession
-from quarry.backfill_stats import BackfillStats, BackfillTally
+from quarry.backfill_stats import BackfillStats
+from quarry.backfill_tally import BackfillTally
 from quarry.backfill_unindexable import UnindexableTranscripts
 from quarry.backfill_writer import BackfillWriteError, WriteOutcome
+from quarry.cli_maintenance import MaintenanceCli
 from quarry.config import Settings
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.daemon.queued_ingest import QueuedIngest, QueuePolicy
+from quarry.daemon.run_record import RunRecord
 from quarry.daemon.tasks import TaskState
 from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.facade import Database
+from quarry.file_stamp import FileStamp
+from quarry.ingestion.streaming import DocumentStreamer
 from quarry.results import DocumentSummary
 from quarry.stop_signal import StopSignal
-from quarry.sync_registry import DirectoryRegistration
+from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+from quarry.transcript_loader import TranscriptLoader
 from quarry.transcript_read import TranscriptRead
 from quarry.transcript_reader import TranscriptReader
 from tests.queue_fixtures import ctx_with_queue, writer_for
 from tests.transcript_writers import DirectWriter, RecordingWriter, runtime_over
+
+if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
+    from quarry.transcript_loader import LoadedTranscript
 
 runner = CliRunner()
 
@@ -254,11 +266,16 @@ class TestBackfillSessionName:
 # ---------------------------------------------------------------------------
 
 
+# A transcript's mtime outside the racy window of any read the tests make.
+_LONG_AGO = 1_700_000_000
+
+
 def _make_transcript(path: Path, messages: list[dict[str, object]]) -> None:
-    """Write a minimal JSONL transcript file."""
+    """Write a minimal JSONL transcript file, last modified long enough ago to trust."""
     with path.open("w") as f:
         for msg in messages:
             f.write(json.dumps(msg) + "\n")
+    os.utime(path, (_LONG_AGO, _LONG_AGO))
 
 
 def _user_message(text: str) -> dict[str, object]:
@@ -287,7 +304,6 @@ def _setup_registry(
     collection: str,
 ) -> None:
     """Create a registry and register a project directory."""
-    from quarry.sync_registry import SyncRegistry
 
     Path(project_path).mkdir(parents=True, exist_ok=True)
     conn = SyncRegistry(registry_path)
@@ -387,7 +403,6 @@ class TestBackfillSessions:
         assert stats.skipped_existing == 0
 
     def test_skip_unregistered_projects(self, tmp_path: Path) -> None:
-        from quarry.sync_registry import SyncRegistry
 
         env = _make_env(tmp_path)
         # Initialize empty registry (no registrations)
@@ -511,7 +526,7 @@ class TestBackfillSessions:
     def test_empty_transcript_skipped(self, tmp_path: Path) -> None:
         env = _make_env(tmp_path)
         # Overwrite with empty content
-        env["transcript"].write_text("")
+        _blank(env["transcript"])
         _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
         writer = RecordingWriter()
 
@@ -530,7 +545,6 @@ class TestBackfillSessions:
         /v1/search).  Patching the store boundary asserts the REAL pipeline scrub
         ran.
         """
-        from quarry.ingestion.streaming import DocumentStreamer
 
         fake_pat = "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8"
         email = "leak.user@evil-example.com"
@@ -575,7 +589,6 @@ def _write_sessions(env: dict[str, Path], *stems: str, text: str = "hello") -> N
 
 def _add_project(env: dict[str, Path], tmp_path: Path, name: str) -> Path:
     """Register a second project, with one transcript, under its own collection."""
-    from quarry.sync_registry import SyncRegistry
 
     project = tmp_path / name
     project.mkdir()
@@ -658,7 +671,7 @@ class TestUnindexableTranscripts:
 
     def test_a_dry_run_records_nothing(self, tmp_path: Path) -> None:
         env = _registered_env(tmp_path)
-        env["transcript"].write_text("")
+        _blank(env["transcript"])
 
         stats = _run(env, RecordingWriter(), BackfillConfig(dry_run=True))
 
@@ -672,14 +685,31 @@ class TestEmptyAndUnreadable:
         self, tmp_path: Path, *, dry_run: bool
     ) -> None:
         env = _registered_env(tmp_path)
-        (env["project_dir"] / "dddd0001-0000.jsonl").write_text("")
-        (env["project_dir"] / "eeee0001-0000.jsonl").mkdir()  # not a readable file
+        _blank(env["project_dir"] / "dddd0001-0000.jsonl")
+        (env["project_dir"] / "eeee0001-0000.jsonl").mkdir()  # not a transcript
 
         stats = _run(env, RecordingWriter(), BackfillConfig(dry_run=dry_run))
 
         assert stats.skipped_empty == 1
-        assert stats.skipped_unreadable == 1
+        assert stats.skipped_unreadable == 0  # a directory is not listed at all
         assert stats.would_ingest + stats.ingested == 1
+
+    def test_a_transcript_that_vanished_after_it_was_listed_is_a_skip(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        gone = env["project_dir"] / "ffff0001-0000.jsonl"
+        listed = ProjectMapping.transcript_files
+
+        def listing(self: ProjectMapping) -> list[Path]:
+            return [*listed(self), gone]
+
+        with patch.object(ProjectMapping, "transcript_files", listing):
+            stats = _run(env, RecordingWriter())
+
+        assert stats.skipped_unreadable == 1
+        assert stats.failed == 0
+        assert stats.errors == []
 
 
 class TestStopping:
@@ -720,6 +750,25 @@ class TestStopping:
         assert stats.failed == 0
         assert stats.not_attempted == 3
         assert stats.errors == ["backfill stopped: daemon shutting down"]
+
+    def test_a_writer_whose_job_had_started_when_it_gave_up_counts_it_failed(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002")
+        writer = RecordingWriter(
+            BackfillWriteError("task cancelled").as_outcome(
+                WriteOutcome.ABORTED_RUNNING
+            )
+        )
+
+        stats = _run(env, writer)
+
+        assert len(writer.calls) == 1
+        assert stats.failed == 1  # it started: it may still be stored
+        assert stats.not_attempted == 2  # the two it never reached
+        assert stats.errors[0] == "backfill stopped: task cancelled"
+        assert any("task cancelled" in e for e in stats.errors[1:])
 
     def test_a_queue_that_stays_full_stops_the_run_after_a_few(
         self, tmp_path: Path
@@ -888,6 +937,12 @@ def _state_file(env: dict[str, Path]) -> Path:
     return env["registry_path"].with_name("backfill-unindexable.json")
 
 
+def _blank(path: Path) -> None:
+    """Empty *path*, leaving its mtime where it was long enough ago to trust."""
+    path.write_text("")
+    os.utime(path, (_LONG_AGO, _LONG_AGO))
+
+
 def _bump_mtime(path: Path) -> None:
     """Make *path* look newer, as if it had been appended to."""
     later = path.stat().st_mtime + 60
@@ -899,31 +954,67 @@ def _recorded(env: dict[str, Path]) -> dict[str, int]:
     return json.loads(state.read_text()) if state.exists() else {}
 
 
-class TestAReadFaultIsNotAnEmptyTranscript:
-    def test_a_read_error_is_unreadable_never_recorded_and_retried_next_run(
+_EMFILE_LINE = "abcd1234-0000-0000-0000-000000000000.jsonl: unreadable (EMFILE)"
+
+
+class TestAReadFaultIsAFailureNeverAnEmptyTranscript:
+    @staticmethod
+    def _failing_open(errno_code: int) -> AbstractContextManager[object]:
+        real_open = Path.open
+
+        def fails(self: Path, *args: Any, **kwargs: Any) -> object:
+            if self.suffix == ".jsonl":
+                raise OSError(errno_code, os.strerror(errno_code))
+            return real_open(self, *args, **kwargs)
+
+        return patch.object(Path, "open", fails)
+
+    def test_a_read_error_is_a_failure_never_recorded_and_retried_next_run(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         env = _registered_env(tmp_path)
-        real_read_text = Path.read_text
 
-        def emfile(self: Path, *args: Any, **kwargs: Any) -> str:
-            if self.suffix == ".jsonl":
-                raise OSError(errno.EMFILE, "Too many open files")
-            return real_read_text(self, *args, **kwargs)
-
-        with (
-            patch.object(Path, "read_text", emfile),
-            caplog.at_level(logging.WARNING),
-        ):
+        with self._failing_open(errno.EMFILE), caplog.at_level(logging.WARNING):
             stats = _run(env, RecordingWriter())
 
-        assert stats.skipped_unreadable == 1
+        assert stats.failed == 1
+        assert stats.skipped_unreadable == 0
         assert stats.skipped_empty == 0
+        assert stats.errors == [
+            "abcd1234-0000-0000-0000-000000000000.jsonl: unreadable (EMFILE)"
+        ]
         assert _recorded(env) == {}
         assert "EMFILE" in caplog.text
         again = RecordingWriter()
         _run(env, again)
         assert [call.name for call in again.calls] == ["session-abcd1234"]
+
+    def test_a_run_whose_every_read_fails_ends_failed_with_the_reason(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002")
+
+        with self._failing_open(errno.EMFILE):
+            stats = _run(env, RecordingWriter())
+        state = TaskState(task_id="t", kind="backfill")
+        RunRecord(state, dry_run=False).stats(stats)
+
+        assert stats.failed == 3
+        assert stats.stored_nothing
+        assert state.status == "failed"
+        assert state.error == f"backfill stored nothing: {_EMFILE_LINE}"
+
+    def test_a_transcript_that_is_not_utf8_is_a_failure(self, tmp_path: Path) -> None:
+        env = _registered_env(tmp_path)
+        env["transcript"].write_bytes(b"\xff\xfe not utf-8")
+        os.utime(env["transcript"], (_LONG_AGO, _LONG_AGO))
+
+        stats = _run(env, RecordingWriter())
+
+        assert stats.failed == 1
+        name = "abcd1234-0000-0000-0000-000000000000.jsonl"
+        assert stats.errors == [f"{name}: unreadable (UnicodeDecodeError)"]
 
 
 class TestATranscriptThatChangedIsNotRecorded:
@@ -931,7 +1022,7 @@ class TestATranscriptThatChangedIsNotRecorded:
         self, tmp_path: Path
     ) -> None:
         env = _registered_env(tmp_path)
-        env["transcript"].write_text("")
+        _blank(env["transcript"])
         real_text = TranscriptReader.text
 
         def empty_then_appended(self: TranscriptReader) -> str:
@@ -966,7 +1057,7 @@ class TestAFailedSaveNeverDecidesTheRun:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         env = _registered_env(tmp_path)
-        env["transcript"].write_text("")  # something to remember, so a save happens
+        _blank(env["transcript"])  # something to remember, so a save happens
 
         with (
             patch.object(
@@ -986,7 +1077,7 @@ class TestAFailedSaveNeverDecidesTheRun:
         env = _registered_env(tmp_path)
 
         with (
-            patch.object(BackfillRun, "process", side_effect=RuntimeError("the run")),
+            patch.object(BackfillRun, "_process", side_effect=RuntimeError("the run")),
             pytest.raises(RuntimeError, match="the run"),
         ):
             _run(env, RecordingWriter())
@@ -1075,8 +1166,8 @@ class TestAHungWorkerStopsTheRun:
             )
 
         assert ran == ["session-abcd1234"]  # not one orphan per transcript
-        assert stats.failed == 0
-        assert stats.not_attempted == 3
+        assert stats.failed == 1  # the job that hung had started: counted, not lost
+        assert stats.not_attempted == 2
         assert stats.errors[0].startswith(
             "backfill stopped: ingest did not finish within"
         )
@@ -1092,12 +1183,14 @@ class TestAHungWorkerStopsTheRun:
             Database.connect(env["db_path"]), writer, env["registry_path"], stop
         )
 
-        async def cancelled(_self: QueuedIngest, _job: object) -> TaskState:
+        async def cancelled(
+            _self: QueuedIngest, _job: object, _state: TaskState
+        ) -> TaskState:
             raise asyncio.CancelledError
 
         with (
             patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
-            patch.object(QueuedIngest, "run", cancelled),
+            patch.object(QueuedIngest, "run_tracked", cancelled),
         ):
             stats = await asyncio.to_thread(
                 Backfill.sessions, BackfillConfig(), runtime
@@ -1105,6 +1198,86 @@ class TestAHungWorkerStopsTheRun:
 
         assert stats.errors == ["backfill stopped: daemon shutting down"]
         assert "Cancelled" not in " ".join(stats.errors)
+
+
+class TestTheStopIsCheckedBeforeEveryBlockingStep:
+    def test_a_stop_before_a_project_is_read_never_lists_its_store(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        stop = StopSignal()
+        stop.set("task cancelled")
+
+        with patch.object(ChunkCatalog, "list_documents") as listing:
+            stats = _run(env, RecordingWriter(), stop=stop)
+
+        listing.assert_not_called()
+        assert stats.not_examined == 1
+
+    def test_a_stop_while_a_transcript_is_read_writes_no_capture_file(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        stop = StopSignal()
+        real_load = TranscriptLoader.load
+
+        def stops_during_the_read(path: Path) -> LoadedTranscript:
+            loaded = real_load(path)
+            stop.set("task cancelled")
+            return loaded
+
+        with (
+            patch.object(TranscriptLoader, "load", stops_during_the_read),
+            patch.object(BackfillSession, "write_capture_file") as capture,
+        ):
+            stats = _run(env, RecordingWriter(), stop=stop)
+
+        capture.assert_not_called()
+        assert stats.not_attempted == 1
+        assert stats.failed == 0
+
+    def test_a_stop_while_the_capture_file_is_written_never_reaches_the_writer(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        stop = StopSignal()
+        writer = RecordingWriter()
+
+        def stops_during_the_capture(_self: BackfillSession) -> bool:
+            stop.set("daemon shutting down")
+            return True
+
+        with patch.object(
+            BackfillSession, "write_capture_file", stops_during_the_capture
+        ):
+            stats = _run(env, writer, stop=stop)
+
+        assert writer.calls == []  # nothing was handed to the scrub and the queue
+        assert stats.not_attempted == 1
+        assert stats.errors == ["backfill stopped: daemon shutting down"]
+
+
+class TestARecentTranscriptIsNeverRememberedAsEmpty:
+    def test_one_modified_a_moment_before_the_read_is_read_again_next_run(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        env["transcript"].write_text("")  # modified just now: inside the racy window
+
+        stats = _run(env, RecordingWriter())
+
+        assert stats.skipped_empty == 1
+        assert _recorded(env) == {}
+
+    def test_one_that_has_been_still_for_a_while_is_remembered(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _blank(env["transcript"])
+
+        _run(env, RecordingWriter())
+
+        assert list(_recorded(env)) == [str(env["transcript"])]
 
 
 class TestNotAttemptedCountsOnlyWhatStillNeededWork:
@@ -1115,7 +1288,7 @@ class TestNotAttemptedCountsOnlyWhatStillNeededWork:
         _write_sessions(env, "bbbb0001", "bbbb0002", "bbbb0003")
         quiet = env["project_dir"] / "bbbb0002-0000-0000-0000-000000000000.jsonl"
         cache = UnindexableTranscripts(_state_file(env))
-        cache.record(TranscriptRead(quiet, quiet.stat().st_mtime_ns, _NOW))
+        cache.record(TranscriptRead(quiet, FileStamp.of(quiet.stat()), _NOW))
         cache.save()
         current = {
             "document_name": "session-bbbb0001",
@@ -1151,7 +1324,7 @@ class TestNotAttemptedCountsOnlyWhatStillNeededWork:
 
         assert stats.not_examined == 2
         assert stats.not_attempted == 0
-        assert "2 not examined" in BackfillReport(stats).summary()
+        assert "2 not examined" in stats.summary()
 
 
 # ---------------------------------------------------------------------------
@@ -1180,14 +1353,10 @@ class TestBackfillLimitDefaultIsAll:
     """
 
     def test_request_contract_default(self) -> None:
-        from quarry.api import BackfillRequest
 
         assert BackfillRequest().limit == 0
 
     def test_cli_option_default(self) -> None:
-        import inspect
-
-        from quarry.cli_maintenance import MaintenanceCli
 
         params = inspect.signature(MaintenanceCli._backfill).parameters
         assert params["limit"].default == 0

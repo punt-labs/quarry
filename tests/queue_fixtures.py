@@ -13,7 +13,8 @@ from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY, QueuePolicy
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskRegistry, TaskState, task_terminal
+from quarry.daemon.task_terminal import TaskTerminal
+from quarry.daemon.tasks import TaskRegistry, TaskState
 from quarry.daemon.thread_call import ThreadCall
 from quarry.stop_signal import StopSignal
 
@@ -53,7 +54,7 @@ class BlockingUnit:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Wait for the gate, then complete."""
         del ctx
-        with task_terminal(state):
+        with TaskTerminal.recording(state):
             await self.gate.wait()
             state.status = "completed"
 
