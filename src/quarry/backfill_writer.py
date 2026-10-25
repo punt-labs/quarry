@@ -15,7 +15,8 @@ class WriteOutcome(Enum):
     UNINDEXABLE = auto()  # nothing to index in it; storing it again changes nothing
     NOT_ADMITTED = auto()  # the queue had no room within the wait
     ABORTED = auto()  # the run cannot go on; the transcript's job will never run
-    ABORTED_RUNNING = auto()  # ... and the job had started: it may still be stored
+    ABORTED_RUNNING = auto()  # ... and the job had started: it stops at its commit
+    ABORTED_COMMITTING = auto()  # ... and it is past its commit: stored, or failed
 
 
 class BackfillWriteError(RefusalError):

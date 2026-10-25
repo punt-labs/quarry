@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import Self, final
 
+from quarry.transcript_records import TranscriptRecords
 from quarry.transcript_turns import TurnText
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +22,8 @@ class TranscriptReader:
     The transcript file is untrusted, possibly-large local input: unparseable
     lines are skipped, an over-budget conversation is front-truncated to keep the
     newest turns, and a read failure degrades to empty rather than raising — a
-    capture must never block compaction.
+    capture must never block compaction.  The records kept are bounded to the
+    newest :attr:`~quarry.transcript_records.TranscriptRecords.MAX`.
     """
 
     _MAX_CHARS = 500_000
@@ -39,7 +37,7 @@ class TranscriptReader:
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
         self._path = path
-        self._records = tuple(cls._parse(cls._read_leniently(path)))
+        self._records = TranscriptRecords.parse(cls._read_leniently(path))
         return self
 
     @classmethod
@@ -54,7 +52,7 @@ class TranscriptReader:
         """
         reader = super().__new__(cls)
         reader._path = path
-        reader._records = tuple(cls._parse(raw))
+        reader._records = TranscriptRecords.parse(raw)
         return reader
 
     @staticmethod
@@ -67,21 +65,6 @@ class TranscriptReader:
         except (OSError, UnicodeDecodeError):
             logger.warning("transcript: could not read %s", path)
             return ""
-
-    @staticmethod
-    def _parse(raw: str) -> Iterator[dict[str, object]]:
-        """Yield each parsed JSON object in *raw*, in file order.
-
-        A line that is not a JSON object is skipped, so no extraction ever sees a
-        partial or malformed record.
-        """
-        for line in raw.splitlines():
-            try:
-                obj = json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            if isinstance(obj, dict):
-                yield obj
 
     def text(self) -> str:
         """Return the transcript's conversation text, newest-first truncated.

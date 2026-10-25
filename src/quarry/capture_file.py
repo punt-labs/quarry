@@ -8,7 +8,7 @@ import stat
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.capture_directory import CaptureDirectory, CaptureSymlinkError
-from quarry.capture_outcome import CaptureOutcome
+from quarry.capture_outcome import CaptureOutcome, CaptureResult
 from quarry.capture_temp import CaptureTemp
 from quarry.failure_reason import FailureReason
 from quarry.redacted_failure import RedactedFailure
@@ -43,19 +43,20 @@ class CaptureFile:
 
     def landed(self) -> bool:
         """Write the capture file; return whether one landed."""
-        return self.write() is CaptureOutcome.WRITTEN
+        return self.write().outcome is CaptureOutcome.WRITTEN
 
-    def write(self) -> CaptureOutcome:
+    def write(self) -> CaptureResult:
         """Scrub the request and write its capture file; say how that ended."""
         try:
-            return self._write(self._request.scrubbed_content())
+            return CaptureResult(self._write(self._request.scrubbed_content()))
         except Exception as exc:
             logger.error(
-                "%s: capture file write failed",
+                "%s: capture file write failed for %s",
                 self._request.label,
+                self._request.capture_path().name,
                 exc_info=RedactedFailure.of(exc),
             )
-            return CaptureOutcome.FAILED
+            return CaptureResult(CaptureOutcome.FAILED, FailureReason.os_name(exc))
 
     def _write(self, content: str) -> CaptureOutcome:
         """Write *content* to the capture file; nothing to write is an outcome."""
@@ -66,7 +67,10 @@ class CaptureFile:
             with CaptureDirectory(self._request.project_dir).opened(create=True) as fd:
                 return self._store(fd, name, content)
         except CaptureSymlinkError:
-            logger.warning("capture: a symlink in the path of %s; not written", name)
+            logger.warning(
+                "capture: a symlink or non-directory in the path of %s; not written",
+                name,
+            )
             return CaptureOutcome.SYMLINK
 
     @staticmethod

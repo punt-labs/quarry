@@ -75,8 +75,12 @@ class TranscriptFiler:
             self.file(transcript)
 
     def _begin(self) -> None:
-        """Start the project: its captures directory is swept of crashed leftovers."""
-        self._store.begin()
+        """Start the project: its captures directory is swept of crashed leftovers.
+
+        A dry run changes nothing, so it sweeps nothing.
+        """
+        if not self._run.config.dry_run:
+            self._store.begin()
 
     def file(self, transcript: Path) -> None:
         """Classify one transcript and file it if it has anything to file."""

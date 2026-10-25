@@ -12,6 +12,7 @@ import time
 from typing import ClassVar, Self, final
 
 from quarry.capture_directory import CaptureDirectory, CaptureSymlinkError
+from quarry.capture_temp import CaptureTemp
 from quarry.failure_reason import FailureReason
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,8 @@ class CaptureReaper:
 
     A live writer holds an ``flock`` on its temp file for as long as it writes,
     so a leftover is reaped only if it is old enough to have outlived any write
-    and its lock can be taken.  Reaping happens once per backfill run for each
+    and its lock can be taken (on a filesystem that cannot lock, old enough is
+    all it takes).  Reaping happens once per backfill run for each
     project, never per write.  Whatever cannot be removed is reported once, with
     the errno of the first failure.
     """
@@ -43,13 +45,26 @@ class CaptureReaper:
         return self
 
     def reap(self) -> int:
-        """Remove the stale leftovers; return how many were removed."""
+        """Remove the stale leftovers; return how many were removed.
+
+        Never raises: leftovers are housekeeping, so a directory that cannot be
+        opened or listed is one warning with the errno, and a backfill goes on.
+        """
         try:
-            fd = self._directory.open(create=False)
+            return self._reap()
         except (FileNotFoundError, CaptureSymlinkError):
+            return 0  # no captures directory, or not one this may enter
+        except OSError as exc:
+            logger.warning(
+                "capture: could not reap leftover temp files: %s",
+                FailureReason.os_name(exc),
+            )
             return 0
+
+    def _reap(self) -> int:
+        """Remove the stale leftovers from the opened directory; count them."""
         reaped, failures, first = 0, 0, ""
-        try:
+        with self._directory.opened(create=False) as fd:
             for entry in os.scandir(fd):
                 if not fnmatch.fnmatch(entry.name, self.PATTERN):
                     continue
@@ -58,8 +73,6 @@ class CaptureReaper:
                 except OSError as exc:
                     failures += 1
                     first = first or FailureReason.os_name(exc)
-        finally:
-            os.close(fd)
         if failures:
             logger.warning(
                 "capture: could not reap %d leftover temp file(s): %s", failures, first
@@ -73,15 +86,15 @@ class CaptureReaper:
             return 0
         if time.time() - info.st_mtime < self.STALE_AFTER_S:
             return 0
-        fd = os.open(
-            name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
-        )
+        fd = os.open(name, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             if exc.errno in {errno.EWOULDBLOCK, errno.EAGAIN}:
                 return 0  # a live writer holds it
-            raise
+            if exc.errno not in CaptureTemp.UNLOCKABLE:
+                raise
+            # no lock to judge by (the writer could not take one either): age alone
         finally:
             os.close(fd)
         os.unlink(name, dir_fd=directory)

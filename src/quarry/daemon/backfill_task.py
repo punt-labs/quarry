@@ -9,7 +9,7 @@ from quarry import backfill
 from quarry.daemon.bounded_scan import BoundedScan
 from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
-from quarry.daemon.run_report import RunReport
+from quarry.daemon.run_record import RunRecord
 from quarry.daemon.thread_call import ThreadCall
 from quarry.stop_signal import StopSignal
 
@@ -57,17 +57,17 @@ class BackfillTask:
         )
         stop = StopSignal()
         call = ThreadCall.here(stop, DEFAULT_QUEUE_POLICY.total_s)
-        report = RunReport(state, stop, dry_run=args.dry_run)
+        record = RunRecord(state, stop, dry_run=args.dry_run)
         runtime = backfill.BackfillRuntime(
             self._ctx.database,
             QueuedTranscriptWriter(self._ctx, call),
             self._ctx.settings.registry_path,
             stop,
-            report.progress,
+            record.progress,
         )
         with self._ctx.ingest_queue.gate.stopping(stop):
             await BoundedScan(stop, self._bound_s).run(
                 partial(backfill.Backfill.sessions, config, runtime),
                 state,
-                report,
+                record,
             )

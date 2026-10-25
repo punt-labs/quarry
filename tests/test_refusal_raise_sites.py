@@ -45,10 +45,10 @@ _ALLOWED: dict[str, int] = {
     "daemon/refusal_aware_terminal.py": 1,
     # A job's state.error (a FailureReason), and the daemon's own fixed refusals
     # re-raised across the thread boundary as backfill's.
-    "daemon/queued_job.py": 2,
-    "transcript_bytes.py": 1,  # the read limit, a size
+    "daemon/queued_job.py": 3,
+    "transcript_loader.py": 1,  # the read limit, a size
+    "backfill_outcomes.py": 1,  # the capture failure's cause: an errno name or class
     "daemon/late_outcome.py": 1,  # the stop reason, a fixed phrase of the run
-    "daemon/aborted_job.py": 1,  # a wait's abort reason, fixed phrases of the run
     "daemon/ingest_refusal.py": 1,  # the factory: its callers pass fixed reasons
     "daemon/thread_call.py": 1,  # the caller's stop reason: a fixed phrase of the run
     "extractors/sheet_tables.py": 0,

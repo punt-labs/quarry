@@ -19,7 +19,6 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.admission_streak import AdmissionStreak
 from quarry.api import BackfillRequest
 from quarry.atomic_file import AtomicFile
 from quarry.backfill import Backfill, BackfillConfig, BackfillRuntime
@@ -31,7 +30,7 @@ from quarry.backfill_unindexable import UnindexableTranscripts
 from quarry.backfill_writer import BackfillWriteError, WriteOutcome
 from quarry.capture import CaptureRequest, CaptureWriter
 from quarry.capture_directory import CaptureDirectory
-from quarry.capture_outcome import CaptureOutcome
+from quarry.capture_outcome import CaptureOutcome, CaptureResult
 from quarry.capture_reaper import CaptureReaper
 from quarry.cli_maintenance import MaintenanceCli
 from quarry.config import Settings
@@ -44,9 +43,9 @@ from quarry.db.facade import Database
 from quarry.file_stamp import FileStamp
 from quarry.ingestion.streaming import DocumentStreamer
 from quarry.results import DocumentSummary
+from quarry.run_halt import RunHalt
 from quarry.stop_signal import StopSignal
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
-from quarry.transcript_bytes import TranscriptBytes
 from quarry.transcript_loader import TranscriptLoader
 from quarry.transcript_read import TranscriptRead
 from quarry.transcript_reader import TranscriptReader
@@ -422,6 +421,14 @@ class TestBackfillSessions:
         assert stats.ingested == 0
         assert stats.skipped_unregistered == 1
 
+    def test_the_registry_is_read_once_and_closed(self, tmp_path: Path) -> None:
+        env = _registered_env(tmp_path)
+
+        with patch.object(SyncRegistry, "close") as close:
+            _run(env, RecordingWriter())
+
+        close.assert_called_once()
+
     def test_dedup_skips_existing(self, tmp_path: Path) -> None:
         writer = RecordingWriter()
         with patch(
@@ -779,6 +786,35 @@ class TestStopping:
         assert stats.errors[0] == "backfill stopped: task cancelled"
         assert any("task cancelled" in e for e in stats.errors[1:])
 
+    def test_a_job_past_its_commit_when_it_gave_up_is_unconfirmed_not_stored(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001")
+        writer = RecordingWriter(
+            BackfillWriteError("task cancelled").as_outcome(
+                WriteOutcome.ABORTED_COMMITTING
+            )
+        )
+
+        with caplog.at_level(logging.INFO):
+            stats = _run(env, writer)
+        again = RecordingWriter()
+        _run(env, again)
+
+        assert stats.stored_unconfirmed == 1
+        assert (stats.ingested, stats.failed) == (0, 0)  # neither stored nor lost
+        assert stats.errors[0] == "backfill stopped: task cancelled"
+        assert "1 stored unconfirmed" in stats.summary()
+        [line] = [
+            r
+            for r in _library_records(caplog)
+            if env["transcript"].name in r.getMessage()
+        ]
+        assert line.levelno == logging.WARNING
+        # no stamp was recorded, so the next run files it again
+        assert len(again.calls) == 2
+
     def test_a_queue_that_stays_full_stops_the_run_after_a_few(
         self, tmp_path: Path
     ) -> None:
@@ -792,8 +828,8 @@ class TestStopping:
 
         stats = _run(env, writer)
 
-        assert len(writer.calls) == AdmissionStreak.MAX
-        assert stats.failed == AdmissionStreak.MAX
+        assert len(writer.calls) == RunHalt.MAX_FULL
+        assert stats.failed == RunHalt.MAX_FULL
         assert stats.not_attempted == 2
         assert stats.errors[0] == "backfill stopped: ingest queue stayed full"
 
@@ -867,24 +903,25 @@ class TestOneLinePerFailure:
         writer = RecordingWriter()
 
         with patch(
-            "quarry.capture.CaptureWriter.outcome", return_value=CaptureOutcome.FAILED
+            "quarry.capture.CaptureWriter.outcome",
+            return_value=CaptureResult(CaptureOutcome.FAILED, "ENOSPC"),
         ):
             stats = _run(env, writer)
 
         assert writer.calls == []  # not handed on as if it had been written
         assert stats.failed == 1
         assert stats.errors == [
-            f"{env['transcript'].name}: capture file could not be written"
+            f"{env['transcript'].name}: capture file could not be written (ENOSPC)"
         ]
 
 
-class TestARefusedTranscriptIsCountedOnceAndNeverConsumesTheLimit:
+class TestARefusedTranscriptIsCountedRefusedEveryRunAndNeverConsumesTheLimit:
     @staticmethod
     def _big(path: Path) -> None:
         path.write_text("x" * (1024 * 1024 + 1))
         os.utime(path, (_LONG_AGO, _LONG_AGO))
 
-    def test_an_oversized_transcript_is_failed_once_then_skipped_by_its_stamp(
+    def test_an_oversized_transcript_is_refused_on_every_run_never_as_empty(
         self, tmp_path: Path
     ) -> None:
         env = _registered_env(tmp_path)
@@ -897,32 +934,38 @@ class TestARefusedTranscriptIsCountedOnceAndNeverConsumesTheLimit:
             return real_load(path)
 
         with (
-            patch.object(TranscriptBytes, "MAX_BYTES", 1024 * 1024),
+            patch.object(TranscriptLoader, "MAX_BYTES", 1024 * 1024),
             patch.object(TranscriptLoader, "load", counting),
         ):
             first = _run(env, RecordingWriter())
             second = _run(env, RecordingWriter())
 
-        assert first.failed == 1
-        assert first.errors == [
-            f"{env['transcript'].name}: transcript is over the 1 MiB backfill limit"
-        ]
-        assert (second.failed, second.skipped_empty) == (0, 1)
-        assert loads == [env["transcript"].name]  # never read again
+        note = f"{env['transcript'].name}: transcript is over the 1 MiB backfill limit"
+        for stats in (first, second):
+            assert (stats.skipped_refused, stats.failed, stats.skipped_empty) == (
+                1,
+                0,
+                0,
+            )
+            assert stats.errors == [note]  # one line per run
+            assert "1 refused" in stats.summary()
+        # re-detected from st_size each run, never cached: the refusal never
+        # reads a byte, so it costs a stat, not a read
+        assert loads == [env["transcript"].name] * 2
 
     def test_a_transcript_that_changed_since_it_was_refused_is_looked_at_again(
         self, tmp_path: Path
     ) -> None:
         env = _registered_env(tmp_path)
         self._big(env["transcript"])
-        with patch.object(TranscriptBytes, "MAX_BYTES", 1024 * 1024):
+        with patch.object(TranscriptLoader, "MAX_BYTES", 1024 * 1024):
             _run(env, RecordingWriter())
             _make_transcript(env["transcript"], [_user_message("small now")])
             again = RecordingWriter()
             stats = _run(env, again)
 
         assert [call.name for call in again.calls] == ["session-abcd1234"]
-        assert stats.failed == 0
+        assert (stats.failed, stats.skipped_refused) == (0, 0)
 
     def test_a_pipe_in_the_project_is_refused_without_holding_the_scan(
         self, tmp_path: Path
@@ -936,7 +979,7 @@ class TestARefusedTranscriptIsCountedOnceAndNeverConsumesTheLimit:
         stats = _run(env, RecordingWriter())
 
         assert time.monotonic() - started < 10
-        assert stats.failed == 1
+        assert (stats.skipped_refused, stats.failed) == (1, 0)
         assert stats.errors == [f"{fifo.name}: transcript is not a regular file"]
         assert stats.ingested == 1  # the real transcript beside it was filed
 
@@ -951,7 +994,7 @@ class TestARefusedTranscriptIsCountedOnceAndNeverConsumesTheLimit:
             return real_open(path, *args, **kwargs)
 
         writer = RecordingWriter()
-        with patch("quarry.transcript_bytes.open", fails_for_the_first, create=True):
+        with patch("quarry.transcript_loader.open", fails_for_the_first, create=True):
             stats = _run(env, writer, BackfillConfig(limit=1))
 
         assert stats.failed == 1  # the unreadable one, counted ...
@@ -972,7 +1015,12 @@ class TestACaptureThatWasNotWrittenSaysWhy:
         stats = _run(env, writer)
 
         assert writer.calls == []
-        assert stats.errors == [f"{env['transcript'].name}: capture refused: symlink"]
+        assert stats.errors == [
+            (
+                f"{env['transcript'].name}: "
+                "capture refused: symlink or non-directory in path"
+            )
+        ]
         assert not (tmp_path / "elsewhere.md").exists()
 
     def test_nothing_to_capture_is_a_skip_not_a_failure(self, tmp_path: Path) -> None:
@@ -980,7 +1028,8 @@ class TestACaptureThatWasNotWrittenSaysWhy:
         writer = RecordingWriter()
 
         with patch(
-            "quarry.capture.CaptureWriter.outcome", return_value=CaptureOutcome.EMPTY
+            "quarry.capture.CaptureWriter.outcome",
+            return_value=CaptureResult(CaptureOutcome.EMPTY),
         ):
             stats = _run(env, writer)
 
@@ -988,6 +1037,22 @@ class TestACaptureThatWasNotWrittenSaysWhy:
         assert stats.skipped_empty == 1
         assert stats.failed == 0
         assert stats.errors == []
+
+    def test_nothing_to_capture_is_not_remembered_so_a_later_run_looks_again(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        with patch(
+            "quarry.capture.CaptureWriter.outcome",
+            return_value=CaptureResult(CaptureOutcome.EMPTY),
+        ):
+            _run(env, RecordingWriter())
+        later = RecordingWriter()
+
+        stats = _run(env, later)
+
+        assert [call.name for call in later.calls] == ["session-abcd1234"]
+        assert stats.skipped_empty == 0
 
 
 class TestACrashedCaptureWritesLeftoversAreReapedOncePerProject:
@@ -1015,6 +1080,42 @@ class TestACrashedCaptureWritesLeftoversAreReapedOncePerProject:
             _run(env, RecordingWriter())
 
         assert reap.call_count == 1
+
+    def test_a_dry_run_reaps_nothing_and_never_begins_the_project(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        captures = env["real_project"].joinpath(*CaptureDirectory.RELATIVE)
+        captures.mkdir(parents=True)
+        stale = captures / ".session-feed0001.md.x1y2z3.tmp"
+        stale.write_text("half")
+        os.utime(stale, (_LONG_AGO, _LONG_AGO))
+
+        with patch.object(CaptureReaper, "reap") as reap:
+            _run(env, RecordingWriter(), BackfillConfig(dry_run=True))
+
+        assert reap.call_count == 0
+        assert stale.exists()  # a dry run deletes nothing
+
+    def test_a_captures_directory_that_cannot_be_swept_does_not_stop_the_run(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        captures = env["real_project"].joinpath(*CaptureDirectory.RELATIVE)
+        captures.mkdir(parents=True)
+        captures.chmod(0)
+        writer = RecordingWriter()
+        try:
+            stats = _run(env, writer)
+        finally:
+            captures.chmod(0o700)
+
+        # the sweep failed (EACCES), and so did the capture write: the one
+        # transcript fails by name, the run reports it instead of crashing
+        assert stats.failed == 1
+        assert stats.errors == [
+            f"{env['transcript'].name}: capture file could not be written (EACCES)"
+        ]
 
 
 class TestTheRunReport:
@@ -1117,7 +1218,7 @@ class TestAReadFaultIsAFailureNeverAnEmptyTranscript:
                 raise OSError(errno_code, os.strerror(errno_code))
             return real_open(path, *args, **kwargs)
 
-        return patch("quarry.transcript_bytes.open", fails, create=True)
+        return patch("quarry.transcript_loader.open", fails, create=True)
 
     def test_a_read_error_is_a_failure_never_recorded_and_retried_next_run(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -1148,7 +1249,7 @@ class TestAReadFaultIsAFailureNeverAnEmptyTranscript:
         with self._failing_open(errno.EMFILE):
             stats = _run(env, RecordingWriter())
         state = TaskState(task_id="t", kind="backfill")
-        RunRecord(state, dry_run=False).stats(stats)
+        RunRecord(state, StopSignal(), dry_run=False).record(stats)
 
         assert stats.failed == 3
         assert stats.stored_nothing
@@ -1276,9 +1377,9 @@ class TestTheNotAdmittedStreakIsConsecutive:
 
         def capture_fails_for_the_second(
             self: CaptureWriter, request: CaptureRequest
-        ) -> CaptureOutcome:
+        ) -> CaptureResult:
             if request.session_id.startswith("bbbb0001"):
-                return CaptureOutcome.FAILED
+                return CaptureResult(CaptureOutcome.FAILED, "EIO")
             return real(self, request)
 
         with patch.object(CaptureWriter, "outcome", capture_fails_for_the_second):
@@ -1397,9 +1498,9 @@ class TestTheStopIsCheckedBeforeEveryBlockingStep:
 
         def stops_during_the_capture(
             _self: CaptureWriter, _request: CaptureRequest
-        ) -> CaptureOutcome:
+        ) -> CaptureResult:
             stop.set("daemon shutting down")
-            return CaptureOutcome.WRITTEN
+            return CaptureResult(CaptureOutcome.WRITTEN)
 
         with patch.object(CaptureWriter, "outcome", stops_during_the_capture):
             stats = _run(env, writer, stop=stop)

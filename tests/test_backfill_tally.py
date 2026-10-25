@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from quarry.admission_streak import AdmissionStreak
 from quarry.backfill_tally import BackfillTally
+from quarry.run_halt import RunHalt
 from quarry.stop_signal import StopSignal
 
 
@@ -82,7 +82,7 @@ class TestBackfillTally:
     def test_a_run_gives_up_after_enough_unadmitted_transcripts_in_a_row(self) -> None:
         tally = BackfillTally(StopSignal())
 
-        for _ in range(AdmissionStreak.MAX - 1):
+        for _ in range(RunHalt.MAX_FULL - 1):
             tally.halt.not_admitted()
         assert not tally.halted()
         tally.halt.not_admitted()
@@ -93,7 +93,7 @@ class TestBackfillTally:
     def test_an_answered_transcript_resets_the_count(self) -> None:
         tally = BackfillTally(StopSignal())
 
-        for _ in range(AdmissionStreak.MAX - 1):
+        for _ in range(RunHalt.MAX_FULL - 1):
             tally.halt.not_admitted()
         tally.halt.answered()
         tally.halt.not_admitted()
@@ -103,7 +103,7 @@ class TestBackfillTally:
     def test_a_stored_transcript_resets_the_count(self) -> None:
         tally = BackfillTally(StopSignal())
 
-        for _ in range(AdmissionStreak.MAX - 1):
+        for _ in range(RunHalt.MAX_FULL - 1):
             tally.halt.not_admitted()
         tally.stored()
         tally.halt.not_admitted()

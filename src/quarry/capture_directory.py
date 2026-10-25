@@ -53,35 +53,47 @@ class CaptureDirectory:
     def open(self, *, create: bool) -> int:
         """Return a descriptor for the directory, creating it if *create*.
 
-        The caller closes it.
+        The caller closes it.  The captures directory itself is created
+        owner-only (0700); the levels above it, which hold other state, are 0755.
 
         Raises:
-            CaptureSymlinkError: A level below the project root is a symlink.
+            CaptureSymlinkError: A level below the project root is a symlink, or
+                not a directory.
             FileNotFoundError: A level is missing and *create* is false.
         """
         fd = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
-        for part in self.RELATIVE:
+        for index, part in enumerate(self.RELATIVE):
+            mode = 0o700 if index == len(self.RELATIVE) - 1 else 0o755
             try:
-                child = self._descend(fd, part, create=create)
+                child = self._descend(fd, part, mode, create=create)
             finally:
                 os.close(fd)
             fd = child
         return fd
 
-    @staticmethod
-    def _descend(parent: int, name: str, *, create: bool) -> int:
+    @classmethod
+    def _descend(cls, parent: int, name: str, mode: int, *, create: bool) -> int:
         """Return a descriptor for *name* under *parent*, never through a symlink."""
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         try:
-            return os.open(name, flags, dir_fd=parent)
+            return cls._open_at(parent, name)
         except FileNotFoundError:
             if not create:
                 raise
-            with contextlib.suppress(FileExistsError):  # a writer beside us made it
-                os.mkdir(name, 0o755, dir_fd=parent)
-            return os.open(name, flags, dir_fd=parent)
+        with contextlib.suppress(FileExistsError):  # a writer beside us made it
+            os.mkdir(name, mode, dir_fd=parent)
+        return cls._open_at(parent, name)  # refused the same way, whoever made it
+
+    @staticmethod
+    def _open_at(parent: int, name: str) -> int:
+        """Open the directory *name* under *parent* without following a symlink."""
+        try:
+            return os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent
+            )
         except OSError as exc:
-            if exc.errno in _REFUSED:
-                msg = f"{name} is a symlink or not a directory"
-                raise CaptureSymlinkError(exc.errno, msg) from exc
-            raise
+            if exc.errno not in _REFUSED:
+                raise
+            what = "a symlink" if exc.errno == errno.ELOOP else "a non-directory"
+            raise CaptureSymlinkError(
+                exc.errno, f"{name} is {what} in the path"
+            ) from exc

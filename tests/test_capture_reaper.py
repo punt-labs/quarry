@@ -121,3 +121,59 @@ def test_removal_failures_are_told_once_with_the_errno_name(
     [record] = caplog.records
     assert "2 leftover" in record.getMessage()
     assert "EACCES" in record.getMessage()
+
+
+def test_an_unreadable_captures_directory_is_one_warning_not_a_crash(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    directory = _captures(tmp_path)
+    directory.chmod(0)
+    try:
+        with caplog.at_level(logging.WARNING, logger="quarry.capture_reaper"):
+            assert _reap(tmp_path) == 0
+    finally:
+        directory.chmod(0o700)
+
+    [record] = caplog.records
+    assert "EACCES" in record.getMessage()
+
+
+def test_a_project_root_that_is_a_file_is_one_warning_not_a_crash(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    root = tmp_path / "not-a-directory"
+    root.write_text("a file")
+
+    with caplog.at_level(logging.WARNING, logger="quarry.capture_reaper"):
+        assert _reap(root) == 0
+
+    [record] = caplog.records
+    assert "ENOTDIR" in record.getMessage()
+
+
+def test_the_leftover_is_opened_for_writing_so_any_lock_can_be_taken(
+    tmp_path: Path,
+) -> None:
+    _leftover(_captures(tmp_path), _STALE, age_s=7200)
+    flags: list[int] = []
+    real_open = os.open
+
+    def spying(path: str, flag: int, *args: int, **kwargs: int) -> int:
+        flags.append(flag)
+        return real_open(path, flag, *args, **kwargs)
+
+    with patch("quarry.capture_reaper.os.open", spying):
+        assert _reap(tmp_path) == 1
+
+    assert flags[-1] & os.O_RDWR
+
+
+def test_a_filesystem_that_cannot_lock_reaps_by_age_alone(tmp_path: Path) -> None:
+    old = _leftover(_captures(tmp_path), _STALE, age_s=7200)
+    young = _leftover(_captures(tmp_path), ".session-feed0002.md.q.tmp", age_s=5)
+
+    with patch("fcntl.flock", side_effect=OSError(errno.ENOLCK, "no locks")):
+        assert _reap(tmp_path) == 1
+
+    assert not old.exists()
+    assert young.exists()

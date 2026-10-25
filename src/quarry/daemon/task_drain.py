@@ -6,6 +6,9 @@ import asyncio
 import logging
 from typing import ClassVar, Self, final
 
+from quarry.daemon.backfill_task import BackfillTask
+from quarry.daemon.bounded_scan import BoundedScan
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,14 +24,15 @@ class TaskDrain:
     A task that outlives the drain window is a straggler: its wrapper is
     cancelled, and the drain fails closed (``TimeoutError``) rather than let the
     caller believe it succeeded.  Cancelling a backfill waits for its scan thread
-    to return, which its own bound limits to :attr:`CANCEL_WAIT_S` less a margin,
-    so the wait after a cancel is bounded by that figure too: a shutdown takes no
+    to return, which its own bound limits to :attr:`BackfillTask.STOP_BOUND_S`
+    plus one poll of the wait, so the wait after a cancel is bounded by
+    :attr:`CANCEL_WAIT_S`, that figure and a second of slack: a shutdown takes no
     longer than the drain window plus :attr:`CANCEL_WAIT_S`.
     """
 
-    # The scan's bound on its wait for its thread after a stop is 30 s
-    # (``BackfillTask.STOP_BOUND_S``); one more second covers its poll.
-    CANCEL_WAIT_S: ClassVar[float] = 31.0
+    CANCEL_WAIT_S: ClassVar[float] = (
+        BackfillTask.STOP_BOUND_S + BoundedScan.POLL_S + 1.0
+    )
 
     __slots__ = ("_cancel_wait_s", "_tasks")
 

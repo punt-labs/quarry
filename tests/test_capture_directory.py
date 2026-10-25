@@ -71,3 +71,64 @@ def test_two_writers_making_the_directory_at_once_both_get_it(tmp_path: Path) ->
     os.close(fd)
 
     assert tmp_path.joinpath(*CaptureDirectory.RELATIVE).is_dir()
+
+
+def test_the_captures_directory_is_owner_only_and_the_levels_above_are_not(
+    tmp_path: Path,
+) -> None:
+    old = os.umask(0)  # so the mode asked for is the mode made
+    try:
+        os.close(_open(tmp_path, create=True))
+    finally:
+        os.umask(old)
+
+    def mode(depth: int) -> int:
+        path = tmp_path.joinpath(*CaptureDirectory.RELATIVE[:depth])
+        return stat.S_IMODE(path.stat().st_mode)
+
+    assert [mode(1), mode(2), mode(3)] == [0o755, 0o755, 0o700]
+
+
+def test_a_level_that_is_a_file_says_it_is_a_non_directory(tmp_path: Path) -> None:
+    (tmp_path / ".punt-labs").write_text("not a directory")
+
+    with pytest.raises(CaptureSymlinkError, match="non-directory in the path"):
+        _open(tmp_path, create=True)
+
+
+def test_a_symlink_planted_after_the_mkdir_is_refused_not_followed(
+    tmp_path: Path,
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    real_mkdir = os.mkdir
+
+    def planted(path: str, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        os.rmdir(path, dir_fd=dir_fd)
+        os.symlink(elsewhere, path, dir_fd=dir_fd)  # swapped in before the reopen
+
+    with (
+        patch("os.mkdir", planted),
+        pytest.raises(CaptureSymlinkError, match="in the path"),
+    ):
+        _open(tmp_path, create=True)
+
+
+def test_a_level_that_is_a_file_where_the_create_races_is_refused(
+    tmp_path: Path,
+) -> None:
+    real_mkdir = os.mkdir
+
+    def file_won_the_race(
+        path: str, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> None:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600, dir_fd=dir_fd)
+        os.close(fd)
+        real_mkdir(path, mode, dir_fd=dir_fd)  # FileExistsError: a file is there
+
+    with (
+        patch("os.mkdir", file_won_the_race),
+        pytest.raises(CaptureSymlinkError, match="non-directory in the path"),
+    ):
+        _open(tmp_path, create=True)

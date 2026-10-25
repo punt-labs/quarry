@@ -189,18 +189,18 @@
     "avg_lcom": 0.0
   },
   "src/quarry/backfill.py": {
-    "efferent_coupling": 4.0,
+    "efferent_coupling": 5.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
   "src/quarry/backfill_filing.py": {
-    "efferent_coupling": 5.0,
-    "public_names": 2.0,
+    "efferent_coupling": 4.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.418,
-    "avg_lcom": 0.418
+    "max_lcom": 0.417,
+    "avg_lcom": 0.417
   },
   "src/quarry/backfill_mapping.py": {
     "efferent_coupling": 0.0,
@@ -213,8 +213,8 @@
     "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.286,
-    "avg_lcom": 0.286
+    "max_lcom": 0.25,
+    "avg_lcom": 0.25
   },
   "src/quarry/backfill_project.py": {
     "efferent_coupling": 4.0,
@@ -231,7 +231,7 @@
     "avg_lcom": 1.0
   },
   "src/quarry/backfill_session.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 3.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.167,
@@ -241,18 +241,25 @@
     "efferent_coupling": 0.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.956,
-    "avg_lcom": 0.956
+    "max_lcom": 0.944,
+    "avg_lcom": 0.944
+  },
+  "src/quarry/backfill_store.py": {
+    "efferent_coupling": 7.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
   },
   "src/quarry/backfill_tally.py": {
     "efferent_coupling": 2.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.728,
-    "avg_lcom": 0.728
+    "max_lcom": 0.637,
+    "avg_lcom": 0.637
   },
   "src/quarry/backfill_unindexable.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 3.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -274,17 +281,24 @@
   },
   "src/quarry/capture.py": {
     "efferent_coupling": 2.0,
-    "public_names": 3.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
     "avg_lcom": 1.0
   },
-  "src/quarry/capture_file.py": {
-    "efferent_coupling": 1.0,
+  "src/quarry/capture_directory.py": {
+    "efferent_coupling": 0.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.0,
-    "avg_lcom": 0.0
+    "max_lcom": 0.667,
+    "avg_lcom": 0.667
+  },
+  "src/quarry/capture_file.py": {
+    "efferent_coupling": 5.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.5,
+    "avg_lcom": 0.5
   },
   "src/quarry/capture_marker.py": {
     "efferent_coupling": 0.0,
@@ -300,8 +314,29 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/capture_outcome.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/quarry/capture_reaper.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.833,
+    "avg_lcom": 0.833
+  },
   "src/quarry/capture_snapshot.py": {
     "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/quarry/capture_temp.py": {
+    "efferent_coupling": 1.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -546,11 +581,11 @@
     "avg_lcom": 0.0
   },
   "src/quarry/daemon/bounded_scan.py": {
-    "efferent_coupling": 2.0,
-    "public_names": 3.0,
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.667,
-    "avg_lcom": 0.667
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/daemon/captured_body_ingest.py": {
     "efferent_coupling": 6.0,
@@ -678,12 +713,26 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/daemon/job_lifecycle.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/daemon/job_spool.py": {
     "efferent_coupling": 0.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
     "avg_lcom": 0.5
+  },
+  "src/quarry/daemon/late_outcome.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/daemon/launcher.py": {
     "efferent_coupling": 8.0,
@@ -714,8 +763,8 @@
     "avg_lcom": 0.6
   },
   "src/quarry/daemon/queued_job.py": {
-    "efferent_coupling": 5.0,
-    "public_names": 1.0,
+    "efferent_coupling": 7.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -875,21 +924,35 @@
     "public_names": 1.0
   },
   "src/quarry/daemon/run_record.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.6,
+    "avg_lcom": 0.6
+  },
+  "src/quarry/daemon/server.py": {
+    "efferent_coupling": 11.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 0.697
+  },
+  "src/quarry/daemon/task_drain.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
+  },
+  "src/quarry/daemon/task_status.py": {
     "efferent_coupling": 0.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
-  "src/quarry/daemon/server.py": {
-    "efferent_coupling": 10.0,
-    "public_names": 3.0,
-    "circular_imports": 0.0,
-    "max_lcom": 1.0,
-    "avg_lcom": 0.697
-  },
   "src/quarry/daemon/task_terminal.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 3.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -899,8 +962,8 @@
     "efferent_coupling": 0.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.348,
-    "avg_lcom": 0.348
+    "max_lcom": 0.218,
+    "avg_lcom": 0.218
   },
   "src/quarry/daemon/thread_call.py": {
     "efferent_coupling": 1.0,
@@ -1281,11 +1344,11 @@
     "avg_lcom": 0.0
   },
   "src/quarry/file_stamp.py": {
-    "efferent_coupling": 1.0,
-    "public_names": 2.0,
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 1.0,
-    "avg_lcom": 1.0
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/formatting.py": {
     "efferent_coupling": 1.0,
@@ -1742,6 +1805,13 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/loaded_transcript.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/lock_pid_file.py": {
     "efferent_coupling": 0.0,
     "public_names": 1.0,
@@ -1974,7 +2044,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/redacted_failure.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -2077,6 +2147,20 @@
     "efferent_coupling": 0.0,
     "max_lcom": 0.0,
     "public_names": 4.0
+  },
+  "src/quarry/run_halt.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.571,
+    "avg_lcom": 0.571
+  },
+  "src/quarry/run_progress.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/safe_paths.py": {
     "efferent_coupling": 0.0,
@@ -2225,6 +2309,13 @@
     "max_lcom": 1.0,
     "avg_lcom": 0.5
   },
+  "src/quarry/stamp_check.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/stop_signal.py": {
     "efferent_coupling": 0.0,
     "public_names": 1.0,
@@ -2366,8 +2457,8 @@
     "public_names": 1.0
   },
   "src/quarry/transcript_loader.py": {
-    "efferent_coupling": 4.0,
-    "public_names": 3.0,
+    "efferent_coupling": 5.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -2380,11 +2471,25 @@
     "avg_lcom": 0.0
   },
   "src/quarry/transcript_reader.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.333,
     "avg_lcom": 0.333
+  },
+  "src/quarry/transcript_records.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/quarry/transcript_refusals.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/transcript_turns.py": {
     "efferent_coupling": 0.0,
@@ -2413,6 +2518,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.333,
     "avg_lcom": 0.333
+  },
+  "src/quarry/unread_transcripts.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/url_admission.py": {
     "efferent_coupling": 3.0,

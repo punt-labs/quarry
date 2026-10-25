@@ -15,7 +15,6 @@ from unittest.mock import patch
 import pytest
 
 from quarry.file_stamp import FileStamp
-from quarry.transcript_bytes import TranscriptBytes
 from quarry.transcript_loader import TranscriptLoader
 from quarry.transcript_reader import TranscriptReader
 from quarry.transcript_refusals import NotARegularFileError, TranscriptTooLargeError
@@ -54,7 +53,7 @@ def _fails_to_open(code: int) -> AbstractContextManager[object]:
             raise OSError(code, os.strerror(code))
         return real_open(path, *args, **kwargs)
 
-    return patch("quarry.transcript_bytes.open", fails, create=True)
+    return patch("quarry.transcript_loader.open", fails, create=True)
 
 
 def test_the_file_is_opened_once_and_never_read_a_second_time(tmp_path: Path) -> None:
@@ -70,7 +69,7 @@ def test_the_file_is_opened_once_and_never_read_a_second_time(tmp_path: Path) ->
         pytest.fail(f"{self.name} was read a second time")
 
     with (
-        patch("quarry.transcript_bytes.open", counting, create=True),
+        patch("quarry.transcript_loader.open", counting, create=True),
         patch.object(Path, "read_text", no_second_read),
     ):
         TranscriptLoader.load(path)
@@ -111,7 +110,7 @@ def test_a_transcript_over_the_limit_is_refused_before_it_is_read(
     path = _transcript(tmp_path)
 
     with (
-        patch.object(TranscriptBytes, "MAX_BYTES", 10),
+        patch.object(TranscriptLoader, "MAX_BYTES", 10),
         patch.object(TranscriptReader, "from_text") as parsed,
         pytest.raises(TranscriptTooLargeError) as raised,
     ):
@@ -125,8 +124,8 @@ def test_the_refusal_names_the_limit_it_derives_from_the_cap(tmp_path: Path) -> 
     path = _transcript(tmp_path)
 
     with (
-        patch.object(TranscriptBytes, "MAX_BYTES", 3 * 1024 * 1024),
-        patch("quarry.transcript_bytes.os.fstat") as fstat,
+        patch.object(TranscriptLoader, "MAX_BYTES", 3 * 1024 * 1024),
+        patch("quarry.transcript_loader.os.fstat") as fstat,
         pytest.raises(TranscriptTooLargeError, match="3 MiB backfill limit"),
     ):
         fstat.return_value = os.stat_result(
@@ -136,8 +135,9 @@ def test_the_refusal_names_the_limit_it_derives_from_the_cap(tmp_path: Path) -> 
 
 
 def test_the_limit_is_32_mib_and_the_cost_of_one_at_the_cap_is_stated() -> None:
-    assert TranscriptBytes.MAX_BYTES == 32 * 1024 * 1024
-    assert "256 MiB" in (TranscriptBytes.__doc__ or "")
+    assert TranscriptLoader.MAX_BYTES == 32 * 1024 * 1024
+    assert "270 MiB" in (TranscriptLoader.__doc__ or "")
+    assert "201 MiB" in (TranscriptLoader.__doc__ or "")
 
 
 def test_a_file_that_grew_while_it_was_read_is_refused(tmp_path: Path) -> None:
@@ -145,8 +145,8 @@ def test_a_file_that_grew_while_it_was_read_is_refused(tmp_path: Path) -> None:
     small = path.stat()
 
     with (
-        patch.object(TranscriptBytes, "MAX_BYTES", small.st_size - 1),
-        patch("quarry.transcript_bytes.os.fstat", return_value=small),
+        patch.object(TranscriptLoader, "MAX_BYTES", small.st_size - 1),
+        patch("quarry.transcript_loader.os.fstat", return_value=small),
         pytest.raises(TranscriptTooLargeError),
     ):
         TranscriptLoader.load(path)
@@ -156,7 +156,7 @@ def test_a_transcript_exactly_at_the_limit_is_read(tmp_path: Path) -> None:
     path = _transcript(tmp_path)
     size = path.stat().st_size
 
-    with patch.object(TranscriptBytes, "MAX_BYTES", size):
+    with patch.object(TranscriptLoader, "MAX_BYTES", size):
         assert TranscriptLoader.load(path).text
 
 
@@ -169,6 +169,32 @@ def test_a_pipe_is_refused_at_once_and_never_blocks_the_scan(tmp_path: Path) -> 
         TranscriptLoader.load(fifo)
 
     assert time.monotonic() - started < 2.0
+
+
+def test_a_symlink_is_refused_as_not_a_regular_file_and_never_followed(
+    tmp_path: Path,
+) -> None:
+    target = _transcript(tmp_path)
+    link = tmp_path / "link.jsonl"
+    link.symlink_to(target)
+
+    with pytest.raises(NotARegularFileError, match="not a regular file") as raised:
+        TranscriptLoader.load(link)
+
+    assert raised.value.read.transcript == link  # the stamp is the link's own
+
+
+def test_a_refusal_carries_the_read_it_was_made_about(tmp_path: Path) -> None:
+    path = _transcript(tmp_path)
+
+    with (
+        patch.object(TranscriptLoader, "MAX_BYTES", 1),
+        pytest.raises(TranscriptTooLargeError) as raised,
+    ):
+        TranscriptLoader.load(path)
+
+    assert raised.value.read.transcript == path
+    assert str(raised.value) == "transcript is over the 0 MiB backfill limit"
 
 
 def test_a_directory_is_not_read_and_says_so_by_errno(tmp_path: Path) -> None:

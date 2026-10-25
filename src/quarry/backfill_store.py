@@ -102,18 +102,20 @@ class TranscriptStore:
     def _captured(self, session: BackfillSession, read: TranscriptRead) -> bool:
         """Write the capture file; return whether the transcript goes on to the store.
 
-        Nothing to capture is a skip, like an empty transcript; a file that was
-        refused or could not be written fails the transcript, with the reason.
+        Nothing to capture is a skip, but not a verdict on the transcript: it is
+        not remembered, so a later run looks at it again.  A file that was refused
+        or could not be written fails the transcript, with the reason.
         """
-        outcome = CaptureWriter().outcome(session.capture_request())
-        match outcome:
+        result = CaptureWriter().outcome(session.capture_request())
+        match result.outcome:
             case CaptureOutcome.EMPTY:
-                self._run.outcomes.unindexable(read)
+                self._run.outcomes.nothing_to_capture()
             case CaptureOutcome.FAILED:
-                self._run.outcomes.capture_failed(read.transcript)
+                self._run.outcomes.capture_failed(read.transcript, result.cause)
             case CaptureOutcome.SYMLINK:
-                logger.warning("backfill: %s: %s", read.transcript.name, outcome.value)
-                self._run.tally.fail(f"{read.transcript.name}: {outcome.value}")
+                reason = result.outcome.value
+                logger.warning("backfill: %s: %s", read.transcript.name, reason)
+                self._run.tally.fail(f"{read.transcript.name}: {reason}")
             case _:
                 return True
         return False

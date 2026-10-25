@@ -7,6 +7,7 @@ import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, final
 
+from quarry.daemon.tasks import TERMINAL_STATUSES
 from quarry.failure_reason import FailureReason
 from quarry.redacted_failure import RedactedFailure
 
@@ -48,6 +49,10 @@ class TaskTerminal:
             state.status = "failed"
             state.error = FailureReason.of(exc)
         finally:
-            if state.status == "running":
+            if state.status not in TERMINAL_STATUSES:
+                # A body that exits mid-job (running, committing, aborted) did
+                # not finish; it keeps any reason the job already gave.
                 state.status = "failed"
-                state.error = "task exited without setting terminal status"
+                state.error = state.reason_or(
+                    "task exited without setting terminal status"
+                )

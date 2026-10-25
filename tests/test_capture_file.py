@@ -17,6 +17,7 @@ from quarry.capture import CaptureRequest
 from quarry.capture_directory import CaptureDirectory
 from quarry.capture_file import CaptureFile
 from quarry.capture_outcome import CaptureOutcome
+from quarry.capture_temp import CaptureTemp
 
 _NAME = "session-abcd1234.md"
 _EMPTY_ARTIFACTS = SessionArtifacts(
@@ -36,7 +37,7 @@ def _request(root: Path, *, session_id: str = "abcd1234ef") -> CaptureRequest:
 
 
 def _write(root: Path, **kwargs: str) -> CaptureOutcome:
-    return CaptureFile(_request(root, **kwargs)).write()
+    return CaptureFile(_request(root, **kwargs)).write().outcome
 
 
 def _content(root: Path) -> str:
@@ -302,3 +303,74 @@ def test_the_descriptor_is_closed_when_fdopen_raises(tmp_path: Path) -> None:
 def test_nothing_to_capture_creates_nothing(tmp_path: Path) -> None:
     assert _write(tmp_path, session_id="") is CaptureOutcome.EMPTY
     assert not (tmp_path / ".punt-labs").exists()
+
+
+def test_a_failed_write_names_the_capture_and_carries_its_cause(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    detail = "/home/me/secret no space"
+
+    def fails(_fd: int) -> None:
+        raise OSError(errno.ENOSPC, detail)
+
+    with (
+        patch("os.fsync", fails),
+        caplog.at_level(logging.ERROR, logger="quarry.capture_file"),
+    ):
+        result = CaptureFile(_request(tmp_path)).write()
+
+    assert (result.outcome, result.cause) == (CaptureOutcome.FAILED, "ENOSPC")
+    assert _NAME in caplog.text  # which capture, so the line is actionable
+    assert "ENOSPC" in caplog.text  # the errno the redacted failure names
+    assert "secret" not in caplog.text
+
+
+def test_a_filesystem_that_cannot_lock_still_gets_the_capture(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    CaptureTemp._warn_unlocked.cache_clear()  # warned once per cause, per process
+
+    with (
+        patch("fcntl.flock", side_effect=OSError(errno.ENOLCK, "no locks")),
+        caplog.at_level(logging.WARNING, logger="quarry.capture_temp"),
+    ):
+        assert _write(tmp_path) is CaptureOutcome.WRITTEN
+        assert _write(tmp_path, session_id="feed0001ef") is CaptureOutcome.WRITTEN
+
+    assert (_captures(tmp_path) / _NAME).is_file()
+    [warning] = caplog.records  # once, not once per capture
+    assert "ENOLCK" in warning.getMessage()
+
+
+def test_an_unexpected_lock_failure_still_fails_the_write(tmp_path: Path) -> None:
+    with patch("fcntl.flock", side_effect=OSError(errno.EIO, "io")):
+        assert _write(tmp_path) is CaptureOutcome.FAILED
+
+    assert list(_captures(tmp_path).iterdir()) == []
+
+
+def test_a_temp_file_that_cannot_be_removed_is_a_debug_line_not_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    def fails(_fd: int) -> None:
+        raise OSError(errno.ENOSPC, "no space")
+
+    with (
+        patch("os.fsync", fails),
+        patch("os.unlink", side_effect=OSError(errno.EACCES, "denied")),
+        caplog.at_level(logging.DEBUG, logger="quarry.capture_temp"),
+    ):
+        assert _write(tmp_path) is CaptureOutcome.FAILED
+
+    [record] = [r for r in caplog.records if r.name == "quarry.capture_temp"]
+    assert record.levelno == logging.DEBUG
+    assert "EACCES" in record.getMessage()
+
+
+def test_a_level_that_is_a_file_is_refused_as_a_non_directory(tmp_path: Path) -> None:
+    (tmp_path / ".punt-labs").write_text("a file")
+
+    assert _write(tmp_path) is CaptureOutcome.SYMLINK
+    assert CaptureOutcome.SYMLINK.value == (
+        "capture refused: symlink or non-directory in path"
+    )

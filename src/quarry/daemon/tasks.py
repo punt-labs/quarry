@@ -14,15 +14,30 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Self, final
+from typing import Literal, Self, final
 
 # Task GC: completed/failed tasks are evicted after this many seconds.
 TASK_TTL_SECONDS = 3600  # 1 hour
 
-# Terminal statuses eligible for GC.  A "queued" or "running" task is still live
-# and must never be evicted out from under a client polling it (DES-042 adds the
-# interim "queued" state that a worker flips to "running" on dequeue).
-_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+# The one status vocabulary of a background task and of a queued job.  ``new``,
+# ``queued``, ``running``, ``committing``, ``aborted`` and ``withdrawn`` belong to
+# a queued job's life (:class:`~quarry.daemon.job_lifecycle.JobLifecycle`); a
+# polled task is ``running`` until it is ``completed`` or ``failed``.
+TaskStatus = Literal[
+    "new",
+    "queued",
+    "running",
+    "committing",
+    "aborted",
+    "withdrawn",
+    "completed",
+    "failed",
+]
+
+# Terminal statuses, eligible for GC.  A task in any other status is still live
+# and must never be evicted out from under a client polling it, and a job whose
+# body exits in one of them did not finish.
+TERMINAL_STATUSES: frozenset[TaskStatus] = frozenset({"completed", "failed"})
 
 
 @dataclass(slots=True)
@@ -32,12 +47,12 @@ class TaskState:
     ``holds_thread`` is set while a scan thread this task started is alive: the
     singleton guard counts the task as running until the thread has returned,
     whatever ``status`` says.  ``claim`` is the lock under which a job is run
-    or withdrawn, never both (:class:`~quarry.daemon.job_claim.JobClaim`).
+    or withdrawn, never both (:class:`~quarry.daemon.job_lifecycle.JobLifecycle`).
     """
 
     task_id: str
     kind: str  # "sync", "ingest", "remember", "delete", "register", "deregister"
-    status: str = "running"
+    status: TaskStatus = "running"
     results: dict[str, object] = field(default_factory=dict)
     error: str = ""
     created_at: float = field(default_factory=time.monotonic)
@@ -94,7 +109,7 @@ class TaskRegistry:
     @staticmethod
     def _is_idle(task: TaskState) -> bool:
         """Return whether *task* ended and nothing of it, a scan thread, still runs."""
-        return task.status in _TERMINAL_STATUSES and not task.holds_thread
+        return task.status in TERMINAL_STATUSES and not task.holds_thread
 
     def drop(self, state: TaskState) -> None:
         """Discard a task record so a rejected submit leaves no orphan behind."""

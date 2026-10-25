@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import final
 
+from quarry.failure_reason import FailureReason
 from quarry.reported_error import ReportedError
 
 
@@ -21,5 +22,12 @@ class RedactedFailure:
 
     @staticmethod
     def of(exc: BaseException) -> ReportedError:
-        """Return the stand-in for *exc*, to pass as a record's ``exc_info``."""
-        return ReportedError(type(exc).__name__).with_traceback(exc.__traceback__)
+        """Return the stand-in for *exc*, to pass as a record's ``exc_info``.
+
+        An ``OSError`` also names its errno (``OSError [ENOSPC]``): the errno
+        carries no path, and it is what tells a full disk from a denied write.
+        """
+        name = type(exc).__name__
+        if isinstance(exc, OSError) and exc.errno:
+            name = f"{name} [{FailureReason.os_name(exc)}]"
+        return ReportedError(name).with_traceback(exc.__traceback__)

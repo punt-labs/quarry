@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Self, final
+import time
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.late_outcome import LateOutcome
-from quarry.daemon.scan_wait import ScanWait
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from quarry.daemon.scan_report import ScanReport
+    from quarry.backfill_stats import BackfillStats
+    from quarry.daemon.run_record import RunRecord
     from quarry.daemon.tasks import TaskState
     from quarry.stop_signal import StopSignal
 
@@ -25,16 +26,22 @@ class BoundedScan:
     Cancelling an ``await`` on a thread does not stop the thread.  A task that
     reported itself finished at that point would let the singleton guard admit a
     second run beside the first, so a cancelled scan is told to stop (with its
-    reason) and then awaited through every further cancel
-    (:class:`~quarry.daemon.scan_wait.ScanWait`), and the cancellation
+    reason) and then awaited through every further cancel, and the cancellation
     propagates only once the thread has returned.  The scan's outcome is written
     to the task first, so the reason the run really stopped for survives.
 
-    The wait is bounded.  When it gives up, the task is told what the scan has
-    counted so far and why it stopped, and the task state keeps ``holds_thread``
-    until the thread really returns, so the singleton guard still refuses a
-    second run beside it; the thread's late outcome is written then.
+    The wait is bounded.  A cancel sets the stop (with its reason) and the wait
+    goes on: the thread ends at its next step.  A step the stop cannot interrupt
+    (a read, a listing) can hold the thread, so :attr:`bound_s` after the stop
+    was requested, by a cancel or by anything else, the wait gives up.  The task
+    is then told what the scan has counted so far and why it stopped, and the
+    task state keeps ``holds_thread`` until the thread really returns, so the
+    singleton guard still refuses a second run beside it; the thread's late
+    outcome is written then.
     """
+
+    # How often the wait looks at the clock, and at whether a stop was requested.
+    POLL_S: ClassVar[float] = 0.1
 
     __slots__ = ("_bound_s", "_stop")
 
@@ -47,21 +54,29 @@ class BoundedScan:
         self._bound_s = bound_s
         return self
 
-    async def run[T](
-        self, scan: Callable[[], T], state: TaskState, report: ScanReport[T]
-    ) -> T:
+    async def run(
+        self, scan: Callable[[], BackfillStats], state: TaskState, record: RunRecord
+    ) -> BackfillStats:
         """Return *scan*'s result, recording it; stop and outwait it if cancelled."""
         state.holds_thread = True
         running = asyncio.ensure_future(run_in_threadpool(scan))
-        late = LateOutcome(state, report)
+        late = LateOutcome(state, record)
         running.add_done_callback(late.returned)
-        cancelled = await self._waiter().until_done(running)
-        return late.settle(running, cancelled=cancelled, reason=self._reason())
+        cancelled = await self._until_done(running)
+        return late.settle(running, cancelled=cancelled, reason=self._stop.reason)
 
-    def _waiter(self) -> ScanWait:
-        """Return the wait that absorbs cancels and gives up at the bound."""
-        return ScanWait(self._stop, self._bound_s)
-
-    def _reason(self) -> str:
-        """Return why the scan was stopped, or ``""`` if it was not."""
-        return self._stop.reason
+    async def _until_done(self, running: asyncio.Future[BackfillStats]) -> bool:
+        """Wait for *running* or the bound; return whether a cancel arrived."""
+        cancelled = False
+        stopped_at = 0.0
+        while not running.done():
+            try:
+                await asyncio.wait({running}, timeout=self.POLL_S)
+            except asyncio.CancelledError:
+                self._stop.set("task cancelled")
+                cancelled = True
+            if self._stop.is_set():
+                stopped_at = stopped_at or time.monotonic()
+                if time.monotonic() - stopped_at >= self._bound_s:
+                    break
+        return cancelled

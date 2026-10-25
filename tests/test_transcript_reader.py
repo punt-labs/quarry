@@ -191,6 +191,13 @@ class TestMalformedLines:
         assert reader.text() == "[user] first\n\n[assistant] second"
         assert reader.last_assistant_text() == "second"
 
+    def test_a_line_nested_too_deeply_to_parse_is_skipped(self, tmp_path: Path) -> None:
+        path = tmp_path / "t.jsonl"
+        deep = "[" * 200_000
+        path.write_text(f"{deep}\n{json.dumps(_turn('user', 'after'))}")
+
+        assert TranscriptReader(path).text() == "[user] after"
+
 
 class TestReadOnce:
     """A reader parses its file at construction and never again."""

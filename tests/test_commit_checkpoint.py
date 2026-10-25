@@ -1,4 +1,4 @@
-"""CommitCheckpoint: a withdrawn job stops before it deletes or stores anything."""
+"""QueuedJob.checkpoint: a withdrawn job stops before it deletes or stores anything."""
 
 from __future__ import annotations
 
@@ -8,9 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.daemon.commit_checkpoint import CommitCheckpoint, JobWithdrawnError
-from quarry.daemon.job_claim import JobClaim
-from quarry.daemon.job_withdrawal import JobWithdrawal
+from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.queued_job import JobWithdrawnError, QueuedJob
 from quarry.daemon.tasks import TaskState
 from quarry.ingestion.chunk_store_funnel import ChunkStoreFunnel
 from quarry.ingestion.ingest_context import Progress
@@ -18,20 +17,25 @@ from quarry.ingestion.owned_insert import OwnedInsert
 from quarry.ingestion.run_context import RunContext
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from quarry.daemon.queued_ingest import QueuedIngest
+    from quarry.daemon.thread_call import ThreadCall
     from quarry.ingestion.extracted_document import ExtractedDocument
     from quarry.ingestion.ingest_context import IngestContext
     from quarry.models import Chunk
 
 
-def _running() -> tuple[TaskState, CommitCheckpoint]:
+def _running() -> tuple[TaskState, Callable[[str], None]]:
     state = TaskState(task_id="j", kind="backfill", status="queued")
-    assert JobClaim(state).start()
-    return state, CommitCheckpoint(JobWithdrawal(state))
+    assert JobLifecycle(state).start()
+    queued = cast("QueuedIngest", SimpleNamespace(new_state=lambda: state))
+    return state, QueuedJob(cast("ThreadCall", None), queued).checkpoint
 
 
 def test_other_progress_lines_pass_whatever_became_of_the_job() -> None:
     state, checkpoint = _running()
-    JobWithdrawal(state).withdraw()
+    JobLifecycle(state).withdraw()
 
     checkpoint("Chunking")
     checkpoint("Created 3 chunks")
@@ -40,17 +44,17 @@ def test_other_progress_lines_pass_whatever_became_of_the_job() -> None:
 def test_the_commit_point_claims_the_commit() -> None:
     state, checkpoint = _running()
 
-    checkpoint(CommitCheckpoint.COMMIT_POINT)
+    checkpoint(QueuedJob.COMMIT_POINT)
 
     assert state.status == "committing"
 
 
 def test_a_job_withdrawn_before_the_commit_point_stops_there() -> None:
     state, checkpoint = _running()
-    JobWithdrawal(state).withdraw()
+    JobLifecycle(state).withdraw()
 
     with pytest.raises(JobWithdrawnError, match="withdrawn before its commit"):
-        checkpoint(CommitCheckpoint.COMMIT_POINT)
+        checkpoint(QueuedJob.COMMIT_POINT)
 
 
 def test_the_pipeline_reports_the_commit_point_before_it_deletes_anything() -> None:
@@ -74,5 +78,5 @@ def test_the_pipeline_reports_the_commit_point_before_it_deletes_anything() -> N
     ):
         funnel.run(cast("ExtractedDocument", extracted))
 
-    commit = f"progress:{CommitCheckpoint.COMMIT_POINT}"
+    commit = f"progress:{QueuedJob.COMMIT_POINT}"
     assert events.index(commit) < events.index("delete")

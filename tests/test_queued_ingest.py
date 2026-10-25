@@ -10,12 +10,11 @@ from typing import TYPE_CHECKING, final
 import pytest
 
 from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
-from quarry.daemon.job_withdrawal import JobWithdrawal
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.queued_ingest import QueuedIngest, QueuePolicy
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskState
-from quarry.daemon.withdrawn import Withdrawn
 from tests.queue_fixtures import ctx_with_queue
 
 if TYPE_CHECKING:
@@ -270,7 +269,7 @@ async def test_a_withdrawn_job_is_skipped_by_its_worker_and_frees_its_slot(
     assert ctx.ingest_queue.try_submit(key, _Unit("w", events), state)
 
     assert (
-        JobWithdrawal(state).withdraw() is Withdrawn.NEVER_STARTED
+        JobLifecycle(state).withdraw() is JobLifecycle.Withdrawn.NEVER_STARTED
     )  # producer stopped
     gate.set()
     await ctx.ingest_queue.aclose(drain_timeout=2.0)
@@ -285,7 +284,9 @@ async def test_a_job_withdrawn_before_it_is_enqueued_never_runs(
     ctx = ctx_with_queue(tmp_path)
     events: list[tuple[str, str]] = []
     state = TaskState(task_id="w", kind="backfill", status="new")
-    assert JobWithdrawal(state).withdraw() is Withdrawn.NEVER_STARTED  # gave up
+    assert (
+        JobLifecycle(state).withdraw() is JobLifecycle.Withdrawn.NEVER_STARTED
+    )  # gave up
 
     assert ctx.ingest_queue.try_submit(
         RouteKey("db", _COLLECTION), _Unit("w", events), state

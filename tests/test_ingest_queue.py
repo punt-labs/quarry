@@ -162,6 +162,11 @@ def _make_queue(
     return IngestQueue(cast("DaemonContext", ctx))
 
 
+def _status(state: TaskState) -> str:
+    """Return *state*'s status, read fresh (a mutable attribute is not narrowed)."""
+    return state.status
+
+
 def _state(name: str) -> TaskState:
     return TaskState(task_id=name, kind="capture")
 
@@ -291,10 +296,10 @@ def test_status_moves_queued_then_running_then_completed() -> None:
         assert queue.try_submit(_rk("c"), unit, state)
         assert state.status == "queued"
         await asyncio.sleep(0.02)  # worker dequeues and flips to running
-        assert state.status == "running"
+        assert _status(state) == "running"
         gate.set()
         await queue.aclose(drain_timeout=2.0)
-        assert state.status == "completed"
+        assert _status(state) == "completed"
 
     asyncio.run(_run())
 
@@ -414,7 +419,7 @@ def test_drain_abort_fails_a_job_blocked_on_the_embed_gate() -> None:
         await asyncio.sleep(0.02)  # B's worker dequeues and blocks awaiting the gate
         assert b.status == "queued"  # dequeued, but not running until it has the gate
         await queue.aclose(drain_timeout=0.05)  # drain times out -> abort
-        assert b.status == "failed"  # gate-blocked job now reaches a terminal state
+        assert _status(b) == "failed"  # gate-blocked job now reaches a terminal state
         assert a.status == "failed"
 
     asyncio.run(_run())

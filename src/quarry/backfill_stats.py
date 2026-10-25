@@ -20,6 +20,12 @@ class BackfillStats:
     still needed work when the run was stopped; ``not_examined`` counts those in
     projects the run never looked into (stopped before them, or their store
     could not be read), where what needed work cannot be told cheaply.
+    ``stored_unconfirmed`` counts the transcripts whose job was past its commit
+    when the run gave up waiting: the store may have landed or failed, so they are
+    neither ingested nor failed, and are not recorded as stored.
+    ``skipped_refused`` counts the transcripts refused for what they are (over
+    the read limit, not a regular file): never empty, never failed, and noted in
+    ``errors`` on every run.
     ``stopped`` is the reason the run ended early, or ``""``.
     """
 
@@ -29,7 +35,9 @@ class BackfillStats:
     skipped_unregistered: int = 0
     skipped_empty: int = 0
     skipped_unreadable: int = 0
+    skipped_refused: int = 0
     failed: int = 0
+    stored_unconfirmed: int = 0
     not_attempted: int = 0
     not_examined: int = 0
     stopped: str = ""
@@ -57,7 +65,9 @@ class BackfillStats:
             "skipped_unregistered": self.skipped_unregistered,
             "skipped_empty": self.skipped_empty,
             "skipped_unreadable": self.skipped_unreadable,
+            "skipped_refused": self.skipped_refused,
             "failed": self.failed,
+            "stored_unconfirmed": self.stored_unconfirmed,
             "not_attempted": self.not_attempted,
             "not_examined": self.not_examined,
             "stopped": bool(self.stopped),
@@ -71,7 +81,7 @@ class BackfillStats:
         return (
             f"{self._stored} ingested, {self._skipped} skipped, "
             f"{self.failed} failed, {self.not_attempted} not attempted"
-            f"{self._examined_note()}{self._stop_note()}"
+            f"{self._notes()}"
         )
 
     def log(self, *, dry_run: bool) -> None:
@@ -88,22 +98,37 @@ class BackfillStats:
     @property
     def _skipped(self) -> int:
         """Return the transcripts skipped for any reason a run skips one."""
-        return self.skipped_existing + self.skipped_empty + self.skipped_unreadable
+        return (
+            self.skipped_existing
+            + self.skipped_empty
+            + self.skipped_unreadable
+            + self.skipped_refused
+        )
 
     @property
     def _left(self) -> int:
         """Return the transcripts that failed or were left undone."""
-        return self.failed + self.not_attempted + self.not_examined
+        return (
+            self.failed
+            + self.stored_unconfirmed
+            + self.not_attempted
+            + self.not_examined
+        )
 
     @property
     def _fell_short(self) -> bool:
         """Return whether anything failed, was left, or stopped the run."""
         return bool(self._left or self.stopped)
 
-    def _examined_note(self) -> str:
-        """Return the summary's note of the transcripts never looked at, or ``""``."""
-        return f", {self.not_examined} not examined" if self.not_examined else ""
-
-    def _stop_note(self) -> str:
-        """Return the summary's note of why the run stopped, or ``""``."""
-        return f"; stopped: {self.stopped}" if self.stopped else ""
+    def _notes(self) -> str:
+        """Return the summary's notes on what was unconfirmed, refused or unexamined."""
+        return "".join(
+            [
+                f", {self.stored_unconfirmed} stored unconfirmed"
+                if self.stored_unconfirmed
+                else "",
+                f", {self.skipped_refused} refused" if self.skipped_refused else "",
+                f", {self.not_examined} not examined" if self.not_examined else "",
+                f"; stopped: {self.stopped}" if self.stopped else "",
+            ]
+        )

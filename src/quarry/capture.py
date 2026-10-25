@@ -18,7 +18,7 @@ from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
-    from quarry.capture_outcome import CaptureOutcome
+    from quarry.capture_outcome import CaptureResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +59,7 @@ class CaptureWriter:
         """Scrub *request* and write the capture file; return whether one landed."""
         return CaptureFile(request).landed()
 
-    def outcome(self, request: CaptureRequest) -> CaptureOutcome:
+    def outcome(self, request: CaptureRequest) -> CaptureResult:
         """Scrub *request*, write the capture file, and say how that ended.
 
         Fails silently — a capture-file problem must never block the main

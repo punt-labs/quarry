@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 class UnreadTranscripts:
     """The tally's account of a transcript that was not read.
 
-    A file that vanished after it was listed is a skip.  Any other fault is a
-    failure that never counts as an attempt (so it does not use up ``--limit``),
-    and one refused for what it is (too large, not a file) is remembered against
-    its stamp, so it is counted once and then skipped, not re-read every run.
+    A file that vanished after it was listed is a skip.  One refused for what it
+    is (too large, not a file) is a refusal: counted as refused, never as empty
+    or failed, and noted on every run, because it is re-detected from the file's
+    own stat (its size, its type) rather than remembered.  Any other fault is a
+    failure that never counts as an attempt, so it does not use up ``--limit``.
     """
 
     __slots__ = ("_run",)
@@ -43,6 +44,8 @@ class UnreadTranscripts:
             self._run.tally.skip_unreadable()
             return
         logger.warning("backfill: %s not read: %s", transcript.name, fault.reason)
-        self._run.tally.fail_unread(f"{transcript.name}: {fault.reason}")
-        if isinstance(exc, UnreadTranscriptError) and not self._run.config.dry_run:
-            self._run.unindexable.record(exc.read)  # it will not change by itself
+        line = f"{transcript.name}: {fault.reason}"
+        if isinstance(exc, UnreadTranscriptError):
+            self._run.tally.skip_refused(line)
+        else:
+            self._run.tally.fail_unread(line)

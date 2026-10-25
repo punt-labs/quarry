@@ -9,16 +9,15 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
 from quarry.daemon.job_admission import JobAdmission
-from quarry.daemon.job_withdrawal import JobWithdrawal
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.tasks import TERMINAL_STATUSES, TaskState
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
 
 _POLL_S = 0.05
-_TERMINAL = frozenset({"completed", "failed"})
 
 
 @final
@@ -111,7 +110,7 @@ class QueuedIngest:
             await self._admission.take(key, job, state)
             await self._finish(key, state)
         except (asyncio.CancelledError, IngestRefusedError):
-            JobWithdrawal(state).withdraw()
+            JobLifecycle(state).withdraw()
             raise
         return state
 
@@ -120,7 +119,7 @@ class QueuedIngest:
         queue = self._ctx.ingest_queue
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._policy.finish_timeout_s
-        while state.status not in _TERMINAL:
+        while state.status not in TERMINAL_STATUSES:
             if not queue.pool.is_alive(key):
                 msg = "collection worker stopped"
                 raise IngestRefusedError.because(IngestRefusal.WORKER_STOPPED, msg)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from quarry.admission_streak import AdmissionStreak
 from quarry.backfill_writer import WriteOutcome
 from quarry.run_halt import RunHalt
 from quarry.stop_signal import StopSignal
@@ -48,7 +47,7 @@ def test_a_job_that_had_started_stops_the_run_with_its_reason() -> None:
 def test_enough_full_queue_answers_in_a_row_halt_it() -> None:
     halt = RunHalt(StopSignal())
 
-    for _ in range(AdmissionStreak.MAX):
+    for _ in range(RunHalt.MAX_FULL):
         halt.refused(WriteOutcome.NOT_ADMITTED, "full")
 
     assert halt.reason == "ingest queue stayed full"
@@ -56,7 +55,7 @@ def test_enough_full_queue_answers_in_a_row_halt_it() -> None:
 
 def test_any_other_answer_ends_the_streak() -> None:
     halt = RunHalt(StopSignal())
-    for _ in range(AdmissionStreak.MAX - 1):
+    for _ in range(RunHalt.MAX_FULL - 1):
         halt.refused(WriteOutcome.NOT_ADMITTED, "full")
 
     halt.refused(WriteOutcome.FAILED, "boom")

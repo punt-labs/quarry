@@ -20,76 +20,68 @@ class BackfillTally:
     number ``--limit`` caps.  A transcript that is skipped, empty, unreadable or
     unindexable never consumes it.  A run is halted by its stop signal, by an
     :meth:`abort`, or when the queue stays full for
-    :attr:`~quarry.admission_streak.AdmissionStreak.MAX` transcripts in a row.
+    :attr:`~quarry.run_halt.RunHalt.MAX_FULL` transcripts in a row.
     """
 
-    __slots__ = (
-        "_errors",
-        "_failed",
-        "_halt",
-        "_ingested",
-        "_not_attempted",
-        "_not_examined",
-        "_processed",
-        "_skipped_empty",
-        "_skipped_existing",
-        "_skipped_unreadable",
-        "_would_ingest",
-    )
+    __slots__ = ("_counts", "_errors", "_halt")
 
+    _counts: dict[str, int]
     _errors: list[str]
-    _failed: int
-    _ingested: int
-    _not_attempted: int
-    _not_examined: int
-    _processed: int
-    _skipped_empty: int
-    _skipped_existing: int
-    _skipped_unreadable: int
     _halt: RunHalt
-    _would_ingest: int
 
     def __new__(cls, stop: StopSignal) -> Self:
         self = super().__new__(cls)
         self._halt = RunHalt(stop)
         self._errors = []
-        self._failed = self._ingested = self._would_ingest = 0
-        self._not_attempted = self._not_examined = self._processed = 0
-        self._skipped_empty = self._skipped_existing = self._skipped_unreadable = 0
+        self._counts = {}
         return self
 
     @property
     def processed(self) -> int:
         """Return how many transcripts were attempted (what ``--limit`` caps)."""
-        return self._processed
+        return self._counts.get("processed", 0)
 
     def stored(self) -> None:
         """Count a transcript the writer stored; the queue answered it."""
-        self._ingested += 1
-        self._processed += 1
+        self._attempt("ingested")
         self._halt.answered()
+
+    def stored_unconfirmed(self) -> None:
+        """Count a transcript whose job was past its commit when the run gave up.
+
+        The store may have landed or failed; it is neither stored nor failed.
+        """
+        self._attempt("stored_unconfirmed")
 
     def would_store(self) -> None:
         """Count a transcript a dry run would have stored."""
-        self._would_ingest += 1
-        self._processed += 1
+        self._attempt("would_ingest")
 
     def skip_existing(self) -> None:
         """Count a transcript whose stored copy is already current."""
-        self._skipped_existing += 1
+        self._bump("skipped_existing")
 
     def skip_empty(self) -> None:
         """Count a transcript with nothing to index."""
-        self._skipped_empty += 1
+        self._bump("skipped_empty")
 
     def skip_unreadable(self) -> None:
         """Count a transcript that vanished before it could be read."""
-        self._skipped_unreadable += 1
+        self._bump("skipped_unreadable")
+
+    def skip_refused(self, line: str) -> None:
+        """Count a transcript refused for what it is, with *line* as the note why.
+
+        It is neither empty nor failed, and the note is kept every run: a refusal
+        is re-detected from the file's own stat, never remembered.
+        """
+        self._bump("skipped_refused")
+        self._errors.append(line)
 
     def fail(self, line: str) -> None:
         """Count an attempted transcript that was not stored; keep *line* as why."""
         self.fail_unread(line)
-        self._processed += 1
+        self._bump("processed")
 
     def fail_unread(self, line: str) -> None:
         """Count a transcript that could not be read; it was never attempted.
@@ -97,7 +89,7 @@ class BackfillTally:
         It is a failure, with *line* as why, but it does not consume ``--limit``.
         """
         self._errors.append(line)
-        self._failed += 1
+        self._bump("failed")
 
     def note(self, line: str) -> None:
         """Keep *line* among the run's errors without counting a transcript."""
@@ -105,11 +97,11 @@ class BackfillTally:
 
     def leave(self, count: int) -> None:
         """Count *count* transcripts that still needed work when the run stopped."""
-        self._not_attempted += count
+        self._bump("not_attempted", count)
 
     def leave_unexamined(self, count: int) -> None:
         """Count *count* transcripts in projects the run never looked into."""
-        self._not_examined += count
+        self._bump("not_examined", count)
 
     def halted(self) -> bool:
         """Return whether the run must stop before its next step."""
@@ -124,16 +116,28 @@ class BackfillTally:
         """Return the run's stats, the stop (if any) first among the errors."""
         reason = self._halt.reason
         stop = [f"backfill stopped: {reason}"] if reason else []
+        counts = self._counts
         return BackfillStats(
-            ingested=self._ingested,
-            would_ingest=self._would_ingest,
-            skipped_existing=self._skipped_existing,
+            ingested=counts.get("ingested", 0),
+            would_ingest=counts.get("would_ingest", 0),
+            skipped_existing=counts.get("skipped_existing", 0),
             skipped_unregistered=skipped_unregistered,
-            skipped_empty=self._skipped_empty,
-            skipped_unreadable=self._skipped_unreadable,
-            failed=self._failed,
-            not_attempted=self._not_attempted,
-            not_examined=self._not_examined,
+            skipped_empty=counts.get("skipped_empty", 0),
+            skipped_unreadable=counts.get("skipped_unreadable", 0),
+            skipped_refused=counts.get("skipped_refused", 0),
+            failed=counts.get("failed", 0),
+            stored_unconfirmed=counts.get("stored_unconfirmed", 0),
+            not_attempted=counts.get("not_attempted", 0),
+            not_examined=counts.get("not_examined", 0),
             stopped=reason,
             errors=[*stop, *self._errors],
         )
+
+    def _bump(self, counter: str, by: int = 1) -> None:
+        """Add *by* to *counter*."""
+        self._counts[counter] = self._counts.get(counter, 0) + by
+
+    def _attempt(self, counter: str) -> None:
+        """Count an attempted transcript under *counter*; it consumes ``--limit``."""
+        self._bump(counter)
+        self._bump("processed")
