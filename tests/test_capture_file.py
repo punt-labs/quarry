@@ -340,6 +340,7 @@ def test_a_filesystem_that_cannot_lock_still_gets_the_capture(
     assert (_captures(tmp_path) / _NAME).is_file()
     [warning] = caplog.records  # once, not once per capture
     assert "ENOLCK" in warning.getMessage()
+    assert str(_captures(tmp_path)) in warning.getMessage()  # names the directory
 
 
 def test_an_unexpected_lock_failure_still_fails_the_write(tmp_path: Path) -> None:
@@ -374,3 +375,23 @@ def test_a_level_that_is_a_file_is_refused_as_a_non_directory(tmp_path: Path) ->
     assert CaptureOutcome.SYMLINK.value == (
         "capture refused: symlink or non-directory in path"
     )
+
+
+def test_an_unlocked_write_is_reported_in_its_result(tmp_path: Path) -> None:
+    CaptureTemp._warn_unlocked.cache_clear()
+    with patch("fcntl.flock", side_effect=OSError(errno.EOPNOTSUPP, "no locks")):
+        unlocked = CaptureFile(_request(tmp_path)).write()
+    locked = CaptureFile(_request(tmp_path, session_id="feed0001ef")).write()
+
+    assert (unlocked.outcome, unlocked.unlocked) == (CaptureOutcome.WRITTEN, True)
+    assert (locked.outcome, locked.unlocked) == (CaptureOutcome.WRITTEN, False)
+
+
+def test_a_bad_descriptor_is_a_bug_not_an_unlockable_filesystem(
+    tmp_path: Path,
+) -> None:
+    with patch("fcntl.flock", side_effect=OSError(errno.EBADF, "bad fd")):
+        result = CaptureFile(_request(tmp_path)).write()
+
+    assert (result.outcome, result.cause) == (CaptureOutcome.FAILED, "EBADF")
+    assert list(_captures(tmp_path).iterdir()) == []

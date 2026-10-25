@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import errno
 import json
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from quarry.transcript_reader import TranscriptReader
+from quarry.transcript_records import TranscriptRecords
 
 if TYPE_CHECKING:
     import pytest
@@ -197,6 +199,56 @@ class TestMalformedLines:
         path.write_text(f"{deep}\n{json.dumps(_turn('user', 'after'))}")
 
         assert TranscriptReader(path).text() == "[user] after"
+
+
+class TestTruncation:
+    """What the bounds drop is reported, never silent."""
+
+    @staticmethod
+    def _transcript(path: Path, count: int) -> Path:
+        path.write_text(
+            "\n".join(json.dumps(_turn("user", f"m{n}")) for n in range(count))
+        )
+        return path
+
+    def test_the_record_bound_drop_is_a_warning_naming_the_transcript(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = self._transcript(tmp_path / "session.jsonl", 8)
+
+        with (
+            patch.object(TranscriptRecords, "MAX", 5),
+            patch.object(TranscriptRecords, "TRIM", 2),
+            caplog.at_level(logging.WARNING, logger="quarry.transcript_reader"),
+        ):
+            reader = TranscriptReader(path)
+
+        assert reader.truncated == 3
+        [record] = caplog.records
+        assert "session.jsonl" in record.getMessage()
+        assert "3 oldest records" in record.getMessage()
+
+    def test_a_transcript_within_the_bound_is_not_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 3))
+
+        assert reader.truncated == 0
+
+    def test_the_character_budget_drop_is_logged_at_info_with_its_count(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 4))
+
+        with (
+            patch.object(TranscriptReader, "_MAX_CHARS", 20),
+            caplog.at_level(logging.INFO, logger="quarry.transcript_reader"),
+        ):
+            reader.text()
+
+        [record] = caplog.records
+        assert record.levelno == logging.INFO
+        assert "dropped" in record.getMessage()
 
 
 class TestReadOnce:

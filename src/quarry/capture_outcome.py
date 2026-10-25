@@ -23,8 +23,10 @@ class CaptureResult:
 
     *cause* is the failure's errno name or class, never its message, so it is
     safe to put in a log line or a run's error line; it is ``""`` for every
-    outcome but ``FAILED``.
+    outcome but ``FAILED``.  *unlocked* says the file was written without its
+    lock, on a filesystem that cannot lock, so a run can count those.
     """
 
     outcome: CaptureOutcome
     cause: str = ""
+    unlocked: bool = False

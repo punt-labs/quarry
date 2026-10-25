@@ -67,6 +67,16 @@ class TranscriptOutcomes:
         if not self._dry_run:
             self._unindexable.record(read)
 
+    def tail_without_text(self, transcript: Path) -> None:
+        """Refuse a transcript whose kept tail holds no text, never recording it.
+
+        Records were dropped past the bound and what is left says nothing, so
+        the transcript is not known to be empty and is looked at again.
+        """
+        line = f"{transcript.name}: transcript tail holds no text past the record bound"
+        logger.warning("backfill: %s", line)
+        self._tally.skip_refused(line)
+
     def nothing_to_capture(self) -> None:
         """Count a transcript whose capture file had nothing to hold.
 

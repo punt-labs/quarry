@@ -32,13 +32,15 @@ class CaptureFile:
     problem never blocks the ingest it belongs to.
     """
 
-    __slots__ = ("_request",)
+    __slots__ = ("_request", "_unlocked")
 
     _request: CaptureRequest
+    _unlocked: bool
 
     def __new__(cls, request: CaptureRequest) -> Self:
         self = super().__new__(cls)
         self._request = request
+        self._unlocked = False
         return self
 
     def landed(self) -> bool:
@@ -48,7 +50,8 @@ class CaptureFile:
     def write(self) -> CaptureResult:
         """Scrub the request and write its capture file; say how that ended."""
         try:
-            return CaptureResult(self._write(self._request.scrubbed_content()))
+            outcome = self._write(self._request.scrubbed_content())
+            return CaptureResult(outcome, unlocked=self._unlocked)
         except Exception as exc:
             logger.error(
                 "%s: capture file write failed for %s",
@@ -73,8 +76,7 @@ class CaptureFile:
             )
             return CaptureOutcome.SYMLINK
 
-    @staticmethod
-    def _store(directory: int, name: str, content: str) -> CaptureOutcome:
+    def _store(self, directory: int, name: str, content: str) -> CaptureOutcome:
         """Refuse a symlink at the target, else write through a temp and sync."""
         try:
             mode = os.stat(name, dir_fd=directory, follow_symlinks=False).st_mode
@@ -83,7 +85,8 @@ class CaptureFile:
         if stat.S_ISLNK(mode):
             logger.warning("capture: %s is a symlink; not written", name)
             return CaptureOutcome.SYMLINK
-        CaptureTemp(directory, name).commit(content)
+        location = str(self._request.capture_path().parent)
+        self._unlocked = not CaptureTemp(directory, name, location).commit(content)
         CaptureFile._sync(directory)
         return CaptureOutcome.WRITTEN
 

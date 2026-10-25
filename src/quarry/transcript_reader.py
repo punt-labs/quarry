@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self, final
 
-from quarry.transcript_records import TranscriptRecords
+from quarry.transcript_records import ParsedRecords, TranscriptRecords
 from quarry.transcript_turns import TurnText
 
 logger = logging.getLogger(__name__)
@@ -29,15 +29,16 @@ class TranscriptReader:
     _MAX_CHARS = 500_000
     _RETENTION_DAYS = 90
 
-    __slots__ = ("_path", "_records")
+    __slots__ = ("_parsed", "_path")
 
+    _parsed: ParsedRecords
     _path: Path
-    _records: tuple[dict[str, object], ...]
 
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
         self._path = path
-        self._records = TranscriptRecords.parse(cls._read_leniently(path))
+        self._parsed = TranscriptRecords.parse(cls._read_leniently(path))
+        self._parsed.warn_if_truncated(path)
         return self
 
     @classmethod
@@ -52,8 +53,14 @@ class TranscriptReader:
         """
         reader = super().__new__(cls)
         reader._path = path
-        reader._records = TranscriptRecords.parse(raw)
+        reader._parsed = TranscriptRecords.parse(raw)
+        reader._parsed.warn_if_truncated(path)
         return reader
+
+    @property
+    def truncated(self) -> int:
+        """Return how many of the oldest message records the bound dropped."""
+        return self._parsed.dropped
 
     @staticmethod
     def _read_leniently(path: Path) -> str:
@@ -75,7 +82,7 @@ class TranscriptReader:
         """
         parts = [
             entry
-            for record in self._records
+            for record in self._parsed.records
             if (entry := TurnText.message_text(record))
         ]
         return self._join_within_budget(parts)
@@ -87,7 +94,7 @@ class TranscriptReader:
         tool-use blocks are not text, so a turn holding only those is skipped.
         """
         last = ""
-        for record in self._records:
+        for record in self._parsed.records:
             if record.get("type") == "assistant" and (
                 text := TurnText.turn_text(record)
             ):
@@ -103,8 +110,8 @@ class TranscriptReader:
             total_chars -= len(parts[start])
             start += 1
         if start > 0:
-            logger.debug(
-                "transcript: dropped %d oldest entries from transcript",
+            logger.info(
+                "transcript: dropped %d oldest entries past the character budget",
                 start,
             )
             parts = parts[start:]

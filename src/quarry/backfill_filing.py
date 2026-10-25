@@ -91,8 +91,13 @@ class TranscriptFiler:
         except (OSError, UnicodeDecodeError, UnreadTranscriptError) as exc:
             UnreadTranscripts(self._run).counted(transcript, exc)
             return
+        if loaded.truncated:
+            self._run.tally.truncated()
         if not loaded.text.strip():
-            self._run.outcomes.unindexable(loaded.read)
+            if loaded.truncated:
+                self._run.outcomes.tail_without_text(transcript)
+            else:
+                self._run.outcomes.unindexable(loaded.read)
         elif self._run.config.dry_run:
             self._run.outcomes.would_store()
         else:

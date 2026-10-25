@@ -177,3 +177,18 @@ def test_a_filesystem_that_cannot_lock_reaps_by_age_alone(tmp_path: Path) -> Non
 
     assert not old.exists()
     assert young.exists()
+
+
+def test_a_bad_descriptor_is_not_an_unlockable_filesystem(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    old = _leftover(_captures(tmp_path), _STALE, age_s=7200)
+
+    with (
+        patch("fcntl.flock", side_effect=OSError(errno.EBADF, "bad fd")),
+        caplog.at_level(logging.WARNING, logger="quarry.capture_reaper"),
+    ):
+        assert _reap(tmp_path) == 0
+
+    assert old.exists()
+    assert "EBADF" in caplog.text

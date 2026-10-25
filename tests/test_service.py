@@ -1303,3 +1303,48 @@ class TestServiceBackendProtocol:
 
     def test_non_conforming_object_rejected(self) -> None:
         assert not isinstance(object(), ServiceBackend)
+
+
+class TestServiceStopTimeout:
+    """The unit and the plist wait out the daemon's whole teardown budget."""
+
+    def test_the_plist_carries_the_stop_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        _make_local_bin_quarryd(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _launchd_plist_content()
+
+        assert "<key>ExitTimeOut</key>\n    <integer>40</integer>" in content
+        assert plistlib.loads(content.encode())["ExitTimeOut"] == 40
+
+    def test_the_unit_carries_the_stop_timeout(self, tmp_path: Path) -> None:
+        _make_local_bin_quarryd(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+        ):
+            content = _systemd_unit_content()
+
+        assert "TimeoutStopSec=40" in content.splitlines()
+
+    def test_the_timeout_follows_the_drain_budget_and_exceeds_it(
+        self, tmp_path: Path
+    ) -> None:
+        _make_local_bin_quarryd(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch("quarry.shutdown_budget.Settings") as settings,
+        ):
+            settings.return_value.ingest_drain_timeout_s = 90.0
+            settings.return_value.fd_limit = 65536
+            content = _systemd_unit_content()
+
+        assert "TimeoutStopSec=100" in content.splitlines()  # 90 s budget + margin

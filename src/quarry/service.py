@@ -24,6 +24,7 @@ from xml.sax.saxutils import escape as _xml_escape
 from quarry.config import DEFAULT_PORT
 from quarry.fd_config import FdServiceLimits
 from quarry.net import LoopbackPolicy
+from quarry.shutdown_budget import ShutdownBudget
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
 
@@ -217,6 +218,8 @@ def _launchd_plist_content() -> str:
             <true/>
             <key>KeepAlive</key>
             <true/>
+            <key>ExitTimeOut</key>
+            <integer>{ShutdownBudget.from_settings().stop_timeout_s}</integer>
             <key>StandardOutPath</key>
             <string>{log_dir}/quarry-stdout.log</string>
             <key>StandardErrorPath</key>
@@ -333,6 +336,7 @@ def _systemd_unit_content() -> str:
         EnvironmentFile=-{env_file_path}
         Restart=always
         RestartSec=5
+        TimeoutStopSec={ShutdownBudget.from_settings().stop_timeout_s}
         Nice=-5
         {fd_limits_directive}
 

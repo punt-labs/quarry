@@ -8,13 +8,13 @@ from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.collection_worker import CollectionWorker
+from quarry.stop_signal import StopSignal
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.route_key import RouteKey
-    from quarry.stop_signal import StopSignal
 
 
 @final
@@ -89,7 +89,7 @@ class QueueGate:
         """Stop admitting, signal every registered stop event, wake the waiters."""
         self._closing = True
         for signal in self._stops:
-            signal.set("daemon shutting down")
+            signal.set(StopSignal.SHUTDOWN)
         self._wake()
 
     @contextmanager
@@ -97,7 +97,7 @@ class QueueGate:
         """Set *signal* when the gate closes, for as long as the block runs."""
         self._stops.add(signal)
         if self._closing:
-            signal.set("daemon shutting down")
+            signal.set(StopSignal.SHUTDOWN)
         try:
             yield
         finally:

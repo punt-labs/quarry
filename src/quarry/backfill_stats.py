@@ -26,6 +26,10 @@ class BackfillStats:
     ``skipped_refused`` counts the transcripts refused for what they are (over
     the read limit, not a regular file): never empty, never failed, and noted in
     ``errors`` on every run.
+    ``truncated`` counts the transcripts stored from their newest records only,
+    the oldest having been dropped past the record bound.
+    ``unlocked_captures`` counts the capture files written without their lock, on
+    a filesystem that cannot lock.
     ``stopped`` is the reason the run ended early, or ``""``.
     """
 
@@ -36,6 +40,8 @@ class BackfillStats:
     skipped_empty: int = 0
     skipped_unreadable: int = 0
     skipped_refused: int = 0
+    truncated: int = 0
+    unlocked_captures: int = 0
     failed: int = 0
     stored_unconfirmed: int = 0
     not_attempted: int = 0
@@ -66,6 +72,8 @@ class BackfillStats:
             "skipped_empty": self.skipped_empty,
             "skipped_unreadable": self.skipped_unreadable,
             "skipped_refused": self.skipped_refused,
+            "truncated": self.truncated,
+            "unlocked_captures": self.unlocked_captures,
             "failed": self.failed,
             "stored_unconfirmed": self.stored_unconfirmed,
             "not_attempted": self.not_attempted,
@@ -128,6 +136,10 @@ class BackfillStats:
                 if self.stored_unconfirmed
                 else "",
                 f", {self.skipped_refused} refused" if self.skipped_refused else "",
+                f", {self.truncated} truncated" if self.truncated else "",
+                f", {self.unlocked_captures} captures written unlocked"
+                if self.unlocked_captures
+                else "",
                 f", {self.not_examined} not examined" if self.not_examined else "",
                 f"; stopped: {self.stopped}" if self.stopped else "",
             ]

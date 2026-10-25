@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -18,6 +20,8 @@ from tests.queue_fixtures import ctx_with_queue
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
     from quarry.config import Settings
     from quarry.daemon.context import DaemonContext
 
@@ -31,18 +35,21 @@ def _server(tmp_path: Path) -> DaemonServer:
     return DaemonServer(settings, ServeConfig(api_key="k"))
 
 
-def _context(tmp_path: Path) -> DaemonContext:
+def _context(tmp_path: Path, *, budget_s: float = 30.0) -> DaemonContext:
     """A context with a real queue and task registry; the watch loop is a no-op."""
     ctx = ctx_with_queue(tmp_path)
     bound = cast("SimpleNamespace", ctx)
+    bound.settings.ingest_drain_timeout_s = budget_s
     bound.start_watch_loop = _no_op
     bound.aclose_watch_loop = _no_op
-
-    async def aclose_ingest_queue() -> None:
-        await ctx.ingest_queue.aclose(drain_timeout=5.0)
-
-    bound.aclose_ingest_queue = aclose_ingest_queue
     return ctx
+
+
+async def _tear_down(tmp_path: Path, ctx: DaemonContext) -> None:
+    app = Starlette()
+    app.state.ctx = ctx
+    async with _server(tmp_path)._lifespan(app):
+        pass
 
 
 async def test_teardown_waits_for_a_running_backfill_and_it_is_stopped_first(
@@ -63,14 +70,43 @@ async def test_teardown_waits_for_a_running_backfill_and_it_is_stopped_first(
 
     ctx.tasks.track(state, asyncio.ensure_future(backfill()))
     await asyncio.sleep(0.05)  # it is running
-    app = Starlette()
-    app.state.ctx = ctx
 
-    async with _server(tmp_path)._lifespan(app):
-        assert not stop.is_set()
+    await _tear_down(tmp_path, ctx)
 
     assert steps == ["stopped", "returned"]  # the queue closing stopped it, and
     assert ctx.tasks.tracked() == []  # shutdown waited for it to return
+
+
+async def test_a_straggler_is_logged_and_teardown_still_ends_inside_the_budget(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    ctx = _context(tmp_path, budget_s=1.0)
+    state = ctx.tasks.begin("backfill")
+    state.holds_thread = True  # its scan thread will not return
+    release = asyncio.Event()
+
+    async def stubborn() -> None:
+        while not release.is_set():
+            try:
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                continue  # a body that swallows its cancellation
+
+    task = asyncio.ensure_future(stubborn())
+    ctx.tasks.track(state, task)
+    started = time.monotonic()
+
+    with caplog.at_level(logging.ERROR):
+        await _tear_down(tmp_path, ctx)
+
+    assert time.monotonic() - started < 1.6  # the one budget, not a window and more
+    [line] = [
+        r for r in caplog.records if "still running at shutdown" in r.getMessage()
+    ]
+    assert state.task_id in line.getMessage()
+    assert "backfill" in line.getMessage()
+    release.set()
+    await task
 
 
 def test_the_cancel_wait_is_derived_from_the_backfill_stop_bound() -> None:

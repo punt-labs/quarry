@@ -26,6 +26,7 @@ from quarry.daemon.fs_events import NullFsEventSource
 from quarry.daemon.fs_watchdog import WatchdogSource
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.task_terminal import TaskTerminal
+from quarry.daemon.tasks import TERMINAL_STATUSES
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
 from quarry.daemon.watch_submit import WatchSubmitter
@@ -39,7 +40,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL = frozenset({"completed", "failed"})
 
 # request_scan polls its child jobs to completion.  The deadline bounds the poll
 # so a wedged threadpool child cannot spin the umbrella (and the CLI's poll)
@@ -377,7 +377,7 @@ class WatchLoop:
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _SCAN_DEADLINE_S
-        while any(child.status not in _TERMINAL for child in children):
+        while any(child.status not in TERMINAL_STATUSES for child in children):
             if loop.time() >= deadline:
                 return True
             await asyncio.sleep(_SCAN_POLL_S)

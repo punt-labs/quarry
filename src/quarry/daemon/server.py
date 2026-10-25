@@ -26,7 +26,7 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.crash_logging import UncaughtExceptionLog
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
-from quarry.daemon.task_drain import TaskDrain
+from quarry.daemon.teardown import Teardown
 from quarry.fd_config import FdEnvelope
 from quarry.fd_telemetry import FdTelemetry
 from quarry.remote import to_netloc
@@ -274,18 +274,9 @@ class DaemonServer:
         try:
             yield
         finally:
-            # Stop the watch loop FIRST so no fresh index job enqueues mid-drain,
-            # THEN drain queued captures before touching sidecars so a clean
-            # shutdown loses no admitted-but-unwritten capture (DES-045/DES-042).
-            await ctx.aclose_watch_loop()
-            await ctx.aclose_ingest_queue()
-            # Closing the queue told a running backfill to stop; now wait for its
-            # scan thread to return, so shutdown does not leave a thread writing.
-            # TaskDrain logs a straggler, and shutdown goes on without it.
-            with suppress(TimeoutError):
-                await TaskDrain(ctx.tasks.tracked()).run(
-                    ctx.settings.ingest_drain_timeout_s
-                )
+            # Drain queued captures before touching sidecars so a clean shutdown
+            # loses no admitted-but-unwritten capture (DES-045/DES-042).
+            await Teardown(ctx).run()
             monitor.cancel()
             # Remove ONLY the sidecars this instance wrote after its own
             # successful bind.  A second quarryd that fails to bind (port in

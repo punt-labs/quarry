@@ -107,6 +107,8 @@ class TranscriptStore:
         or could not be written fails the transcript, with the reason.
         """
         result = CaptureWriter().outcome(session.capture_request())
+        if result.unlocked:
+            self._run.tally.unlocked_capture()
         match result.outcome:
             case CaptureOutcome.EMPTY:
                 self._run.outcomes.nothing_to_capture()

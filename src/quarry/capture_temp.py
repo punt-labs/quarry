@@ -27,30 +27,35 @@ class CaptureTemp:
 
     A filesystem that cannot lock (:attr:`UNLOCKABLE`: NFS without a lock
     daemon, some FUSE mounts) is no reason to refuse the write: the file is
-    written unlocked, with one warning per cause, and the reaper then judges its
-    leftovers by age alone.
+    written unlocked, with one warning per cause and captures directory, and the
+    reaper then judges its leftovers by age alone.  :meth:`commit` says whether
+    the write was locked, so the caller can count the ones that were not.  An
+    ``EBADF`` is a bug in the descriptor, never a filesystem limit, so it raises.
     """
 
     MODE: ClassVar[int] = 0o600
-    UNLOCKABLE: ClassVar[frozenset[int]] = frozenset(
-        {errno.ENOLCK, errno.EOPNOTSUPP, errno.EBADF}
-    )
+    UNLOCKABLE: ClassVar[frozenset[int]] = frozenset({errno.ENOLCK, errno.EOPNOTSUPP})
 
-    __slots__ = ("_directory", "_name", "_target")
+    __slots__ = ("_directory", "_location", "_name", "_target")
 
     _directory: int
+    _location: str
     _name: str
     _target: str
 
-    def __new__(cls, directory: int, target: str) -> Self:
+    def __new__(cls, directory: int, target: str, location: str) -> Self:
         self = super().__new__(cls)
         self._directory = directory
+        self._location = location
         self._target = target
         self._name = f".{target}.{secrets.token_hex(6)}.tmp"
         return self
 
-    def commit(self, content: str) -> None:
-        """Write *content* and rename it into place; leave nothing behind on failure."""
+    def commit(self, content: str) -> bool:
+        """Write *content* and rename it into place; return whether it was locked.
+
+        Leaves nothing behind on failure.
+        """
         fd = os.open(
             self._name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -58,7 +63,7 @@ class CaptureTemp:
             dir_fd=self._directory,
         )
         try:
-            self._write_locked(fd, content)
+            return self._write_locked(fd, content)
         except BaseException:
             self._remove()
             raise
@@ -74,15 +79,18 @@ class CaptureTemp:
                 FailureReason.os_name(exc),
             )
 
-    def _write_locked(self, fd: int, content: str) -> None:
-        """Write *content* through *fd* under its lock, then rename it into place."""
+    def _write_locked(self, fd: int, content: str) -> bool:
+        """Write *content* through *fd* under its lock, then rename it into place.
+
+        Returns whether the lock was taken.
+        """
         try:
             handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
         except BaseException:
             os.close(fd)  # fdopen did not take it
             raise
         with handle:
-            self._lock(handle.fileno())
+            locked = self._lock(handle.fileno())
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
@@ -92,23 +100,26 @@ class CaptureTemp:
                 src_dir_fd=self._directory,
                 dst_dir_fd=self._directory,
             )
+        return locked
 
-    @classmethod
-    def _lock(cls, fd: int) -> None:
-        """Lock *fd* for the writer's life; warn once that this filesystem cannot."""
+    def _lock(self, fd: int) -> bool:
+        """Lock *fd* for the writer's life; return False on a filesystem that cannot."""
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
-            if exc.errno not in cls.UNLOCKABLE:
+            if exc.errno not in self.UNLOCKABLE:
                 raise
-            cls._warn_unlocked(FailureReason.os_name(exc))
+            self._warn_unlocked(FailureReason.os_name(exc), self._location)
+            return False
+        return True
 
     @staticmethod
     @cache
-    def _warn_unlocked(cause: str) -> None:
-        """Warn, once per cause, that captures are written without a lock."""
+    def _warn_unlocked(cause: str, location: str) -> None:
+        """Warn, once per cause and directory, that captures are written unlocked."""
         logger.warning(
-            "capture: the filesystem cannot lock files (%s); writing unlocked, "
+            "capture: %s cannot lock files (%s); writing unlocked, "
             "and leftovers are reaped by age alone",
+            location,
             cause,
         )

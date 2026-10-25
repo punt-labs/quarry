@@ -79,12 +79,6 @@ class DaemonContext:
         """Return the resident serialized ingest queue."""
         return self._ingest_queue
 
-    async def aclose_ingest_queue(self) -> None:
-        """Drain and close the ingest queue on shutdown (bounded by settings)."""
-        await self._ingest_queue.aclose(
-            drain_timeout=self.settings.ingest_drain_timeout_s
-        )
-
     @property
     def watch_loop(self) -> WatchLoop:
         """Return the always-on filesystem watch loop (DES-045)."""

@@ -53,6 +53,14 @@ class BackfillTally:
         """
         self._attempt("stored_unconfirmed")
 
+    def truncated(self) -> None:
+        """Count a transcript whose oldest records the record bound dropped."""
+        self._bump("truncated")
+
+    def unlocked_capture(self) -> None:
+        """Count a capture file written without its lock (a filesystem that cannot)."""
+        self._bump("unlocked_captures")
+
     def would_store(self) -> None:
         """Count a transcript a dry run would have stored."""
         self._attempt("would_ingest")
@@ -125,6 +133,8 @@ class BackfillTally:
             skipped_empty=counts.get("skipped_empty", 0),
             skipped_unreadable=counts.get("skipped_unreadable", 0),
             skipped_refused=counts.get("skipped_refused", 0),
+            truncated=counts.get("truncated", 0),
+            unlocked_captures=counts.get("unlocked_captures", 0),
             failed=counts.get("failed", 0),
             stored_unconfirmed=counts.get("stored_unconfirmed", 0),
             not_attempted=counts.get("not_attempted", 0),

@@ -213,8 +213,8 @@
     "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.25,
-    "avg_lcom": 0.25
+    "max_lcom": 0.222,
+    "avg_lcom": 0.222
   },
   "src/quarry/backfill_project.py": {
     "efferent_coupling": 4.0,
@@ -255,8 +255,8 @@
     "efferent_coupling": 2.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.637,
-    "avg_lcom": 0.637
+    "max_lcom": 0.614,
+    "avg_lcom": 0.614
   },
   "src/quarry/backfill_unindexable.py": {
     "efferent_coupling": 3.0,
@@ -297,8 +297,8 @@
     "efferent_coupling": 5.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.5,
-    "avg_lcom": 0.5
+    "max_lcom": 0.4,
+    "avg_lcom": 0.4
   },
   "src/quarry/capture_marker.py": {
     "efferent_coupling": 0.0,
@@ -339,8 +339,8 @@
     "efferent_coupling": 1.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.0,
-    "avg_lcom": 0.0
+    "max_lcom": 0.3,
+    "avg_lcom": 0.3
   },
   "src/quarry/capture_url.py": {
     "efferent_coupling": 2.0,
@@ -609,11 +609,11 @@
     "avg_lcom": 0.857
   },
   "src/quarry/daemon/context.py": {
-    "avg_lcom": 0.735,
-    "circular_imports": 0.0,
     "efferent_coupling": 4.0,
-    "max_lcom": 0.735,
-    "public_names": 2.0
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.717,
+    "avg_lcom": 0.717
   },
   "src/quarry/daemon/debounce.py": {
     "avg_lcom": 0.428,
@@ -728,7 +728,7 @@
     "avg_lcom": 0.5
   },
   "src/quarry/daemon/late_outcome.py": {
-    "efferent_coupling": 2.0,
+    "efferent_coupling": 3.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -742,14 +742,14 @@
     "avg_lcom": 0.0
   },
   "src/quarry/daemon/purge_service.py": {
-    "avg_lcom": 0.0,
+    "efferent_coupling": 3.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 2.0,
     "max_lcom": 0.0,
-    "public_names": 2.0
+    "avg_lcom": 0.0
   },
   "src/quarry/daemon/queue_bounds.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.472,
@@ -941,8 +941,8 @@
     "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.333,
-    "avg_lcom": 0.333
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/daemon/task_status.py": {
     "efferent_coupling": 0.0,
@@ -962,8 +962,15 @@
     "efferent_coupling": 0.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.218,
-    "avg_lcom": 0.218
+    "max_lcom": 0.212,
+    "avg_lcom": 0.212
+  },
+  "src/quarry/daemon/teardown.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/daemon/thread_call.py": {
     "efferent_coupling": 1.0,
@@ -973,7 +980,7 @@
     "avg_lcom": 0.333
   },
   "src/quarry/daemon/watch_loop.py": {
-    "efferent_coupling": 9.0,
+    "efferent_coupling": 10.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.457,
@@ -2198,7 +2205,7 @@
     "avg_lcom": 1.0
   },
   "src/quarry/service.py": {
-    "efferent_coupling": 4.0,
+    "efferent_coupling": 5.0,
     "public_names": 5.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -2280,6 +2287,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/quarry/shutdown_budget.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
   },
   "src/quarry/sitemap.py": {
     "efferent_coupling": 2.0,
@@ -2474,12 +2488,12 @@
     "efferent_coupling": 2.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.333,
-    "avg_lcom": 0.333
+    "max_lcom": 0.3,
+    "avg_lcom": 0.3
   },
   "src/quarry/transcript_records.py": {
-    "efferent_coupling": 0.0,
-    "public_names": 1.0,
+    "efferent_coupling": 1.0,
+    "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0

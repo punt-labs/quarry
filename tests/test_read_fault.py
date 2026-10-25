@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import errno
-from datetime import UTC, datetime
-from pathlib import Path
 
-from quarry.file_stamp import FileStamp
 from quarry.read_fault import ReadFault
-from quarry.transcript_read import TranscriptRead
 from quarry.transcript_refusals import NotARegularFileError
 
 
@@ -30,8 +26,7 @@ def test_a_bad_encoding_is_named_by_its_class() -> None:
 
 
 def test_a_refusal_keeps_its_own_words() -> None:
-    read = TranscriptRead(Path("/s.jsonl"), FileStamp(1, 2), datetime.now(UTC))
-    fault = ReadFault(NotARegularFileError("transcript is not a regular file", read))
+    fault = ReadFault(NotARegularFileError("transcript is not a regular file"))
 
     assert not fault.vanished
     assert fault.reason == "transcript is not a regular file"

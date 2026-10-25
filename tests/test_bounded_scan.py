@@ -197,6 +197,7 @@ async def test_a_thread_that_will_not_stop_is_given_up_on_with_what_it_counted(
     assert _ingested(state) == 0  # what the scan had counted
     assert "daemon shutting down" in caplog.text
     assert "still running" in caplog.text
+    assert "refused" not in caplog.text  # at shutdown nothing starts another run
     assert _held(state)  # the guard still refuses a second run
 
     release.set()
@@ -272,4 +273,55 @@ async def test_a_late_failure_is_logged_by_class_and_never_left_unretrieved(
     # the error no longer says "still running": it says how the thread ended
     assert state.error == (
         "backfill stopped (daemon shutting down); scan thread failed late: OSError"
+    )
+
+
+async def test_a_cancelled_scan_given_up_on_says_a_new_backfill_is_refused(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state = _state()
+    started, release = threading.Event(), threading.Event()
+
+    def blocked() -> BackfillStats:
+        started.set()
+        release.wait(timeout=10)
+        return _stats()
+
+    task = asyncio.create_task(
+        BoundedScan(StopSignal(), 0.3).run(blocked, state, _record(state))
+    )
+    await _started(started)
+    task.cancel()
+    with caplog.at_level(logging.WARNING), pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert "a new backfill is refused until it returns" in caplog.text
+    release.set()
+    await asyncio.sleep(0.3)
+
+
+async def test_a_late_return_appends_to_the_reason_the_run_record_set() -> None:
+    stop = StopSignal()
+    state = _state()
+    started, release = threading.Event(), threading.Event()
+
+    def blocked() -> BackfillStats:
+        started.set()
+        release.wait(timeout=10)
+        return BackfillStats(failed=1, errors=["a.jsonl: unreadable (EIO)"])
+
+    task = asyncio.create_task(
+        BoundedScan(stop, 0.3).run(blocked, state, _record(state))
+    )
+    await _started(started)
+    stop.set("daemon shutting down")
+    with pytest.raises(ScanStillRunningError):
+        await task
+
+    release.set()
+    await asyncio.sleep(0.3)
+
+    assert state.status == "failed"
+    assert state.error.startswith(
+        "backfill stored nothing: a.jsonl: unreadable (EIO); scan thread returned late"
     )

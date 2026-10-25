@@ -238,7 +238,7 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
         purge_state = ctx.tasks.begin("deregister")
         purge_state.results = {"deleted_chunks": 0}
         await RegistrationLifecycle(ctx).run_purge(purge_state, "col")
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
         # 3. no orphan chunks survive for the deregistered collection.
         assert _docs(ctx.database) == set()
 
@@ -289,7 +289,7 @@ def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> No
         )
         assert reg_state.status == "completed"
         assert reg_state.results["subsumed"] == ["child-col"]
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
         # 3. no orphan chunks survive in the subsumed child collection.
         assert _docs(ctx.database) == set()
 

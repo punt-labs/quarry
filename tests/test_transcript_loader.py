@@ -112,12 +112,11 @@ def test_a_transcript_over_the_limit_is_refused_before_it_is_read(
     with (
         patch.object(TranscriptLoader, "MAX_BYTES", 10),
         patch.object(TranscriptReader, "from_text") as parsed,
-        pytest.raises(TranscriptTooLargeError) as raised,
+        pytest.raises(TranscriptTooLargeError),
     ):
         TranscriptLoader.load(path)
 
     parsed.assert_not_called()
-    assert raised.value.read.stamp == FileStamp.of(path.stat())  # kept for the cache
 
 
 def test_the_refusal_names_the_limit_it_derives_from_the_cap(tmp_path: Path) -> None:
@@ -178,13 +177,11 @@ def test_a_symlink_is_refused_as_not_a_regular_file_and_never_followed(
     link = tmp_path / "link.jsonl"
     link.symlink_to(target)
 
-    with pytest.raises(NotARegularFileError, match="not a regular file") as raised:
+    with pytest.raises(NotARegularFileError, match="not a regular file"):
         TranscriptLoader.load(link)
 
-    assert raised.value.read.transcript == link  # the stamp is the link's own
 
-
-def test_a_refusal_carries_the_read_it_was_made_about(tmp_path: Path) -> None:
+def test_a_refusal_carries_a_fixed_reason_naming_the_limit(tmp_path: Path) -> None:
     path = _transcript(tmp_path)
 
     with (
@@ -193,7 +190,6 @@ def test_a_refusal_carries_the_read_it_was_made_about(tmp_path: Path) -> None:
     ):
         TranscriptLoader.load(path)
 
-    assert raised.value.read.transcript == path
     assert str(raised.value) == "transcript is over the 0 MiB backfill limit"
 
 

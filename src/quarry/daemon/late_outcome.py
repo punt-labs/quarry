@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.failure_reason import FailureReason
 from quarry.refusal import RefusalError
+from quarry.stop_signal import StopSignal
 
 if TYPE_CHECKING:
     from quarry.backfill_stats import BackfillStats
@@ -33,9 +34,10 @@ class LateOutcome:
     asyncio "exception never retrieved" is left behind.
     """
 
-    __slots__ = ("_given_up", "_record", "_state", "_stopped")
+    __slots__ = ("_given_up", "_pending", "_record", "_state", "_stopped")
 
     _given_up: bool
+    _pending: str
     _record: RunRecord
     _state: TaskState
     _stopped: str
@@ -46,6 +48,7 @@ class LateOutcome:
         self._record = record
         self._given_up = False
         self._stopped = ""
+        self._pending = ""
         return self
 
     def settle(
@@ -91,11 +94,18 @@ class LateOutcome:
         self._given_up = True
         self._stopped = f"backfill stopped ({reason})"
         self._record.record(self._record.so_far())
-        self._state.error = f"{self._stopped}; scan thread still running"
+        self._pending = f"{self._stopped}; scan thread still running"
+        self._state.error = self._pending
+        # At shutdown nothing starts another backfill, so the guard is not the news.
+        refusal = (
+            ""
+            if reason == StopSignal.SHUTDOWN
+            else "; a new backfill is refused until it returns"
+        )
         logger.warning(
-            "backfill stopped (%s) but its scan thread is still running; "
-            "a new backfill is refused until it returns",
+            "backfill stopped (%s) but its scan thread is still running%s",
             reason,
+            refusal,
         )
 
     def returned(self, running: asyncio.Future[BackfillStats]) -> None:
@@ -110,7 +120,10 @@ class LateOutcome:
         else:
             self._record.late(running.result())
             how = f"returned late: {running.result().summary()}"
-        self._state.error = f"{self._stopped}; scan thread {how}"
+        # Appended to what the run record set, if it set a reason; else to the stop.
+        recorded = self._state.error
+        base = self._stopped if recorded == self._pending else recorded
+        self._state.error = f"{base}; scan thread {how}"
 
     @staticmethod
     def log_failure(exc: BaseException) -> None:

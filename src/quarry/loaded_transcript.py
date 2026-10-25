@@ -12,7 +12,12 @@ if TYPE_CHECKING:
 @final
 @dataclass(frozen=True, slots=True)
 class LoadedTranscript:
-    """A transcript with the moment and stamp it was read at, and its text."""
+    """A transcript with the moment and stamp it was read at, and its text.
+
+    ``truncated`` is how many of its oldest message records the record bound
+    dropped: the text is then the newest part of the conversation.
+    """
 
     read: TranscriptRead
     text: str
+    truncated: int = 0

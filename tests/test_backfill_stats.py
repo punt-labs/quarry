@@ -24,6 +24,8 @@ class TestBackfillStats:
             "skipped_empty": 0,
             "skipped_unreadable": 2,
             "skipped_refused": 0,
+            "truncated": 0,
+            "unlocked_captures": 0,
             "failed": 1,
             "stored_unconfirmed": 0,
             "not_attempted": 0,

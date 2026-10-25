@@ -126,6 +126,10 @@ class TaskRegistry:
         """Return the live task handles, for a teardown to await."""
         return list(self._refs.values())
 
+    def holding_threads(self) -> list[TaskState]:
+        """Return the tasks whose scan thread is still alive, finished or not."""
+        return [state for state in self._states.values() if state.holds_thread]
+
     def seed(self, state: TaskState) -> None:
         """Insert a pre-built *state* keyed by its ``task_id``.
 

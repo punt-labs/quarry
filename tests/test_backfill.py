@@ -49,6 +49,7 @@ from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 from quarry.transcript_loader import TranscriptLoader
 from quarry.transcript_read import TranscriptRead
 from quarry.transcript_reader import TranscriptReader
+from quarry.transcript_records import TranscriptRecords
 from tests.queue_fixtures import ctx_with_queue, writer_for
 from tests.transcript_writers import DirectWriter, RecordingWriter, runtime_over
 
@@ -1002,6 +1003,59 @@ class TestARefusedTranscriptIsCountedRefusedEveryRunAndNeverConsumesTheLimit:
         assert stats.ingested == 1
 
 
+class TestATranscriptPastTheRecordBound:
+    @staticmethod
+    def _many(env: dict[str, Path], count: int) -> None:
+        _make_transcript(
+            env["transcript"], [_user_message(f"turn {n}") for n in range(count)]
+        )
+
+    def test_it_is_stored_from_its_newest_records_and_counted_truncated(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        self._many(env, 8)
+        writer = RecordingWriter()
+
+        with (
+            patch.object(TranscriptRecords, "MAX", 5),
+            patch.object(TranscriptRecords, "TRIM", 2),
+            caplog.at_level(logging.WARNING),
+        ):
+            stats = _run(env, writer)
+
+        assert (stats.truncated, stats.ingested) == (1, 1)
+        assert "1 truncated" in stats.summary()
+        assert "turn 7" in writer.calls[0].body
+        assert "turn 0" not in writer.calls[0].body
+        [line] = [
+            r
+            for r in caplog.records
+            if "oldest records past the record bound" in r.getMessage()
+        ]
+        assert env["transcript"].name in line.getMessage()
+        assert "3 oldest" in line.getMessage()
+
+    def test_a_truncated_read_with_no_text_is_refused_and_never_recorded(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        self._many(env, 8)
+
+        with (
+            patch.object(TranscriptRecords, "MAX", 5),
+            patch.object(TranscriptRecords, "TRIM", 2),
+            patch.object(TranscriptReader, "_MAX_CHARS", 1),  # nothing fits
+        ):
+            first = _run(env, RecordingWriter())
+            second = _run(env, RecordingWriter())
+
+        reason = "transcript tail holds no text past the record bound"
+        for stats in (first, second):  # not remembered, so seen again every run
+            assert (stats.skipped_refused, stats.skipped_empty) == (1, 0)
+            assert stats.errors == [f"{env['transcript'].name}: {reason}"]
+
+
 class TestACaptureThatWasNotWrittenSaysWhy:
     def test_a_symlink_where_the_capture_goes_is_refused_by_name(
         self, tmp_path: Path
@@ -1080,6 +1134,18 @@ class TestACrashedCaptureWritesLeftoversAreReapedOncePerProject:
             _run(env, RecordingWriter())
 
         assert reap.call_count == 1
+
+    def test_unlocked_capture_writes_are_counted_in_the_summary(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001")
+
+        with patch("fcntl.flock", side_effect=OSError(errno.ENOLCK, "no locks")):
+            stats = _run(env, RecordingWriter())
+
+        assert stats.unlocked_captures == 2
+        assert "2 captures written unlocked" in stats.summary()
 
     def test_a_dry_run_reaps_nothing_and_never_begins_the_project(
         self, tmp_path: Path

@@ -56,7 +56,7 @@ class TranscriptLoader:
         """
         read, raw = cls._read(path, datetime.now(UTC))
         reader = TranscriptReader.from_text(path, raw.decode("utf-8"))
-        return LoadedTranscript(read, reader.text())
+        return LoadedTranscript(read, reader.text(), reader.truncated)
 
     @classmethod
     def _read(cls, path: Path, snapshot: datetime) -> tuple[TranscriptRead, bytes]:
@@ -68,32 +68,29 @@ class TranscriptLoader:
                 return os.open(name, flags | os.O_NONBLOCK | os.O_NOFOLLOW)
             except OSError as exc:
                 if exc.errno == errno.ELOOP:  # O_NOFOLLOW refused a symlink
-                    stamp = FileStamp.of(os.lstat(name))
-                    raise cls._not_a_file(
-                        TranscriptRead(path, stamp, snapshot)
-                    ) from exc
+                    raise cls._not_a_file() from exc
                 raise
 
         with open(path, "rb", opener=opener) as handle:
             info = os.fstat(handle.fileno())
             read = TranscriptRead(path, FileStamp.of(info), snapshot)
             if not stat.S_ISREG(info.st_mode):
-                raise cls._not_a_file(read)
+                raise cls._not_a_file()
             if info.st_size > cls.MAX_BYTES:
-                raise cls._too_large(read)
+                raise cls._too_large()
             raw = handle.read(cls.MAX_BYTES + 1)
         if len(raw) > cls.MAX_BYTES:  # it grew while it was read
-            raise cls._too_large(read)
+            raise cls._too_large()
         return read, raw
 
     @classmethod
-    def _too_large(cls, read: TranscriptRead) -> TranscriptTooLargeError:
-        """Return the refusal of *read*, naming the limit."""
+    def _too_large(cls) -> TranscriptTooLargeError:
+        """Return the refusal of a transcript over the limit, naming it."""
         msg = f"transcript is over the {cls.MAX_BYTES >> 20} MiB backfill limit"
-        return TranscriptTooLargeError(msg, read)
+        return TranscriptTooLargeError(msg)
 
     @staticmethod
-    def _not_a_file(read: TranscriptRead) -> NotARegularFileError:
-        """Return the refusal of *read*: a pipe, a device or a symlink."""
+    def _not_a_file() -> NotARegularFileError:
+        """Return the refusal of a pipe, a device or a symlink."""
         msg = "transcript is not a regular file"
-        return NotARegularFileError(msg, read)
+        return NotARegularFileError(msg)

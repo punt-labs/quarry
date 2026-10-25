@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Self, final
+from typing import ClassVar, Self, final
 
 
 @final
@@ -13,6 +13,8 @@ class StopSignal:
     The first reason wins: a run stopped by a daemon shutdown that is then
     cancelled still says it was the shutdown.
     """
+
+    SHUTDOWN: ClassVar[str] = "daemon shutting down"  # the reason a closing queue gives
 
     __slots__ = ("_event", "_lock", "_reason")
 
