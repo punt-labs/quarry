@@ -16,6 +16,10 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- docs: the README HTTP API section no longer says loopback needs no auth.
+  Every `/v1` endpoint requires a Bearer token; local installs get one minted
+  automatically in `serve.token`, and the `curl` example now sends it (#551).
+
 - `/ingest <file>` now indexes the file's parent directory. The daemon
   rejected an existing file with the same `directory not found` error as a
   nonexistent path, and the command waited for a `FileNotFoundError` that
