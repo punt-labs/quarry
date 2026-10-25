@@ -3224,9 +3224,11 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
    - A URL ingest aborted at shutdown is recoverable only when nothing was
      dropped from it (no query, no `;params`); its stored name is spooled,
      which fetches the same resource. A URL with a query is spooled with
-     `recoverable: false` and no URL text, since the raw query never
-     reaches disk, and the task says it must be re-run rather than that it
-     was spooled for recovery.
+     `recoverable: false`, the distinct kind `ingest-unrecoverable` (so a
+     replayer keyed on kind alone never treats the note as a URL), and no
+     URL text, since the raw query never reaches disk. The task says it
+     must be re-run "(query or parameters not persisted)" rather than that
+     it was spooled for recovery.
    - The budget is checked over the whole document before any overwrite-delete,
      so a violation never leaves a partial document.
    - Overlong sentences are hard-wrapped to `max_chars`.
@@ -3319,10 +3321,16 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        and the page being stored are URL-sourced, a store replaces the
        document under its former spelling, overwriting or not, and logs the
        replacement at WARNING. The twins are dropped only after the new
-       document is stored, so a failed embed or write loses nothing; a
-       failed insert of a URL-sourced page also removes its own partial
-       write, and a failed twin delete is logged with its remedy
-       (re-ingest with overwrite) without failing the stored page. Two
+       document is stored, so a failed embed or write loses nothing. A
+       single-URL ingest without overwrite is create-if-absent, like the
+       content jobs: a name already held is skipped as `exists`, so a
+       re-ingest never appends duplicate chunks. A failed insert of a
+       URL-sourced page removes its partial write only when it owned the
+       name (the name was absent before, or overwrite deleted the prior
+       copy on purpose), so a failure never deletes a good page; a failed
+       cleanup never replaces the insert's own error. A failed twin lookup
+       or delete is logged with its remedy (re-ingest with overwrite)
+       without failing the stored page. Two
        cases remain. A legacy name whose literal query is already
        `q[sha256]=<16 hex>` reads as a current-build name and spells only
        itself, so it sits beside its re-ingested copy; reading it the
