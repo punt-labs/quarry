@@ -52,6 +52,7 @@ class DocumentStreamer:
             context.agent_handle,
             context.memory_type,
             context.summary,
+            context.source_version,
         )
 
     @staticmethod

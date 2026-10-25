@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 # rows).  Non-vector filtered queries must set an explicit limit large enough
 # to cover the full table so the WHERE clause is evaluated against every row.
 _FULL_SCAN_LIMIT = 1_000_000
+_DOCUMENT_COLUMNS = (
+    "document_name",
+    "document_path",
+    "collection",
+    "total_pages",
+    "page_number",
+    "ingestion_timestamp",
+)
 
 # A compaction transcript is filed under ``session-<session_id[:8]>``
 # (api/capture_ingest.py); a URL capture is not.  The session archive is the
@@ -45,52 +53,38 @@ class ChunkCatalog:
             return []
 
         table = self._db.open_table(TABLE_NAME)
-        query = (
-            table.search()
-            .limit(_FULL_SCAN_LIMIT)
-            .select(
-                [
-                    "document_name",
-                    "document_path",
-                    "collection",
-                    "total_pages",
-                    "page_number",
-                    "ingestion_timestamp",
-                ]
-            )
-        )
+        query = table.search().limit(_FULL_SCAN_LIMIT)
+        query = query.select(self._document_columns(table.schema.names))
         if collection_filter:
             query = query.where(f"collection = '{escape_sql(collection_filter)}'")
-        rows = query.to_list()
-
-        if not rows:
-            return []
-
         grouped: dict[str, list[dict[str, object]]] = {}
-        for row in rows:
-            name = str(row["document_name"])
-            if name not in grouped:
-                grouped[name] = []
-            grouped[name].append(row)
+        for row in query.to_list():
+            grouped.setdefault(str(row["document_name"]), []).append(row)
+        return [self._summary(name, chunks) for name, chunks in grouped.items()]
 
-        docs: list[DocumentSummary] = []
-        for name, chunks in grouped.items():
-            pages = {int(str(c["page_number"])) for c in chunks}
-            docs.append(
-                {
-                    "document_name": name,
-                    "document_path": str(chunks[0]["document_path"]),
-                    "collection": str(chunks[0]["collection"]),
-                    "total_pages": int(str(chunks[0]["total_pages"])),
-                    "chunk_count": len(chunks),
-                    "indexed_pages": len(pages),
-                    "ingestion_timestamp": str(
-                        max(str(c["ingestion_timestamp"]) for c in chunks)
-                    ),
-                }
-            )
+    @staticmethod
+    def _document_columns(present: list[str]) -> list[str]:
+        """Return the columns a document summary reads that *present* holds.
 
-        return docs
+        A table not yet migrated predates ``source_version``; its rows report none.
+        """
+        wanted = [*_DOCUMENT_COLUMNS, "source_version"]
+        return [column for column in wanted if column in present]
+
+    @staticmethod
+    def _summary(name: str, chunks: list[dict[str, object]]) -> DocumentSummary:
+        """Summarise document *name* from its *chunks* rows."""
+        first = chunks[0]
+        return {
+            "document_name": name,
+            "document_path": str(first["document_path"]),
+            "collection": str(first["collection"]),
+            "total_pages": int(str(first["total_pages"])),
+            "chunk_count": len(chunks),
+            "indexed_pages": len({int(str(c["page_number"])) for c in chunks}),
+            "ingestion_timestamp": max(str(c["ingestion_timestamp"]) for c in chunks),
+            "source_version": str(first.get("source_version", "")),
+        }
 
     def list_collections(self) -> list[CollectionSummary]:
         """List all collections with document and chunk counts."""

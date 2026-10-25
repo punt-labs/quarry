@@ -31,6 +31,7 @@ class RunContext(IngestContext):
             agent_handle=context.agent_handle,
             memory_type=context.memory_type,
             summary=context.summary,
+            source_version=context.source_version,
             names=LegacyUrlNames(context.database),
         )
 

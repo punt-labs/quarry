@@ -33,6 +33,7 @@ class ChunkLabels:
     agent_handle: str = ""
     memory_type: MemoryType = ""
     summary: str = ""
+    source_version: str = ""
 
     def require_within(self, budget: RowBudget) -> None:
         """Raise :class:`RowBudgetError` if a label is over *budget*'s label cap."""
@@ -135,4 +136,5 @@ class PageChunker:
             agent_handle=labels.agent_handle,
             memory_type=labels.memory_type,
             summary=labels.summary,
+            source_version=labels.source_version,
         )
