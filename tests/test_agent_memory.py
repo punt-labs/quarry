@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,10 +18,12 @@ if TYPE_CHECKING:
 
 from quarry.db import ChunkSearch, ChunkStore, Database, SchemaManager, get_db
 from quarry.db.schema import TABLE_NAME
+from quarry.http_url import HttpUrl
 from quarry.models import Chunk
 from quarry.results import SearchFilter, SearchResult
 from quarry.retrieval import HybridRetriever, RetrievalConfig
 from quarry.retrieval.fusion import RrfFusion
+from quarry.send_outcome import SendOutcome
 
 
 def _hybrid(
@@ -304,9 +307,9 @@ class TestNewColumnsInPipeline:
 
 
 class TestChunkerThreading:
-    def test_chunk_pages_passes_new_fields(self) -> None:
-        """chunk_pages threads agent_handle, memory_type, summary to Chunks."""
-        from quarry.ingestion.chunker import chunk_pages
+    def test_page_chunker_passes_new_fields(self) -> None:
+        """PageChunker threads agent_handle, memory_type, summary to Chunks."""
+        from quarry.ingestion.page_chunker import ChunkLabels, PageChunker
         from quarry.models import PageContent, PageType
 
         pages = [
@@ -319,20 +322,21 @@ class TestChunkerThreading:
                 page_type=PageType.TEXT,
             )
         ]
-        chunks = chunk_pages(
-            pages,
-            agent_handle="kpz",
-            memory_type="observation",
-            summary="Test observation",
-        )
+        chunks = PageChunker(
+            labels=ChunkLabels(
+                agent_handle="kpz",
+                memory_type="observation",
+                summary="Test observation",
+            )
+        ).chunk(pages)
         assert len(chunks) >= 1
         assert chunks[0].agent_handle == "kpz"
         assert chunks[0].memory_type == "observation"
         assert chunks[0].summary == "Test observation"
 
-    def test_chunk_pages_defaults_new_fields(self) -> None:
-        """chunk_pages defaults new fields to empty strings."""
-        from quarry.ingestion.chunker import chunk_pages
+    def test_page_chunker_defaults_new_fields(self) -> None:
+        """PageChunker defaults new fields to empty strings."""
+        from quarry.ingestion.page_chunker import PageChunker
         from quarry.models import PageContent, PageType
 
         pages = [
@@ -345,7 +349,7 @@ class TestChunkerThreading:
                 page_type=PageType.TEXT,
             )
         ]
-        chunks = chunk_pages(pages)
+        chunks = PageChunker().chunk(pages)
         assert len(chunks) >= 1
         assert chunks[0].agent_handle == ""
         assert chunks[0].memory_type == ""
@@ -684,7 +688,7 @@ class TestPreCompactEthosTagging:
             patch("quarry.capture.CaptureWriter.write"),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -713,7 +717,7 @@ class TestPreCompactEthosTagging:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -736,6 +740,7 @@ class TestIngestUrlThreadsAgentHandle:
         from unittest.mock import MagicMock
 
         from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.page_chunker import ChunkLabels
         from quarry.ingestion.streaming import DocumentStreamer
         from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
@@ -743,9 +748,9 @@ class TestIngestUrlThreadsAgentHandle:
         seen: dict[str, object] = {}
 
         def _capture_build_chunks(
-            _self: DocumentStreamer, pages: list[object], **kwargs: object
+            _self: DocumentStreamer, pages: list[object], labels: ChunkLabels
         ) -> list[object]:
-            seen.update(kwargs)
+            seen.update(asdict(labels))
             return []
 
         with (
@@ -758,7 +763,7 @@ class TestIngestUrlThreadsAgentHandle:
             patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
             ingest_url(
-                UrlIngest("https://example.com"),
+                UrlIngest(HttpUrl("https://example.com")),
                 Progress(None),
                 IngestContext(
                     Database(MagicMock()),

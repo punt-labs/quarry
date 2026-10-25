@@ -23,7 +23,7 @@ class SubagentCaptureOutcome:
 
     raw: TranscriptCaptureOutcome
     handle: str
-    distilled: bool
+    distillation: str
 
 
 @final
@@ -74,13 +74,13 @@ class SubagentCapture:
         raw = SessionTranscriptCapture(
             self._source, reader, agent_handle=handle, summary=report.summary
         ).capture()
-        distilled = False
-        if handle and not report.is_empty and raw.text_captured:
-            distilled = DaemonCaptureSender().send_remember(
-                report.remember_request(),
-                unreachable_log=(
-                    f"{self._source.label}: daemon unreachable; report for "
-                    f"{handle} not filed (raw transcript archived)"
-                ),
-            )
-        return SubagentCaptureOutcome(raw=raw, handle=handle, distilled=distilled)
+        if not (handle and not report.is_empty and raw.text_captured):
+            return SubagentCaptureOutcome(raw=raw, handle=handle, distillation="")
+        send = DaemonCaptureSender().send_remember(
+            report.remember_request(),
+            unreachable_log=(
+                f"{self._source.label}: daemon unreachable; report for "
+                f"{handle} not filed (raw transcript archived)"
+            ),
+        )
+        return SubagentCaptureOutcome(raw, handle, send.named("distilled", "distill"))

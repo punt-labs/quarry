@@ -13,7 +13,7 @@ present, so a pure client never pulls in lancedb/onnxruntime.
 from __future__ import annotations
 
 from quarry.api.capture_ingest import CaptureIngestRequest
-from quarry.api.captures import (
+from quarry.api.captures_contract import (
     CapturesLookupRequest,
     CapturesLookupResponse,
     CapturesPushResponse,

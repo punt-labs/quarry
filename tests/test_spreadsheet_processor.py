@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from quarry.extractors.sheet_tables import SheetTables
 from quarry.extractors.spreadsheet_extractor import (
     SUPPORTED_SPREADSHEET_EXTENSIONS,
     SpreadsheetExtractor,
@@ -31,7 +32,7 @@ class TestSupportedExtensions:
 
 class TestSplitRowsToSections:
     def test_small_table_single_section(self):
-        sections = SpreadsheetExtractor._split_rows_to_sections(
+        sections = SheetTables.sections(
             ["A", "B"], [["1", "2"], ["3", "4"]], None, max_chars=5000
         )
         assert len(sections) == 1
@@ -39,9 +40,7 @@ class TestSplitRowsToSections:
     def test_large_table_splits(self):
         headers = ["Name", "Value"]
         rows = [[f"item_{i}", f"value_{i}"] for i in range(50)]
-        sections = SpreadsheetExtractor._split_rows_to_sections(
-            headers, rows, None, max_chars=200
-        )
+        sections = SheetTables.sections(headers, rows, None, max_chars=200)
         assert len(sections) > 1
         # Each section should have the headers
         for section in sections:
@@ -50,24 +49,18 @@ class TestSplitRowsToSections:
     def test_sheet_name_in_all_sections(self):
         headers = ["A"]
         rows = [[f"row_{i}"] for i in range(50)]
-        sections = SpreadsheetExtractor._split_rows_to_sections(
-            headers, rows, "MySheet", max_chars=100
-        )
+        sections = SheetTables.sections(headers, rows, "MySheet", max_chars=100)
         for section in sections:
             assert "% Sheet: MySheet" in section
 
     def test_single_row_never_split(self):
         headers = ["A" * 100]
         rows = [["B" * 100]]
-        sections = SpreadsheetExtractor._split_rows_to_sections(
-            headers, rows, None, max_chars=10
-        )
+        sections = SheetTables.sections(headers, rows, None, max_chars=10)
         assert len(sections) == 1
 
     def test_empty_rows_returns_empty(self):
-        sections = SpreadsheetExtractor._split_rows_to_sections(
-            ["A"], [], None, max_chars=100
-        )
+        sections = SheetTables.sections(["A"], [], None, max_chars=100)
         # Empty rows still produce a valid (header-only) table
         result = LatexSerializer.serialize_table(["A"], [])
         if result.strip():
@@ -292,3 +285,31 @@ class TestProcessSpreadsheetErrors:
 
         with pytest.raises(ValueError, match="Unsupported spreadsheet format"):
             _extractor.extract_pages(f)
+
+
+class TestHugeCsvCell:
+    """The csv module's 128 KiB field limit must not crash extraction."""
+
+    def test_a_cell_just_over_the_stdlib_limit_is_extracted(self, tmp_path: Path):
+        path = tmp_path / "wide.csv"
+        cell = "x" * (131_072 + 10)
+        path.write_text(f"note\n{cell}\n")
+
+        pages = _extractor.extract_pages(path)
+
+        assert pages
+        assert sum(page.text.count("x") for page in pages) >= len(cell)
+
+    def test_a_cell_over_the_page_cap_is_a_quiet_refusal(self, tmp_path: Path):
+        from quarry.content_guard import UnindexableContentError
+        from quarry.db.row_budget import RowBudget
+
+        path = tmp_path / "huge.csv"
+        path.write_text("note\n" + "x" * (RowBudget().max_page_bytes + 1) + "\n")
+
+        with pytest.raises(UnindexableContentError) as info:
+            _extractor.extract_pages(path)
+
+        assert str(info.value) == "content rejected: CSV field exceeds the page budget"
+        assert str(path) not in str(info.value)
+        assert info.value.__cause__ is None

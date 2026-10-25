@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import fcntl
 import logging
 import os
@@ -10,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Self, final
+
+from quarry.lock_pid_file import LockPidFile
 
 logger = logging.getLogger(__name__)
 
@@ -89,46 +90,11 @@ class SyncLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         return os.open(str(self._path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
 
-    def is_held(self) -> bool:
-        """Return whether another process currently holds the sync lock.
-
-        This is an ADVISORY, non-mutating probe — a momentary snapshot, not
-        a reservation.  A ``False`` here does not guarantee a subsequent
-        :meth:`acquire` will succeed (a concurrent acquirer could win
-        first), and a ``True`` here can go stale the instant the holder
-        exits.  The only trustworthy single-winner decision is
-        :meth:`acquire`'s own ``flock(LOCK_EX | LOCK_NB)`` attempt; this
-        method exists purely as a cheap fast-path skip.
-        """
-        try:
-            fd = self._open_for_lock()
-        except OSError as exc:
-            logger.error("session-start: failed to open lock file for probe: %s", exc)
-            return False
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            # Normal contention: another process holds it. Expected, not logged.
-            return True
-        except OSError as exc:
-            # A genuine kernel error (e.g. ENOLCK, lock-table exhausted) --
-            # never conflate this with routine contention, or it silently
-            # masquerades as "someone else is syncing" forever with no trace.
-            logger.error("session-start: flock probe failed: %s", exc)
-            return True
-        else:
-            # Best-effort release: the finally-close below already releases
-            # the flock (closing the last fd on the open file description
-            # does), so a transient OSError unlocking explicitly here must
-            # not escape and turn this advisory probe into a raise.
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            return False
-        finally:
-            os.close(fd)
-
     def acquire(self) -> int | None:
         """Attempt to take the sync lock; return the held fd, or ``None``.
+
+        ``None`` is contention only.  A fault (the lockfile cannot be opened, or
+        the kernel refuses the lock for another reason) raises ``OSError``.
 
         ``flock(LOCK_EX | LOCK_NB)`` makes the kernel the single arbiter of
         "who won" — there is no check-then-act window for a second caller
@@ -139,8 +105,8 @@ class SyncLock:
         try:
             fd = self._open_for_lock()
         except OSError as exc:
-            logger.error("session-start: failed to open lock file: %s", exc)
-            return None
+            logger.error("session-start: failed to open %s: %s", self._path, exc)
+            raise
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -150,9 +116,9 @@ class SyncLock:
         except OSError as exc:
             # A genuine kernel error (e.g. ENOLCK) -- must be visible, not
             # silently treated as routine contention.
-            logger.error("session-start: flock acquire failed: %s", exc)
+            logger.error("session-start: flock of %s failed: %s", self._path, exc)
             os.close(fd)
-            return None
+            raise
         return fd
 
     def launch_background_sync(self) -> str:
@@ -174,60 +140,49 @@ class SyncLock:
         instant the child exits or dies, live or crashed alike.
 
         Returns ``"launched"`` if the subprocess was started, ``"running"``
-        if a sync is already in progress (or the lock is held), or
-        ``"failed"`` if the launch itself errored.
+        if a sync is already in progress (the lock is held), or ``"failed"`` if
+        the lock could not be opened or taken, or the launch itself errored.
         """
-        # Fast path: if a sync is already running, skip without trying the lock.
-        if self.is_held():
-            logger.debug("session-start: sync already running, skipping")
-            return "running"
-
-        # The one genuine single-winner decision — see is_held()'s docstring.
-        fd = self.acquire()
+        try:
+            fd = self.acquire()  # the one single-winner decision, see acquire()
+        except OSError:
+            return "failed"  # already logged; a fault is not "already running"
         if fd is None:
-            logger.debug("session-start: could not acquire sync lock, skipping")
+            logger.debug("session-start: sync lock %s held, skipping", self._path)
             return "running"
 
-        # pass_fds=(fd,) is the ONLY inheritance mechanism used: CPython's
-        # _posixsubprocess clears CLOEXEC on each pass_fds descriptor in the
-        # CHILD, after fork and before exec.  Marking the fd inheritable on
-        # the PARENT first (a prior version of this code did) would open a
-        # window where an unrelated thread's own subprocess/fork could
-        # inherit the lock fd and keep the flock held after this sync exits
-        # -- relying on pass_fds alone keeps the parent's copy CLOEXEC and
-        # closes that window.
+        # Our copy of the fd is closed on every path out of here, whatever
+        # raises: the child's inherited copy of the SAME open file description
+        # (if one was spawned) keeps the flock held until it exits or dies.
         try:
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "quarry", "sync"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-                pass_fds=(fd,),
-            )
-        except OSError as exc:
-            logger.error("session-start: failed to launch background sync: %s", exc)
-            # No child inherited a copy — closing ours fully releases the lock.
-            os.close(fd)
-            return "failed"
+            # pass_fds=(fd,) is the ONLY inheritance mechanism used: CPython's
+            # _posixsubprocess clears CLOEXEC on each pass_fds descriptor in the
+            # CHILD, after fork and before exec.  Marking the fd inheritable on
+            # the PARENT first (a prior version of this code did) would open a
+            # window where an unrelated thread's own subprocess/fork could
+            # inherit the lock fd and keep the flock held after this sync exits
+            # -- relying on pass_fds alone keeps the parent's copy CLOEXEC and
+            # closes that window.
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "quarry", "sync"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    pass_fds=(fd,),
+                )
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                logger.error("session-start: failed to launch background sync: %s", exc)
+                return "failed"
 
-        # Record the PID for observability only — the flock the child
-        # inherited, not this content, is now the actual lock.  A short
-        # write is retried until the full PID lands, so a later human
-        # inspecting the file never sees a truncated or stale value.
-        try:
-            os.ftruncate(fd, 0)
-            data = str(proc.pid).encode()
-            written = 0
-            while written < len(data):
-                written += os.write(fd, data[written:])
-        except OSError as exc:
-            logger.warning(
-                "session-start: sync launched but pidfile write failed: %s", exc
-            )
+            try:
+                LockPidFile(fd).record(proc.pid)
+            except OSError as exc:
+                logger.warning(
+                    "session-start: sync launched but pidfile write failed: %s", exc
+                )
         finally:
-            # Close OUR copy — the child's inherited copy of the SAME open
-            # file description keeps the flock held until it exits or dies.
             os.close(fd)
 
         logger.info("session-start: background sync launched (pid=%d)", proc.pid)

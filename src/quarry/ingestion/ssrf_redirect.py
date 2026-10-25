@@ -4,7 +4,7 @@ urllib's default ``HTTPRedirectHandler`` follows 30x responses automatically
 with no per-hop check, so a caller-supplied public URL that 302s to a private,
 loopback, link-local, CGNAT, or cloud-metadata address would reach an internal
 service.  :data:`GUARDED_OPENER` replaces that handler with one that gates each
-redirect target against its resolved address -- the same :class:`UrlSafetyCheck`
+redirect target against its resolved address -- the same :class:`UrlAdmission`
 the ingest route runs on the initial source -- and refuses an unsafe hop before
 it is opened.  It also replaces urllib's default HTTP(S) handlers with the pinned
 ones (:mod:`quarry.ingestion.pinned_opener`), so each hop is connected to a
@@ -17,10 +17,11 @@ from __future__ import annotations
 import contextlib
 import ssl
 import urllib.request
-from typing import IO, TYPE_CHECKING, final
+from typing import IO, TYPE_CHECKING, NoReturn, final
 
 from quarry.ingestion.pinned_opener import PinnedHTTPHandler, PinnedHTTPSHandler
-from quarry.url_safety import UrlSafetyCheck
+from quarry.ingestion.redirect_location import RedirectLocation
+from quarry.url_admission import UrlAdmission
 
 if TYPE_CHECKING:
     from http.client import HTTPMessage
@@ -72,6 +73,24 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
             opener.add_handler(handler)
         return opener
 
+    def http_error_302(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+    ) -> urllib.request.Request | None:
+        """Refuse a redirect whose ``Location`` is malformed, then defer.
+
+        One handler serves every redirect code, as in the base class.
+        """
+        if RedirectLocation.is_malformed(req.full_url, headers):
+            self._refuse(fp, "malformed redirect target")
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
     def redirect_request(
         self,
         req: urllib.request.Request,
@@ -90,16 +109,23 @@ class SsrfGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         This pre-check is defense in depth ahead of the connection-level pin,
         and it closes the intermediate 3xx response.
         """
-        reason = UrlSafetyCheck.reject_reason(newurl)
+        reason = UrlAdmission.reject_reason(newurl)
         if reason is not None:
-            # urllib's http_error_30x calls this BEFORE it reads/closes fp, so
-            # raising here would leak the intermediate 3xx response's fd on every
-            # blocked hop.  Close it first (Class-1 fd hygiene); a close failure
-            # must not mask the SSRF rejection, so it is suppressed.
-            with contextlib.suppress(OSError, ValueError):
-                fp.close()
-            raise RedirectRejectedError(f"redirect target rejected: {reason}")
+            self._refuse(fp, f"redirect target rejected: {reason}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    @staticmethod
+    def _refuse(fp: IO[bytes], reason: str) -> NoReturn:
+        """Close the intermediate 3xx response, then refuse the hop with *reason*.
+
+        urllib's ``http_error_30x`` calls the gate BEFORE it reads or closes *fp*,
+        so raising without closing would leak that response's fd on every refused
+        hop.  A close failure must not mask the refusal, so it
+        is suppressed.
+        """
+        with contextlib.suppress(OSError, ValueError):
+            fp.close()
+        raise RedirectRejectedError(reason)
 
 
 # One shared opener for all server-side fetches: every redirect hop is gated and

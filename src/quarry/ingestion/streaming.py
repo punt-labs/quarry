@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING, Self
 
-from quarry.db.chunk_table import ChunkTable
 from quarry.ingestion.backends import get_embedding_backend
-from quarry.ingestion.chunker import chunk_pages
+from quarry.ingestion.page_chunker import ChunkLabels, PageChunker
+from quarry.ingestion.plain_flush_target import PlainFlushTarget
 from quarry.ingestion.progressive import ProgressiveIndexer
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Iterator
 
     import numpy as np
     from numpy.typing import NDArray
 
     from quarry.config import Settings
     from quarry.db.chunk_store import ChunkStore
-    from quarry.ingestion.progressive import FlushCheckpoint
+    from quarry.ingestion.extracted_document import ExtractedDocument
+    from quarry.ingestion.ingest_context import IngestContext
+    from quarry.ingestion.progressive import FlushTarget
     from quarry.models import Chunk, PageContent
 
 
@@ -40,28 +41,33 @@ class DocumentStreamer:
         self._settings = settings
         return self
 
-    def build_chunks(
-        self,
-        pages: list[PageContent],
-        *,
-        collection: str = "default",
-        source_format: str = "",
-        agent_handle: str = "",
-        memory_type: str = "",
-        summary: str = "",
-    ) -> list[Chunk]:
-        """Chunk *pages* and assign a document-global, contiguous ``chunk_index``."""
-        chunks = chunk_pages(
-            pages,
-            max_chars=self._settings.chunk_max_chars,
-            overlap_chars=self._settings.chunk_overlap_chars,
-            collection=collection,
-            source_format=source_format,
-            agent_handle=agent_handle,
-            memory_type=memory_type,
-            summary=summary,
+    @staticmethod
+    def ingest_labels(
+        extracted: ExtractedDocument, context: IngestContext
+    ) -> ChunkLabels:
+        """Return *context*'s collection and memory tags as the chunks' labels."""
+        return ChunkLabels(
+            context.collection,
+            extracted.source_format,
+            context.agent_handle,
+            context.memory_type,
+            context.summary,
         )
-        return [replace(chunk, chunk_index=i) for i, chunk in enumerate(chunks)]
+
+    @staticmethod
+    def sync_labels(extracted: ExtractedDocument, collection: str) -> ChunkLabels:
+        """Return the labels of a synced file in *collection* (no memory tags)."""
+        return ChunkLabels(collection, extracted.source_format)
+
+    def build_chunks(
+        self, pages: list[PageContent], labels: ChunkLabels
+    ) -> list[Chunk]:
+        """Chunk *pages* into a document-global, contiguous ``chunk_index`` sequence."""
+        return PageChunker(
+            self._settings.chunk_max_chars,
+            self._settings.chunk_overlap_chars,
+            labels,
+        ).chunk(pages)
 
     def stream_batches(
         self,
@@ -83,49 +89,21 @@ class DocumentStreamer:
             vectors: NDArray[np.float32] = embedder.embed_texts([c.text for c in batch])
             yield batch, vectors
 
+    def progressive(self, target: FlushTarget) -> ProgressiveIndexer:
+        """Return an indexer flushing *target* at the configured byte budget."""
+        flush_bytes = self._settings.sync_flush_mb * 1024 * 1024
+        return ProgressiveIndexer(target, flush_bytes=flush_bytes)
 
-class _PlainFlushTarget:
-    """FlushTarget for single-document ingest: write chunks, no registry."""
+    def insert(self, chunks: list[Chunk], store: ChunkStore, document_name: str) -> int:
+        """Embed *chunks* in windows and progressively insert via ProgressiveIndexer.
 
-    __slots__ = ("_store",)
-
-    _store: ChunkStore
-
-    def __new__(cls, store: ChunkStore) -> Self:
-        self = super().__new__(cls)
-        self._store = store
-        return self
-
-    def build_records(
-        self, chunks: list[Chunk], vectors: NDArray[np.float32]
-    ) -> list[dict[str, object]]:
-        return ChunkTable.build_records(chunks, vectors)
-
-    def insert_records(self, records: list[dict[str, object]]) -> int:
-        return self._store.insert_records(records)
-
-    def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None:
-        """Single-document ingest keeps no resume watermark — nothing to commit."""
-
-
-def progressive_insert(
-    chunks: list[Chunk],
-    store: ChunkStore,
-    settings: Settings,
-    document_name: str,
-) -> int:
-    """Embed *chunks* in windows and progressively insert via ProgressiveIndexer.
-
-    Bounds peak resident vectors to ``sync_flush_mb + one window`` and makes each
-    flushed window searchable, even for a single very large document.
-    """
-    target = _PlainFlushTarget(store)
-    indexer = ProgressiveIndexer(
-        target, flush_bytes=settings.sync_flush_mb * 1024 * 1024
-    )
-    indexer.begin_file(document_name, total_chunks=len(chunks))
-    for batch, vectors in DocumentStreamer(settings).stream_batches(chunks):
-        indexer.add_window(document_name, batch, vectors)
-    indexer.complete_file(document_name)
-    indexer.drain()
-    return indexer.inserted_count
+        Bounds peak resident vectors to ``sync_flush_mb + one window`` and makes
+        each flushed window searchable, even for a single very large document.
+        """
+        indexer = self.progressive(PlainFlushTarget(store))
+        indexer.begin_file(document_name, total_chunks=len(chunks))
+        for batch, vectors in self.stream_batches(chunks):
+            indexer.add_window(document_name, batch, vectors)
+        indexer.complete_file(document_name)
+        indexer.drain()
+        return indexer.inserted_count

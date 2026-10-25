@@ -122,3 +122,18 @@ def test_producers_yield_byte_identical_files(tmp_path: Path) -> None:
     CaptureWriter().write(back)
 
     assert pre.capture_path().read_bytes() == back.capture_path().read_bytes()
+
+
+def test_write_reports_whether_a_file_landed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    good = _request(tmp_path, text="hello world")
+    assert CaptureWriter().write(good) is True
+    assert CaptureWriter().write(_request(tmp_path, session_id="")) is False
+
+    def boom(_text: str, _label: str) -> str:
+        msg = "scrub exploded"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("quarry.capture.scrub_and_log", boom)
+    assert CaptureWriter().write(_request(tmp_path, text="x")) is False

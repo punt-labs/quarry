@@ -1,23 +1,23 @@
-"""PII-safe metadata form of a WebFetch-captured URL."""
+"""The tolerant fallback for a URL HttpUrl refuses, used via HttpUrl.shown."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
 from quarry.remote import to_netloc
 
-# The scrub-log label every WebFetch capture URL is stamped with, at both the
-# write (hooks.handle_post_web_fetch) and read (captures/lookup route) sides —
-# a single constant keeps the two derivations from drifting into different
-# document names for what should be the same stored capture.
-_WEB_FETCH_LABEL = "web-fetch"
+# Shown for a URL that cannot be parsed, never its raw text (where secrets sit).
+_UNPARSEABLE = "(unparseable URL)"
+_PARAMS = re.compile(r";[^/]*")  # path parameters: ";jsessionid=..." on any segment
 
 
 @dataclass(frozen=True, slots=True)
 class CaptureUrl:
-    """A fetched URL whose persisted-metadata form carries no structural PII.
+    """A URL HttpUrl refuses, read tolerantly; its form carries no structural PII.
 
     A WebFetch capture stores its source URL as the document name and path.  A
     raw URL leaks anything in its userinfo, query, or fragment — the tokens and
@@ -35,19 +35,18 @@ class CaptureUrl:
     _raw: str
 
     @classmethod
-    def for_web_fetch(cls, raw: str) -> str:
-        """Return *raw*'s WebFetch document-name form: the one true derivation.
+    def display(cls, raw: str) -> str:
+        """Return *raw*'s stored fallback form (via DisplayName.stored); never raises.
 
-        Both the capture write path (``hooks.handle_post_web_fetch``) and the
-        lookup read path (``CaptureRoutes.lookup``) call this so a URL always
-        maps to the same document name regardless of which side computes it.
+        A URL that cannot be parsed (an out-of-range port, a malformed netloc)
+        shows as a fixed placeholder rather than as its raw text.
         """
-        from quarry.scrub import scrub_and_log  # noqa: PLC0415
-
-        return cls(raw).redacted(lambda text: scrub_and_log(text, _WEB_FETCH_LABEL))
+        with suppress(ValueError):
+            return cls(raw).redacted(lambda text: text)
+        return _UNPARSEABLE
 
     def redacted(self, scrubber: Callable[[str], str]) -> str:
-        """Return the metadata URL: userinfo/query/fragment stripped, then scrubbed.
+        """Return the metadata URL: userinfo, query, fragment and params stripped.
 
         ``to_netloc`` re-brackets an IPv6 literal that ``urlsplit(...).hostname``
         stripped (``2001:db8::1`` -> ``[2001:db8::1]``), so the reassembled netloc
@@ -55,5 +54,5 @@ class CaptureUrl:
         """
         parts = urlsplit(self._raw)
         netloc = to_netloc(parts.hostname or "", parts.port)
-        bare = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-        return scrubber(bare)
+        path = _PARAMS.sub("", parts.path)
+        return scrubber(urlunsplit((parts.scheme, netloc, path, "", "")))

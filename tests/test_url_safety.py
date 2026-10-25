@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from quarry.url_safety import UrlSafetyCheck
+from quarry.url_admission import UrlAdmission
 
 _GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
 _PUBLIC = "93.184.216.34"
@@ -43,11 +43,11 @@ class TestSafeUrl:
 
     def test_public_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _resolve_to(monkeypatch, _PUBLIC)
-        assert UrlSafetyCheck.reject_reason("https://example.com/page") is None
+        assert UrlAdmission.reject_reason("https://example.com/page") is None
 
     def test_public_ipv6_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _resolve_to(monkeypatch, "2606:2800:220:1:248:1893:25c8:1946")
-        assert UrlSafetyCheck.reject_reason("https://example.com/") is None
+        assert UrlAdmission.reject_reason("https://example.com/") is None
 
 
 class TestSchemeAndHost:
@@ -60,13 +60,30 @@ class TestSchemeAndHost:
         self, url: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(_GETADDRINFO, _boom)
-        reason = UrlSafetyCheck.reject_reason(url)
+        reason = UrlAdmission.reject_reason(url)
         assert reason is not None
         assert "unsupported scheme" in reason
 
+    @pytest.mark.parametrize(
+        "url", ["http://h:99999/", "https://h:0x50/", "http://h:abc/x"], ids=str
+    )
+    def test_an_unusable_port_is_rejected(
+        self, url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_GETADDRINFO, _boom)
+        assert UrlAdmission.reject_reason(url) == "malformed URL"
+
+    def test_a_malformed_url_reason_does_not_echo_the_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """urlsplit's NFKC error embeds the netloc, userinfo included."""
+        monkeypatch.setattr(_GETADDRINFO, _boom)
+        reason = UrlAdmission.reject_reason("http://user:secret@h\uff03x/")
+        assert reason == "malformed URL"
+
     def test_missing_host_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(_GETADDRINFO, _boom)
-        reason = UrlSafetyCheck.reject_reason("https:///just/a/path")
+        reason = UrlAdmission.reject_reason("https:///just/a/path")
         assert reason is not None
         assert "missing hostname" in reason
 
@@ -84,7 +101,7 @@ class TestSchemeAndHost:
     ) -> None:
         """Cloud-metadata hosts are blocked by name, before any resolution."""
         monkeypatch.setattr(_GETADDRINFO, _boom)
-        reason = UrlSafetyCheck.reject_reason(f"http://{host}/latest/meta-data/")
+        reason = UrlAdmission.reject_reason(f"http://{host}/latest/meta-data/")
         assert reason is not None
         assert "metadata hostname" in reason
 
@@ -92,7 +109,7 @@ class TestSchemeAndHost:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(_GETADDRINFO, _boom)
-        reason = UrlSafetyCheck.reject_reason("http://myprinter.local/status")
+        reason = UrlAdmission.reject_reason("http://myprinter.local/status")
         assert reason is not None
         assert ".local" in reason
 
@@ -122,7 +139,7 @@ class TestBlockedResolvedAddress:
         self, label: str, resolved: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _resolve_to(monkeypatch, resolved)
-        reason = UrlSafetyCheck.reject_reason("https://target.test/x")
+        reason = UrlAdmission.reject_reason("https://target.test/x")
         assert reason is not None
         assert "blocked address" in reason
 
@@ -138,7 +155,7 @@ class TestBlockedResolvedAddress:
     ) -> None:
         """CGNAT (RFC 6598) has its own reason wording; mapped form unmaps to it."""
         _resolve_to(monkeypatch, resolved)
-        reason = UrlSafetyCheck.reject_reason("https://target.test/x")
+        reason = UrlAdmission.reject_reason("https://target.test/x")
         assert reason is not None
         assert "CGNAT address" in reason
 
@@ -149,7 +166,7 @@ class TestBlockedResolvedAddress:
         monkeypatch.setattr(
             _GETADDRINFO, lambda *a, **k: _addrinfo(_PUBLIC, "10.0.0.9")
         )
-        reason = UrlSafetyCheck.reject_reason("https://mixed.test/x")
+        reason = UrlAdmission.reject_reason("https://mixed.test/x")
         assert reason is not None
         assert "blocked address 10.0.0.9" in reason
 
@@ -164,7 +181,7 @@ class TestFailClosed:
             raise OSError("Name or service not known")
 
         monkeypatch.setattr(_GETADDRINFO, _raise)
-        reason = UrlSafetyCheck.reject_reason("https://cannot-resolve.test/x")
+        reason = UrlAdmission.reject_reason("https://cannot-resolve.test/x")
         assert reason is not None
         assert "cannot resolve hostname" in reason
 
@@ -175,6 +192,6 @@ class TestFailClosed:
         monkeypatch.setattr(
             _GETADDRINFO, lambda *a, **k: [(2, 1, 6, "", ("not-an-ip", 0))]
         )
-        reason = UrlSafetyCheck.reject_reason("https://bogus.test/x")
+        reason = UrlAdmission.reject_reason("https://bogus.test/x")
         assert reason is not None
         assert "cannot parse resolved address" in reason

@@ -232,8 +232,25 @@ Format strategies & \modpath{ingestion/format\_strategies.py} &
 Funnel      & \modpath{ingestion/chunk\_store\_funnel.py} & The single
               convergence point for chunking, embedding, and storing pages
               (the DES-036 choke point every ingest path shares). \\
-Chunker     & \modpath{ingestion/chunker.py}     & Split page text into
-              overlapping chunks; respects page and heading boundaries. \\
+Chunker     & \modpath{ingestion/page\_chunker.py}     & \texttt{PageChunker}:
+              refuse binary documents, split logical sections to the row
+              budget (an oversized paginated page fails the document), and pack
+              overlapping chunks; respects page boundaries (extractors cut
+              sections at headings).  Splitting is
+              \modpath{ingestion/page\_splitter.py}, sentence packing
+              \modpath{ingestion/sentence\_chunker.py}. \\
+Binary guard & \modpath{content\_guard.py} & \texttt{BinaryContent}
+              classifies text that is really a binary payload (signature plus
+              non-text ratio) and \texttt{UnindexableContentError}, the
+              content-refusal channel: a \texttt{RefusalError} (a
+              \texttt{ValueError}) whose message is a stable, URL-free
+              reason.  Neutral and stdlib-only, so the HTTP
+              routes and the pipeline share it. \\
+Row budget  & \modpath{db/row\_budget.py} & \texttt{RowBudget}: caps a stored
+              page, chunk and label so a Lance scan batch of 1,024 rows stays
+              under the 32-bit Arrow offset limit; \texttt{RowBudgetError} on
+              overflow, never truncation.  Enforced where rows are built
+              (\modpath{db/chunk\_table.py}) and before any delete. \\
 Web ingest  & \modpath{ingestion/web\_ingest.py} & \texttt{WebIngest}:
               inline content (\texttt{ingest\_content}) and URL
               (\texttt{ingest\_url}) ingest --- extract, scrub when the
@@ -241,9 +258,17 @@ Web ingest  & \modpath{ingestion/web\_ingest.py} & \texttt{WebIngest}:
               the store. \\
 Bulk / sitemap & \modpath{ingestion/bulk\_ingest.py},
               \modpath{ingestion/sitemap\_ingest.py} & Threaded bulk fan-out
-              and sitemap-driven URL ingestion. \\
-Web fetch   & \modpath{ingestion/web\_fetch.py}  & Fetch a URL over
-              HTTP(S) and return validated HTML text. \\
+              and sitemap-driven URL ingestion; a sitemap that cannot be read,
+              or a crawl in which every page failed, fails the task. \\
+Web fetch   & \modpath{ingestion/web\_fetch.py},
+              \modpath{ingestion/fetched\_body.py},
+              \modpath{ingestion/media\_type\_policy.py} & Fetch a URL over
+              HTTP(S) behind the SSRF gate; a media type outside the text
+              allow-list is refused from the headers before the body is read.
+              Every failure is an \texttt{UnindexableContentError}
+              (\texttt{FetchRefusedError}, or \texttt{UnsupportedContentError}
+              for a refused media type) whose message never embeds userinfo,
+              path or query. \\
 Ingest stats & \modpath{ingestion/ingest\_stats.py} & Per-format ingest
               counters merged into an ingest result. \\
 \bottomrule
@@ -360,8 +385,9 @@ Scrubber       & \modpath{scrub.py}         & \texttt{Scrubber} ---
 Scrub rules    & \modpath{scrub\_rules.py}  & Secret-detection regex
                  catalog applied by the scrubber. \\
 Capture URL    & \modpath{capture\_url.py}  & \texttt{CaptureUrl} ---
-                 strips userinfo/query/fragment from a captured URL's
-                 metadata form. \\
+                 tolerant redaction for a URL that \texttt{HttpUrl}
+                 refuses; the fallback behind \texttt{HttpUrl.shown} and
+                 \texttt{DisplayName.stored}. \\
 Web capture    & \modpath{web\_capture.py}  & Parse a PostToolUse
                  WebFetch payload into URL + fetched content. \\
 Transcript     & \modpath{transcript.py}    & The session transcript
@@ -1480,7 +1506,7 @@ already committed.
 
 Every module that performs I/O declares
 \texttt{logger = logging.getLogger(\_\_name\_\_)}.  Pure data modules
-(\texttt{models.py}, \texttt{types.py}, \texttt{chunker.py}) do not.
+(\texttt{models.py}, \texttt{types.py}, \texttt{page\_chunker.py}) do not.
 
 Logging is configured once at each application entry point --- the CLI,
 the MCP server, and the \texttt{quarryd} daemon (DES-048; the daemon writes
@@ -1695,10 +1721,10 @@ text via an opt-in \texttt{content\_scrubber} on the
 The field defaults to \texttt{None}: user-initiated \texttt{quarry ingest <url>},
 sitemap crawls, and directory sync are \emph{not} scrubbed --- redaction
 is a captures concern, not a general-ingestion one.  The URL's persisted
-metadata form is redacted separately by \texttt{CaptureUrl}
-(\modpath{capture\_url.py}), which strips userinfo, query, and fragment
-(preserving IPv6 brackets) before the same text scrubber runs over the
-bare \texttt{scheme://host/path}.
+metadata form is its admitted \texttt{HttpUrl.document\_name}
+(\modpath{http\_url.py}), \texttt{scheme://host[:port]/path} with no
+userinfo, query, fragment, or \texttt{;params}, run through the same text
+scrubber (DES-057).
 
 % ===================================================================
 \section{Deployment}
@@ -1888,7 +1914,8 @@ Before sending, \texttt{WebFetchLoopCloser}
 (\modpath{web\_fetch\_loop\_closer.py}) checks \texttt{/v1/captures/lookup}
 for a prior capture of the URL and, when one exists, nudges the agent to
 \texttt{find} it instead of re-fetching.  The URL's persisted metadata form
-is redacted by \texttt{CaptureUrl} (DES-036).
+is derived by \texttt{WebFetchName} from the admitted \texttt{HttpUrl}
+(DES-036, DES-057).
 
 \subsection{Web Search and Read Capture}
 
@@ -2024,7 +2051,7 @@ named are representative, not exhaustive:
 \textbf{Tier} & \textbf{Strategy} & \textbf{Files} \\
 \midrule
 Tier 1: Core logic & Real data, no mocks & \texttt{test\_database},
-  \texttt{test\_chunker}, \texttt{test\_embeddings},
+  \texttt{test\_page\_chunker}, \texttt{test\_embeddings},
   \texttt{test\_code\_processor}, \texttt{test\_html\_processor},
   \texttt{test\_text\_processor}, \texttt{test\_collections},
   \texttt{test\_config}, \texttt{test\_formatting},

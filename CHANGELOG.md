@@ -51,9 +51,160 @@ across `transform`, `index`, and `connector`).
   sibling classes (mirroring the existing `MissionTools` pattern). The stdio
   wire surface — tool names, behavior, `MCPServer` construction — is
   unchanged. `McpTools.main()` moves to a `McpTools.run_stdio` staticmethod.
+- index: a URL's stored document name is `scheme://host[:port]/path`,
+  followed by `?q[sha256]=<digest>` when the URL has a query. The digest is the
+  first 16 hex digits of a SHA-256 of the sorted, encoded parameters, so a
+  secret in a query string is never stored while pages that differ by query
+  stay separate documents. These parts are removed:
+  - userinfo, fragment, and `;params`;
+  - an explicit default port;
+  - a trailing dot on the host.
+
+  The path is percent-encoded once as UTF-8, with existing escapes kept and
+  upper-cased, so `…/café` and `…/caf%C3%A9` are one document and a
+  non-ASCII URL is fetched rather than failing. This applies to `quarry
+  ingest <url>`, sitemap pages, a `remember` whose name is a URL, and
+  captures. URLs that differ only in fragment, `;params`, or parameter order
+  resolve to the same document. Ingesting a URL from the web replaces a
+  web-sourced document stored under the URL's former spelling (logged at
+  WARNING) rather than leaving a duplicate. Documents named by `remember`
+  or `learn` are labels and are never matched or replaced, whatever their
+  format hint.
+- tool: a failed task's error shows its reason only when the task was
+  refused (binary content, an over-budget row, a rejected or failed fetch,
+  or a directory registration that is already covered, already registered,
+  uses a taken collection name, or targets an archived collection). Every
+  other failure reads `internal error: <ExceptionClass>`, with the detail in
+  the redacted `quarry.log`. This also applies to per-file errors from sync,
+  watch, and sitemap crawls.
+- tool: registration refusals are fixed text (`directory already
+  registered`, `directory covered by a parent registration`, `collection
+  name already in use`, `collection holds archived data from another
+  directory`), each followed by a fixed remediation. The directory and
+  collection names appear only in the redacted log line. A refused
+  automatic registration at session start is reported in the session
+  context instead of failing the hook.
+- tool: a task that stores nothing now fails instead of ending `completed`.
+  A crawl that selects no pages fails with `nothing was stored: no pages
+  were selected for ingest`. A crawl whose pages all produce no text, and
+  any other ingest, capture, or `remember`/`learn` that stores nothing,
+  fails with `nothing was stored: the content produced no indexable text`.
+  A crawl result now reports an `empty` count for pages that stored
+  nothing.
+- tool: hook traces tell a daemon refusal (`daemon-refused`) from an
+  unreachable daemon (`daemon-unreachable`), a hook-side configuration error
+  (`config-error`), and a server fault (`daemon-error`). The PreCompact
+  message states truthfully whether a local copy was saved, and for a
+  recoverable failure notes that `quarry backfill-sessions` indexes missed
+  sessions of registered directories. A SubagentStop trace reports the
+  distillation result (`distilled` or `distill-<label>`) whether or not the
+  raw send succeeded. SessionStart traces a nudge, drift, or refused
+  registration as a skip and a failed sync launch as an error, never as a
+  capture. A background sync that cannot take its lock or start its process
+  is reported as `Background sync failed to launch` with a pointer to the
+  log, instead of `already running`.
+- tool: the drift notice's command is `quarry deregister --keep-data --
+  <name>`, so it keeps the indexed data the notice says it keeps.
+- tool: `quarry register` and the MCP `register_directory` default the
+  collection name to the directory's leaf with characters outside
+  `A-Z a-z 0-9 . _ -` mapped to `-`, the same name automatic registration
+  picks.
+- security: SessionStart context quotes every directory and collection name
+  on one line, and runnable commands are shell-quoted, so a hostile
+  directory name cannot inject instructions. A name with unprintable
+  characters never appears in a command; the context says to run `quarry
+  enable .` from that directory, or to find the collection with `quarry
+  list collections`. New collection names use only `A-Z a-z 0-9 . _ -` and
+  cannot start with `-` or `.`; a directory leaf with other characters is
+  mapped to `-`, and a user-supplied name with them is refused.
+- security: the WebFetch loop-closer no longer prints a stored document name
+  into the session. It shows the URL's log form and, when the page is
+  indexed under an older spelling, says `quarry find` reaches it.
+- tool: `quarry backfill-sessions` re-ingests a session whose transcript
+  has grown since it was last stored, instead of skipping it. It finds a
+  project's transcripts for paths containing dots, underscores, or spaces,
+  matching Claude Code's directory names.
+- infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
+  its path, whether quarry logs it or a library does. The full path is kept
+  in the stored document name. Tracebacks in the log are indented, and a
+  record is capped at 64 KiB. Punctuation after a URL path in a log line is
+  kept. An HTTP error status is logged as one line without a traceback,
+  and an SSRF-blocked sitemap fetch is now logged. A record the redactor cannot
+  settle is
+  replaced by one line naming its time, level, logger, and call site, with
+  the message withheld.
 
 ### Fixed
 
+- index: binary content can no longer be stored as chunk text. A PDF captured
+  through the WebFetch hook was decoded as text, and its multi-megabyte page
+  was copied onto every one of its chunks. That poisoned the `chunks` table:
+  every `optimize()` failed with an Arrow `Offset overflow`. Because cleanup
+  runs inside the same call, each failed compaction also left orphaned files
+  on disk. Ingestion now refuses binary content and bounds every stored row
+  (DES-057):
+  - A media-type allow-list is checked before a fetched body is read.
+  - A document-level binary classifier (`content_guard.py`) checks for magic
+    bytes and the share of replacement and control characters. Prose that
+    merely begins with `%PDF-` or `GIF8` still passes.
+  - A text, markdown, or HTML section, code section, or spreadsheet row group over
+    the page cap (just under 1 MiB) is split at the best available boundary,
+    never truncated. An oversized PDF or other paginated page fails its
+    document instead, so page numbers always match the source.
+  - Overlong unpunctuated runs are hard-wrapped so a chunk's stored text
+    equals its embedded text.
+  - Label columns (`summary`, document name and path, collection, agent
+    handle) are capped at 8 KiB.
+  - The row budget is checked before any overwrite-delete, so a refused
+    document never replaces the previous version with a partial one.
+
+  A refused payload fails with its reason on every surface, with no traceback
+  in the daemon log:
+  - HTTP 400 is returned before any job is queued:
+    - `remember` and `capture`: binary content, an over-budget label, or an
+      unknown `format_hint`.
+    - `learn`: binary content or an over-budget label.
+    - `ingest`: an over-budget label.
+    - `ingest` and `capture`: a URL with userinfo, whitespace or control
+      characters, `\` or `%` in the host, or an out-of-range port. The
+      reason is fixed text (`malformed URL`, `unsupported scheme`) and never
+      echoes the URL.
+  - A URL ingest task ends `failed`.
+  - Directory sync reports a per-file error and indexes the rest.
+  - A sitemap crawl records the reason per page. A crawl in which every page
+    failed fails its task.
+  - The hook never blocks the session.
+  - MCP tools render a daemon refusal as `Error: <message>`, the same text as
+    the CLI.
+- index: a failed fetch now fails its task with a URL-free reason and one
+  redacted log line. These cases used to end `completed` with zero chunks:
+  - Scrubbed URL ingests and capture re-fetches that hit an HTTP error,
+    timeout, unreachable host, or over-cap body.
+  - A sitemap URL that could not be fetched or parsed, or a sitemap index
+    whose sub-sitemaps all failed.
+  - A crawl in which every listed URL was rejected as unsafe.
+  - A capture or scrubbed URL ingest whose content extracted to no text.
+- security: URL secrets can no longer reach logs, task errors, HTTP
+  responses, MCP results, or stored document names (DES-057). Credentials,
+  query strings and tokens in a URL used to leak through several paths:
+  network errors, sitemap-parser exceptions and logs, document-name log
+  lines, and a parse differential that put userinfo into connection errors.
+  The fix is structural rather than per call site:
+  - One admission gate rejects any URL that the URL parser, urllib, and the
+    sitemap parser could read differently.
+  - URLs are carried as an `HttpUrl` value whose printed form is redacted.
+  - Every log handler redacts URLs and control characters in the final
+    text, and drops third-party log records below WARNING.
+- index: a CSV with a single cell larger than 128 KiB no longer crashes
+  extraction. Large cells are chunked within the row budget, and a cell
+  over the page cap fails its file with a reason. A malformed CSV fails with
+  `not parseable CSV` rather than a misleading field-size message.
+- infra: `chunk_max_chars` is bounded in `Settings` (1 to 16,384), so every
+  chunk fits the 64 KiB per-chunk row budget. `chunk_overlap_chars` must be
+  non-negative. An out-of-range value is refused at load, with an error naming
+  the field. Without this bound, an oversized `chunk_max_chars` would fail
+  every ingest against the new per-chunk budget with an error that never named
+  the setting.
 - tool: add the `missions_sync` tool to `scripts/mcpb-manifest.template.json`
   — it was never added when the tool shipped, so the Claude Desktop bundle's
   tool list silently omitted it.

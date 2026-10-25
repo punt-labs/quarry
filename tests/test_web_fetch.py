@@ -10,7 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.ingestion import web_fetch as wf
+from quarry.http_url import HttpUrl
+from quarry.ingestion import opened_response as wf, web_fetch
+from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.fetched_body import FetchGate
+from quarry.ingestion.media_type_policy import MediaTypePolicy, UnsupportedContentError
 from quarry.ingestion.ssrf_redirect import (
     RedirectRejectedError,
     SsrfGuardedRedirectHandler,
@@ -41,60 +45,68 @@ def _resolve_public(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestWebFetcher:
     """Test the fetch helper with mocked responses."""
 
-    def test_rejects_non_http(self) -> None:
-        with pytest.raises(ValueError, match="Only HTTP"):
-            WebFetcher().fetch("ftp://example.com")
-
-    def test_rejects_file_scheme(self) -> None:
-        with pytest.raises(ValueError, match="Only HTTP"):
-            WebFetcher().fetch("file:///etc/passwd")
-
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_fetches_html(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>Hello</p></body></html>"
         mock_open.return_value = _mock_response(body, "text/html; charset=utf-8")
-        assert "Hello" in WebFetcher().fetch("https://example.com")
+        assert "Hello" in WebFetcher().fetch(HttpUrl("https://example.com"))
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_an_iri_is_requested_as_percent_encoded_ascii(
+        self, mock_open: MagicMock
+    ) -> None:
+        mock_open.return_value = _mock_response(b"<p>x</p>", "text/html")
+        WebFetcher().fetch(HttpUrl("https://example.com/caf\u00e9?q=\u00fc"))
+        requested = mock_open.call_args[0][0].full_url
+        assert requested == "https://example.com/caf%C3%A9?q=%C3%BC"
+        assert requested.isascii()
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_uppercase_scheme_accepted(self, mock_open: MagicMock) -> None:
         """An uppercase scheme is accepted, consistent with UrlSafetyCheck."""
         body = b"<html><body><p>OK</p></body></html>"
         mock_open.return_value = _mock_response(body, "text/html")
-        assert "OK" in WebFetcher().fetch("HTTP://example.com")
+        assert "OK" in WebFetcher().fetch(HttpUrl("HTTP://example.com"))
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_rejects_non_html_content_type(self, mock_open: MagicMock) -> None:
-        mock_open.return_value = _mock_response(b"%PDF-1.4", "application/pdf")
+        mock_open.return_value = _mock_response(b"raw log", "text/plain")
         with pytest.raises(ValueError, match="non-HTML"):
-            WebFetcher().fetch("https://example.com/report.pdf")
+            WebFetcher().fetch(HttpUrl("https://example.com/log.txt"))
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_rejects_pdf_media_type(self, mock_open: MagicMock) -> None:
+        mock_open.return_value = _mock_response(b"%PDF-1.4", "application/pdf")
+        with pytest.raises(UnsupportedContentError, match="content rejected"):
+            WebFetcher().fetch(HttpUrl("https://example.com/report.pdf"))
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_accepts_xhtml(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>XHTML</p></body></html>"
         mock_open.return_value = _mock_response(body, "application/xhtml+xml")
-        assert "XHTML" in WebFetcher().fetch("https://example.com")
+        assert "XHTML" in WebFetcher().fetch(HttpUrl("https://example.com"))
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_content_type_case_insensitive(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>OK</p></body></html>"
         mock_open.return_value = _mock_response(body, "Text/HTML; charset=UTF-8")
-        assert "OK" in WebFetcher().fetch("https://example.com")
+        assert "OK" in WebFetcher().fetch(HttpUrl("https://example.com"))
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_missing_content_type_allowed(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>No CT</p></body></html>"
         mock_open.return_value = _mock_response(body, "")
-        assert "No CT" in WebFetcher().fetch("https://example.com")
+        assert "No CT" in WebFetcher().fetch(HttpUrl("https://example.com"))
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_rejects_final_url_non_http(self, mock_open: MagicMock) -> None:
         mock_resp = _mock_response(b"", "text/html")
         mock_resp.url = "ftp://evil.com/file"
         mock_open.return_value = mock_resp
         with pytest.raises(ValueError, match="final URL rejected"):
-            WebFetcher().fetch("https://example.com/redirect")
+            WebFetcher().fetch(HttpUrl("https://example.com/redirect"))
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_rejects_final_url_internal_address(
         self, mock_open: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -110,9 +122,9 @@ class TestWebFetcher:
             lambda host, *a, **k: _addrinfo(resolve.get(host, _PUBLIC_ADDR)),
         )
         with pytest.raises(ValueError, match="final URL rejected"):
-            WebFetcher().fetch("https://example.com/redirect")
+            WebFetcher().fetch(HttpUrl("https://example.com/redirect"))
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_http_error_raises_valueerror(self, mock_open: MagicMock) -> None:
         from urllib.error import HTTPError
 
@@ -123,40 +135,43 @@ class TestWebFetcher:
             {},  # type: ignore[arg-type]
             None,
         )
-        with pytest.raises(ValueError, match="HTTP 404"):
-            WebFetcher().fetch("https://example.com/missing")
+        with pytest.raises(FetchRefusedError) as info:
+            WebFetcher().fetch(HttpUrl("https://example.com/missing"))
+        assert str(info.value) == "fetch failed: HTTP 404"
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_url_error_raises_oserror(self, mock_open: MagicMock) -> None:
         from urllib.error import URLError
 
         mock_open.side_effect = URLError("Name or service not known")
-        with pytest.raises(OSError, match="Cannot reach"):
-            WebFetcher().fetch("https://nonexistent.invalid")
+        with pytest.raises(FetchRefusedError) as info:
+            WebFetcher().fetch(HttpUrl("https://nonexistent.invalid"))
+        assert str(info.value) == "fetch failed: cannot reach the host"
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_custom_timeout_passed_through(self, mock_open: MagicMock) -> None:
         body = b"<html><body><p>Hi</p></body></html>"
         mock_open.return_value = _mock_response(body, "text/html")
-        WebFetcher(timeout=7).fetch("https://example.com")
+        WebFetcher(timeout=7).fetch(HttpUrl("https://example.com"))
         assert mock_open.call_args.kwargs["timeout"] == 7
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_oversize_body_fails_at_the_cap(self, mock_open: MagicMock) -> None:
         """A body past the size cap fails cleanly instead of streaming forever."""
         oversize = b"x" * (wf._MAX_RESPONSE_BYTES + 1)
         mock_open.return_value = _mock_response(oversize, "text/html")
-        with pytest.raises(ValueError, match=r"exceeds .*-byte cap"):
-            WebFetcher().fetch("https://example.com/huge")
+        with pytest.raises(FetchRefusedError) as info:
+            WebFetcher().fetch(HttpUrl("https://example.com/huge"))
+        assert str(info.value) == "content rejected: response exceeds 4194304-byte cap"
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_slow_drip_aborts_at_the_deadline(
         self, mock_open: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A body that never ends is aborted once the wall-clock deadline passes.
 
         The fake clock stays put while the deadline is computed, then jumps past
-        it, so the read loop trips ``TimeoutError`` rather than draining a body
+        it, so the read loop gives up rather than draining a body
         that keeps producing chunks under every per-socket-op timeout.
         """
         drip = _mock_response(b"", "text/html")
@@ -164,50 +179,95 @@ class TestWebFetcher:
         drip.read.return_value = b"x" * 16  # always more bytes, never EOF
         clock = iter([0.0, 0.0, 1_000_000.0, 1_000_000.0, 1_000_000.0])
         monkeypatch.setattr(wf, "monotonic", lambda: next(clock))
+        monkeypatch.setattr(web_fetch, "monotonic", lambda: next(clock))
         mock_open.return_value = drip
-        # fetch() wraps the deadline TimeoutError with the URL so concurrent
-        # fetches are distinguishable in logs.
-        with pytest.raises(TimeoutError, match="time budget") as excinfo:
-            WebFetcher().fetch("https://example.com/slow")
-        assert "https://example.com/slow" in str(excinfo.value)
+        with pytest.raises(FetchRefusedError) as excinfo:
+            WebFetcher().fetch(HttpUrl("https://example.com/slow"))
+        assert str(excinfo.value) == "fetch failed: exceeded its total time budget"
 
 
 class TestFetchBody:
-    """G4 capture-as-text: fetch_body returns non-HTML text with its media type."""
+    """fetch_body returns non-HTML text with its media type."""
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_returns_json_body_with_media_type(self, mock_open: MagicMock) -> None:
         body = b'{"id": "abc-123"}'
         mock_open.return_value = _mock_response(body, "application/json")
-        result = WebFetcher().fetch_body("https://httpbin.org/uuid")
+        result = WebFetcher().fetch_body(HttpUrl("https://httpbin.org/uuid"))
         assert result.text == '{"id": "abc-123"}'
         assert result.media_type == "application/json"
         assert result.is_html is False
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_returns_html_body_with_media_type(self, mock_open: MagicMock) -> None:
         body = b"<html><body>hi</body></html>"
         mock_open.return_value = _mock_response(body, "text/html; charset=utf-8")
-        result = WebFetcher().fetch_body("https://example.com")
+        result = WebFetcher().fetch_body(HttpUrl("https://example.com"))
         assert "hi" in result.text
         assert result.media_type == "text/html"
         assert result.is_html is True
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_missing_content_type_is_html(self, mock_open: MagicMock) -> None:
         """Missing Content-Type is treated as HTML, matching legacy fetch()."""
         body = b"<html>ok</html>"
         mock_open.return_value = _mock_response(body, "")
-        result = WebFetcher().fetch_body("https://example.com")
+        result = WebFetcher().fetch_body(HttpUrl("https://example.com"))
         assert result.media_type == ""
         assert result.is_html is True
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_plain_text_is_not_html(self, mock_open: MagicMock) -> None:
         mock_open.return_value = _mock_response(b"raw log line", "text/plain")
-        result = WebFetcher().fetch_body("https://example.com/log")
+        result = WebFetcher().fetch_body(HttpUrl("https://example.com/log"))
         assert result.text == "raw log line"
         assert result.is_html is False
+
+
+class TestMediaTypeBoundary:
+    """The media-type allow-list is enforced from the headers, before the body."""
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_pdf_is_rejected_before_the_body_is_read(
+        self, mock_open: MagicMock
+    ) -> None:
+        resp = _mock_response(b"%PDF-1.5", "application/pdf")
+        mock_open.return_value = resp
+        with pytest.raises(UnsupportedContentError):
+            WebFetcher().fetch_body(HttpUrl("https://example.com/paper.pdf"))
+        resp.read.assert_not_called()
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_rejection_message_has_no_url_and_the_safe_prefix(
+        self, mock_open: MagicMock
+    ) -> None:
+        url = "https://example.com/paper.pdf?token=abc"
+        mock_open.return_value = _mock_response(b"%PDF", "application/pdf")
+        with pytest.raises(UnsupportedContentError) as info:
+            WebFetcher().fetch_body(HttpUrl(url))
+        assert str(info.value) == (
+            "content rejected: unsupported media type application/pdf"
+        )
+
+    @pytest.mark.parametrize(
+        "content_type",
+        ["text/html", "application/json", "application/vnd.api+json", ""],
+    )
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_text_media_types_and_an_absent_header_are_accepted(
+        self, mock_open: MagicMock, content_type: str
+    ) -> None:
+        mock_open.return_value = _mock_response(b"hello", content_type)
+        assert WebFetcher().fetch_body(HttpUrl("https://example.com/x")).text == "hello"
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_the_policy_is_injectable(self, mock_open: MagicMock) -> None:
+        mock_open.return_value = _mock_response(b"{}", "application/json")
+        strict = MediaTypePolicy(exact=frozenset(), suffixes=())
+        with pytest.raises(UnsupportedContentError):
+            WebFetcher(gate=FetchGate(strict)).fetch_body(
+                HttpUrl("https://example.com/x")
+            )
 
 
 class TestInitialUrlGate:
@@ -236,15 +296,15 @@ class TestInitialUrlGate:
         opener = MagicMock()
         monkeypatch.setattr(wf, "GUARDED_OPENER", opener)
         with pytest.raises(ValueError, match="URL rejected"):
-            WebFetcher().fetch("https://evil.test/x")
+            WebFetcher().fetch(HttpUrl("https://evil.test/x"))
         assert opener.open.call_count == 0  # gate ran before any socket
 
-    @patch("quarry.ingestion.web_fetch.GUARDED_OPENER.open")
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
     def test_public_initial_url_still_fetches(self, mock_open: MagicMock) -> None:
         """A public initial URL passes the gate and is fetched (resolver public)."""
         body = b"<html><body><p>OK</p></body></html>"
         mock_open.return_value = _mock_response(body, "text/html")
-        assert "OK" in WebFetcher().fetch("https://example.com")
+        assert "OK" in WebFetcher().fetch(HttpUrl("https://example.com"))
 
     def test_close_failure_does_not_mask_the_real_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -262,9 +322,11 @@ class TestInitialUrlGate:
                 "https://example.com/x", 404, "nf", HTTPMessage(), None
             )
 
-        monkeypatch.setattr("quarry.ingestion.web_fetch.GUARDED_OPENER.open", _open)
+        monkeypatch.setattr(
+            "quarry.ingestion.opened_response.GUARDED_OPENER.open", _open
+        )
         with pytest.raises(ValueError, match="HTTP 404"):
-            WebFetcher().fetch("https://example.com/x")
+            WebFetcher().fetch(HttpUrl("https://example.com/x"))
 
 
 class TestRedirectGate:
@@ -301,11 +363,13 @@ class TestRedirectGate:
         monkeypatch.setattr(_GETADDRINFO, _resolver)
         handler = SsrfGuardedRedirectHandler()
         req = urllib.request.Request("https://public.example/start")
+        fp = io.BytesIO(b"")
         with pytest.raises(RedirectRejectedError, match="redirect target rejected"):
             handler.redirect_request(
-                req, io.BytesIO(b""), 302, "Found", HTTPMessage(), f"http://{host}/x"
+                req, fp, 302, "Found", HTTPMessage(), f"http://{host}/x"
             )
         assert host in seen  # the gate resolved the redirect target's host
+        assert fp.closed  # the refused hop's response is released
 
     def test_redirect_to_metadata_ip_is_refused_without_dns(
         self, monkeypatch: pytest.MonkeyPatch
@@ -365,7 +429,7 @@ class TestRedirectGate:
         opener.add_handler(recorder)
         monkeypatch.setattr(wf, "GUARDED_OPENER", opener)
         with pytest.raises(ValueError, match="redirect target rejected"):
-            WebFetcher().fetch(start)
+            WebFetcher().fetch(HttpUrl(start))
         assert recorder.opened == [start]  # internal target never fetched
 
 
@@ -485,3 +549,80 @@ def _make_headers(content_type: str) -> Any:
     if content_type:
         msg["Content-Type"] = content_type
     return msg
+
+
+class TestEveryFailureIsUrlFree:
+    """No failure leaves the fetcher carrying the URL the library quoted."""
+
+    _URL = "https://example.com/p?token=SECRET"
+
+    @pytest.mark.parametrize(
+        ("failure", "reason"),
+        [
+            (
+                ConnectionResetError("reset http://x/?token=SECRET"),
+                "fetch failed: ConnectionResetError",
+            ),
+            (TimeoutError("slow"), "fetch failed: timed out"),
+        ],
+        ids=["reset", "timeout"],
+    )
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_a_read_failure_is_a_refusal(
+        self, mock_open: MagicMock, failure: BaseException, reason: str
+    ) -> None:
+        resp = _mock_response(b"", "text/html")
+        resp.read.side_effect = failure
+        mock_open.return_value = resp
+        with pytest.raises(FetchRefusedError) as info:
+            WebFetcher().fetch_body(HttpUrl(self._URL))
+        assert str(info.value) == reason
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_an_incomplete_read_is_a_refusal(self, mock_open: MagicMock) -> None:
+        from http.client import IncompleteRead
+
+        resp = _mock_response(b"", "text/html")
+        resp.read.side_effect = IncompleteRead(b"abc", 10)
+        mock_open.return_value = resp
+        with pytest.raises(FetchRefusedError) as info:
+            WebFetcher().fetch_body(HttpUrl(self._URL))
+        assert str(info.value) == "fetch failed: IncompleteRead"
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_an_unknown_charset_is_a_refusal(self, mock_open: MagicMock) -> None:
+        mock_open.return_value = _mock_response(b"hi", "text/html; charset=nope-9")
+        with pytest.raises(FetchRefusedError) as info:
+            WebFetcher().fetch_body(HttpUrl(self._URL))
+        assert str(info.value) == "content rejected: unsupported charset nope-9"
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_a_non_html_fetch_names_the_media_type_safely(
+        self, mock_open: MagicMock
+    ) -> None:
+        mock_open.return_value = _mock_response(b"x", "text/plain")
+        with pytest.raises(FetchRefusedError) as info:
+            WebFetcher().fetch(HttpUrl(self._URL))
+        assert str(info.value) == "content rejected: non-HTML content text/plain"
+
+
+class _AllowAll:
+    def reject_reason(self, url: str) -> str | None:
+        return None
+
+
+class TestHttpClientErrorsDoNotEscape:
+    """``http.client`` errors quote the request path and query verbatim (CWE-532)."""
+
+    @staticmethod
+    def _fetcher() -> WebFetcher:
+        return WebFetcher(gate=FetchGate(urls=_AllowAll()))
+
+    @patch("quarry.ingestion.opened_response.GUARDED_OPENER.open")
+    def test_a_bad_status_line_is_a_refusal(self, mock_open: MagicMock) -> None:
+        from http.client import BadStatusLine
+
+        mock_open.side_effect = BadStatusLine("token=abc")
+        with pytest.raises(FetchRefusedError) as info:
+            self._fetcher().fetch_body(HttpUrl("https://h.test/p"))
+        assert str(info.value) == "fetch failed: BadStatusLine"

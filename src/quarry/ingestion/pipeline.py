@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.format_strategies import SUPPORTED_EXTENSIONS, resolve_strategy
@@ -33,7 +33,7 @@ def ingest_document(
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
     agent_handle: str = "",
-    memory_type: str = "",
+    memory_type: MemoryType = "",
     summary: str = "",
 ) -> IngestResult:
     """Ingest a document: dispatch to the format-specific extraction strategy.
@@ -54,7 +54,8 @@ def ingest_document(
             subdirectories.
         progress_callback: Optional callable for progress messages.
         agent_handle: Agent that owns this memory (empty for non-agent content).
-        memory_type: Memory classification (fact, observation, opinion, procedure).
+        memory_type: Memory classification (fact, observation, opinion, procedure,
+            or lesson).
         summary: One-line summary of the content.
 
     Returns:
@@ -62,7 +63,9 @@ def ingest_document(
 
     Raises:
         FileNotFoundError: If file does not exist.
-        ValueError: If file format is not supported.
+        ValueError: If the format is unsupported; also its subclasses
+            UnindexableContentError (binary, or an oversized paginated page) and
+            RowBudgetError (over budget).
     """
     if not file_path.exists():
         msg = f"File not found: {file_path}"
@@ -76,11 +79,7 @@ def ingest_document(
         overwrite=overwrite,
         collection=collection,
         agent_handle=agent_handle,
-        # ingest_document's own memory_type stays a plain str (unvalidated public
-        # API param); IngestContext's field is the tightened Literal, so the
-        # cast marks this specific boundary crossing rather than widening the
-        # dataclass field back to str.
-        memory_type=cast("MemoryType", memory_type),
+        memory_type=memory_type,
         summary=summary,
     )
     strategy = resolve_strategy(file_path.suffix.lower(), settings)
@@ -94,9 +93,6 @@ def plan_file_chunks(
     *,
     collection: str = "default",
     document_name: str | None = None,
-    agent_handle: str = "",
-    memory_type: str = "",
-    summary: str = "",
 ) -> tuple[list[Chunk], bool]:
     """Extract and chunk a file for sync, reporting extraction determinism.
 
@@ -107,7 +103,9 @@ def plan_file_chunks(
 
     Raises:
         FileNotFoundError: If *file_path* does not exist.
-        ValueError: If the file format is not supported.
+        ValueError: If the format is unsupported; also its subclasses
+            UnindexableContentError (binary, or an oversized paginated page) and
+            RowBudgetError (over budget).
     """
     if not file_path.exists():
         msg = f"File not found: {file_path}"
@@ -119,12 +117,7 @@ def plan_file_chunks(
     if not extracted.pages:
         return [], deterministic
     chunks = DocumentStreamer(settings).build_chunks(
-        extracted.pages,
-        collection=collection,
-        source_format=extracted.source_format,
-        agent_handle=agent_handle,
-        memory_type=memory_type,
-        summary=summary,
+        extracted.pages, DocumentStreamer.sync_labels(extracted, collection)
     )
     return chunks, deterministic
 

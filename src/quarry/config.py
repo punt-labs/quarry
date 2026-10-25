@@ -52,10 +52,10 @@ class Settings(BaseSettings):
     # single write.
     telemetry_prune_cadence_s: float = Field(default=3600.0, gt=0)
 
-    chunk_max_chars: int = 1800
-    chunk_overlap_chars: int = 200
+    chunk_max_chars: int = Field(default=1800, ge=1, le=16_384)  # 4 B/char <= 64 KiB
+    chunk_overlap_chars: int = Field(default=200, ge=0)
 
-    # Bounded progressive commit (DES-034); embed_window_chunks is a kpz seam.
+    # Bounded progressive commit (DES-034); embed_window_chunks sizes the window.
     # Both are >= 1: ProgressiveIndexer rejects a non-positive flush budget, so an
     # invalid value must fail loud at construction, not deep in the ingestor.
     sync_flush_mb: int = Field(default=32, ge=1)

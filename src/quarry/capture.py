@@ -59,8 +59,8 @@ class CaptureWriter:
 
     __slots__ = ()
 
-    def write(self, request: CaptureRequest) -> None:
-        """Scrub *request* and write the capture file.
+    def write(self, request: CaptureRequest) -> bool:
+        """Scrub *request* and write the capture file; return whether one landed.
 
         Fails silently — a capture-file problem must never block the main
         ingest flow.  Scrubbing precedes the write, and the write is atomic,
@@ -68,17 +68,17 @@ class CaptureWriter:
         """
         try:
             content = request.scrubbed_content()
-            if not content:
-                return
-            path = request.capture_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self._atomic_write(path, content)
+            if content:
+                self._atomic_write(request.capture_path(), content)
+            return bool(content)
         except Exception:
             logger.exception("%s: capture file write failed", request.label)
+            return False
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
         """Write *content* to *path* via a temp file and atomic rename."""
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         try:
             tmp.write_text(content, encoding="utf-8")

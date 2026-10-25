@@ -5,10 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, final
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
-    from quarry.results import CoverageCounts
-
+    from quarry.shown_value import Shown
 
 # Two canonical pointer sentences, spliced verbatim into the SessionStart
 # ``additionalContext`` and the MCP server ``instructions`` block. The deep
@@ -25,101 +22,40 @@ _TRIGGER_RULES = (
 
 @final
 class SessionStartTemplates:
-    """Produce every SessionStart ``additionalContext`` string.
+    """Produce the SessionStart ``additionalContext`` strings that are not counts.
 
-    Owns the three-rule trailer and the per-branch templates so ``hooks``'s
+    Owns the skill-pointer trailer and the per-branch templates so ``hooks``'s
     dispatcher never assembles ad-hoc strings.  Each ``@classmethod`` maps to
     exactly one dispatcher branch; the shared trailer is stitched into the
-    trigger-carrying branches at one place.
+    trigger-carrying branches at one place.  A *directory* or *collection*
+    arrives as a :class:`~quarry.shown_value.Shown`: whoever made the directory
+    chose its path, and the model that reads this text must not take it for
+    instructions or a command.
     """
 
     __slots__ = ()
 
-    _SLASH_TAIL = (
-        "Slash commands: /find, /ingest, /remember, /explain, /source, /quarry. "
-        "For deep research across local docs and the web, use the researcher agent."
-    )
-
     @classmethod
-    def _trailer(cls) -> str:
+    def trailer(cls) -> str:
         """Return the skill-pointer rules joined by newlines."""
         return "\n".join(_TRIGGER_RULES)
 
     @classmethod
-    def _sync_line(cls, status: str) -> str:
-        """Render the launched/running/failed background-sync status line."""
-        return {
-            "launched": "Background sync in progress.",
-            "running": "Background sync already running.",
-        }.get(status, "Background sync failed to launch.")
-
-    @classmethod
-    def active(
-        cls,
-        directory: Path,
-        collection: str,
-        captures_collection: str,
-        counts: CoverageCounts,
-        sync_status: str,
-    ) -> str:
-        """Reachable-coverage active-mode context: counts + rules + sync + slash."""
-        header = (
-            f"Quarry semantic search is active for this project.\n"
-            f'Collection: "{collection}" ({directory})\n'
-            f'Captures: "{captures_collection}"\n'
-            f"{counts['documents_indexed']} documents indexed, "
-            f"{counts['transcripts_captured']} transcripts captured, "
-            f"{counts['memories_saved']} memories saved."
-        )
-        return (
-            f"{header}\n{cls._trailer()}\n"
-            f"{cls._sync_line(sync_status)}\n{cls._SLASH_TAIL}"
-        )
-
-    @classmethod
-    def active_unreachable_coverage(
-        cls,
-        directory: Path,
-        collection: str,
-        captures_collection: str,
-        sync_status: str,
-    ) -> str:
-        """Active-mode context when the coverage query itself failed.
-
-        Registration and background sync are local operations that can succeed
-        while the daemon's HTTP API refuses the coverage call — the daemon is
-        unreachable, an HTTP status refused (401 not-authorized, 5xx), or the
-        client is misconfigured.  The trailer is still emitted so an agent that
-        reads this message can act on the diagnosis and then apply the rules.
-        """
-        header = (
-            f"Quarry semantic search is active for this project.\n"
-            f'Collection: "{collection}" ({directory})\n'
-            f'Captures: "{captures_collection}"\n'
-            "Coverage counts unavailable "
-            "(quarryd unreachable or client not authorized)."
-        )
-        return (
-            f"{header}\n{cls._trailer()}\n"
-            f"{cls._sync_line(sync_status)}\n{cls._SLASH_TAIL}"
-        )
-
-    @classmethod
-    def subsumption(cls, directory: Path) -> str:
+    def subsumption(cls, directory: Shown) -> str:
         """Child registrations exist under this directory — trailer still applies.
 
         A subsumption refusal says nothing about the daemon; ``find``/``remember``
         against the covering child still work, so the trigger rules are emitted.
         """
         header = (
-            f"Quarry: child registrations exist under {directory}. "
+            f"Quarry: child registrations exist under {directory.text}. "
             "Auto-register skipped to prevent subsumption. "
-            f"Run 'quarry enable {directory}' to register the parent."
+            f"To register the parent {cls._enable(directory, lead='run: ')}"
         )
-        return f"{header}\n{cls._trailer()}"
+        return f"{header}\n{cls.trailer()}"
 
     @classmethod
-    def daemon_unreachable(cls, directory: Path) -> str:
+    def daemon_unreachable(cls, directory: Shown) -> str:
         """Auto-register deferred because quarryd is unreachable.
 
         Per operator ratification R2b: the trailer is emitted even here — the
@@ -130,30 +66,50 @@ class SessionStartTemplates:
             "Quarry is enabled for this repo but quarryd is currently unreachable.\n"
             "Once you restart it (systemctl --user restart quarry / "
             "launchctl kickstart) the tools below become available.\n"
-            f"Auto-registration of {directory} is deferred until quarryd returns."
+            f"Auto-registration of {directory.text} is deferred until quarryd returns."
         )
-        return f"{header}\n{cls._trailer()}"
+        return f"{header}\n{cls.trailer()}"
 
     @classmethod
-    def nudge_enable(cls, directory: Path) -> str:
+    def nudge_enable(cls, directory: Shown) -> str:
         """No marker, no coverage: nudge the operator to run ``quarry enable``."""
         return (
             "Quarry semantic search is available but not enabled for this project.\n"
-            f"Directory: {directory}\n"
+            f"Directory: {directory.text}\n"
             "This directory is not registered for sync. To turn quarry on:\n"
-            f"  quarry enable {directory}\n"
+            f"  {cls._enable(directory)}\n"
             "This runs once, commits an opt-in marker, deposits the agent guide,\n"
             "and registers this directory for background sync."
         )
 
     @classmethod
-    def drift_surface(cls, directory: Path, collection: str) -> str:
+    def drift_surface(cls, directory: Shown, collection: Shown) -> str:
         """Marker absent + coverage exists: surface the drift, no auto-fix."""
         return (
             "Quarry: this project has an indexed collection but no opt-in marker\n"
-            f"({directory}, collection {collection!r}). Two doors:\n"
-            f"  quarry enable {directory}         re-adopt: marker + guide.\n"
-            f"  quarry deregister {collection}    drop the registration (keep-data).\n"
+            f"({directory.text}, collection {collection.text}). Two doors:\n"
+            f"  {cls._enable(directory)}         re-adopt: marker + guide.\n"
+            f"  {cls._deregister(collection)}    "
+            "drop the registration (keep-data).\n"
             "Auto-register is refused (already registered); auto-deregister is\n"
             "refused (would delete indexed data on marker drift)."
+        )
+
+    @staticmethod
+    def _enable(directory: Shown, *, lead: str = "") -> str:
+        """Return the enable step: a command, or what to do when the path is hidden."""
+        return directory.either(
+            usual=f"{lead}quarry enable {directory.arg}",
+            instead="from that directory, run: quarry enable .",
+        )
+
+    @staticmethod
+    def _deregister(collection: Shown) -> str:
+        """Return the deregister step: a command, or how to find the name to give it."""
+        return collection.either(
+            usual=f"quarry deregister --keep-data -- {collection.arg}",
+            instead=(
+                "list the collections with `quarry list collections`, then run: "
+                "quarry deregister --keep-data -- <its name>"
+            ),
         )

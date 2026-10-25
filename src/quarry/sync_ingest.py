@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
@@ -11,9 +10,8 @@ from queue import Queue
 from typing import TYPE_CHECKING, Self
 
 from quarry.db.chunk_table import ChunkTable
+from quarry.failure_reason import FailureReason
 from quarry.ingestion.file_indexer import SingleFileIndexer
-from quarry.ingestion.progressive import ProgressiveIndexer
-from quarry.ingestion.streaming import DocumentStreamer
 from quarry.sync_messages import FileMeta, WindowMsg
 
 if TYPE_CHECKING:
@@ -24,14 +22,12 @@ if TYPE_CHECKING:
 
     from quarry.config import Settings
     from quarry.db.chunk_store import ChunkStore
-    from quarry.ingestion.progressive import FlushCheckpoint
+    from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
     from quarry.models import Chunk
     from quarry.sync_file_store import FileRecord
     from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
-
-_RECOVERABLE = (sqlite3.Error, OSError, ValueError, RuntimeError, TimeoutError)
 
 
 class CollectionIngestor:
@@ -105,9 +101,7 @@ class CollectionIngestor:
         self._file_indexer = SingleFileIndexer(
             store, registry, settings, collection=collection, resolved=resolved
         )
-        self._indexer = ProgressiveIndexer(
-            self, flush_bytes=settings.sync_flush_mb * 1024 * 1024
-        )
+        self._indexer = self._file_indexer.progressive(self)
         return self
 
     def build_records(
@@ -152,7 +146,7 @@ class CollectionIngestor:
         try:
             op()
         except Exception as exc:  # noqa: BLE001 - consumer liveness: never escape
-            self._abort(errors, f"flush failed: {exc}")
+            self._abort(errors, f"flush failed: {FailureReason.of(exc)}")
             return False
         return True
 
@@ -175,17 +169,14 @@ class CollectionIngestor:
         try:
             plan = self._file_indexer.plan_file(file_path, self._records.get(file_id))
             self._meta[file_id] = plan.meta
-            streamer = DocumentStreamer(self._settings)
-            for batch, vectors in streamer.stream_batches(
-                plan.chunks, start_index=plan.meta.resume_watermark
-            ):
+            for batch, vectors in self._file_indexer.windows(plan):
                 self._queue.put(WindowMsg(file_id, batch, vectors))
-        except _RECOVERABLE as exc:
+        except FailureReason.RECOVERABLE as exc:
             logger.warning("Ingest failed for %s: %s", document_name, exc)
-            error = f"{document_name}: {exc}"
+            error = FailureReason.line(document_name, exc)
         except Exception as exc:
             logger.exception("Unexpected ingest failure for %s", document_name)
-            error = f"{document_name}: {exc}"
+            error = FailureReason.line(document_name, exc)
         finally:
             stale = error is not None and self._file_indexer.should_clear_stale(
                 self._records.get(file_id), file_path

@@ -551,7 +551,7 @@ class TestIngest:
         # only gates the route, not the worker's later pipeline call).
         with (
             patch(
-                "quarry.daemon.routes.ingestion.UrlSafetyCheck.reject_reason",
+                "quarry.daemon.routes.content_group.UrlAdmission.reject_reason",
                 return_value=None,
             ),
             patch(

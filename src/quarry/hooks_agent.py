@@ -31,6 +31,7 @@ from quarry.web_search_capture import WebSearchPayload
 
 logger = logging.getLogger(__name__)
 
+
 _WEB_SEARCH_UNREACHABLE = (
     "web-search: daemon unreachable; digest not indexed (re-run to retry)"
 )
@@ -88,15 +89,15 @@ class HookAgent:
         unreachable daemon must not read as ``capture``, and an empty
         transcript is a skip, not a send failure (parity with the
         ``handle_pre_compact`` branching in :mod:`quarry.hooks`). *detail*
-        rides the capture line — SubagentStop uses it to say whether the
-        distilled report was filed too.
+        rides the capture line, or follows the error label — SubagentStop uses it
+        to say whether the distilled report was filed too.
         """
         if not outcome.text_captured:
             trace.skip("empty-transcript")
         elif outcome.sent:
             trace.capture(detail)
         else:
-            trace.error("daemon-unreachable")
+            trace.error(f"{outcome.failure} ({detail})" if detail else outcome.failure)
 
     @staticmethod
     def post_web_search(payload: dict[str, object]) -> dict[str, object]:
@@ -141,7 +142,7 @@ class HookAgent:
         if sent:
             trace.capture()
         else:
-            trace.error("daemon-unreachable")
+            trace.error(sent.label)
         return {}
 
     @staticmethod
@@ -175,8 +176,8 @@ class HookAgent:
         trace.mark_payload(ok=outcome != "payload")
         if outcome == "captured":
             trace.capture()
-        elif outcome == "unreachable":
-            trace.error("daemon-unreachable")
+        elif outcome.startswith("error:"):
+            trace.error(outcome.removeprefix("error:"))
         else:
             trace.skip(outcome)
         return {}
@@ -185,11 +186,9 @@ class HookAgent:
     def _filter_and_send_read(payload: dict[str, object]) -> str:
         """Apply the four admission checks and send on pass; return the outcome.
 
-        Return values classify the outcome for the trace: ``"captured"``,
-        ``"unreachable"`` (send attempted but the daemon rejected or was
-        down), ``"payload"`` (missing/empty inputs), ``"filter"`` (rejected
-        by an admission check), ``"size"`` (byte cap exceeded), or
-        ``"secret"`` (client-side secret pattern hit).
+        Return values classify the outcome for the trace: ``"captured"``, a skip
+        reason (``"payload"``, ``"filter"``, ``"size"`` or ``"secret"``), or, when
+        the send failed, ``error:`` and its ``SendOutcome`` label.
         """
         cwd = HookPayload.as_dir(payload.get("cwd"))
         parsed = ReadPayload(payload)
@@ -220,7 +219,7 @@ class HookAgent:
             ),
             unreachable_log=_READ_UNREACHABLE,
         )
-        return "captured" if sent else "unreachable"
+        return "captured" if sent else f"error:{sent.label}"
 
     @staticmethod
     def subagent_stop(payload: dict[str, object]) -> dict[str, object]:
@@ -267,7 +266,5 @@ class HookAgent:
             agent_type=HookPayload.as_str(payload.get("agent_type")),
             parent_session_id=HookPayload.as_str(payload.get("session_id")),
         ).capture()
-        HookAgent._trace_transcript_outcome(
-            trace, outcome.raw, "distilled" if outcome.distilled else ""
-        )
+        HookAgent._trace_transcript_outcome(trace, outcome.raw, outcome.distillation)
         return {}

@@ -8,7 +8,7 @@ same-document overwrites so both chunk sets survive (DES-042 §2.1).
 
 This module supplies the missing top layer above DES-034's op-level ``_write_lock``
 and single-consumer ``ProgressiveIndexer``: exactly one in-flight
-``progressive_insert`` caller per collection (a :class:`CollectionWorker`), and
+``DocumentStreamer.insert`` caller per collection (a :class:`CollectionWorker`), and
 at most ``EMBED_CONCURRENCY_CEILING`` embed jobs anywhere (a shared semaphore).
 Admission is a non-blocking bounded gate — a full queue is a 503, never a blocked
 hook (I-NOBLOCK).  The route key is client-controlled, so the resident worker map

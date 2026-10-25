@@ -884,7 +884,7 @@ Known issues (as of May 2026):
         tool-results/             # Tool output artifacts
 ```
 
-The encoded project dir replaces `/` with `-` and preserves the leading dash (e.g., `/Users/jm/code` → `-Users-jm-code`).
+The encoded project dir replaces every character outside `[A-Za-z0-9]` with `-` and preserves the leading dash (e.g., `/Users/jm/code` → `-Users-jm-code`, `/repo/.claude/worktrees` → `-repo--claude-worktrees`).
 
 ### Implications
 
@@ -1435,6 +1435,12 @@ parameter on `ingest_url`.
    IPv6 host literals keep their `[...]` brackets so the netloc stays valid
    (`CaptureUrl._bracketed`). This is defence-in-depth distinct from body
    scrubbing, and it is the specific property `quarry-ow3k` relies on.
+   *Superseded in part by DES-057 decision 6:* a capture's stored name is now
+   `HttpUrl.document_name` (via `WebFetchName`), which keeps a digest of the
+   query rather than dropping it, and userinfo is refused at admission
+   rather than stripped. `CaptureUrl` remains only as the tolerant
+   fallback behind `HttpUrl.shown` and `DisplayName.stored` for a URL that
+   `HttpUrl` will not admit.
 
 ### Path pass scope
 
@@ -1747,7 +1753,7 @@ LanceDB writer assumes a single caller; concurrent overwrite delete-then-adds
 interleave so both chunk sets survive (lost update).
 
 **Decision.** A daemon-owned serialized queue: one resident FIFO worker per
-collection — one in-flight `progressive_insert` per LanceDB table, the
+collection — one in-flight `DocumentStreamer.insert` per LanceDB table, the
 daemon-scope generalization of DES-034's single-writer invariant (not a fork;
 `_write_lock`/`ProgressiveIndexer` untouched) — plus a global embed `Semaphore`
 hard-clamped to 1 (DES-032: >1 buys no matmul parallelism behind the shared ONNX
@@ -2755,7 +2761,9 @@ exactly: the daemon derives the target
 `<repo>-captures` collection server-side via
 `CapturesCollection.for_registry_path(cwd, registry_path)`. `CaptureUrl.for_web_fetch`
 also moved to run server-side, inside the route, rather than being computed by
-the caller and passed as an opaque pre-normalized string.
+the caller and passed as an opaque pre-normalized string. (DES-057 decision 6
+later replaced `CaptureUrl.for_web_fetch` with `WebFetchName`, which derives the
+name from the admitted `HttpUrl`; it still runs server-side in the route.)
 
 **Why.** `CapturesCollection.for_registry_path`'s own docstring states the
 constraint plainly: "the capture client cannot do this itself without
@@ -3126,3 +3134,361 @@ telemetry write completes (rejected — this is precisely the failure mode
 Class-1/Class-2 bug histories warn about; the write is fire-and-forget from
 the caller's perspective, wrapped in the same boundary-I/O contract as every
 other best-effort side effect in this codebase).
+
+## DES-057: Row budget, binary rejection, and normalized page text
+
+**Date:** 2026-10-22
+**Status:** ACCEPTED. Delivery is four sequential PRs:
+
+1. Prevent (decisions 1 and 2, including the `Settings` bound). Shipped first.
+2. Resilience (the finalize half of decision 4). Pending.
+3. Normalize (decision 3). Pending.
+4. Repair and visibility (the rest of decision 4). Pending.
+
+**Topic:** Keeping the chunks table compactable; rejecting content that is not text
+**Bead:** quarry-70zm
+
+### Context
+
+Since 2026-09-27 every daemon `optimize()` on the operator's database failed
+with an Arrow `Offset overflow error`. A PDF captured through the WebFetch hook
+fallback was fetched by `fetch_body`, which had no media-type policy and
+decoded with `errors="replace"`. The PDF was stored as a single 4.5 MB "page"
+of mostly replacement characters. The chunker copied the full page text onto
+every chunk (`page_raw_text`), so one document became 831 rows of 4.5 MB each
+(3.78 GB).
+
+Arrow string offsets are 32-bit, so a decoded batch can hold at most 2^31 bytes
+in one column. Any read batch spanning roughly 473 of those rows overflowed.
+Cleanup runs inside the same `optimize()` call, so each failed compaction left
+about 525 MB of orphaned files that nothing removed. On the operator's machine
+`data/` reached 1.2 TB for a 3 GB table. The failure surfaced only as "Background
+sync failed" in the daemon log.
+
+The cleanup could not simply be separated out. In lancedb 0.36.0 without
+pylance, `Table.optimize(cleanup_older_than, delete_unverified)` is the only
+maintenance entry point. `cleanup_old_versions` and `compact_files` raise
+`ImportError`, and the Rust binding exposes no compaction batch options. So the
+fix removes the trigger and isolates the failure, rather than tuning Lance.
+
+### Decision
+
+1. **Reject binary content; never store it as text.**
+   - A media-type allow-list is checked before a fetched body is read.
+   - A document-level classifier in the neutral, stdlib-only `content_guard.py`
+     looks for magic bytes after an optional media-type marker. Non-printable
+     signatures (PNG, ZIP, ELF, JPEG, and a leading run of three U+FFFD)
+     reject outright. The printable ones
+     (`%PDF-`, `GIF8`) also require non-text evidence, so prose that merely
+     begins with them passes. The classifier also measures the aggregate share
+     of U+FFFD and C0 control characters, with a threshold of 0.25. The measured
+     separation on the live corpus was 0.521 for the PDF against at most 0.0188
+     for every legitimate document.
+   - A per-page check applies only to pages of at least `LARGE_PAGE_CHARS`
+     (65,536 characters), because small legitimate PDF pages can exceed the
+     ratio. One 677-character page measured 0.341.
+   - A refused payload or a failed fetch fails with a URL-free reason on every
+     surface (CLI, HTTP, MCP and task) and never logs a traceback. A refusal is
+     always an exception; it is never an empty "completed" result. The plugin's
+     hooks reach the same daemon routes, so the refusal covers that surface too.
+   - A job that stores nothing fails as well. `RefusalAwareTerminal` is the one
+     place that decides a task's terminal state: a plain ingest, bulk crawl,
+     capture, or remember that wrote no rows fails with a fixed reason chosen
+     by the result's shape: `nothing was stored: no pages were selected for
+     ingest` for a crawl that selected no pages, `nothing was stored: the
+     content produced no indexable text` for a single document or a crawl
+     whose pages all stored nothing (a page counts as ingested only when it
+     stored chunks; the rest are reported as `empty`). A table-driven test
+     covers every job type against every outcome.
+   - Only policy rejections (`UrlRejectedError`, `RedirectRejectedError`) and
+     transport failures (`OSError`, `HTTPException`) are fetch refusals
+     (`FetchRefusedError.REFUSABLE`, shared by the URL fetch and the sitemap
+     client). Any other exception from a fetch, a `ValueError` from a bug
+     included, is a fault and ends the task as `internal error: <Class>`.
+2. **Bound every stored row; split, never truncate.**
+   - A logical-section page over the page cap (2^20 − 1 bytes) is split at the
+     best boundary. Logical sections are text, markdown and HTML sections,
+     code sections, and spreadsheet row groups.
+   - A paginated page (PDF, OCR, slide) is never renumbered, so an oversized
+     one fails its document with a reason. Real PDF pages never approach the
+     cap. In a document that mixes the two, the parts of a split section take
+     page numbers no paginated page holds, so splitting never moves a
+     paginated page.
+   - Label columns (`summary`, `document_name`, `document_path`, `collection`,
+     `agent_handle`) have their own 8 KiB budget. `summary` is copied onto
+     every chunk, so an unbounded label could recreate the overflow. The
+     content routes refuse an over-budget label with HTTP 400.
+   - The budget is checked over the whole document before any overwrite-delete,
+     so a violation never leaves a partial document.
+   - Overlong sentences are hard-wrapped to `max_chars`.
+   - `RowBudget` encodes the invariant `max(page, chunk, label budget) ×
+     assumed_batch_rows × safety_factor ≤ 2^31 − 1`, the Arrow i32 offset
+     limit. `build_records`, the single record builder, keeps it as a
+     backstop.
+   - `assumed_batch_rows` (1,024) is Lance's default scan batch. On the
+     poisoned table (about 4.5 MB rows), scans with batches of 512 and 1,024
+     overflowed and 256 passed. The batch size is measured for scans and
+     inferred for compaction, and `safety_factor` covers compaction batches up
+     to twice the scan batch.
+   - `Settings` bounds `chunk_max_chars` so a configuration cannot exceed the
+     per-chunk budget.
+3. **Normalize page text.**
+   - Page text moves out of `chunks` into its own `pages` table, keyed by
+     `(collection, document_name, page_number)` and stored once per page.
+   - Writers insert pages before the chunks that need them and delete them
+     after. The invariant "a chunk exists only if its page exists" therefore
+     survives a crash between the two tables; a crash can only leave orphan
+     pages, which are invisible to readers and swept after a 24 h grace period.
+   - The invariant also depends on the ingest queue's single-unit embed gate
+     (`EMBED_CONCURRENCY_CEILING == 1`), which a test pins.
+   - A one-time migration backfills `pages` in small adaptive batches,
+     verifies completeness and equality, then drops `page_raw_text`
+     automatically at first daemon start (`drop_columns` is metadata-only).
+4. **Isolate and surface failure.**
+   - Finalize steps run independently, so an optimize failure no longer skips
+     shadow push or GC.
+   - A per-database failure ledger applies exponential backoff.
+   - `/health.finalize` exposes the ledger.
+   - `quarry repair` removes provably binary documents and reclaims orphaned
+     files.
+   - `quarry doctor` fails (required) on a failing optimize, a row-budget
+     violation, or pages-table inconsistency.
+5. **Upgrade-only.** Quarry builds no downgrade or restore machinery; a
+   downgrade is at most a schema-only revert.
+6. **URL secrets are structurally unreachable from every sink.** Review
+   rounds on the first PR kept finding the same defect in new call sites: a
+   raw URL, or an exception message containing one, reached a log line, task
+   error, response, or stored name. An adversarial audit proved a parse
+   differential behind several of them. `urlsplit` saw the host, while
+   urllib connected to `user:secret@host` and echoed it in errors. Patching
+   each call site did not converge, so the fix is structural:
+   - **Admission (layer A).** `UrlAdmission.reject_reason`
+     (`url_admission.py`) is the single gate for routes, captures, sitemap
+     entries, and every redirect hop. Its decisions are made over one
+     canonical reading (`UrlSyntax`). It rejects userinfo, `\` or `%` in the
+     netloc, whitespace or any Cc, Cf, Zl, or Zp character anywhere (bidi
+     controls included), a port that is out of range or 0, and any URL
+     longer than 8,192 characters. Its reasons
+     never quote userinfo, path, or query: syntax and scheme failures are
+     fixed text (`malformed URL`, `unsupported scheme`, `missing hostname`),
+     and an address-policy failure names only the host and the resolved
+     address. This supersedes
+     `UrlSafetyCheck.reject_reason` as cited in DES-042 and DES-049;
+     `UrlSafetyCheck` keeps the resolved-address checks.
+   - **`HttpUrl`.** An admitted URL is carried as a value type:
+     - `.fetch_url` is the only fetchable form.
+     - `.document_name` is the stored form, `scheme://host[:port]/path`,
+       with no default port, no `;params`, no trailing dot, and IDNA dot
+       variants folded, so equivalent URLs share one document. A query is
+       stored as `?q[sha256]=<16 hex of SHA-256 of the sorted, encoded
+       parameters>`: pages that differ by query stay distinct documents,
+       and the raw query never reaches storage. Dropping the query
+       entirely was rejected because it merged distinct pages (`?page=1`
+       and `?page=2`) into one document. The digest is unsalted, so a
+       low-entropy query secret could be guessed back from a stored name;
+       a per-install salt was rejected because it would make the same URL
+       a different document on every install. The URL admission and
+       capture layers are what keep credentials out of URLs; the digest
+       only keeps them out of storage. `;params` are dropped because they
+       carry session IDs, so an overwrite of `/a/c` replaces a legacy
+       `/a;b/c`.
+     - The path, query, and fragment are percent-encoded once as UTF-8 at
+       construction (existing escapes kept and upper-cased, a lone `%`
+       becomes `%25`). `fetch_url` and `document_name` share that form, so
+       an IRI is fetchable and `café` and `caf%C3%A9` are one document.
+     - Because this decision changes stored URL names, `LegacyUrlNames`
+       canonicalizes the stored names under the same `scheme://host` prefix
+       (host matched case-insensitively, one row per document, listed once
+       per bulk run) at dedup and store time. Whether a store is URL-sourced
+       is a fact of the route, carried on the ingest context: a capture or
+       URL ingest is, `remember` and `learn` are not, whatever their format
+       hint. A `/capture` is URL-sourced only when its document name is
+       the one its `source_url` derives, so a transcript or a mismatched
+       name is a label, never re-fetched, and the demotion is logged at
+       INFO without the name. A label's row records an empty `document_path`, so
+       it never lists as a page candidate. When both the stored document
+       and the page being stored are URL-sourced, a store replaces the
+       document under its former spelling, overwriting or not, and logs the
+       replacement at WARNING. One case remains: a label an older build
+       stored with an html hint and a URL-shaped, non-canonical name is
+       indistinguishable from a captured page in every stored column, so a
+       later fetch of that page can replace it.
+       A name this build wrote is canonical and spells only itself, so a
+       copied digest cannot alias a different page; an older raw name is
+       matched under either reading of a `?q[sha256]=` it happens to
+       contain. Names given by `remember` and `learn` are labels: they are
+       never matched, and their typed marker is never read as a digest,
+       though a URL-shaped label is still cleaned of userinfo and query.
+       There is no bulk rename migration.
+     - `str()` is the log form, `scheme://host[:port]/…(segments=N)`. It
+       never carries the path. Punctuation that follows a path-ending URL
+       in prose (`, . : ;`, and a `)` or `]` that closes nothing opened
+       inside the URL) survives unchanged. A query or fragment, with or
+       without a scheme before it, runs to the next whitespace, quotes and
+       angle brackets included, and after it
+       only closing brackets matched by openers earlier in the same token
+       survive, so no character of a query value shows;
+       a `:` after a bare host stays masked, since `host:` may be a
+       truncated credential; and a URL with userinfo may lose its trailing
+       punctuation, which over-redacts but never leaks. A heuristic cannot tell a slug from a
+       secret, so the path stays only in the stored name, where diagnosis
+       needs it. The form is one whitespace-free token, so redacting
+       already-redacted text leaves it unchanged.
+     - `HttpUrl.shown(raw)` is the one producer of a URL's log text. A URL
+       `HttpUrl` refuses renders in the same shape through the tolerant
+       `CaptureUrl` fallback, or as `(unparseable URL)`.
+     - The value is immutable and hashable.
+
+     `WebFetchName` derives capture names from it, replacing
+     `CaptureUrl.for_web_fetch`.
+   - **Logging (layer B).** The configured file and stream handlers redact
+     URLs and escape control characters in the finished text, tracebacks
+     included. Any URL left in a message is rewritten to the same log form,
+     so no path, userinfo, query, or fragment reaches the log. The
+     authority is read whole (userinfo is everything to the last `@`, quotes
+     included), and a host that is not a DNS name or bracketed IP literal
+     prints as `[host]`. They drop third-party records below WARNING. This
+     backstop catches what a library logs on its own.
+     - **A written contract and an oracle.** Five review rounds of
+       pattern patches each opened a neighbouring hole, so the redactor's
+       contract is now specified in `AuthorityMask` (`authority_mask.py`)
+       and enforced by a generated property test
+       (`tests/test_log_redactor_oracle.py`, hypothesis, derandomized).
+       The test checks three properties: no secret survives; every
+       non-URL line, including email and traceback lines, survives
+       unchanged; and a second redaction changes nothing. The contract
+       masks a URL's authority up to its last `@`. It joins whitespace
+       only into text that already has userinfo shape, never crosses a
+       newline except for one named continuation token, and keeps
+       everything else exactly. The redactor repeats its passes until one
+       changes nothing, which makes the result a fixed point. The bound is
+       eight passes, and the oracle fails if any generated case needs more
+       than seven. A record that has not settled at the bound fails
+       closed: the handler writes one line from the time (in the handler's
+       own format), level, logger, call site, the exception class, and the
+       message template when the template settles on its own, ending `message withheld:
+       redaction did not settle in 8 passes`. That line is itself
+       redacted, and if it does not settle either, a constant line with no
+       fields is written. `handleError` withholds its report the same way.
+       Redaction itself never logs, because a log call from inside a
+       handler can deadlock two handlers' locks.
+     - **Known limits of the backstop.** The types are the guarantee and
+       the redactor is a heuristic for third-party text, so these residual
+       cases are accepted and pinned in the contract:
+       - a colon-less user-only credential split so that it looks like a
+         host followed by an email address, and `name:digits` followed by
+         a gap and a bare `@`;
+       - a credential broken by two or more line breaks;
+       - a password holding both `@` and whitespace after it;
+       - `?`, `#`, or `\` inside a URL's password, which ends the
+         authority;
+       - a `/` inside a password whose `scheme://` opener is broken by a
+         gap, which reads as the start of a path.
+
+       Masking them would break the preservation property for ordinary
+       log lines.
+     - **Linear time.** A record is capped at 64 KiB. The redactor works
+       one token at a time: a token over 2,048 characters becomes `[…]`,
+       and each pattern runs only on a token that can match it. A scheme
+       is matched only where a run of scheme characters starts, so a long
+       run is not rescanned from every offset. Per-token backtracking is
+       bounded by the token cap, so a crafted record costs well under a
+       second and cannot stall the handler.
+     - **No forged lines.** Newlines and bidi and direction marks in a
+       message are escaped (`\xNN`, `\uNNNN`, `\UNNNNNNNN`). Every
+       traceback and stack line is indented, so no continuation line can
+       begin a record.
+     - **A failing handler leaks nothing.** `handleError` writes a fixed
+       line with the logger name, the call site, the redacted message
+       template, the exception class, and message-free frames. It never
+       echoes the record's arguments, and a broken stderr cannot raise out
+       of it.
+     - **An HTTP status is an answer, not a fault.** A status response
+       logs one line, `fetch refused: HTTP <code> on <subject>`, with no
+       frames: INFO for 4xx, WARNING for 429 and 5xx. Sitemap fetches log
+       their status at DEBUG in our layer because the sitemap library
+       reports them itself and is the one component that knows which
+       fetches are speculative: its well-known-path misses log at INFO,
+       a failed listed sitemap at WARNING. An SSRF-blocked sitemap fetch
+       logs one WARNING from our layer (the library also reports it). The
+       library swallows every exception raised while it adds a child
+       sitemap, bugs and document defects (self-listing indexes, corrupt
+       gzip) alike, so a bug is recorded where quarry can see it: any
+       exception the sitemap client's fetch raises is logged with its class
+       and message-free frames at ERROR and re-raised. A malformed redirect
+       `Location` is refused at the redirect layer before it can surface
+       as a bug. Every failed node logs one line naming its cause (a
+       fetch-layer status or refusal) or a parse failure, never the
+       library's reason text; discovery logs them at DEBUG, since its
+       misses are speculative. A recorded bug fails the task as `internal
+       error: <class>` even when other nodes yielded pages, so a bug never
+       reads as partial success, while a document defect keeps the good
+       pages; an unreadable sitemap's refusal names its
+       cause; and a readable sitemap that lists no pages logs a WARNING
+       before the crawl fails as storing nothing.
+     - **Unclassified failures stay diagnosable.** Their message-free
+       frames are logged at WARNING, and a parser catch names only the
+       parser's own exceptions, so a programming error is never reported as
+       a refusal.
+   - **Task errors (layer C).** Only a refusal keeps its message. A refusal
+     is any `RefusalError`: `UnindexableContentError` (including
+     `RowBudgetError` and fetch refusals) and `RegistrationRefusedError`.
+     A refusal's message never embeds caller-supplied text: registration
+     refusals are fixed (`directory already registered`, `directory covered
+     by a parent registration`, `collection name already in use`,
+     `collection holds archived data from another directory`), each with
+     a fixed remediation, and the names ride structured fields that only
+     the redacted log line shows. A
+     test sweeps every `RefusalError` raise site and pins the few that
+     interpolate (counts, sizes, sanitised labels, admission reasons). Every
+     other failure is recorded as `internal error: <Class>`, including a
+     stray `ValueError`. Fetch refusals are raised `from None`, so a
+     traceback cannot chain the raw cause. Hook traces distinguish
+     `daemon-refused` (4xx), `daemon-unreachable`, `config-error`
+     (hook-side), and `daemon-error` (5xx or malformed reply), from the
+     single `SendOutcome` every send returns; the same outcome picks the
+     PreCompact message's advice. A recoverable failure notes that `quarry
+     backfill-sessions` indexes missed sessions of registered directories;
+     that conditional is true for every session, so no reach check is made
+     (an earlier reach check mis-encoded paths and was removed). Backfill
+     re-ingests a session whose transcript grew since it was stored. The
+     quarry archive is reported separately as saved or not. A fault on the
+     background-sync lock, or any failure to start the sync process, is
+     reported as a failed launch with a pointer to the log, never as
+     "already running".
+   - **Model context (SessionStart and the WebFetch loop-closer).** Text a
+     hook puts in the model's context carries no unquoted caller-derived
+     value. Directory and collection names render through one quoted form
+     (`Shown`), and runnable commands are `shlex`-quoted. A name that is
+     not printable never appears in a command: the directory form becomes
+     "from that directory, run: quarry enable .", and the collection form
+     points to `quarry list collections`. The drift nudge's command is
+     `quarry deregister --keep-data -- <name>`, so pasting it keeps the
+     data it says it keeps. New collection names, including the default
+     the CLI and MCP pick from a directory's leaf, are limited to
+     `[A-Za-z0-9._-]` and cannot start with `-` or `.`; an existing
+     registration keeps its name when its directory is widened. The
+     captures lookup returns
+     only the canonical name of the URL asked about plus a `legacy` flag,
+     never a stored name, because a legacy name can hold a raw query.
+
+### Rejected alternatives
+
+- **Store `page_raw_text` only on each page's first chunk, empty elsewhere.**
+  This encodes a relationship in row order and a magic empty value, and leaves
+  bulky text in the hot table. Rejected by the operator: avoiding a schema
+  change is not a reason to choose a workaround over the normalized design.
+- **Truncate oversized text.** It loses data silently.
+- **Delete oversized-but-genuine text in repair.** It violates "no loss beyond
+  provably bad rows".
+- **SQL length predicates or a `page_raw_text <> ''` filter.** Both decode the
+  overflowing column on a poisoned table.
+- **Add pylance to get `compact_files` options.** It is a heavy new dependency
+  to tune a symptom whose cause is removed anyway.
+- **Per-page binary classification at all sizes.** It falsely rejects
+  legitimate small PDF pages.
+- **Redact URLs at each call site.** Several review rounds showed this does
+  not converge; every new sink is a new leak.
+- **A regex log filter alone.** It is a backstop, not a guarantee. A space
+  inside a query string defeats it, so admission and `HttpUrl` carry the
+  guarantee.

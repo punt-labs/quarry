@@ -5,22 +5,21 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
 
-from quarry.artifacts import (
-    SessionArtifacts,
-    extract_artifacts,
-    format_artifacts_header,
-)
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
-from quarry.config import Settings
+from quarry.backfill_session import BackfillSession
 from quarry.db.facade import Database
+from quarry.failure_reason import FailureReason
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 from quarry.scrub import scrub_and_log
+from quarry.stored_sessions import StoredSessions
 from quarry.sync_registry import SyncRegistry
-from quarry.transcript import Transcript
 from quarry.transcript_reader import TranscriptReader
+
+if TYPE_CHECKING:
+    from quarry.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +32,10 @@ class BackfillConfig:
     collection_override: str | None = None
     project_filter: str | None = None
     limit: int | None = None
+
+    def reached_by(self, processed: int) -> bool:
+        """Return whether *processed* transcripts are as many as ``limit`` allows."""
+        return bool(self.limit) and processed >= (self.limit or 0)
 
 
 # A shared immutable default: a bare name reference in the signature below,
@@ -71,54 +74,9 @@ class _Accumulator:
     errors: list[str] = field(default_factory=list)
 
 
-def document_name_for_transcript(transcript_path: Path) -> str:
-    """Derive the stable ``session-<id[:8]>`` document name for a transcript."""
-    return Transcript(transcript_path).document_name()
-
-
-def is_already_ingested(
-    session_id_prefix: str,
-    existing_doc_names: set[str],
-) -> bool:
-    """Return True if this session's document already exists.
-
-    Hook and backfill both file under the same stable ``session-<id[:8]>`` name,
-    so this is a clean exact-name check: a session captured by either path — in
-    either order — is skipped rather than re-ingested as a second document.
-    """
-    return f"session-{session_id_prefix}" in existing_doc_names
-
-
-def _write_backfill_capture_file(
-    project_path: str,
-    session_id: str,
-    transcript: Path,
-    artifacts: SessionArtifacts,
-    text: str,
-) -> None:
-    """Write a backfill session capture via the shared CaptureWriter.
-
-    The writer scrubs secrets, PII, and profanity before any bytes reach the
-    git-tracked capture file, and fails silently.
-    """
-    from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
-
-    timestamp = Transcript(transcript).timestamp("%Y-%m-%dT%H:%M:%SZ")
-    CaptureWriter().write(
-        CaptureRequest(
-            project_dir=Path(project_path),
-            session_id=session_id,
-            timestamp=timestamp,
-            artifacts=artifacts,
-            text=text,
-            label="backfill",
-        )
-    )
-
-
 @final
 class _ProjectProcessor:
-    """Ingest one project's not-yet-captured transcripts, tallying the run.
+    """Ingest one project's uncaptured or grown transcripts, tallying the run.
 
     Owns the per-project state the old free function threaded through eight
     parameters — the shared database, settings, accumulator, and the derived
@@ -131,7 +89,7 @@ class _ProjectProcessor:
     _acc: _Accumulator
     _config: BackfillConfig
     _collection: str
-    _existing: set[str]
+    _stored: StoredSessions
     _ingested: int
     _skipped: int
 
@@ -148,7 +106,7 @@ class _ProjectProcessor:
         self._acc = acc
         self._config = config
         self._collection = config.collection_override or mapping.captures_collection
-        self._existing = set()
+        self._stored = StoredSessions([])
         self._ingested = 0
         self._skipped = 0
         return self
@@ -161,10 +119,9 @@ class _ProjectProcessor:
         docs = self._runtime.database.catalog.list_documents(
             collection_filter=self._collection
         )
-        self._existing = {d["document_name"] for d in docs}
-        limit = self._config.limit or 0
+        self._stored = StoredSessions(docs)
         for transcript in transcripts:
-            if limit > 0 and self._acc.processed >= limit:
+            if self._config.reached_by(self._acc.processed):
                 break
             self._handle(transcript)
         logger.info(
@@ -177,36 +134,24 @@ class _ProjectProcessor:
 
     def _handle(self, transcript: Path) -> None:
         """Skip, dry-run, or ingest one transcript, updating the counters."""
-        if is_already_ingested(transcript.stem[:8], self._existing):
+        if self._stored.is_current(transcript):
             self._skipped += 1
             self._acc.skipped_existing += 1
             return
+        self._acc.processed += 1
         if self._config.dry_run:
-            self._ingested += 1
-            self._acc.ingested += 1
-            self._acc.processed += 1
+            self._tally_ingested()
             return
         text = TranscriptReader(transcript).text()
         if not text.strip():
             self._acc.skipped_empty += 1
-            self._acc.processed += 1
             return
         self._ingest(transcript, text)
-        self._acc.processed += 1
 
     def _ingest(self, transcript: Path, text: str) -> None:
         """Write the capture file and ingest the transcript through the pipeline."""
-        artifacts = extract_artifacts(text)
-        _write_backfill_capture_file(
-            project_path=self._mapping.project_path,
-            session_id=transcript.stem,
-            transcript=transcript,
-            artifacts=artifacts,
-            text=text,
-        )
-        header = format_artifacts_header(artifacts)
-        body = f"{header}\n\n{text}" if header else text
-        doc_name = document_name_for_transcript(transcript)
+        session = BackfillSession(transcript, self._mapping.project_path, text)
+        session.write_capture_file()
         try:
             # Scrub via the pipeline choke point: passing a content_scrubber makes
             # ingest_content redact the content AND the metadata, so the chunks
@@ -215,11 +160,11 @@ class _ProjectProcessor:
             # (The capture .md is scrubbed independently by CaptureWriter.)
             ingest_content(
                 InlineIngest(
-                    body,
+                    session.body,
                     format_hint="plain",
                     content_scrubber=lambda t: scrub_and_log(t, "backfill"),
                 ),
-                doc_name,
+                session.name,
                 Progress(None),
                 IngestContext(
                     self._runtime.database,
@@ -229,10 +174,14 @@ class _ProjectProcessor:
                 ),
             )
         except Exception as exc:
-            self._acc.errors.append(f"{transcript.name}: {exc}")
+            self._acc.errors.append(FailureReason.line(transcript.name, exc))
             logger.exception("backfill: failed to ingest %s", transcript.name)
             return
-        self._existing.add(doc_name)
+        self._stored.record(transcript)
+        self._tally_ingested()
+
+    def _tally_ingested(self) -> None:
+        """Count one transcript as ingested, for the project and for the run."""
         self._ingested += 1
         self._acc.ingested += 1
 
@@ -257,11 +206,10 @@ def backfill_sessions(
     acc = _Accumulator()
     skipped_unregistered = ProjectMappingResolver.count_unmapped(all_mappings)
 
-    limit = config.limit or 0
     for mapping in mappings:
         _ProjectProcessor(mapping, runtime, acc, config).process()
-        if limit > 0 and acc.processed >= limit:
-            logger.info("backfill: reached limit of %d transcripts", limit)
+        if config.reached_by(acc.processed):
+            logger.info("backfill: reached limit of %d transcripts", config.limit)
             break
 
     return BackfillStats(

@@ -15,8 +15,9 @@ import logging
 import time
 from typing import TYPE_CHECKING, cast, final
 
-from quarry.capture_url import CaptureUrl
-from quarry.ingestion.streaming import DocumentStreamer, progressive_insert
+from quarry.display_name import DisplayName
+from quarry.ingestion.run_context import RunContext
+from quarry.ingestion.streaming import DocumentStreamer
 
 if TYPE_CHECKING:
     from quarry.ingestion.extracted_document import ExtractedDocument
@@ -48,21 +49,7 @@ class ChunkStoreFunnel:
         fires only when a replacement chunk set actually exists.
         """
         progress("Chunking")
-        t0 = time.perf_counter()
-        chunks = DocumentStreamer(context.settings).build_chunks(
-            extracted.pages,
-            collection=context.collection,
-            source_format=extracted.source_format,
-            agent_handle=context.agent_handle,
-            memory_type=context.memory_type,
-            summary=context.summary,
-        )
-        logger.info(
-            "pipeline: chunked %d pages → %d chunks in %.2fs",
-            len(extracted.pages),
-            len(chunks),
-            time.perf_counter() - t0,
-        )
+        chunks = ChunkStoreFunnel._chunk(extracted, context)
         progress("Created %d chunks", len(chunks))
 
         if chunks:
@@ -77,21 +64,55 @@ class ChunkStoreFunnel:
         )
 
     @staticmethod
+    def _chunk(extracted: ExtractedDocument, context: IngestContext) -> list[Chunk]:
+        """Chunk the extracted pages, labelled for this ingest."""
+        t0 = time.perf_counter()
+        chunks = DocumentStreamer(context.settings).build_chunks(
+            extracted.pages, DocumentStreamer.ingest_labels(extracted, context)
+        )
+        logger.info(
+            "pipeline: chunked %d pages → %d chunks in %.2fs",
+            len(extracted.pages),
+            len(chunks),
+            time.perf_counter() - t0,
+        )
+        return chunks
+
+    @staticmethod
+    def _replace_prior(chunks: list[Chunk], context: IngestContext) -> list[str]:
+        """Delete the document's earlier chunks, if overwriting; return its twins.
+
+        A copy an older build stored under a former spelling of the same URL is
+        replaced too, overwriting or not, when this document was fetched from a
+        URL, so a re-ingest leaves one document, not two.  That copy is returned,
+        not deleted: it goes only once the new document is stored.
+
+        Every chunk of a document carries its name.  Whether it was fetched from a
+        URL is the caller's fact, carried on the *context*, not read back from the
+        document's path: a label that merely looks like a URL is not a page.
+        """
+        return RunContext.legacy_names_of(context).replace_prior(
+            chunks[0].document_name, context
+        )
+
+    @staticmethod
     def _embed_and_store(
         chunks: list[Chunk],
         document_name: str,
         progress: Progress,
         context: IngestContext,
     ) -> int:
-        """Delete the prior document (if overwriting), then embed and store."""
-        if context.overwrite:
-            context.database.store.delete_document(
-                document_name, collection=context.collection, count=False
-            )
+        """Delete the prior document (if overwriting), embed and store, then drop
+        any legacy-named copy the stored document replaces."""
+        twins = ChunkStoreFunnel._replace_prior(chunks, context)
         progress("Embedding + storing in bounded windows")
         t0 = time.perf_counter()
-        inserted = progressive_insert(
-            chunks, context.database.store, context.settings, document_name
+        inserted = DocumentStreamer(context.settings).insert(
+            chunks, context.database.store, document_name
+        )
+        RunContext.note_stored(context, document_name)
+        RunContext.legacy_names_of(context).drop_legacy(
+            chunks[0].document_name, twins, context.collection
         )
         logger.info(
             "pipeline: embedded + stored %d chunks in %.2fs",
@@ -101,7 +122,7 @@ class ChunkStoreFunnel:
         progress(
             "Done: %d chunks indexed from %s",
             inserted,
-            ChunkStoreFunnel._display_name(document_name),
+            DisplayName(document_name).redacted(),
         )
         return inserted
 
@@ -111,35 +132,10 @@ class ChunkStoreFunnel:
         logger.warning(
             "pipeline: %s produced zero chunks — keeping any prior document, "
             "storing nothing",
-            ChunkStoreFunnel._display_name(document_name),
+            DisplayName(document_name).redacted(),
         )
         progress("No text found — nothing to index")
         return 0
-
-    @staticmethod
-    def _display_name(document_name: str) -> str:
-        """Return *document_name* redacted for a log/progress line, never stored.
-
-        document_name IS the URL for a plain (unscrubbed) URL ingest, so a
-        userinfo/query secret would otherwise reach the log/progress stream
-        verbatim (CWE-532). But this funnel is also reached by ingest_content
-        with an arbitrary caller-supplied name that is never a URL -- and
-        CaptureUrl is unsafe on non-URL input: it silently truncates at the
-        first ``#``/``?`` (urlsplit treats them as fragment/query delimiters,
-        both valid characters in a plain document name), and some malformed
-        strings resembling a URL authority raise ``ValueError`` straight out
-        of ``urlsplit``. Gate on the same ``http(s)://`` prefix check
-        ``WebFetcher``/``cli_ingest`` already use to recognize a real URL, and
-        fall back to *document_name* verbatim -- untruncated, never raising --
-        for anything else or for a redaction that still fails despite the
-        prefix match.
-        """
-        if not document_name.lower().startswith(("http://", "https://")):
-            return document_name
-        try:
-            return CaptureUrl(document_name).redacted(lambda text: text)
-        except ValueError:
-            return document_name
 
     @staticmethod
     def _build_result(

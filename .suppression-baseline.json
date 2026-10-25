@@ -1,7 +1,7 @@
 {
-  "total": 211,
+  "total": 198,
   "by_category": {
-    "noqa": 173,
+    "noqa": 160,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -18,10 +18,10 @@
     "src/quarry/_hook_trace.py": {
       "noqa": 3
     },
-    "src/quarry/backfill.py": {
+    "src/quarry/active_session_context.py": {
       "noqa": 1
     },
-    "src/quarry/capture_url.py": {
+    "src/quarry/backfill_session.py": {
       "noqa": 1
     },
     "src/quarry/captures_collection.py": {
@@ -40,7 +40,7 @@
       "noqa": 3
     },
     "src/quarry/daemon/ingest_jobs.py": {
-      "noqa": 8
+      "noqa": 3
     },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
@@ -56,9 +56,6 @@
     },
     "src/quarry/daemon/server.py": {
       "type_ignore": 1
-    },
-    "src/quarry/daemon/watch_reconcile.py": {
-      "noqa": 2
     },
     "src/quarry/daemon_capture.py": {
       "noqa": 1
@@ -105,7 +102,7 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 9
+      "noqa": 6
     },
     "src/quarry/hooks_agent.py": {
       "noqa": 2
@@ -114,7 +111,7 @@
       "noqa": 3
     },
     "src/quarry/ingestion/bulk_ingest.py": {
-      "noqa": 2
+      "noqa": 1
     },
     "src/quarry/ingestion/chunk_store_funnel.py": {
       "pyright_ignore": 1
@@ -129,18 +126,21 @@
       "noqa": 1
     },
     "src/quarry/ingestion/provider.py": {
-      "noqa": 2
+      "noqa": 1
+    },
+    "src/quarry/ingestion/safe_entry_selector.py": {
+      "noqa": 1
     },
     "src/quarry/ingestion/sitemap_ingest.py": {
-      "noqa": 4
+      "noqa": 2
+    },
+    "src/quarry/ingestion/sitemap_reader.py": {
+      "noqa": 2
     },
     "src/quarry/ingestion/web_fetch.py": {
       "noqa": 1
     },
     "src/quarry/lesson.py": {
-      "noqa": 1
-    },
-    "src/quarry/mcp_server.py": {
       "noqa": 1
     },
     "src/quarry/onnx_session.py": {
@@ -168,7 +168,7 @@
       "noqa": 1
     },
     "src/quarry/sitemap.py": {
-      "noqa": 3,
+      "noqa": 1,
       "type_ignore": 1
     },
     "src/quarry/sitemap_web_client.py": {
@@ -182,7 +182,10 @@
     },
     "src/quarry/web_fetch_loop_closer.py": {
       "noqa": 2
+    },
+    "src/quarry/web_fetch_name.py": {
+      "noqa": 1
     }
   },
-  "updated_at": "2026-10-06T14:44:56Z"
+  "updated_at": "2026-10-24T04:02:47Z"
 }

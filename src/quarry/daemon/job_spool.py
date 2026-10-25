@@ -36,7 +36,7 @@ class SpoolRecord:
     """A recoverable snapshot of an aborted job that has no durable client copy.
 
     ``payload`` is already scrubbed by the producing job (the remember content or
-    the ingest source URL), so the spooled file never holds unredacted secrets.
+    the ingest URL's storage form), so the spooled file never holds secrets.
     """
 
     kind: str

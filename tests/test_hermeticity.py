@@ -16,6 +16,7 @@ import pytest
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
+from quarry.url_admission import UrlAdmission
 from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
 from tests.hermetic_env import ENV, ProductionTreeGuard
 
@@ -219,7 +220,7 @@ class TestNoRealDns:
 
     def test_the_overlong_label_boundary_still_raises(self) -> None:
         """The fake reproduces the real resolver's UnicodeError, not just success."""
-        assert UrlSafetyCheck.reject_reason(f"https://{'a' * 64}.example.com/")
+        assert UrlAdmission.reject_reason(f"https://{'a' * 64}.example.com/")
 
 
 class TestSubprocessNetworkIsRefused:
