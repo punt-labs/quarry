@@ -22,6 +22,10 @@ across `transform`, `index`, and `connector`).
   `.claude/settings.json` only, prints each rule it added, and keeps every
   other setting. `quarry disable` removes exactly those rules. Rules earlier
   versions added globally stay until you delete them (#552, DES-058).
+- tool: edits to `CLAUDE.md` and `.claude/settings.json` now lock the
+  standard cross-tool sibling `.<file>.punt-import.lock` (was `.<file>.lock`),
+  so quarry serializes with other punt tools editing the same file. A
+  symlinked `.claude/` is refused before any lock file is created (#552).
 
 ### Fixed
 

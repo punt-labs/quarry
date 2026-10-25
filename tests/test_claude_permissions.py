@@ -147,10 +147,19 @@ class TestGrant:
         root.mkdir()
         (root / ".claude").symlink_to(outside)
 
-        change = ProjectPermissions(root).grant()
+        grant = ProjectPermissions(root).grant()
+        revoke = ProjectPermissions(root).revoke()
 
-        assert change.error
+        assert ".claude is a symlink" in grant.error
+        assert ".claude is a symlink" in revoke.error
+        assert sorted(p.name for p in outside.iterdir()) == ["settings.json"]
         assert (outside / "settings.json").read_text() == "{}\n"
+
+    def test_takes_the_mandated_shared_lock(self, tmp_path: Path) -> None:
+        ProjectPermissions(tmp_path).grant()
+
+        assert (tmp_path / ".claude" / ".settings.json.punt-import.lock").is_file()
+        assert not (tmp_path / ".claude" / ".settings.json.lock").exists()
 
     def test_home_directory_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -186,6 +195,20 @@ class TestRevoke:
         assert change.changed == ()
         assert change.error == ""
         assert not (tmp_path / ".claude").exists()
+
+    def test_unsearchable_claude_dir_is_reported_not_raised(
+        self, tmp_path: Path
+    ) -> None:
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        claude.chmod(0)
+        try:
+            change = ProjectPermissions(tmp_path).revoke()
+        finally:
+            claude.chmod(0o755)
+
+        assert change.changed == ()
+        assert change.error
 
     def test_revoke_without_quarry_rules_leaves_file_untouched(
         self, tmp_path: Path

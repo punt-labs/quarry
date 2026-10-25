@@ -3517,7 +3517,9 @@ itself standing permission: rules land when the user asks, in the project.
    `QUARRY_RULES` set to `<repo>/.claude/settings.json` (tool-enable-disable.md
    § 2.8) and prints each rule it added.
 3. `quarry disable` removes the same set by exact value. No tag schema.
-4. The edit is locked (`FileLock`), symlink-safe (`SafeRepoPath`),
+4. The edit takes the cross-tool `.settings.json.punt-import.lock`
+   (`FileLock.shared`, also now used for `CLAUDE.md`), refuses a symlinked
+   `.claude/` before locking, is symlink-safe (`SafeRepoPath`),
    order-preserving, idempotent, and skips the write when nothing changes.
    Malformed JSON or a wrong-shaped `permissions`/`allow` is reported and left
    untouched. A project at `$HOME` is refused, because its `.claude/settings.json`

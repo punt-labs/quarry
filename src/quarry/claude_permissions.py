@@ -11,6 +11,8 @@ the same set.
 from __future__ import annotations
 
 import json
+import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Self, final
@@ -88,13 +90,7 @@ class ProjectPermissions:
         return self._update(add=True)
 
     def revoke(self) -> PermissionChange:
-        """Remove every quarry rule; return the rules removed.
-
-        Without a settings file there is nothing to remove, so no lock file
-        (or ``.claude/``) is created in a project that never granted.
-        """
-        if not self._file.path.is_symlink() and not self._file.path.exists():
-            return PermissionChange()
+        """Remove every quarry rule; return the rules removed."""
         return self._update(add=False)
 
     def _update(self, *, add: bool) -> PermissionChange:
@@ -105,12 +101,31 @@ class ProjectPermissions:
                 "settings.json is user-global"
             )
         try:
-            with FileLock(self._file.path):
+            if not self._settings_present() and not add:
+                return PermissionChange()
+            with FileLock.shared(self._file.path):
                 return PermissionChange(changed=self._apply(add=add))
         except ValueError as exc:
             return PermissionChange(error=str(exc))
         except OSError as exc:
             return PermissionChange(error=exc.strerror or type(exc).__name__)
+
+    def _settings_present(self) -> bool:
+        """Return whether ``.claude/settings.json`` exists; refuse a linked dir.
+
+        Runs before the lock is taken: :class:`FileLock` creates its lock file
+        in ``.claude/``, so a ``.claude`` symlink would place it outside the
+        repo, and a revoke with no settings file must not create ``.claude/``.
+        """
+        claude = self._file.path.parent
+        try:
+            if stat.S_ISLNK(os.lstat(claude).st_mode):
+                msg = ".claude is a symlink; refusing to edit through it"
+                raise ValueError(msg)
+            os.lstat(self._file.path)
+        except FileNotFoundError:
+            return False
+        return True
 
     def _apply(self, *, add: bool) -> tuple[str, ...]:
         """Edit the allow list in place and write it back if it changed."""

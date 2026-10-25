@@ -62,7 +62,7 @@ class ClaudeMdImport:
         the import is never glued to the user's prose.
         """
         self._validate_import_line(import_line)
-        with FileLock(self._file.path):
+        with FileLock.shared(self._file.path):
             content = self._file.read()
             lines = content.splitlines(keepends=True)
             hits, fence_open = self._scan_toplevel(lines, import_line)
@@ -93,7 +93,7 @@ class ClaudeMdImport:
         Claude Code imports, so only those are the tool's to remove.
         """
         self._validate_import_line(import_line)
-        with FileLock(self._file.path):
+        with FileLock.shared(self._file.path):
             content = self._file.read()
             lines = content.splitlines(keepends=True)
             matches, _ = self._scan_toplevel(lines, import_line)
