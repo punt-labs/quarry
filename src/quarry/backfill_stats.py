@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 @final
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BackfillStats:
     """Aggregate counts from a backfill run.
 

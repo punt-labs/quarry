@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.backfill_writer import BackfillWriteError, WriteOutcome
+from quarry.daemon.aborted_job import AbortedJob
+from quarry.daemon.backfill_job import BackfillTranscriptJob
+from quarry.daemon.commit_checkpoint import CommitCheckpoint
 from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
-from quarry.daemon.job_claim import JobClaim
+from quarry.daemon.job_withdrawal import JobWithdrawal
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.thread_call import ThreadCallAbortedError
 
 if TYPE_CHECKING:
-    from quarry.daemon.backfill_job import BackfillTranscriptJob
     from quarry.daemon.queued_ingest import QueuedIngest
     from quarry.daemon.tasks import TaskState
     from quarry.daemon.thread_call import ThreadCall
@@ -52,14 +55,20 @@ class QueuedJob:
 
     def store(self, job: BackfillTranscriptJob) -> None:
         """Run *job* through the FIFO; raise if the worker did not store it."""
-        self._submit(job)
+        self._submit(
+            BackfillTranscriptJob(replace(job.inner, checkpoint=self._checkpoint()))
+        )
         state = self._state
-        if state.status == "completed":
+        if state.status in {"completed", "committing"}:
             return
         error = BackfillWriteError(state.error)
         if state.error == RefusalAwareTerminal.NOTHING_STORED:
             error.as_outcome(WriteOutcome.UNINDEXABLE)
         raise error
+
+    def _checkpoint(self) -> CommitCheckpoint:
+        """Return the checkpoint that stops this job at its commit if withdrawn."""
+        return CommitCheckpoint(JobWithdrawal(self._state))
 
     def _submit(self, job: BackfillTranscriptJob) -> None:
         """Run *job* on the loop until its state is terminal, or raise the refusal."""
@@ -67,21 +76,8 @@ class QueuedJob:
             self._call.result(self._queued.run_tracked(job, self._state))
         except IngestRefusedError as exc:
             outcome = _OUTCOMES[exc.reason]
-            if outcome is WriteOutcome.ABORTED:
-                outcome = self._abort_outcome()
-            raise BackfillWriteError(str(exc)).as_outcome(outcome) from exc
+            if outcome is not WriteOutcome.ABORTED:
+                raise BackfillWriteError(str(exc)).as_outcome(outcome) from exc
+            AbortedJob(self._state).settle(exc)
         except ThreadCallAbortedError as exc:
-            raise BackfillWriteError(str(exc)).as_outcome(
-                self._abort_outcome()
-            ) from exc
-
-    def _abort_outcome(self) -> WriteOutcome:
-        """Withdraw the job if it is still waiting; say whether it had started.
-
-        A job that never ran is not attempted and never will be; one the worker
-        already holds goes on and may still be stored, so it is not claimed
-        untouched.
-        """
-        if JobClaim(self._state).withdraw():
-            return WriteOutcome.ABORTED
-        return WriteOutcome.ABORTED_RUNNING
+            AbortedJob(self._state).settle(exc)

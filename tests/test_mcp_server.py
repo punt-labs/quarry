@@ -32,6 +32,7 @@ from quarry.client import QuarryClient, QuarryConnectionError
 from quarry.client.transport import HttpxTransport, Response
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.daemon.task_drain import TaskDrain
 from quarry.db_pointer import SELECTION
 from quarry.mcp_catalog import ResourceCatalog
 from quarry.mcp_documents import DocumentTools
@@ -207,7 +208,9 @@ def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
             # be skipped -- that queue is the OTHER leak vector this teardown
             # guards, tracked independently of ``TaskRegistry._refs``.
             try:
-                portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
+                portal.call(
+                    TaskDrain(ctx.tasks.tracked()).run, _TEARDOWN_DRAIN_TIMEOUT_S
+                )
             finally:
                 portal.call(_aclose_ingest_queue, ctx)
 

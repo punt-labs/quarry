@@ -9,7 +9,6 @@ atomic, so a partial or half-redacted capture is never left behind.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,8 +18,7 @@ from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
-
-logger = logging.getLogger(__name__)
+    from quarry.capture_outcome import CaptureOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,15 +56,14 @@ class CaptureWriter:
     __slots__ = ()
 
     def write(self, request: CaptureRequest) -> bool:
-        """Scrub *request* and write the capture file; return whether one landed.
+        """Scrub *request* and write the capture file; return whether one landed."""
+        return CaptureFile(request).landed()
+
+    def outcome(self, request: CaptureRequest) -> CaptureOutcome:
+        """Scrub *request*, write the capture file, and say how that ended.
 
         Fails silently — a capture-file problem must never block the main
         ingest flow.  Scrubbing precedes the write, and the write is atomic,
         so no partial or unredacted file is ever left on disk.
         """
-        try:
-            content = request.scrubbed_content()
-            return bool(content) and CaptureFile(request.capture_path()).write(content)
-        except Exception:
-            logger.exception("%s: capture file write failed", request.label)
-            return False
+        return CaptureFile(request).write()

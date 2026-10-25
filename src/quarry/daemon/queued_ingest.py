@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
 from quarry.daemon.job_admission import JobAdmission
-from quarry.daemon.job_claim import JobClaim
+from quarry.daemon.job_withdrawal import JobWithdrawal
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskState
 
@@ -111,7 +111,7 @@ class QueuedIngest:
             await self._admission.take(key, job, state)
             await self._finish(key, state)
         except (asyncio.CancelledError, IngestRefusedError):
-            JobClaim(state).withdraw()
+            JobWithdrawal(state).withdraw()
             raise
         return state
 

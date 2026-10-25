@@ -3,19 +3,43 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import threading
 import time
+from dataclasses import dataclass, field
 
 import pytest
 
-from quarry.daemon.bounded_scan import BoundedScan, ScanStillRunningError
+from quarry.daemon.bounded_scan import BoundedScan
+from quarry.daemon.late_outcome import ScanStillRunningError
 from quarry.daemon.tasks import TaskState
 from quarry.stop_signal import StopSignal
 
 
+@dataclass(slots=True)
+class _Report:
+    """A scan report that remembers what it was told, and says 'partial' so far."""
+
+    recorded: list[str] = field(default_factory=list)
+    late_results: list[str] = field(default_factory=list)
+
+    def record(self, result: str) -> None:
+        self.recorded.append(result)
+
+    def late(self, result: str) -> None:
+        self.late_results.append(result)
+
+    def so_far(self) -> str:
+        return "partial"
+
+
 def _state() -> TaskState:
     return TaskState(task_id="t", kind="backfill")
+
+
+def _held(state: TaskState) -> bool:
+    return state.holds_thread
 
 
 async def _started(scan_started: threading.Event) -> None:
@@ -23,29 +47,25 @@ async def _started(scan_started: threading.Event) -> None:
 
 
 async def test_a_scan_that_returns_has_its_result_recorded_and_returned() -> None:
-    recorded: list[int] = []
+    report = _Report()
 
-    result = await BoundedScan(StopSignal(), 5.0).run(
-        lambda: 7, _state(), recorded.append
-    )
+    result = await BoundedScan(StopSignal(), 5.0).run(lambda: "done", _state(), report)
 
-    assert result == 7
-    assert recorded == [7]
+    assert result == "done"
+    assert report.recorded == ["done"]
 
 
 async def test_a_double_cancel_still_waits_for_the_thread() -> None:
     stop = StopSignal()
     started, release = threading.Event(), threading.Event()
-    recorded: list[str] = []
+    report = _Report()
 
     def lingers() -> str:
         started.set()
         release.wait(timeout=10)  # finishing the transcript it was on
         return "done"
 
-    task = asyncio.create_task(
-        BoundedScan(stop, 30.0).run(lingers, _state(), recorded.append)
-    )
+    task = asyncio.create_task(BoundedScan(stop, 30.0).run(lingers, _state(), report))
     await _started(started)
     task.cancel()
     await asyncio.sleep(0.05)
@@ -57,54 +77,59 @@ async def test_a_double_cancel_still_waits_for_the_thread() -> None:
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert recorded == ["done"]  # the result survives the cancel
+    assert report.recorded == ["done"]  # the result survives the cancel
 
 
 async def test_the_first_stop_reason_is_the_one_a_cancelled_scan_keeps() -> None:
     stop = StopSignal()
     stop.set("daemon shutting down")
-    recorded: list[str] = []
+    state = _state()
+    report = _Report()
+    started, release = threading.Event(), threading.Event()
 
-    task = asyncio.create_task(
-        BoundedScan(stop, 30.0).run(lambda: stop.reason, _state(), recorded.append)
-    )
-    await asyncio.sleep(0.05)
+    def lingers() -> str:
+        started.set()
+        release.wait(timeout=10)
+        return stop.reason
+
+    task = asyncio.create_task(BoundedScan(stop, 30.0).run(lingers, state, report))
+    await _started(started)
     task.cancel()
+    release.set()
     await asyncio.gather(task, return_exceptions=True)
 
-    assert recorded == ["daemon shutting down"]
+    assert report.recorded == ["daemon shutting down"]
+    assert state.error == "backfill stopped (daemon shutting down)"
 
 
-async def test_a_scan_that_raised_is_logged_by_class_and_frames_not_message(
+async def test_a_scan_that_raised_propagates_and_is_not_logged_here(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    def boom() -> None:
+    def boom() -> str:
         msg = "/secret/path/session.jsonl"
         raise RuntimeError(msg)
 
-    recorded: list[None] = []
+    report = _Report()
     with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError):
-        await BoundedScan(StopSignal(), 5.0).run(boom, _state(), recorded.append)
+        await BoundedScan(StopSignal(), 5.0).run(boom, _state(), report)
 
-    assert recorded == []
-    assert "RuntimeError" in caplog.text
-    assert "boom" in caplog.text  # the frame names the code
-    assert "/secret/path" not in caplog.text
+    assert report.recorded == []
+    assert caplog.text == ""  # the task's terminal records it, once
 
 
-async def test_a_cancelled_scan_that_raised_logs_it_and_still_cancels(
+async def test_a_cancelled_scan_that_raised_is_logged_by_class_and_frames(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     started, release = threading.Event(), threading.Event()
 
-    def fails_late() -> None:
+    def fails_late() -> str:
         started.set()
         release.wait(timeout=10)
-        msg = "late"
+        msg = "/secret/path"
         raise OSError(msg)
 
     task = asyncio.create_task(
-        BoundedScan(StopSignal(), 30.0).run(fails_late, _state(), print)
+        BoundedScan(StopSignal(), 30.0).run(fails_late, _state(), _Report())
     )
     await _started(started)
     task.cancel()
@@ -113,17 +138,22 @@ async def test_a_cancelled_scan_that_raised_logs_it_and_still_cancels(
         await task
 
     assert "OSError" in caplog.text
+    assert "fails_late" in caplog.text
+    assert "/secret/path" not in caplog.text
 
 
 async def test_the_thread_is_held_against_the_guard_until_it_returns() -> None:
     state = _state()
     started, release = threading.Event(), threading.Event()
 
-    def holds() -> None:
+    def holds() -> str:
         started.set()
         release.wait(timeout=10)
+        return "done"
 
-    task = asyncio.create_task(BoundedScan(StopSignal(), 30.0).run(holds, state, print))
+    task = asyncio.create_task(
+        BoundedScan(StopSignal(), 30.0).run(holds, state, _Report())
+    )
     await _started(started)
 
     assert state.holds_thread
@@ -133,40 +163,59 @@ async def test_the_thread_is_held_against_the_guard_until_it_returns() -> None:
     assert not state.holds_thread
 
 
-async def test_a_thread_that_will_not_stop_is_given_up_on_after_the_bound() -> None:
+async def test_a_thread_that_will_not_stop_is_given_up_on_with_what_it_counted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     stop = StopSignal()
     state = _state()
+    report = _Report()
     started, release = threading.Event(), threading.Event()
 
-    def blocked() -> None:
+    def blocked() -> str:
         started.set()
         release.wait(timeout=10)  # a read the stop cannot interrupt
+        return "finally"
 
-    task = asyncio.create_task(BoundedScan(stop, 0.3).run(blocked, state, print))
+    task = asyncio.create_task(BoundedScan(stop, 0.3).run(blocked, state, report))
     await _started(started)
     stop.set("daemon shutting down")
     began = time.monotonic()
 
-    with pytest.raises(ScanStillRunningError):
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(ScanStillRunningError) as raised,
+    ):
         await task
 
     assert 0.2 < time.monotonic() - began < 3.0
-    assert state.holds_thread  # the guard still refuses a second run
+    expected = "backfill stopped (daemon shutting down); scan thread still running"
+    assert str(raised.value) == expected
+    assert state.error == expected
+    assert report.recorded == ["partial"]  # what the scan had counted
+    assert "daemon shutting down" in caplog.text
+    assert "still running" in caplog.text
+    assert _held(state)  # the guard still refuses a second run
+
     release.set()
-    await asyncio.sleep(0.2)
-    assert not state.holds_thread
+    await asyncio.sleep(0.3)
+    assert not _held(state)
+    assert report.late_results == ["finally"]  # the late outcome is written
 
 
-async def test_a_cancelled_scan_given_up_on_still_ends_cancelled() -> None:
+async def test_a_cancelled_scan_given_up_on_still_ends_cancelled_with_its_reason() -> (
+    None
+):
     state = _state()
+    report = _Report()
     started, release = threading.Event(), threading.Event()
 
-    def blocked() -> None:
+    def blocked() -> str:
         started.set()
         release.wait(timeout=10)
+        return "finally"
 
     task = asyncio.create_task(
-        BoundedScan(StopSignal(), 0.3).run(blocked, state, print)
+        BoundedScan(StopSignal(), 0.3).run(blocked, state, report)
     )
     await _started(started)
     task.cancel()
@@ -174,7 +223,41 @@ async def test_a_cancelled_scan_given_up_on_still_ends_cancelled() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert state.holds_thread
+    assert report.recorded == ["partial"]
+    assert state.error == (
+        "backfill stopped (task cancelled); scan thread still running"
+    )
+    assert _held(state)
     release.set()
-    await asyncio.sleep(0.2)
-    assert not state.holds_thread
+    await asyncio.sleep(0.3)
+    assert not _held(state)
+
+
+async def test_a_late_failure_is_logged_by_class_and_never_left_unretrieved(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stop = StopSignal()
+    state = _state()
+    started, release = threading.Event(), threading.Event()
+
+    def blocked() -> str:
+        started.set()
+        release.wait(timeout=10)
+        msg = "/secret/path"
+        raise OSError(msg)
+
+    task = asyncio.create_task(BoundedScan(stop, 0.3).run(blocked, state, _Report()))
+    await _started(started)
+    stop.set("daemon shutting down")
+    with pytest.raises(ScanStillRunningError):
+        await task
+
+    with caplog.at_level(logging.ERROR):
+        release.set()
+        await asyncio.sleep(0.3)
+        gc.collect()
+
+    assert "OSError" in caplog.text
+    assert "blocked" in caplog.text
+    assert "/secret/path" not in caplog.text
+    assert "never retrieved" not in caplog.text

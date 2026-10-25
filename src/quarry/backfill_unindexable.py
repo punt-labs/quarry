@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.backfill_unindexable_file import UnindexableFile
+from quarry.stamp_check import StampCheck
 from quarry.unindexable_entries import StampedEntries
 
 if TYPE_CHECKING:
@@ -41,13 +42,12 @@ class UnindexableTranscripts:
     def knows(self, transcript: Path) -> bool:
         """Return whether *transcript* is known to be unindexable and is unchanged."""
         known = self._known.get(str(transcript))
-        return known is not None and known.holds_for(transcript)
+        return known is not None and StampCheck(known).holds_for(transcript)
 
     def record(self, read: TranscriptRead) -> None:
         """Note that *read*'s transcript held nothing to index, if that will hold."""
-        if read.stamp.is_racy(read.snapshot) or not read.stamp.holds_for(
-            read.transcript
-        ):
+        check = StampCheck(read.stamp)
+        if check.is_racy(read.snapshot) or not check.holds_for(read.transcript):
             return  # modified too near the read, or since: it may not be empty now
         self._known[str(read.transcript)] = read.stamp
 

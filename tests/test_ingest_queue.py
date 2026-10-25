@@ -412,7 +412,7 @@ def test_drain_abort_fails_a_job_blocked_on_the_embed_gate() -> None:
         await asyncio.sleep(0.02)  # A's worker takes the gate and enters job.run
         assert queue.try_submit(_rk("cB"), _StubUnit("cB", "b", ledger), b)
         await asyncio.sleep(0.02)  # B's worker dequeues and blocks awaiting the gate
-        assert b.status == "running"  # dequeued + gate-blocked (the #7 gap)
+        assert b.status == "queued"  # dequeued, but not running until it has the gate
         await queue.aclose(drain_timeout=0.05)  # drain times out -> abort
         assert b.status == "failed"  # gate-blocked job now reaches a terminal state
         assert a.status == "failed"

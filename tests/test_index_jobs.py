@@ -344,8 +344,8 @@ def test_a_stray_value_error_in_registration_fails_closed(
     settings, parent = _lifecycle_fixture(tmp_path)
 
     def _boom(*_a: object, **_k: object) -> None:
-        msg = "unexpected /home/me/secret/path"
-        raise ValueError(msg)
+        detail = "unexpected /home/me/secret/path"
+        raise ValueError(detail)
 
     monkeypatch.setattr(RegistrationLifecycle, "_register_sync", _boom)
 
@@ -360,7 +360,9 @@ def test_a_stray_value_error_in_registration_fails_closed(
 
     state = asyncio.run(_run())
     assert state.error == "internal error: ValueError"
-    assert "/home/me/secret/path" in caplog.text
+    assert "ValueError" in caplog.text  # the log names the class and the frames ...
+    assert "_boom" in caplog.text
+    assert "/home/me/secret/path" not in caplog.text  # ... and never the message
 
 
 def test_subsume_purge_failure_is_logged_and_reported(

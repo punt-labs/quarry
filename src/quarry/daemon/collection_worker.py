@@ -18,7 +18,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.abort_reason import AbortReason
-from quarry.daemon.job_claim import JobClaim
+from quarry.daemon.claimed_run import ClaimedRun
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -85,7 +85,7 @@ class CollectionWorker:
 
     def enqueue(self, job: IngestUnit, state: TaskState) -> None:
         """Append a job (with its task state) to this FIFO queue (never blocks)."""
-        JobClaim(state).enqueue()
+        ClaimedRun(state).enqueue()
         self._queue.put_nowait(_Queued(job, state))
 
     def stop(self) -> None:
@@ -158,7 +158,7 @@ class CollectionWorker:
                 # hold the gate for the whole hang.  The one genuinely unbounded
                 # wait is the web fetch, bounded by its own total deadline + size
                 # cap (web_fetch.py); embed + LanceDB write are finite.
-                await JobClaim(item.state).run(item.job, self._ctx, self._embed_gate)
+                await ClaimedRun(item.state).run(item.job, self._ctx, self._embed_gate)
             except asyncio.CancelledError:
                 # The drain-timeout abort cancels this task through the await
                 # chain, so the in-flight job is aborted HERE — not in abort(),

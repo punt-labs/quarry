@@ -165,7 +165,7 @@ def test_a_failed_record_is_logged_at_debug(
     cache = UnindexableTranscripts(tmp_path / "state.json")
     gone = tmp_path / "gone.jsonl"
 
-    with caplog.at_level(logging.DEBUG, logger="quarry.file_stamp"):
+    with caplog.at_level(logging.DEBUG, logger="quarry.stamp_check"):
         cache.record(TranscriptRead(gone, FileStamp(_OLD, 1), datetime.now(UTC)))
 
     assert "ENOENT" in caplog.text

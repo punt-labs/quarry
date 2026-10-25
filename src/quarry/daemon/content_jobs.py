@@ -22,6 +22,7 @@ from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from datetime import datetime
 
     from quarry.daemon.context import DaemonContext
@@ -66,6 +67,8 @@ class ScrubbedIngestJob:
     url_sourced: bool = False
     # When the hook read the snapshot this stores; ``None`` is the queue's own time.
     captured_at: datetime | None = None
+    # Hears each progress line of the ingest; ``None`` hears none (the default).
+    checkpoint: Callable[[str], None] | None = None
 
     @property
     def collection(self) -> str:
@@ -125,7 +128,7 @@ class ScrubbedIngestJob:
             ingest_content(
                 inline,
                 self.name,
-                Progress(None),
+                Progress(self.checkpoint),
                 replace(self.labels.context(ctx), ingested_at=self.captured_at),
             )
         )

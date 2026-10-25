@@ -46,6 +46,7 @@ class BackfillRun:
         self, mappings: list[ProjectMapping], skipped_unregistered: int
     ) -> BackfillStats:
         """File every project in turn, save what was learned, and return the stats."""
+        self.runtime.progress.attach(self.tally, skipped_unregistered)
         try:
             self._process(mappings)
         finally:
@@ -56,8 +57,7 @@ class BackfillRun:
         """File every project in *mappings*, until done, limited or halted."""
         for mapping in mappings:
             if self.config.reached_by(self.tally.processed):
-                limit = self.config.limit
-                logger.info("backfill: reached limit of %d transcripts", limit)
+                logger.info("backfill: reached limit of %s", self.config.limit)
                 break
             ProjectProcessor(mapping, self).process()
 

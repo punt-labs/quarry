@@ -32,6 +32,7 @@ from quarry.daemon import routes
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
+from quarry.daemon.task_drain import TaskDrain
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
 from quarry.http_url import HttpUrl
@@ -147,13 +148,15 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         if portal is not None:
             # Ingest jobs now run inside per-collection queue workers, not tracked
             # tasks, so drain those too or a queued job could run into a later
-            # test's mock window (the same isolation guard as ctx.tasks.drain).
+            # test's mock window (the same isolation guard as TaskDrain).
             # ``finally`` is load-bearing: a registry drain timeout now raises
             # (fail-closed) rather than swallowing, so the queue close must not
             # be skipped -- that queue is the OTHER leak vector this teardown
             # guards, tracked independently of ``TaskRegistry._refs``.
             try:
-                portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
+                portal.call(
+                    TaskDrain(ctx.tasks.tracked()).run, _TEARDOWN_DRAIN_TIMEOUT_S
+                )
             finally:
                 portal.call(_aclose_ingest_queue, ctx)
 

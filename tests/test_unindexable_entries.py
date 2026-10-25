@@ -14,9 +14,9 @@ _SOURCE = Path("/state/backfill-unindexable.json")
 
 
 def test_a_clean_object_is_kept_whole_and_is_not_dirty() -> None:
-    entries = StampedEntries({"/a": [1, 2], "/b/c": [3, 4]}, _SOURCE)
+    entries = StampedEntries({"/a": [1, 2, 3, 4], "/b/c": [5, 6, 7, 8]}, _SOURCE)
 
-    assert entries.kept == {"/a": FileStamp(1, 2), "/b/c": FileStamp(3, 4)}
+    assert entries.kept == {"/a": FileStamp(1, 2, 3, 4), "/b/c": FileStamp(5, 6, 7, 8)}
     assert not entries.dirty
 
 
@@ -24,7 +24,7 @@ def test_a_clean_object_is_kept_whole_and_is_not_dirty() -> None:
     "bad_key", ["relative", "", "a/b", "/with\0nul", 5, None, ("/a",)]
 )
 def test_a_key_that_cannot_name_a_transcript_is_dropped(bad_key: object) -> None:
-    raw: dict[object, object] = {bad_key: [1, 2], "/ok": [1, 2]}
+    raw: dict[object, object] = {bad_key: [1, 2, 3, 4], "/ok": [1, 2, 3, 4]}
 
     entries = StampedEntries(raw, _SOURCE)
 
@@ -36,7 +36,7 @@ def test_something_that_is_not_an_object_is_empty_and_dirty(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="quarry.unindexable_entries"):
-        entries = StampedEntries([1, 2], _SOURCE)
+        entries = StampedEntries([1, 2, 3, 4], _SOURCE)
 
     assert entries.kept == {}
     assert entries.dirty
@@ -48,7 +48,7 @@ def test_what_was_dropped_is_counted_in_one_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="quarry.unindexable_entries"):
-        StampedEntries({"/a": "x", "b": [1, 2], "/c": [1, 2]}, _SOURCE)
+        StampedEntries({"/a": "x", "b": [1, 2, 3, 4], "/c": [1, 2, 3, 4]}, _SOURCE)
 
     assert caplog.text.count("dropped 2 entries") == 1
 

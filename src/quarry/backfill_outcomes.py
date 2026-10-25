@@ -78,14 +78,14 @@ class TranscriptOutcomes:
         )
         if outcome is WriteOutcome.UNINDEXABLE:
             self.unindexable(read)
-            self._tally.answered()
+            self._tally.halt.answered()
         elif outcome is WriteOutcome.ABORTED:
-            self._tally.abort(str(exc))
+            self._tally.halt.abort(str(exc))
             self._tally.leave(1)
         else:
             logger.warning("backfill: %s not stored: %s", read.transcript.name, exc)
             self.failed(read.transcript, exc)
-            self._tally.refused(outcome, str(exc))
+            self._tally.halt.refused(outcome, str(exc))
 
     def failed(self, transcript: Path, exc: Exception) -> None:
         """Count an attempted transcript that was not stored."""

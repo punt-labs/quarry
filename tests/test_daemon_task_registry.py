@@ -12,8 +12,8 @@ import asyncio
 
 import pytest
 
-from quarry.daemon.job_claim import JobClaim
-from quarry.daemon.tasks import TaskRegistry, TaskState
+from quarry.daemon.task_drain import TaskDrain
+from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskRegistry
 
 
 async def _completed_task() -> asyncio.Task[None]:
@@ -78,7 +78,7 @@ class TestDrain:
         task = await _completed_task()
         registry.track(state, task)
 
-        await registry.drain(timeout=1.0)  # no raise
+        await TaskDrain(registry.tracked()).run(timeout=1.0)  # no raise
 
     async def test_straggler_fails_closed_not_silently(self) -> None:
         """A task that outlives the window: drain cancels the wrapper and RAISES.
@@ -99,7 +99,7 @@ class TestDrain:
         registry.track(state, task)
 
         with pytest.raises(TimeoutError):
-            await registry.drain(timeout=0.01)
+            await TaskDrain(registry.tracked()).run(timeout=0.01)
 
         assert task.cancelled()  # wrapper cancelled as best-effort cleanup
 
@@ -116,16 +116,32 @@ def test_a_task_whose_thread_is_alive_still_counts_as_running() -> None:
     assert registry.running_of_kind("backfill") is None
 
 
-def test_a_queued_job_can_be_withdrawn_but_not_a_running_one() -> None:
-    queued = TaskState(task_id="q", kind="backfill", status="queued")
-    running = TaskState(task_id="r", kind="backfill", status="queued")
-    assert JobClaim(running).start()
+def test_a_state_that_still_holds_its_thread_survives_the_ttl_and_keeps_the_guard() -> (
+    None
+):
+    registry = TaskRegistry()
+    state = registry.begin("backfill")
+    state.status = "failed"  # reported, but its scan thread has not returned
+    state.holds_thread = True
+    state.created_at -= TASK_TTL_SECONDS + 10
 
-    assert JobClaim(queued).withdraw()
-    assert JobClaim(queued).withdraw()  # again: it still never runs
-    assert not JobClaim(queued).start()  # the worker skips it
-    assert not JobClaim(running).withdraw()  # it is running; counted, not cancelled
+    registry.begin("optimize")  # beginning a task sweeps the expired ones
+
+    assert registry.get(state.task_id) is state
+    assert registry.running_of_kind("backfill") is state
 
 
-def test_a_job_that_was_never_submitted_is_withdrawn() -> None:
-    assert JobClaim(TaskState(task_id="n", kind="backfill", status="new")).withdraw()
+def test_a_terminal_state_past_the_ttl_is_evicted_once_its_thread_has_returned() -> (
+    None
+):
+    registry = TaskRegistry()
+    state = registry.begin("backfill")
+    state.status = "failed"
+    state.holds_thread = True
+    state.created_at -= TASK_TTL_SECONDS + 10
+    registry.begin("optimize")
+    state.holds_thread = False
+
+    registry.begin("optimize")
+
+    assert registry.get(state.task_id) is None

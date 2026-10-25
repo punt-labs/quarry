@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, final
 
 from quarry.failure_reason import FailureReason
+from quarry.redacted_failure import RedactedFailure
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -28,7 +29,8 @@ class TaskTerminal:
     def recording(state: TaskState) -> Generator[None]:
         """Record *state*'s terminal status when its background body exits.
 
-        Cancellation is recorded and re-raised; any other exception is logged and
+        Cancellation is recorded and re-raised, keeping a reason the run already
+        gave; any other exception is logged once, by class and frames, and
         recorded as ``FailureReason.of`` words it: a refusal's text, else
         ``internal error: <Class>`` (a ReportedError's carried class); a body
         that sets no terminal status fails.
@@ -37,10 +39,12 @@ class TaskTerminal:
             yield
         except asyncio.CancelledError:
             state.status = "failed"
-            state.error = "task was cancelled"
+            state.error = state.reason_or("task was cancelled")
             raise
         except Exception as exc:
-            logger.exception("Background %s failed", state.kind)
+            logger.error(
+                "Background %s failed", state.kind, exc_info=RedactedFailure.of(exc)
+            )
             state.status = "failed"
             state.error = FailureReason.of(exc)
         finally:

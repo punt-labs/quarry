@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from quarry.admission_streak import AdmissionStreak
 from quarry.backfill_tally import BackfillTally
 from quarry.stop_signal import StopSignal
 
@@ -10,7 +11,7 @@ class TestBackfillTally:
     def test_the_stop_is_the_first_error_and_the_others_follow(self) -> None:
         tally = BackfillTally(StopSignal())
         tally.fail("a.jsonl: boom")
-        tally.abort("daemon shutting down")
+        tally.halt.abort("daemon shutting down")
 
         assert tally.stats(0).errors == [
             "backfill stopped: daemon shutting down",
@@ -43,12 +44,22 @@ class TestBackfillTally:
         tally.skip_existing()
         tally.skip_empty()
         tally.skip_unreadable()
+        tally.fail_unread("a.jsonl: unreadable (EMFILE)")
         assert tally.processed == 0
 
         tally.stored()
         tally.would_store()
         tally.fail("x: y")
         assert tally.processed == 3
+
+    def test_an_unread_transcript_is_a_failure_that_is_never_an_attempt(self) -> None:
+        tally = BackfillTally(StopSignal())
+
+        tally.fail_unread("a.jsonl: unreadable (EMFILE)")
+
+        stats = tally.stats(0)
+        assert (stats.failed, tally.processed) == (1, 0)
+        assert stats.errors == ["a.jsonl: unreadable (EMFILE)"]
 
     def test_it_halts_once_the_stop_event_is_set(self) -> None:
         stop = StopSignal()
@@ -63,18 +74,18 @@ class TestBackfillTally:
     def test_the_first_reason_a_run_stopped_for_is_kept(self) -> None:
         tally = BackfillTally(StopSignal())
 
-        tally.abort("daemon shutting down")
-        tally.abort("something later")
+        tally.halt.abort("daemon shutting down")
+        tally.halt.abort("something later")
 
         assert tally.stats(0).errors == ["backfill stopped: daemon shutting down"]
 
     def test_a_run_gives_up_after_enough_unadmitted_transcripts_in_a_row(self) -> None:
         tally = BackfillTally(StopSignal())
 
-        for _ in range(BackfillTally.MAX_UNADMITTED - 1):
-            tally.not_admitted()
+        for _ in range(AdmissionStreak.MAX - 1):
+            tally.halt.not_admitted()
         assert not tally.halted()
-        tally.not_admitted()
+        tally.halt.not_admitted()
 
         assert tally.halted()
         assert tally.stats(0).errors == ["backfill stopped: ingest queue stayed full"]
@@ -82,19 +93,19 @@ class TestBackfillTally:
     def test_an_answered_transcript_resets_the_count(self) -> None:
         tally = BackfillTally(StopSignal())
 
-        for _ in range(BackfillTally.MAX_UNADMITTED - 1):
-            tally.not_admitted()
-        tally.answered()
-        tally.not_admitted()
+        for _ in range(AdmissionStreak.MAX - 1):
+            tally.halt.not_admitted()
+        tally.halt.answered()
+        tally.halt.not_admitted()
 
         assert not tally.halted()
 
     def test_a_stored_transcript_resets_the_count(self) -> None:
         tally = BackfillTally(StopSignal())
 
-        for _ in range(BackfillTally.MAX_UNADMITTED - 1):
-            tally.not_admitted()
+        for _ in range(AdmissionStreak.MAX - 1):
+            tally.halt.not_admitted()
         tally.stored()
-        tally.not_admitted()
+        tally.halt.not_admitted()
 
         assert not tally.halted()

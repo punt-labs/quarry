@@ -10,14 +10,11 @@ completed states after a TTL so a long-lived daemon does not leak them.
 from __future__ import annotations
 
 import asyncio
-import logging
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Self, final
-
-logger = logging.getLogger(__name__)
 
 # Task GC: completed/failed tasks are evicted after this many seconds.
 TASK_TTL_SECONDS = 3600  # 1 hour
@@ -48,6 +45,10 @@ class TaskState:
     claim: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
+
+    def reason_or(self, default: str) -> str:
+        """Return the reason the task has already given, else *default*."""
+        return self.error or default
 
 
 @final
@@ -84,12 +85,16 @@ class TaskRegistry:
         expired = [
             tid
             for tid, task in self._states.items()
-            if task.status in _TERMINAL_STATUSES
-            and (now - task.created_at) > TASK_TTL_SECONDS
+            if self._is_idle(task) and (now - task.created_at) > TASK_TTL_SECONDS
         ]
         for tid in expired:
             del self._states[tid]
             self._refs.pop(tid, None)
+
+    @staticmethod
+    def _is_idle(task: TaskState) -> bool:
+        """Return whether *task* ended and nothing of it, a scan thread, still runs."""
+        return task.status in _TERMINAL_STATUSES and not task.holds_thread
 
     def drop(self, state: TaskState) -> None:
         """Discard a task record so a rejected submit leaves no orphan behind."""
@@ -102,54 +107,9 @@ class TaskRegistry:
         self._refs[tid] = task
         task.add_done_callback(lambda _t: self._refs.pop(tid, None))
 
-    async def drain(self, timeout: float) -> None:
-        """Await every tracked task's real completion within *timeout*.
-
-        Cancelling the wrapping ``asyncio.Task`` does not stop a
-        ``run_in_threadpool`` job's underlying OS thread — Python has no way to
-        interrupt a running thread — so a cancel-only teardown lets that thread
-        keep executing (a real ingest, a real network fetch, a real log call)
-        well after the caller believes the task is gone.  A daemon/test-harness
-        teardown that only cancels can therefore race: the thread finishes later,
-        inside a *different* context (a later test's mocks, a closed log stream).
-        Waiting for genuine completion is the only way to close that race.
-
-        A task that outlives the drain window is a genuine straggler: its
-        ``asyncio.Task`` wrapper is best-effort cancelled (to release the
-        reference and unblock event-loop bookkeeping), but — per the paragraph
-        above — that does **not** stop the underlying thread, so the race is
-        NOT closed for a straggler.  Pretending otherwise (swallowing the
-        timeout and returning normally) would silently reintroduce the exact
-        bug this method exists to fix.  So this fails closed: log the straggler
-        and re-raise ``TimeoutError`` rather than let the caller believe drain
-        succeeded. Must be called on the registry's own event-loop thread.
-        """
-        tasks = list(self._refs.values())
-        if not tasks:
-            return
-        try:
-            async with asyncio.timeout(timeout):
-                await asyncio.gather(*tasks, return_exceptions=True)
-        except TimeoutError:
-            await self._cancel_stragglers(tasks)
-            logger.error(
-                "TaskRegistry.drain: %d task(s) did not complete within %.1fs; "
-                "their wrapper was cancelled but the underlying thread may still "
-                "be running",
-                len(tasks),
-                timeout,
-            )
-            raise
-
-    async def _cancel_stragglers(self, tasks: list[asyncio.Task[None]]) -> None:
-        """Best-effort cancel *tasks* that outlived the drain window, then await them.
-
-        Only releases each wrapper's ``asyncio.Task`` reference — it does NOT
-        stop the underlying ``run_in_threadpool`` OS thread (see :meth:`drain`).
-        """
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    def tracked(self) -> list[asyncio.Task[None]]:
+        """Return the live task handles, for a teardown to await."""
+        return list(self._refs.values())
 
     def seed(self, state: TaskState) -> None:
         """Insert a pre-built *state* keyed by its ``task_id``.

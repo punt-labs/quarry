@@ -8,6 +8,7 @@ must yield byte-identical files for identical input).
 from __future__ import annotations
 
 import logging
+import os
 import stat
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -94,15 +95,12 @@ def test_write_failure_swallowed_leaves_no_partial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed rename is swallowed and leaves neither file nor temp."""
-    real_replace = Path.replace
 
-    def failing_replace(self: Path, target: Path) -> Path:
-        if self.name.endswith(".tmp"):
-            msg = "disk full"
-            raise OSError(msg)
-        return real_replace(self, target)
+    def failing_rename(_src: str, _dst: str, **_dirs: int) -> None:
+        msg = "disk full"
+        raise OSError(msg)
 
-    monkeypatch.setattr(Path, "replace", failing_replace)
+    monkeypatch.setattr(os, "rename", failing_rename)
     req = _request(tmp_path)
     CaptureWriter().write(req)  # must not raise
 
@@ -132,17 +130,16 @@ def test_concurrent_writers_of_one_session_never_clobber_each_other(
     reached the same point, so a shared temp name would be written by both
     before either renames it.
     """
-    real_replace = Path.replace
+    real_rename = os.rename
     both_written = threading.Barrier(2, timeout=10)
     temps: list[str] = []
 
-    def synchronized_replace(self: Path, target: Path) -> Path:
-        if self.name.endswith(".tmp"):
-            temps.append(self.name)
-            both_written.wait()
-        return real_replace(self, target)
+    def synchronized_rename(src: str, dst: str, **dirs: int) -> None:
+        temps.append(src)
+        both_written.wait()
+        real_rename(src, dst, **dirs)
 
-    monkeypatch.setattr(Path, "replace", synchronized_replace)
+    monkeypatch.setattr(os, "rename", synchronized_rename)
     first = _request(tmp_path, text="first writer " * 40)
     second = _request(tmp_path, text="second writer " * 40)
     complete = {first.scrubbed_content(), second.scrubbed_content()}
@@ -164,6 +161,8 @@ def test_concurrent_writers_of_one_session_never_clobber_each_other(
 def test_producers_yield_byte_identical_files(tmp_path: Path) -> None:
     """Same input under each producer label produces byte-identical files."""
     text = "body /Users/jane/x mail jdoe@example.com"
+    (tmp_path / "pre").mkdir()
+    (tmp_path / "back").mkdir()
     pre = _request(tmp_path / "pre", label="pre-compact", text=text)
     back = _request(tmp_path / "back", label="backfill", text=text)
 
@@ -211,3 +210,21 @@ def test_a_capture_is_not_written_through_a_symlink(
     assert not landed
     assert victim.read_text() == "precious"
     assert "symlink" in caplog.text
+
+
+def test_a_failed_capture_is_logged_by_class_not_by_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def boom(*_args: object) -> str:
+        msg = "secret /home/me/.ssh/key"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("quarry.capture.scrub_and_log", boom)
+
+    with caplog.at_level(logging.ERROR, logger="quarry.capture_file"):
+        assert not CaptureWriter().write(_request(tmp_path))
+
+    assert "RuntimeError" in caplog.text
+    assert "secret" not in caplog.text

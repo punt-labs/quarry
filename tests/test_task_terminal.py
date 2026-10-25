@@ -31,7 +31,9 @@ def test_an_arbitrary_exception_records_only_its_class(
     [record] = caplog.records
     assert record.getMessage() == "Background sync failed"
     assert record.exc_info is not None
-    assert record.exc_info[1] is secret
+    assert record.exc_info[1] is not secret  # the stand-in names the class only
+    assert str(record.exc_info[1]) == "RuntimeError"
+    assert "QSEC" not in caplog.text
 
 
 def test_cancellation_is_recorded_and_reraised() -> None:
@@ -48,4 +50,17 @@ def test_a_body_that_never_set_a_status_is_marked_failed() -> None:
     assert (state.status, state.error) == (
         "failed",
         "task exited without setting terminal status",
+    )
+
+
+def test_a_cancel_never_overwrites_the_reason_the_run_already_gave() -> None:
+    state = _state()
+    state.error = "backfill stopped (daemon shutting down); scan thread still running"
+
+    with pytest.raises(asyncio.CancelledError), TaskTerminal.recording(state):
+        _fail(asyncio.CancelledError())
+
+    assert state.status == "failed"
+    assert state.error == (
+        "backfill stopped (daemon shutting down); scan thread still running"
     )

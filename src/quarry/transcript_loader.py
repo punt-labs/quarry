@@ -2,65 +2,40 @@
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, ClassVar, final
+from typing import TYPE_CHECKING, final
 
-from quarry.file_stamp import FileStamp
-from quarry.refusal import RefusalError
-from quarry.transcript_read import TranscriptRead
+from quarry.loaded_transcript import LoadedTranscript
+from quarry.transcript_bytes import TranscriptBytes
 from quarry.transcript_reader import TranscriptReader
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-class TranscriptTooLargeError(RefusalError):
-    """The transcript is over the backfill read limit."""
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class LoadedTranscript:
-    """A transcript as read: what was read, and the conversation text in it."""
-
-    read: TranscriptRead
-    text: str
-
-
 @final
 class TranscriptLoader:
-    """Read a transcript from one open file, so the stamp, the text and the parse agree.
+    """Load a transcript from the one read of its file, so the stamp and text agree.
 
     A fault is raised, never read as an empty conversation: backfill remembers an
     empty transcript and never reads it again, so a read that failed must not
-    look like one.  The stamp comes from the open file, and the text parsed is
-    the text that read returned: there is no second read that could disagree.
-    A transcript past :attr:`MAX_BYTES` (a conversation of that size is not a
-    transcript but a log) is refused rather than truncated, so it is counted and
-    named instead of silently half-stored.
+    look like one.  The text parsed is the text that read returned
+    (:class:`~quarry.transcript_bytes.TranscriptBytes`): there is no second read
+    that could disagree with the first.
     """
-
-    MAX_BYTES: ClassVar[int] = 64 * 1024 * 1024
 
     __slots__ = ()
 
-    @classmethod
-    def load(cls, path: Path) -> LoadedTranscript:
+    @staticmethod
+    def load(path: Path) -> LoadedTranscript:
         """Return the transcript at *path*.
 
         Raises:
             OSError: The file could not be opened or read (``ENOENT`` if it is gone).
             UnicodeDecodeError: The file is not UTF-8.
+            NotARegularFileError: The path is a pipe or a device.
             TranscriptTooLargeError: The file is over the read limit.
         """
-        snapshot = datetime.now(UTC)
-        with path.open("rb") as handle:
-            stamp = FileStamp.of(os.fstat(handle.fileno()))
-            raw = handle.read(cls.MAX_BYTES + 1)
-        if len(raw) > cls.MAX_BYTES:
-            msg = "transcript is over the 64 MiB backfill limit"
-            raise TranscriptTooLargeError(msg)
+        read, raw = TranscriptBytes.read(path, datetime.now(UTC))
         reader = TranscriptReader.from_text(path, raw.decode("utf-8"))
-        return LoadedTranscript(TranscriptRead(path, stamp, snapshot), reader.text())
+        return LoadedTranscript(read, reader.text())

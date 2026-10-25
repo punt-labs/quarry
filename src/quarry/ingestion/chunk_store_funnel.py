@@ -123,8 +123,8 @@ class ChunkStoreFunnel:
         fact, carried on the context, not read back from the document's path: a
         label that merely looks like a URL is not a page and has no twins.
         """
-        self._replace_prior(chunks)
         self._progress("Embedding + storing in bounded windows")
+        self._replace_prior(chunks)
         t0 = time.perf_counter()
         inserted = OwnedInsert(self._name, self._context).run(chunks)
         RunContext.note_stored(self._context, self._name)

@@ -9,7 +9,7 @@ from quarry import backfill
 from quarry.daemon.bounded_scan import BoundedScan
 from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
-from quarry.daemon.run_record import RunRecord
+from quarry.daemon.run_report import RunReport
 from quarry.daemon.thread_call import ThreadCall
 from quarry.stop_signal import StopSignal
 
@@ -31,11 +31,9 @@ class BackfillTask:
     when it stored nothing and left something undone, else ``completed``.
     """
 
-    # Seconds the run waits for the scan thread to return after a stop.  The
-    # scan checks the stop before every step it controls, so the longest it can
-    # still be busy is one step it cannot interrupt (a transcript's read, scrub
-    # or capture write, seconds even on a slow disk): half a minute fires only
-    # on a hang, never on a slow step.
+    # Seconds to wait for the scan thread after a stop: it can still be busy
+    # only in one step it cannot interrupt (a read, a scrub, a capture write),
+    # seconds even on a slow disk, so half a minute fires only on a hang.
     STOP_BOUND_S: ClassVar[float] = 30.0
 
     __slots__ = ("_bound_s", "_ctx")
@@ -59,13 +57,17 @@ class BackfillTask:
         )
         stop = StopSignal()
         call = ThreadCall.here(stop, DEFAULT_QUEUE_POLICY.total_s)
-        writer = QueuedTranscriptWriter(self._ctx, call)
+        report = RunReport(state, stop, dry_run=args.dry_run)
         runtime = backfill.BackfillRuntime(
-            self._ctx.database, writer, self._ctx.settings.registry_path, stop
+            self._ctx.database,
+            QueuedTranscriptWriter(self._ctx, call),
+            self._ctx.settings.registry_path,
+            stop,
+            report.progress,
         )
         with self._ctx.ingest_queue.gate.stopping(stop):
             await BoundedScan(stop, self._bound_s).run(
                 partial(backfill.Backfill.sessions, config, runtime),
                 state,
-                RunRecord(state, dry_run=args.dry_run).stats,
+                report,
             )

@@ -12,12 +12,14 @@ import pytest
 
 from quarry.backfill_session import BackfillSession
 from quarry.backfill_writer import BackfillWriteError, WriteOutcome
+from quarry.daemon.commit_checkpoint import CommitCheckpoint, JobWithdrawnError
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.daemon.queued_ingest import QueuedIngest, QueuePolicy
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskState
+from quarry.daemon.thread_call import ThreadCallAbortedError
 from quarry.stop_signal import StopSignal
 from tests.queue_fixtures import (
     BlockingUnit,
@@ -311,3 +313,115 @@ async def test_a_job_that_times_out_still_queued_never_writes_later(
 
     assert raised.value.outcome is WriteOutcome.ABORTED
     assert wrote == []
+
+
+def _aborting_after(status: str, error: str = "") -> object:
+    """A wait that ended without an answer, just after the job reached *status*."""
+
+    async def run_tracked(
+        _self: QueuedIngest, _job: object, state: TaskState
+    ) -> TaskState:
+        state.status = status
+        state.error = error
+        msg = "task cancelled"
+        raise ThreadCallAbortedError(msg)
+
+    return run_tracked
+
+
+async def test_a_job_that_stored_just_before_the_withdraw_is_counted_stored(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    writer = writer_for(ctx, asyncio.get_running_loop())
+
+    with patch.object(QueuedIngest, "run_tracked", _aborting_after("completed")):
+        await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
+
+
+async def test_a_job_past_its_commit_at_the_withdraw_is_counted_stored(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    writer = writer_for(ctx, asyncio.get_running_loop())
+
+    with patch.object(QueuedIngest, "run_tracked", _aborting_after("committing")):
+        await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
+
+
+async def test_a_job_that_failed_just_before_the_withdraw_fails_with_its_own_reason(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    writer = writer_for(ctx, asyncio.get_running_loop())
+
+    with (
+        patch.object(QueuedIngest, "run_tracked", _aborting_after("failed", "no text")),
+        pytest.raises(BackfillWriteError, match="no text") as raised,
+    ):
+        await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
+
+    assert raised.value.outcome is WriteOutcome.FAILED
+
+
+async def test_a_running_job_withdrawn_before_its_commit_never_writes(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    stop = StopSignal()
+    writer = writer_for(ctx, asyncio.get_running_loop(), stop)
+    gate = asyncio.Event()
+    wrote: list[str] = []
+
+    async def embeds_then_commits(
+        self: ScrubbedIngestJob, _ctx: object, state: TaskState
+    ) -> None:
+        await gate.wait()  # still embedding when the run is stopped
+        assert self.checkpoint is not None
+        try:
+            self.checkpoint(CommitCheckpoint.COMMIT_POINT)  # raises: withdrawn
+        except JobWithdrawnError:
+            return  # the job's terminal handler would record the refusal
+        wrote.append("written")
+        state.status = "completed"
+
+    asyncio.get_running_loop().call_later(0.3, stop.set, "task cancelled")
+    with (
+        patch.object(ScrubbedIngestJob, "run", embeds_then_commits),
+        pytest.raises(BackfillWriteError) as raised,
+    ):
+        await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
+    gate.set()
+    await asyncio.sleep(0.2)
+    await ctx.ingest_queue.aclose(drain_timeout=2.0)
+
+    assert raised.value.outcome is WriteOutcome.ABORTED_RUNNING
+    assert wrote == []
+
+
+async def test_a_job_past_its_commit_when_the_run_stops_is_counted_stored(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    stop = StopSignal()
+    writer = writer_for(ctx, asyncio.get_running_loop(), stop)
+    gate = asyncio.Event()
+    wrote: list[str] = []
+
+    async def commits_then_writes(
+        self: ScrubbedIngestJob, _ctx: object, state: TaskState
+    ) -> None:
+        assert self.checkpoint is not None
+        self.checkpoint(CommitCheckpoint.COMMIT_POINT)  # past the point of no return
+        await gate.wait()
+        wrote.append("written")
+        state.status = "completed"
+
+    asyncio.get_running_loop().call_later(0.3, stop.set, "task cancelled")
+    with patch.object(ScrubbedIngestJob, "run", commits_then_writes):
+        await asyncio.to_thread(writer.write, "c", _session(tmp_path), _SNAPSHOT)
+        gate.set()
+        await asyncio.sleep(0.2)
+    await ctx.ingest_queue.aclose(drain_timeout=2.0)
+
+    assert wrote == ["written"]  # reported stored, and it was

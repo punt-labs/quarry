@@ -54,9 +54,9 @@ A `POST /v1/capture` reaches embedding + write like this:
 | Step | Location |
 |------|----------|
 | Route validates body, derives `<repo>-captures`, builds job | `daemon/routes/captures.py:31-79` |
-| `state = self.ctx.tasks.begin("capture")` (status `"running"`) | `daemon/routes/captures.py:43`; `daemon/tasks.py:84-98` |
+| `state = self.ctx.tasks.begin("capture")` (status `"running"`) | `daemon/routes/captures.py:43`; `daemon/tasks.py:77-83` |
 | `self.accept(state, job.run(self.ctx, state))` | `daemon/routes/captures.py:44` |
-| `accept` → **`asyncio.create_task(coro)`** + track, return 202 | `daemon/routes/base.py:116-127` |
+| `accept` → **`asyncio.create_task(coro)`** + track, return 202 | `daemon/routes/base.py:156-165` |
 | `CaptureIngestJob.run` → `run_in_threadpool(self._capture, ctx)` | `daemon/content_jobs.py` (`CaptureIngestJob.run`) |
 | `_capture` → `ScrubbedIngestJob.scrub_and_ingest` → `ingest_content` | `daemon/content_jobs.py` (`CaptureIngestJob._capture`, `ScrubbedIngestJob.scrub_and_ingest`) |
 | `ingest_content` → `_chunk_embed_store` (delete + `DocumentStreamer.insert`) | `ingestion/chunk_store_funnel.py` (`ChunkStoreFunnel._chunk_embed_store`) |
@@ -67,7 +67,7 @@ A `POST /v1/capture` reaches embedding + write like this:
 run_in_threadpool → _chunk_embed_store` path.
 
 **Where unbounded concurrency enters:** `RouteGroup.accept`
-(`daemon/routes/base.py:122`) fires `asyncio.create_task` per request with no
+(`daemon/routes/base.py:160`) fires `asyncio.create_task` per request with no
 gate. Every accepted capture becomes a live task; each hops onto the AnyIO
 threadpool (≤ 40 slots) and runs embed + write immediately. Nothing serializes
 same-collection writers, and nothing bounds how many embed jobs run at once.
@@ -192,7 +192,7 @@ async def _run(self) -> None:
                 return
             item.state.status = "running"  # queued -> running here
             async with self._embed_gate:  # global concurrency bound
-                await item.job.run(self._ctx, item.state)  # task_terminal inside
+                await item.job.run(self._ctx, item.state)  # TaskTerminal inside
         finally:
             self._admit_release()  # free one queue-depth slot
             self._queue.task_done()
@@ -210,10 +210,10 @@ async def _run(self) -> None:
 
 ### 3.3 Route change
 
-`accept(...)` (`daemon/routes/base.py:116`) splits into two paths:
+`accept(...)` (`daemon/routes/base.py:156`) splits into two paths:
 
 - **Sync/optimize/backfill/delete** keep `asyncio.create_task` — they are
-  already singleton-gated by `reject_if_running` (`base.py:95-114`) and don't
+  already singleton-gated by `reject_if_running` (`base.py:110-129`) and don't
   touch the shared embed session in a burst. Unchanged. (This is the same
   DES-026 409 concurrent-sync guard, untouched — see §4.1.)
 - **capture / remember / ingest** call a new `submit(collection, job, state)`
@@ -292,7 +292,7 @@ I-NOBLOCK and stalls the hook (the exact regression DES-041 removed).
   DES-026 guard, which filters on `"running"`; scoping the value to the queued
   path avoids that.)
 - The worker sets `status = "running"` when it dequeues the job (§3.2), before
-  `job.run`. `task_terminal` (`tasks.py:39-61`) then records
+  `job.run`. `TaskTerminal.recording` (`task_terminal.py`) then records
   `completed`/`failed`/`cancelled→failed` exactly as today.
 
 This is a new status **value**, not a schema change. The client's `await_task`
@@ -321,7 +321,7 @@ step is needed. The ASGI **lifespan** owns only the bounded shutdown drain:
   after each collection's pending jobs, and `await`s each queue's `join()` under
   a bounded `DRAIN_TIMEOUT` (default 30 s) so queued captures are not silently
   lost on a clean shutdown. On timeout, remaining workers are cancelled;
-  `task_terminal` records `cancelled → failed` and the durable artifact is
+  `TaskTerminal.recording` records `cancelled → failed` and the durable artifact is
   recoverable via backfill. Drain is bounded so shutdown never hangs.
 
 **Resource-invariant interaction** (`tests/test_resource_invariants.py`): the
@@ -343,7 +343,7 @@ DES-026 rejected "queue concurrent sync requests" with the reason *"queuing hide
 the problem; the caller should know sync is already running."* That reasoning is
 specific to a **user-initiated** `quarry sync`: a human or agent issued the
 command and is waiting on its outcome, so the honest response is a `409` telling
-them a sync is already in flight (`routes/base.py:95-114`, `routes/sync.py:44`).
+them a sync is already in flight (`routes/base.py:110-129`, `routes/sync.py:44`).
 
 Captures are the opposite. A capture is a **fire-and-forget background event**:
 the compaction / web-fetch hook already received its `202` and moved on
@@ -360,7 +360,7 @@ The queue also **composes with DES-026's existing guards rather than duplicating
 them**:
 
 - **Server-side sync lock (409).** DES-026's lock gates `POST /v1/sync` only
-  (`reject_if_running`, `routes/base.py:95-114`). Captures never traverse that
+  (`reject_if_running`, `routes/base.py:110-129`). Captures never traverse that
   route, so the capture queue neither uses nor weakens the 409 path. A concurrent
   user `sync` during a capture burst still gets its 409 exactly as today.
 - **`PRAGMA busy_timeout=5000` on every `SyncRegistry` connection**

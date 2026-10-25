@@ -288,6 +288,10 @@ async def test_a_thread_that_will_not_stop_keeps_the_guard_shut_after_the_bound(
 
         assert task.cancelled()  # the loop is not held for the hung thread
         assert ctx.tasks.running_of_kind("backfill") is state  # the guard still is
+        assert state.error == (
+            "backfill stopped (task cancelled); scan thread still running"
+        )
+        assert state.results["stop_reason"] == "task cancelled"  # what it had counted
         release.set()
         await asyncio.sleep(0.3)
 

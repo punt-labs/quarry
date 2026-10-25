@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
-from quarry.backfill_mapping import ProjectMappingResolver
 from quarry.backfill_run import BackfillRun
+from quarry.registered_projects import RegisteredProjects
+from quarry.run_progress import RunProgress
 from quarry.stop_signal import StopSignal
-from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
     from quarry.backfill_stats import BackfillStats
@@ -44,6 +44,9 @@ class BackfillRuntime:
     writer: TranscriptWriter
     registry_path: Path
     stop: StopSignal = field(default_factory=StopSignal)
+    progress: RunProgress = field(
+        default_factory=lambda: RunProgress(StopSignal())  # a window nobody reads
+    )
 
 
 @final
@@ -55,18 +58,9 @@ class Backfill:
     @staticmethod
     def sessions(config: BackfillConfig, runtime: BackfillRuntime) -> BackfillStats:
         """Scan Claude Code project transcripts and file them through *runtime*."""
-        conn = SyncRegistry(runtime.registry_path)
-        try:
-            registrations = conn.list_registrations()
-        finally:
-            conn.close()
-
-        all_mappings = ProjectMappingResolver.resolve_all(registrations)
-        mappings = ProjectMappingResolver.filter_by_project(
-            all_mappings, config.project_filter
-        )
+        projects = RegisteredProjects(runtime.registry_path)
         stats = BackfillRun.open(config, runtime).execute(
-            mappings, ProjectMappingResolver.count_unmapped(all_mappings)
+            projects.filtered(config.project_filter), projects.unregistered
         )
         stats.log(dry_run=config.dry_run)
         return stats

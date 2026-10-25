@@ -3,29 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import time
 from typing import TYPE_CHECKING, Self, final
 
 from starlette.concurrency import run_in_threadpool
 
-from quarry.failure_reason import FailureReason
-from quarry.refusal import RefusalError
+from quarry.daemon.late_outcome import LateOutcome
+from quarry.daemon.scan_wait import ScanWait
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from quarry.daemon.scan_report import ScanReport
     from quarry.daemon.tasks import TaskState
     from quarry.stop_signal import StopSignal
-
-logger = logging.getLogger(__name__)
-
-# How often the wait looks at the clock, and at whether a stop was requested.
-_POLL_S = 0.1
-
-
-class ScanStillRunningError(RefusalError):
-    """The scan thread did not return within the bound after it was told to stop."""
 
 
 @final
@@ -35,17 +25,15 @@ class BoundedScan:
     Cancelling an ``await`` on a thread does not stop the thread.  A task that
     reported itself finished at that point would let the singleton guard admit a
     second run beside the first, so a cancelled scan is told to stop (with its
-    reason) and then awaited through every further cancel, and the cancellation
-    propagates only once the thread has returned.  The scan's result is handed
-    to *record* first, so the reason the run really stopped for survives the
-    cancel.
+    reason) and then awaited through every further cancel
+    (:class:`~quarry.daemon.scan_wait.ScanWait`), and the cancellation
+    propagates only once the thread has returned.  The scan's outcome is written
+    to the task first, so the reason the run really stopped for survives.
 
-    The wait is bounded.  The scan checks the stop signal before each step it
-    controls, but a step blocked in the operating system (a read, a listing)
-    cannot be interrupted, so *bound_s* after the stop was requested the wait
-    gives up rather than hold the event loop's task for good.  The task state
-    keeps ``holds_thread`` until the thread really returns, so the singleton
-    guard still refuses a second run beside it.
+    The wait is bounded.  When it gives up, the task is told what the scan has
+    counted so far and why it stopped, and the task state keeps ``holds_thread``
+    until the thread really returns, so the singleton guard still refuses a
+    second run beside it; the thread's late outcome is written then.
     """
 
     __slots__ = ("_bound_s", "_stop")
@@ -60,60 +48,20 @@ class BoundedScan:
         return self
 
     async def run[T](
-        self, scan: Callable[[], T], state: TaskState, record: Callable[[T], None]
+        self, scan: Callable[[], T], state: TaskState, report: ScanReport[T]
     ) -> T:
-        """Return *scan*'s result, recording it; stop and outwait it if cancelled.
-
-        Raises:
-            asyncio.CancelledError: The task was cancelled, once the thread has
-                returned (or been given up on).
-            ScanStillRunningError: The scan was told to stop and did not return
-                within the bound.
-        """
+        """Return *scan*'s result, recording it; stop and outwait it if cancelled."""
         state.holds_thread = True
         running = asyncio.ensure_future(run_in_threadpool(scan))
-        running.add_done_callback(lambda _done: self._returned(state))
-        cancelled = await self._wait(running)
-        if not running.done():
-            if cancelled:
-                raise asyncio.CancelledError
-            msg = "scan thread still running after the stop; a new run is refused"
-            raise ScanStillRunningError(msg)
-        failure = running.exception()
-        if failure is not None:
-            self._log_failure(failure)
-        else:
-            record(running.result())
-        if cancelled:
-            raise asyncio.CancelledError
-        return running.result()
+        late = LateOutcome(state, report)
+        running.add_done_callback(late.returned)
+        cancelled = await self._waiter().until_done(running)
+        return late.settle(running, cancelled=cancelled, reason=self._reason())
 
-    async def _wait[T](self, running: asyncio.Future[T]) -> bool:
-        """Wait for *running*, absorbing cancels; return whether one arrived."""
-        cancelled = False
-        stopped_at = 0.0
-        while not running.done():
-            try:
-                await asyncio.wait({running}, timeout=_POLL_S)
-            except asyncio.CancelledError:
-                self._stop.set("task cancelled")
-                cancelled = True
-            if self._stop.is_set():
-                stopped_at = stopped_at or time.monotonic()
-                if time.monotonic() - stopped_at >= self._bound_s:
-                    break
-        return cancelled
+    def _waiter(self) -> ScanWait:
+        """Return the wait that absorbs cancels and gives up at the bound."""
+        return ScanWait(self._stop, self._bound_s)
 
-    @staticmethod
-    def _returned(state: TaskState) -> None:
-        """Release the singleton guard's hold: the thread is gone."""
-        state.holds_thread = False
-
-    @staticmethod
-    def _log_failure(exc: BaseException) -> None:
-        """Log how the scan failed: its class and frames, never its message."""
-        logger.error(
-            "backfill scan failed: %s\n%s",
-            type(exc).__name__,
-            FailureReason.frames(exc),
-        )
+    def _reason(self) -> str:
+        """Return why the scan was stopped, or ``""`` if it was not."""
+        return self._stop.reason

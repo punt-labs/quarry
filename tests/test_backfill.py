@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import errno
 import inspect
 import json
 import logging
 import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -17,6 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
+from quarry.admission_streak import AdmissionStreak
 from quarry.api import BackfillRequest
 from quarry.atomic_file import AtomicFile
 from quarry.backfill import Backfill, BackfillConfig, BackfillRuntime
@@ -24,9 +27,12 @@ from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.backfill_run import BackfillRun
 from quarry.backfill_session import BackfillSession
 from quarry.backfill_stats import BackfillStats
-from quarry.backfill_tally import BackfillTally
 from quarry.backfill_unindexable import UnindexableTranscripts
 from quarry.backfill_writer import BackfillWriteError, WriteOutcome
+from quarry.capture import CaptureRequest, CaptureWriter
+from quarry.capture_directory import CaptureDirectory
+from quarry.capture_outcome import CaptureOutcome
+from quarry.capture_reaper import CaptureReaper
 from quarry.cli_maintenance import MaintenanceCli
 from quarry.config import Settings
 from quarry.daemon.content_jobs import ScrubbedIngestJob
@@ -40,6 +46,7 @@ from quarry.ingestion.streaming import DocumentStreamer
 from quarry.results import DocumentSummary
 from quarry.stop_signal import StopSignal
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+from quarry.transcript_bytes import TranscriptBytes
 from quarry.transcript_loader import TranscriptLoader
 from quarry.transcript_read import TranscriptRead
 from quarry.transcript_reader import TranscriptReader
@@ -49,7 +56,8 @@ from tests.transcript_writers import DirectWriter, RecordingWriter, runtime_over
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
-    from quarry.transcript_loader import LoadedTranscript
+    from quarry.loaded_transcript import LoadedTranscript
+    from quarry.models import PageContent
 
 runner = CliRunner()
 
@@ -90,8 +98,9 @@ class TestBackfillConfig:
 
     def test_frozen(self) -> None:
         cfg = BackfillConfig()
+        field = "dry_run"
         with pytest.raises(AttributeError):
-            cfg.dry_run = True  # type: ignore[misc]
+            setattr(cfg, field, True)
 
 
 # ---------------------------------------------------------------------------
@@ -556,10 +565,10 @@ class TestBackfillSessions:
         settings = _make_settings(env["db_path"], env["registry_path"])
         writer = DirectWriter(Database.connect(env["db_path"]), settings)
 
-        stored: list[object] = []
+        stored: list[PageContent] = []
 
         def _capture_build_chunks(
-            _self: DocumentStreamer, pages: list[object], _labels: object
+            _self: DocumentStreamer, pages: list[PageContent], _labels: object
         ) -> list[object]:
             stored.extend(pages)
             return []
@@ -571,7 +580,7 @@ class TestBackfillSessions:
             _run(env, writer)
 
         assert stored, "the job never reached the chunker"
-        joined = " ".join(page.text for page in stored)  # type: ignore[attr-defined]
+        joined = " ".join(page.text for page in stored)
         assert fake_pat not in joined
         assert email not in joined
         assert "[REDACTED:gh-pat]" in joined
@@ -783,8 +792,8 @@ class TestStopping:
 
         stats = _run(env, writer)
 
-        assert len(writer.calls) == BackfillTally.MAX_UNADMITTED
-        assert stats.failed == BackfillTally.MAX_UNADMITTED
+        assert len(writer.calls) == AdmissionStreak.MAX
+        assert stats.failed == AdmissionStreak.MAX
         assert stats.not_attempted == 2
         assert stats.errors[0] == "backfill stopped: ingest queue stayed full"
 
@@ -857,7 +866,9 @@ class TestOneLinePerFailure:
         env = _registered_env(tmp_path)
         writer = RecordingWriter()
 
-        with patch("quarry.capture.CaptureWriter.write", return_value=False):
+        with patch(
+            "quarry.capture.CaptureWriter.outcome", return_value=CaptureOutcome.FAILED
+        ):
             stats = _run(env, writer)
 
         assert writer.calls == []  # not handed on as if it had been written
@@ -865,6 +876,145 @@ class TestOneLinePerFailure:
         assert stats.errors == [
             f"{env['transcript'].name}: capture file could not be written"
         ]
+
+
+class TestARefusedTranscriptIsCountedOnceAndNeverConsumesTheLimit:
+    @staticmethod
+    def _big(path: Path) -> None:
+        path.write_text("x" * (1024 * 1024 + 1))
+        os.utime(path, (_LONG_AGO, _LONG_AGO))
+
+    def test_an_oversized_transcript_is_failed_once_then_skipped_by_its_stamp(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        self._big(env["transcript"])
+        loads: list[str] = []
+        real_load = TranscriptLoader.load
+
+        def counting(path: Path) -> LoadedTranscript:
+            loads.append(path.name)
+            return real_load(path)
+
+        with (
+            patch.object(TranscriptBytes, "MAX_BYTES", 1024 * 1024),
+            patch.object(TranscriptLoader, "load", counting),
+        ):
+            first = _run(env, RecordingWriter())
+            second = _run(env, RecordingWriter())
+
+        assert first.failed == 1
+        assert first.errors == [
+            f"{env['transcript'].name}: transcript is over the 1 MiB backfill limit"
+        ]
+        assert (second.failed, second.skipped_empty) == (0, 1)
+        assert loads == [env["transcript"].name]  # never read again
+
+    def test_a_transcript_that_changed_since_it_was_refused_is_looked_at_again(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        self._big(env["transcript"])
+        with patch.object(TranscriptBytes, "MAX_BYTES", 1024 * 1024):
+            _run(env, RecordingWriter())
+            _make_transcript(env["transcript"], [_user_message("small now")])
+            again = RecordingWriter()
+            stats = _run(env, again)
+
+        assert [call.name for call in again.calls] == ["session-abcd1234"]
+        assert stats.failed == 0
+
+    def test_a_pipe_in_the_project_is_refused_without_holding_the_scan(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        fifo = env["project_dir"] / "ffff0001-0000-0000-0000-000000000000.jsonl"
+        os.mkfifo(fifo)
+        os.utime(fifo, (_LONG_AGO, _LONG_AGO))
+        started = time.monotonic()
+
+        stats = _run(env, RecordingWriter())
+
+        assert time.monotonic() - started < 10
+        assert stats.failed == 1
+        assert stats.errors == [f"{fifo.name}: transcript is not a regular file"]
+        assert stats.ingested == 1  # the real transcript beside it was filed
+
+    def test_a_read_fault_does_not_use_up_the_limit(self, tmp_path: Path) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001")
+        real_open = builtins.open
+
+        def fails_for_the_first(path: Path, *args: Any, **kwargs: Any) -> object:
+            if Path(path).name.startswith("abcd1234"):
+                raise OSError(errno.EMFILE, "Too many open files")
+            return real_open(path, *args, **kwargs)
+
+        writer = RecordingWriter()
+        with patch("quarry.transcript_bytes.open", fails_for_the_first, create=True):
+            stats = _run(env, writer, BackfillConfig(limit=1))
+
+        assert stats.failed == 1  # the unreadable one, counted ...
+        assert [call.name for call in writer.calls] == ["session-bbbb0001"]  # ... free
+        assert stats.ingested == 1
+
+
+class TestACaptureThatWasNotWrittenSaysWhy:
+    def test_a_symlink_where_the_capture_goes_is_refused_by_name(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        target = env["real_project"] / ".punt-labs" / "quarry" / "captures"
+        target.mkdir(parents=True)
+        (target / "session-abcd1234.md").symlink_to(tmp_path / "elsewhere.md")
+        writer = RecordingWriter()
+
+        stats = _run(env, writer)
+
+        assert writer.calls == []
+        assert stats.errors == [f"{env['transcript'].name}: capture refused: symlink"]
+        assert not (tmp_path / "elsewhere.md").exists()
+
+    def test_nothing_to_capture_is_a_skip_not_a_failure(self, tmp_path: Path) -> None:
+        env = _registered_env(tmp_path)
+        writer = RecordingWriter()
+
+        with patch(
+            "quarry.capture.CaptureWriter.outcome", return_value=CaptureOutcome.EMPTY
+        ):
+            stats = _run(env, writer)
+
+        assert writer.calls == []
+        assert stats.skipped_empty == 1
+        assert stats.failed == 0
+        assert stats.errors == []
+
+
+class TestACrashedCaptureWritesLeftoversAreReapedOncePerProject:
+    def test_the_stale_temp_file_of_a_crashed_write_is_removed_by_the_run(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        captures = env["real_project"].joinpath(*CaptureDirectory.RELATIVE)
+        captures.mkdir(parents=True)
+        stale = captures / ".session-feed0001.md.x1y2z3.tmp"
+        stale.write_text("half")
+        os.utime(stale, (_LONG_AGO, _LONG_AGO))
+
+        _run(env, RecordingWriter())
+
+        assert not stale.exists()
+
+    def test_it_happens_once_for_a_project_not_once_per_transcript(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002", "bbbb0003")
+
+        with patch.object(CaptureReaper, "reap", return_value=0) as reap:
+            _run(env, RecordingWriter())
+
+        assert reap.call_count == 1
 
 
 class TestTheRunReport:
@@ -960,14 +1110,14 @@ _EMFILE_LINE = "abcd1234-0000-0000-0000-000000000000.jsonl: unreadable (EMFILE)"
 class TestAReadFaultIsAFailureNeverAnEmptyTranscript:
     @staticmethod
     def _failing_open(errno_code: int) -> AbstractContextManager[object]:
-        real_open = Path.open
+        real_open = builtins.open
 
-        def fails(self: Path, *args: Any, **kwargs: Any) -> object:
-            if self.suffix == ".jsonl":
+        def fails(path: Path, *args: Any, **kwargs: Any) -> object:
+            if Path(path).suffix == ".jsonl":
                 raise OSError(errno_code, os.strerror(errno_code))
-            return real_open(self, *args, **kwargs)
+            return real_open(path, *args, **kwargs)
 
-        return patch.object(Path, "open", fails)
+        return patch("quarry.transcript_bytes.open", fails, create=True)
 
     def test_a_read_error_is_a_failure_never_recorded_and_retried_next_run(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -1122,14 +1272,16 @@ class TestTheNotAdmittedStreakIsConsecutive:
                 "session-bbbb0003": self._full(),
             }
         )
-        real = BackfillSession.write_capture_file
+        real = CaptureWriter.outcome
 
-        def capture_fails_for_the_second(session: BackfillSession) -> bool:
-            return False if session.name == "session-bbbb0001" else real(session)
+        def capture_fails_for_the_second(
+            self: CaptureWriter, request: CaptureRequest
+        ) -> CaptureOutcome:
+            if request.session_id.startswith("bbbb0001"):
+                return CaptureOutcome.FAILED
+            return real(self, request)
 
-        with patch.object(
-            BackfillSession, "write_capture_file", capture_fails_for_the_second
-        ):
+        with patch.object(CaptureWriter, "outcome", capture_fails_for_the_second):
             stats = _run(env, writer)
 
         assert stats.stopped == "ingest queue stayed full"
@@ -1228,7 +1380,7 @@ class TestTheStopIsCheckedBeforeEveryBlockingStep:
 
         with (
             patch.object(TranscriptLoader, "load", stops_during_the_read),
-            patch.object(BackfillSession, "write_capture_file") as capture,
+            patch.object(CaptureWriter, "outcome") as capture,
         ):
             stats = _run(env, RecordingWriter(), stop=stop)
 
@@ -1243,13 +1395,13 @@ class TestTheStopIsCheckedBeforeEveryBlockingStep:
         stop = StopSignal()
         writer = RecordingWriter()
 
-        def stops_during_the_capture(_self: BackfillSession) -> bool:
+        def stops_during_the_capture(
+            _self: CaptureWriter, _request: CaptureRequest
+        ) -> CaptureOutcome:
             stop.set("daemon shutting down")
-            return True
+            return CaptureOutcome.WRITTEN
 
-        with patch.object(
-            BackfillSession, "write_capture_file", stops_during_the_capture
-        ):
+        with patch.object(CaptureWriter, "outcome", stops_during_the_capture):
             stats = _run(env, writer, stop=stop)
 
         assert writer.calls == []  # nothing was handed to the scrub and the queue
@@ -1372,7 +1524,8 @@ class TestBackfillCaptureRedaction:
         # transcript's mtime, so rewriting the file on a rerun must not let a
         # straddled clock tick change the bytes this test asserts are identical.
         os.utime(transcript, (1_700_000_000, 1_700_000_000))
-        BackfillSession(transcript, str(tmp_path), text).write_capture_file()
+        session = BackfillSession(transcript, str(tmp_path), text)
+        CaptureWriter().outcome(session.capture_request())
         return tmp_path / ".punt-labs" / "quarry" / "captures" / "session-sess1234.md"
 
     def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
@@ -1401,9 +1554,8 @@ class TestBackfillCaptureRedaction:
         """
         missing = tmp_path / "sess1234abcd.jsonl"  # never created — stat() will raise
 
-        BackfillSession(
-            missing, str(tmp_path), "ran /Users/jdoe/x here"
-        ).write_capture_file()
+        session = BackfillSession(missing, str(tmp_path), "ran /Users/jdoe/x here")
+        CaptureWriter().outcome(session.capture_request())
 
         captures = tmp_path / ".punt-labs" / "quarry" / "captures"
         content = (captures / "session-sess1234.md").read_text(encoding="utf-8")

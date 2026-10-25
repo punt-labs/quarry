@@ -1,79 +1,95 @@
-"""One capture file on disk: owner-only, never through a symlink, durable."""
+"""One capture file on disk: scrubbed, owner-only, never through a symlink, durable."""
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
-import time
-from pathlib import Path
-from typing import ClassVar, Self, final
+import stat
+from typing import TYPE_CHECKING, Self, final
 
-from quarry.atomic_file import AtomicFile
+from quarry.capture_directory import CaptureDirectory, CaptureSymlinkError
+from quarry.capture_outcome import CaptureOutcome
+from quarry.capture_temp import CaptureTemp
+from quarry.failure_reason import FailureReason
+from quarry.redacted_failure import RedactedFailure
+
+if TYPE_CHECKING:
+    from quarry.capture import CaptureRequest
 
 logger = logging.getLogger(__name__)
 
 
 @final
 class CaptureFile:
-    """Write a capture where only its owner can read it, and no further than its path.
+    """Write a request's capture where only its owner can read it, and nowhere else.
 
-    A capture holds a scrubbed conversation, so it is written mode 0600, from the
-    first byte (the temp file is created that way, not chmod-ed after).  The
-    captures directory travels with a repository, so a clone can carry a symlink
-    where a capture will be written; the write is refused rather than followed to
-    wherever it points.  After the rename the directory is synced, so a capture
-    that was reported written survives a power loss.  A temp file a crashed write
-    left behind is reaped once it is old enough that no live write can own it.
+    Mode 0600 from the first byte (:class:`~quarry.capture_temp.CaptureTemp`); a
+    symlink anywhere in the path, even one planted mid-write, is refused or
+    replaced, never followed (every step goes through a descriptor opened by
+    :class:`~quarry.capture_directory.CaptureDirectory`); the directory is synced
+    after the rename, and a failed sync is a warning.  Any other failure is
+    logged by class and frames and is the outcome ``FAILED``: a capture-file
+    problem never blocks the ingest it belongs to.
     """
 
-    # An in-flight write holds its temp file for milliseconds; one this old was
-    # left by a crash.
-    STALE_TEMP_S: ClassVar[float] = 3600.0
-    MODE: ClassVar[int] = 0o600
+    __slots__ = ("_request",)
 
-    __slots__ = ("_path",)
+    _request: CaptureRequest
 
-    _path: Path
-
-    def __new__(cls, path: Path) -> Self:
+    def __new__(cls, request: CaptureRequest) -> Self:
         self = super().__new__(cls)
-        self._path = path
+        self._request = request
         return self
 
-    def write(self, content: str) -> bool:
-        """Write *content* to the capture path atomically, owner-only.
+    def landed(self) -> bool:
+        """Write the capture file; return whether one landed."""
+        return self.write() is CaptureOutcome.WRITTEN
 
-        Return whether it landed: ``False`` (with the reason logged) when the
-        path is a symlink, which is never written through.
-
-        Raises:
-            OSError: The write could not be made durable.
-        """
-        if self._path.is_symlink():
-            logger.warning("capture: %s is a symlink; not written", self._path.name)
-            return False
-        self._reap_leftovers()
-        AtomicFile(self._path).replace(content, mode=self.MODE)
-        self._sync_directory()
-        return True
-
-    def _sync_directory(self) -> None:
-        """Flush the directory entry the rename just wrote."""
-        fd = os.open(self._path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    def write(self) -> CaptureOutcome:
+        """Scrub the request and write its capture file; say how that ended."""
         try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+            return self._write(self._request.scrubbed_content())
+        except Exception as exc:
+            logger.error(
+                "%s: capture file write failed",
+                self._request.label,
+                exc_info=RedactedFailure.of(exc),
+            )
+            return CaptureOutcome.FAILED
 
-    def _reap_leftovers(self) -> None:
-        """Remove the stale temp files of crashed capture writes in this directory.
+    def _write(self, content: str) -> CaptureOutcome:
+        """Write *content* to the capture file; nothing to write is an outcome."""
+        if not content:
+            return CaptureOutcome.EMPTY
+        name = self._request.capture_path().name
+        try:
+            with CaptureDirectory(self._request.project_dir).opened(create=True) as fd:
+                return self._store(fd, name, content)
+        except CaptureSymlinkError:
+            logger.warning("capture: a symlink in the path of %s; not written", name)
+            return CaptureOutcome.SYMLINK
 
-        Best effort: a leftover that cannot be removed is left for the next write.
-        """
-        cutoff = time.time() - self.STALE_TEMP_S
-        for leftover in self._path.parent.glob(".session-*.md.*.tmp"):
-            with contextlib.suppress(OSError):
-                if leftover.stat().st_mtime < cutoff:
-                    leftover.unlink()
-                    logger.info("capture: reaped a stale temp file %s", leftover.name)
+    @staticmethod
+    def _store(directory: int, name: str, content: str) -> CaptureOutcome:
+        """Refuse a symlink at the target, else write through a temp and sync."""
+        try:
+            mode = os.stat(name, dir_fd=directory, follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            mode = 0
+        if stat.S_ISLNK(mode):
+            logger.warning("capture: %s is a symlink; not written", name)
+            return CaptureOutcome.SYMLINK
+        CaptureTemp(directory, name).commit(content)
+        CaptureFile._sync(directory)
+        return CaptureOutcome.WRITTEN
+
+    @staticmethod
+    def _sync(directory: int) -> None:
+        """Flush the directory entry the rename wrote; a failure is only a warning."""
+        try:
+            os.fsync(directory)
+        except OSError as exc:
+            logger.warning(
+                "capture: could not sync the captures directory: %s",
+                FailureReason.os_name(exc),
+            )

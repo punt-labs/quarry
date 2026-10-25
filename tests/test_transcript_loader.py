@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+import builtins
 import errno
 import json
 import os
+import stat
+import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
 
 from quarry.file_stamp import FileStamp
-from quarry.transcript_loader import TranscriptLoader, TranscriptTooLargeError
+from quarry.transcript_bytes import TranscriptBytes
+from quarry.transcript_loader import TranscriptLoader
 from quarry.transcript_reader import TranscriptReader
+from quarry.transcript_refusals import NotARegularFileError, TranscriptTooLargeError
+
+if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
 
 
 def _transcript(tmp_path: Path, text: str = "hello") -> Path:
@@ -38,20 +46,31 @@ def test_the_conversation_text_and_the_stamp_come_from_the_one_read(
     assert loaded.read.stamp == FileStamp.of(path.stat())
 
 
+def _fails_to_open(code: int) -> AbstractContextManager[object]:
+    real_open = builtins.open
+
+    def fails(path: Path, *args: Any, **kwargs: Any) -> object:
+        if Path(path).suffix == ".jsonl":
+            raise OSError(code, os.strerror(code))
+        return real_open(path, *args, **kwargs)
+
+    return patch("quarry.transcript_bytes.open", fails, create=True)
+
+
 def test_the_file_is_opened_once_and_never_read_a_second_time(tmp_path: Path) -> None:
     path = _transcript(tmp_path)
     opened: list[str] = []
-    real_open = Path.open
+    real_open = builtins.open
 
-    def counting(self: Path, *args: Any, **kwargs: Any) -> Any:
-        opened.append(self.name)
-        return real_open(self, *args, **kwargs)
+    def counting(target: Path, *args: Any, **kwargs: Any) -> Any:
+        opened.append(Path(target).name)
+        return real_open(target, *args, **kwargs)
 
     def no_second_read(self: Path, *args: object, **kwargs: object) -> str:
         pytest.fail(f"{self.name} was read a second time")
 
     with (
-        patch.object(Path, "open", counting),
+        patch("quarry.transcript_bytes.open", counting, create=True),
         patch.object(Path, "read_text", no_second_read),
     ):
         TranscriptLoader.load(path)
@@ -59,17 +78,11 @@ def test_the_file_is_opened_once_and_never_read_a_second_time(tmp_path: Path) ->
     assert opened == ["session.jsonl"]
 
 
-@pytest.mark.parametrize(
-    "code",
-    [errno.EMFILE, errno.EACCES, errno.EIO],
-)
+@pytest.mark.parametrize("code", [errno.EMFILE, errno.EACCES, errno.EIO])
 def test_a_read_fault_raises_with_its_real_errno(tmp_path: Path, code: int) -> None:
     path = _transcript(tmp_path)
 
-    def fails(self: Path, *args: object, **kwargs: object) -> object:
-        raise OSError(code, os.strerror(code))
-
-    with patch.object(Path, "open", fails), pytest.raises(OSError) as raised:
+    with _fails_to_open(code), pytest.raises(OSError) as raised:
         TranscriptLoader.load(path)
 
     assert raised.value.errno == code
@@ -92,26 +105,80 @@ def test_a_file_that_is_not_utf8_raises_instead_of_reading_as_empty(
         TranscriptLoader.load(path)
 
 
-def test_a_transcript_over_the_limit_is_refused_not_truncated(tmp_path: Path) -> None:
+def test_a_transcript_over_the_limit_is_refused_before_it_is_read(
+    tmp_path: Path,
+) -> None:
     path = _transcript(tmp_path)
 
     with (
-        patch.object(TranscriptLoader, "MAX_BYTES", 10),
-        pytest.raises(TranscriptTooLargeError, match="64 MiB backfill limit"),
+        patch.object(TranscriptBytes, "MAX_BYTES", 10),
+        patch.object(TranscriptReader, "from_text") as parsed,
+        pytest.raises(TranscriptTooLargeError) as raised,
     ):
         TranscriptLoader.load(path)
 
+    parsed.assert_not_called()
+    assert raised.value.read.stamp == FileStamp.of(path.stat())  # kept for the cache
 
-def test_the_limit_is_64_mib_as_the_refusal_says() -> None:
-    assert TranscriptLoader.MAX_BYTES == 64 * 1024 * 1024
+
+def test_the_refusal_names_the_limit_it_derives_from_the_cap(tmp_path: Path) -> None:
+    path = _transcript(tmp_path)
+
+    with (
+        patch.object(TranscriptBytes, "MAX_BYTES", 3 * 1024 * 1024),
+        patch("quarry.transcript_bytes.os.fstat") as fstat,
+        pytest.raises(TranscriptTooLargeError, match="3 MiB backfill limit"),
+    ):
+        fstat.return_value = os.stat_result(
+            (stat.S_IFREG | 0o600, 1, 1, 1, 0, 0, 4 << 20, 0, 0, 0)
+        )
+        TranscriptLoader.load(path)
+
+
+def test_the_limit_is_32_mib_and_the_cost_of_one_at_the_cap_is_stated() -> None:
+    assert TranscriptBytes.MAX_BYTES == 32 * 1024 * 1024
+    assert "256 MiB" in (TranscriptBytes.__doc__ or "")
+
+
+def test_a_file_that_grew_while_it_was_read_is_refused(tmp_path: Path) -> None:
+    path = _transcript(tmp_path)
+    small = path.stat()
+
+    with (
+        patch.object(TranscriptBytes, "MAX_BYTES", small.st_size - 1),
+        patch("quarry.transcript_bytes.os.fstat", return_value=small),
+        pytest.raises(TranscriptTooLargeError),
+    ):
+        TranscriptLoader.load(path)
 
 
 def test_a_transcript_exactly_at_the_limit_is_read(tmp_path: Path) -> None:
     path = _transcript(tmp_path)
     size = path.stat().st_size
 
-    with patch.object(TranscriptLoader, "MAX_BYTES", size):
+    with patch.object(TranscriptBytes, "MAX_BYTES", size):
         assert TranscriptLoader.load(path).text
+
+
+def test_a_pipe_is_refused_at_once_and_never_blocks_the_scan(tmp_path: Path) -> None:
+    fifo = tmp_path / "session.jsonl"
+    os.mkfifo(fifo)
+    started = time.monotonic()
+
+    with pytest.raises(NotARegularFileError, match="not a regular file"):
+        TranscriptLoader.load(fifo)
+
+    assert time.monotonic() - started < 2.0
+
+
+def test_a_directory_is_not_read_and_says_so_by_errno(tmp_path: Path) -> None:
+    directory = tmp_path / "session.jsonl"
+    directory.mkdir()
+
+    with pytest.raises(OSError) as raised:
+        TranscriptLoader.load(directory)
+
+    assert raised.value.errno == errno.EISDIR
 
 
 def test_the_reader_is_final() -> None:
