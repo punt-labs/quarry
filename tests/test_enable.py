@@ -7,11 +7,13 @@ enable/disable drive the daemon's registry through a client port
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from quarry.claude_permissions import QUARRY_RULES
 from quarry.enable import (
     _CONFIG_TEMPLATE,
     DisableResult,
@@ -762,3 +764,39 @@ class TestDisablePreservesOtherClaudemdContent:
         assert "# My Project" in content
         assert "Keep this." in content
         assert REPO_IMPORT_LINE not in content
+
+
+class TestEnableGrantsProjectPermissions:
+    """``quarry enable`` is the consent that grants quarry's allow rules (#552)."""
+
+    def test_enable_grants_then_disable_revokes(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        settings = project / ".claude" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"permissions": {"allow": ["Bash(make:*)"]}}))
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enabled = enable_project(project, client)
+            again = enable_project(project, client)
+            disabled = disable_project(project, client)
+
+        assert enabled.permissions.changed == QUARRY_RULES
+        assert again.permissions.changed == ()
+        assert disabled.permissions.changed == QUARRY_RULES
+        assert json.loads(settings.read_text()) == {
+            "permissions": {"allow": ["Bash(make:*)"]}
+        }
+
+    def test_unreadable_settings_does_not_fail_enable(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / ".claude").mkdir()
+        (project / ".claude" / "settings.json").write_text("{broken")
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, FakeRegistryClient())
+
+        assert result.enabled_marker_written is True
+        assert "not valid JSON" in result.permissions.error

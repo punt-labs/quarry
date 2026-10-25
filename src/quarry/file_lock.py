@@ -32,10 +32,10 @@ class FileLock:
     change, and rename, and the second silently clobbers the first. This lock
     serializes them.
 
-    The lock file lives beside its target (``.CLAUDE.md.lock`` next to
-    ``CLAUDE.md``) so it shares the directory the atomic rename needs anyway,
-    and is created — never removed — so a waiter and a holder always ``flock``
-    the same inode.
+    The lock file lives beside its target (``.CLAUDE.md.punt-import.lock``
+    next to ``CLAUDE.md``, via :meth:`shared`) so it shares the directory the
+    atomic rename needs anyway, and is created — never removed — so a waiter
+    and a holder always ``flock`` the same inode.
 
     **Reentrant within a process.** A nested acquisition of the same lock path
     (``Enablement`` holds the lock across its whole enable/disable sequence while
@@ -64,6 +64,18 @@ class FileLock:
     def __new__(cls, target: Path) -> Self:
         self = super().__new__(cls)
         self._lock_path = target.parent / f".{target.name}.lock"
+        return self
+
+    @classmethod
+    def shared(cls, target: Path) -> Self:
+        """Lock a host file other punt tools also edit, on the mandated name.
+
+        tool-enable-disable.md § 2.4 fixes the sibling ``.<name>.punt-import.lock``
+        for ``CLAUDE.md`` and ``.claude/settings.json``: every tool must take the
+        identical lock, or one serializes only against itself.
+        """
+        self = cls(target)
+        self._lock_path = target.parent / f".{target.name}.punt-import.lock"
         return self
 
     def __enter__(self) -> Self:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from quarry.claude_permissions import PermissionChange
 from quarry.enable import DisableResult, EnableResult
 from quarry.enable_report import DisableReport, EnableReport
 from quarry.ethos_memory import EthosMemoryResult
@@ -134,3 +135,49 @@ def test_disable_report_idempotent_noop() -> None:
     result = DisableResult(directory="/p", collection="", captures_collection="")
     joined = "\n".join(DisableReport(result, keep_data=False).lines())
     assert "Already disabled (no registration)" in joined
+
+
+def test_enable_report_lists_granted_rules_and_scope() -> None:
+    result = EnableResult(
+        directory="/p",
+        collection="p",
+        captures_collection="p-captures",
+        permissions=PermissionChange(changed=("mcp__quarry__*", "Skill(find)")),
+    )
+    joined = "\n".join(EnableReport(result).lines())
+    assert (
+        "  Allowed quarry tools in .claude/settings.json (this project only): "
+        "mcp__quarry__*, Skill(find)"
+    ) in joined
+
+
+def test_enable_report_says_when_rules_already_allowed() -> None:
+    lines = EnableReport(_enable(EthosMemoryResult())).lines()
+    assert "  Quarry tools already allowed in .claude/settings.json" in lines
+
+
+def test_enable_report_surfaces_permission_error() -> None:
+    result = EnableResult(
+        directory="/p",
+        collection="p",
+        captures_collection="p-captures",
+        permissions=PermissionChange(error="bad json"),
+    )
+    assert "  Permissions not changed: bad json" in EnableReport(result).lines()
+
+
+def test_disable_report_lists_removed_rules_and_omits_noop() -> None:
+    removed = DisableResult(
+        directory="/p",
+        collection="",
+        captures_collection="",
+        permissions=PermissionChange(changed=("Skill(find)",)),
+    )
+    noop = DisableResult(directory="/p", collection="", captures_collection="")
+    assert (
+        "  Removed quarry tool permissions from .claude/settings.json "
+        "(this project only): Skill(find)"
+    ) in DisableReport(removed, keep_data=False).lines()
+    assert not any(
+        "settings.json" in line for line in DisableReport(noop, keep_data=False).lines()
+    )

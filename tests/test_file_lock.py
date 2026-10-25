@@ -180,3 +180,15 @@ def test_lock_prevents_lost_updates(tmp_path: Path) -> None:
             p.terminate()
         assert p.exitcode == 0, "a child did not finish cleanly"
     assert counter.read_text() == "200"
+
+
+@pytest.mark.parametrize("target_name", ["CLAUDE.md", "settings.json"])
+def test_shared_lock_uses_the_mandated_punt_import_name(
+    tmp_path: Path, target_name: str
+) -> None:
+    """``FileLock.shared`` takes the cross-tool sibling lock, still gitignored."""
+    with FileLock.shared(tmp_path / target_name):
+        pass
+    lock_name = f".{target_name}.punt-import.lock"
+    assert [p.name for p in tmp_path.iterdir()] == [lock_name]
+    assert fnmatch.fnmatch(lock_name, FILE_LOCK_GITIGNORE_GLOB)
