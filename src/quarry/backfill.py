@@ -20,6 +20,7 @@ from quarry.transcript_reader import TranscriptReader
 
 if TYPE_CHECKING:
     from quarry.config import Settings
+    from quarry.transcript_snapshot import TranscriptSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,10 @@ class _ProjectProcessor:
 
     def _handle(self, transcript: Path) -> None:
         """Skip, dry-run, or ingest one transcript, updating the counters."""
-        if self._stored.is_current(transcript):
+        # Versioned before the read, so growth during the read or the store
+        # leaves the row behind the transcript and the next run re-ingests.
+        snapshot = self._stored.snapshot(transcript)
+        if self._stored.is_current(snapshot):
             self._skipped += 1
             self._acc.skipped_existing += 1
             return
@@ -146,10 +150,11 @@ class _ProjectProcessor:
         if not text.strip():
             self._acc.skipped_empty += 1
             return
-        self._ingest(transcript, text)
+        self._ingest(snapshot, text)
 
-    def _ingest(self, transcript: Path, text: str) -> None:
+    def _ingest(self, snapshot: TranscriptSnapshot, text: str) -> None:
         """Write the capture file and ingest the transcript through the pipeline."""
+        transcript = snapshot.path
         session = BackfillSession(transcript, self._mapping.project_path, text)
         session.write_capture_file()
         try:
@@ -171,13 +176,14 @@ class _ProjectProcessor:
                     self._runtime.settings,
                     overwrite=True,
                     collection=self._collection,
+                    source_version=snapshot.version,
                 ),
             )
         except Exception as exc:
             self._acc.errors.append(FailureReason.line(transcript.name, exc))
             logger.exception("backfill: failed to ingest %s", transcript.name)
             return
-        self._stored.record(transcript)
+        self._stored.record(snapshot)
         self._tally_ingested()
 
     def _tally_ingested(self) -> None:

@@ -138,6 +138,7 @@ class TestSchemaMigration:
         assert "agent_handle" in field_names
         assert "memory_type" in field_names
         assert "summary" in field_names
+        assert "source_version" in field_names
 
     def test_migration_is_idempotent(self, tmp_path: Path) -> None:
         """Running migration twice does not raise or duplicate columns."""

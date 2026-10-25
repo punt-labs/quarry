@@ -149,6 +149,7 @@ class DocumentSummary(TypedDict):
     chunk_count: int
     indexed_pages: int
     ingestion_timestamp: str
+    source_version: str
 
 
 class CollectionSummary(TypedDict):
