@@ -1497,10 +1497,10 @@
   "src/quarry/db/chunk_catalog.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.5,
+    "avg_params": 1.44,
     "max_complexity": 7.0,
-    "avg_complexity": 3.88,
-    "module_size": 192.0,
+    "avg_complexity": 3.67,
+    "module_size": 200.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

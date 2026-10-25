@@ -83,8 +83,18 @@ class ChunkCatalog:
             "chunk_count": len(chunks),
             "indexed_pages": len({int(str(c["page_number"])) for c in chunks}),
             "ingestion_timestamp": max(str(c["ingestion_timestamp"]) for c in chunks),
-            "source_version": str(first.get("source_version", "")),
+            "source_version": ChunkCatalog._shared_version(chunks),
         }
+
+    @staticmethod
+    def _shared_version(chunks: list[dict[str, object]]) -> str:
+        """Return the ``source_version`` all *chunks* carry; ``""`` when they differ.
+
+        Two overwrites of one document that interleave can leave rows from both;
+        such a document vouches for no single version.
+        """
+        versions = {str(c.get("source_version", "")) for c in chunks}
+        return versions.pop() if len(versions) == 1 else ""
 
     def list_collections(self) -> list[CollectionSummary]:
         """List all collections with document and chunk counts."""
