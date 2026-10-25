@@ -185,7 +185,7 @@ class TestRevoke:
 
         assert change.changed == ()
         assert change.error == ""
-        assert not _settings(tmp_path).exists()
+        assert not (tmp_path / ".claude").exists()
 
     def test_revoke_without_quarry_rules_leaves_file_untouched(
         self, tmp_path: Path

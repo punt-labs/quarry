@@ -88,7 +88,13 @@ class ProjectPermissions:
         return self._update(add=True)
 
     def revoke(self) -> PermissionChange:
-        """Remove every quarry rule; return the rules removed."""
+        """Remove every quarry rule; return the rules removed.
+
+        Without a settings file there is nothing to remove, so no lock file
+        (or ``.claude/``) is created in a project that never granted.
+        """
+        if not self._file.path.is_symlink() and not self._file.path.exists():
+            return PermissionChange()
         return self._update(add=False)
 
     def _update(self, *, add: bool) -> PermissionChange:
