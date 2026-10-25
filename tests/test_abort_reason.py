@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, cast, final
 
-from quarry.daemon.abort_reason import AbortReason
+from quarry.daemon.abort_reason import Aborted, AbortReason
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 
 if TYPE_CHECKING:
@@ -51,8 +51,12 @@ class _Rerunnable:
         return None
 
 
-def _reason(spool: _Spool, unit: _Unit | _Rerunnable) -> str:
+def _outcome(spool: _Spool, unit: _Unit | _Rerunnable) -> Aborted:
     return AbortReason(cast("JobSpool", spool)).of(unit)
+
+
+def _reason(spool: _Spool, unit: _Unit | _Rerunnable) -> str:
+    return _outcome(spool, unit).reason
 
 
 def test_a_unit_with_a_durable_source_says_how_to_run_it_again() -> None:
@@ -89,3 +93,12 @@ def test_an_unrecoverable_record_says_to_rerun_the_ingest() -> None:
     )
 
     assert "re-run the ingest" in _reason(_Spool(), _Unit(record))
+
+
+def test_only_a_job_whose_record_was_written_is_marked_spooled() -> None:
+    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
+
+    assert _outcome(_Spool(ok=True), _Unit(record)).spooled
+    assert not _outcome(_Spool(ok=False), _Unit(record)).spooled
+    assert not _outcome(_Spool(), _Unit(None)).spooled
+    assert not _outcome(_Spool(), _Rerunnable()).spooled

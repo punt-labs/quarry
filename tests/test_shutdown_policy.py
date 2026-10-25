@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from quarry.config import Settings
+from quarry.daemon.ingest_queue import IngestQueue
+from quarry.daemon.task_drain import TaskDrain
 from quarry.shutdown_policy import ShutdownPolicy
 
 _BUDGETS = [0.0, 0.5, 7.0, 30.0, 123.4]
@@ -68,3 +70,31 @@ def test_from_settings_follows_the_configured_total(
     monkeypatch.setenv(ShutdownPolicy.ENV_NAME, "55")
 
     assert ShutdownPolicy.from_settings().total_s == 55.0
+
+
+def test_the_stop_margin_pays_for_everything_outside_the_budget() -> None:
+    outside = (
+        ShutdownPolicy.GRACEFUL_S
+        + ShutdownPolicy.ABORT_WAIT_S
+        + ShutdownPolicy.TASK_FLOOR_S
+        + ShutdownPolicy.EXIT_SLACK_S
+    )
+
+    assert outside <= ShutdownPolicy.MARGIN_S
+    assert ShutdownPolicy.GRACEFUL_S > 0
+    assert ShutdownPolicy.GRACEFUL_S < ShutdownPolicy.MARGIN_S - (
+        ShutdownPolicy.ABORT_WAIT_S
+    )
+
+
+@pytest.mark.parametrize("timeout", [0.0, 1.0, 17.0])
+def test_the_cancel_share_is_part_of_the_timeout(timeout: float) -> None:
+    cancel = ShutdownPolicy.cancel_s(timeout)
+
+    assert 0.0 <= cancel <= timeout
+    assert cancel == timeout * ShutdownPolicy.CANCEL_SHARE
+
+
+def test_the_collaborators_use_the_policys_constants() -> None:
+    assert IngestQueue.ABORT_WAIT_S == ShutdownPolicy.ABORT_WAIT_S
+    assert TaskDrain.FLOOR_S == ShutdownPolicy.TASK_FLOOR_S

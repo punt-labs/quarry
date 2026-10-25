@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.job_spool import JobSpool
@@ -10,6 +11,15 @@ from quarry.daemon.rerunnable_unit import RerunnableUnit
 if TYPE_CHECKING:
     from quarry.config import Settings
     from quarry.daemon.ingest_unit import IngestUnit
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Aborted:
+    """How a drain-aborted job ended: the words, and whether it was spooled."""
+
+    reason: str
+    spooled: bool = False
 
 
 @final
@@ -39,21 +49,26 @@ class AbortReason:
         """Return the reasons for a daemon with *settings*."""
         return cls(JobSpool.for_settings(settings))
 
-    def of(self, job: IngestUnit) -> str:
-        """Return the terminal error for *job*, spooling it first if it needs it."""
+    def of(self, job: IngestUnit) -> Aborted:
+        """Return the outcome for *job*, spooling it first if it needs it."""
         if isinstance(job, RerunnableUnit):
-            return f"daemon shut down before ingest completed; {job.rerun_hint}"
+            return Aborted(
+                f"daemon shut down before ingest completed; {job.rerun_hint}"
+            )
         record = job.spool_record()
         if record is None:
-            return "daemon shut down before ingest completed"
+            return Aborted("daemon shut down before ingest completed")
         if not self._spool.write(record):
-            return (
+            return Aborted(
                 "daemon shut down before ingest; spool write failed, "
                 "content not recovered"
             )
         if record.recoverable:
-            return "daemon shut down before ingest; spooled for recovery"
-        return (
+            return Aborted(
+                "daemon shut down before ingest; spooled for recovery", spooled=True
+            )
+        return Aborted(
             "daemon shut down before ingest; URL not recoverable "
-            "(query or parameters not persisted), re-run the ingest"
+            "(query or parameters not persisted), re-run the ingest",
+            spooled=True,
         )

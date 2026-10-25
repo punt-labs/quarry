@@ -25,6 +25,8 @@ import logging
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.daemon.queue_bounds import QueueGate, WorkerPool
+from quarry.redacted_failure import RedactedFailure
+from quarry.shutdown_policy import ShutdownPolicy
 
 if TYPE_CHECKING:
     from quarry.daemon.collection_worker import CollectionWorker
@@ -61,7 +63,7 @@ class IngestQueue:
 
     # The most an abort waits for its workers to unwind: cancelling a worker whose
     # job sits in a non-cancellable thread must not hold shutdown for good.
-    ABORT_WAIT_S: ClassVar[float] = 5.0
+    ABORT_WAIT_S: ClassVar[float] = ShutdownPolicy.ABORT_WAIT_S
 
     __slots__ = ("_gate", "_pool")
 
@@ -141,7 +143,15 @@ class IngestQueue:
     async def _abort(self, workers: list[CollectionWorker], window_s: float) -> None:
         """Abort *workers* after a drain outran its window; say what that cost."""
         tasks = [worker.abort() for worker in workers]
-        _, pending = await asyncio.wait(tasks, timeout=self.ABORT_WAIT_S)
+        done, pending = await asyncio.wait(tasks, timeout=self.ABORT_WAIT_S)
+        for task in done:
+            # A worker that died of anything but the cancel would otherwise end as
+            # "exception never retrieved", never named.
+            if not task.cancelled() and (failure := task.exception()) is not None:
+                logger.error(
+                    "ingest queue: a worker task failed while aborting",
+                    exc_info=RedactedFailure.of(failure),
+                )
         logger.warning(
             "ingest queue: drain did not finish within %.1fs; aborted %d job(s), "
             "%d of them spooled for recovery%s",

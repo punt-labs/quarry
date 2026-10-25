@@ -327,6 +327,120 @@ class TestWriteEnvFile:
         # The raw fd must have been closed
         assert closed_fds, "os.close was never called after os.fdopen failure"
 
+    def test_a_stale_temp_file_is_replaced_not_reused(self, tmp_path: Path) -> None:
+        """A crashed write's leftover temp is removed and the create retried."""
+        env_file = tmp_path / "quarry.env"
+        stale = tmp_path / "quarry.env.tmp"
+        stale.write_text("STALE=1\n")
+        stale.chmod(0o666)  # a mode the writer did not choose
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("k1")
+
+        assert "STALE" not in env_file.read_text()
+        assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+        assert not stale.exists()
+
+    def test_a_symlink_at_the_temp_is_removed_not_written_through(
+        self, tmp_path: Path
+    ) -> None:
+        env_file = tmp_path / "quarry.env"
+        victim = tmp_path / "victim"
+        victim.write_text("precious")
+        (tmp_path / "quarry.env.tmp").symlink_to(victim)
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("k1")
+
+        assert victim.read_text() == "precious"
+        assert 'QUARRY_API_KEY="k1"' in env_file.read_text()
+
+    def test_the_temp_file_is_0600_from_creation_whatever_the_umask(
+        self, tmp_path: Path
+    ) -> None:
+        env_file = tmp_path / "quarry.env"
+        modes: list[int] = []
+        real_open = os.open
+
+        def recording(path: str, flags: int, mode: int = 0o777, **kw: int) -> int:
+            fd = real_open(path, flags, mode, **kw)
+            if flags & os.O_EXCL:
+                modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+            return fd
+
+        old = os.umask(0)
+        try:
+            with (
+                patch("quarry.service._ENV_FILE", env_file),
+                patch("quarry.service.os.open", recording),
+            ):
+                _write_env_file("k1")
+        finally:
+            os.umask(old)
+
+        assert modes == [0o600]  # before a byte was written
+
+    def test_the_temp_is_created_exclusively_and_never_through_a_symlink(
+        self, tmp_path: Path
+    ) -> None:
+        env_file = tmp_path / "quarry.env"
+        flags_seen: list[int] = []
+        real_open = os.open
+
+        def recording(path: str, flags: int, mode: int = 0o777, **kw: int) -> int:
+            flags_seen.append(flags)
+            return real_open(path, flags, mode, **kw)
+
+        with (
+            patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.service.os.open", recording),
+        ):
+            _write_env_file("k1")
+
+        created = flags_seen[0]
+        assert created & os.O_EXCL
+        assert created & os.O_NOFOLLOW
+        assert created & os.O_CREAT
+
+    def test_the_file_is_synced_before_the_rename_and_the_directory_after(
+        self, tmp_path: Path
+    ) -> None:
+        env_file = tmp_path / "quarry.env"
+        events: list[str] = []
+        real_fsync = os.fsync
+        real_replace = type(env_file).replace
+
+        def fsync(fd: int) -> None:
+            kind = "dir" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
+            events.append(f"fsync-{kind}")
+            real_fsync(fd)
+
+        def replace(self: Path, target: Path) -> Path:
+            events.append("rename")
+            return real_replace(self, target)
+
+        with (
+            patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.service.os.fsync", fsync),
+            patch.object(type(env_file), "replace", replace),
+        ):
+            _write_env_file("k1")
+
+        assert events == ["fsync-file", "rename", "fsync-dir"]
+
+    def test_a_failed_write_removes_the_temp_and_keeps_the_old_file(
+        self, tmp_path: Path
+    ) -> None:
+        env_file = tmp_path / "quarry.env"
+        env_file.write_text("OLD=1\n")
+        with (
+            patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.service.os.fsync", side_effect=OSError("injected")),
+            pytest.raises(OSError, match="injected"),
+        ):
+            _write_env_file("k1")
+
+        assert env_file.read_text() == "OLD=1\n"
+        assert not any(tmp_path.glob("*.tmp"))
+
 
 class TestServiceFileApiKey:
     def test_launchd_plist_contains_environment_variables_block(

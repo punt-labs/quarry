@@ -31,6 +31,7 @@ from quarry.fd_config import FdEnvelope
 from quarry.fd_telemetry import FdTelemetry
 from quarry.remote import to_netloc
 from quarry.run_dir import RunDir
+from quarry.shutdown_policy import ShutdownPolicy
 from quarry.thread_config import ThreadConfig
 
 if TYPE_CHECKING:
@@ -300,6 +301,9 @@ class DaemonServer:
             access_log=False,
             ssl_certfile=self._config.ssl_certfile,
             ssl_keyfile=self._config.ssl_keyfile,
+            # The connections' drain happens before the lifespan teardown and is
+            # outside its budget; bound it by what the stop margin leaves.
+            timeout_graceful_shutdown=ShutdownPolicy.GRACEFUL_S,
         )
 
     def _install_startup_hook(self, server: uvicorn.Server) -> None:

@@ -60,7 +60,7 @@ class TranscriptReader:
     @property
     def truncated(self) -> int:
         """Return how many records or entries the record and character bounds cost."""
-        return self._parsed.dropped + self._parsed.fit(self._MAX_CHARS)[1]
+        return self._parsed.dropped + self._parsed.fit(self._MAX_CHARS).cost
 
     @staticmethod
     def _read_leniently(path: Path) -> str:
@@ -82,15 +82,15 @@ class TranscriptReader:
         never does: the newest entry is always kept, cut to its tail if it alone
         exceeds the budget.
         """
-        text, cut = self._parsed.fit(self._MAX_CHARS)
-        if cut:
+        fitted = self._parsed.fit(self._MAX_CHARS)
+        if fitted.cost:
             logger.warning(
-                "transcript: %s: dropped or cut %d oldest entries past the "
-                "character budget",
+                "transcript: %s: dropped %d oldest entries%s past the character budget",
                 self._path.name,
-                cut,
+                fitted.dropped,
+                " and cut the newest to its tail" if fitted.cut else "",
             )
-        return text
+        return fitted.text
 
     def last_assistant_text(self) -> str:
         """Return the final assistant turn's text without its role prefix, or ``""``.

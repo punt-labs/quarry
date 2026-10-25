@@ -13,10 +13,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
 from unittest.mock import patch
+
+import pytest
 
 from quarry.config import Settings
 from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
@@ -39,8 +42,6 @@ def _reconciler(loop: WatchLoop) -> WatchReconciler:
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-
-    import pytest
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
@@ -1524,5 +1525,103 @@ def test_reconcile_finalizes_each_database_once_not_once_per_collection(
         # ...but the table-wide finalize runs once for the one database.
         assert len(queue.jobs(CollectionFinalizeJob)) == 1
         await loop.stop()
+
+    asyncio.run(_run())
+
+
+def _blocking_stop(release: threading.Event) -> Callable[[_FakeSource], None]:
+    """Return a ``stop`` that joins its observer thread only when released."""
+
+    def stop(source: _FakeSource) -> None:
+        release.wait(timeout=10)
+        source.stopped = True
+
+    return stop
+
+
+def _is_torn_down(loop: WatchLoop) -> bool:
+    return loop._roster is None and loop._source is None and loop._dispatcher is None
+
+
+def test_stop_drops_its_collaborators_even_when_the_roster_teardown_fails(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue())
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop._roster is not None
+
+        with (
+            patch.object(
+                WatchRoster, "unwatch_all", side_effect=RuntimeError("unwatch failed")
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await loop.stop()
+
+        assert _is_torn_down(loop)  # a later start() rebuilds cleanly
+        assert source.stopped is True  # and the observer was still joined
+
+    asyncio.run(_run())
+
+
+def test_a_cancel_during_the_observer_join_still_tears_down_and_says_so(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue())
+        source = _FakeSource()
+        release = threading.Event()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+
+        with (
+            patch.object(_FakeSource, "stop", _blocking_stop(release)),
+            caplog.at_level(logging.WARNING, logger="quarry.daemon.watch_loop"),
+        ):
+            stopping = asyncio.create_task(loop.stop())
+            await asyncio.sleep(0.1)  # in the observer join
+            stopping.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await stopping
+
+            assert _is_torn_down(loop)
+            assert "thread may still be running" in caplog.text
+            release.set()
+            await asyncio.sleep(0.2)
+            assert source.stopped is True  # the shielded join ran to the end
+
+    asyncio.run(_run())
+
+
+def test_a_cancel_while_the_safety_task_retires_is_not_swallowed(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue())
+        loop = WatchLoop(ctx, source=_FakeSource())
+        await loop.start()
+        release = asyncio.Event()
+
+        async def slow_to_retire() -> None:
+            while not release.is_set():
+                try:
+                    await asyncio.sleep(0.05)
+                except asyncio.CancelledError:
+                    continue  # takes its time to retire
+
+        loop._safety_task = asyncio.ensure_future(slow_to_retire())
+        stopping = asyncio.create_task(loop.stop())
+        await asyncio.sleep(0.1)
+        stopping.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await stopping  # the teardown's own cancel gets through
+
+        assert _is_torn_down(loop)
+        release.set()
+        await asyncio.sleep(0.1)
 
     asyncio.run(_run())

@@ -68,7 +68,15 @@ class Settings(BaseSettings):
     # resident workers and worker_idle_s reaps idle ones.
     ingest_embed_concurrency: int = Field(default=1, ge=1)
     ingest_queue_depth: int = Field(default=32, ge=1)
-    ingest_drain_timeout_s: float = Field(default=30.0, ge=0)
+    # The teardown budget.  At least 5 s: the watch stop, the queue drain and the
+    # task drain each need a share that means something (the task drain alone has
+    # a 1 s floor).  At most 300 s: the service stop timeout is this plus a
+    # margin, and a longer one would hold up a restart on a hung daemon for
+    # minutes.  Never inf or nan: a service stop timeout cannot be computed from
+    # them and the budget's deadline would never arrive.
+    ingest_drain_timeout_s: float = Field(
+        default=30.0, ge=5.0, le=300.0, allow_inf_nan=False
+    )
     ingest_max_workers: int = Field(default=256, ge=1)
     ingest_worker_idle_s: float = Field(default=60.0, ge=0)
 

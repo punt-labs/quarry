@@ -13,7 +13,6 @@ itself and invents no second queue, inheriting the whole serialization stack
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from functools import partial
 from pathlib import Path
@@ -158,31 +157,56 @@ class WatchLoop:
             )
 
     async def stop(self) -> None:
-        """Tear down the observer + roster before the queue drain (any watch state)."""
-        if self._roster is None:  # start() never ran
+        """Tear down the observer + roster before the queue drain (any watch state).
+
+        Safe to cancel: whatever the cancel interrupts, the roster is closed and
+        the built collaborators are dropped, so a later ``start()`` rebuilds
+        cleanly.  Only the observer's join can outlive a cancel, and it says so.
+        """
+        roster = self._roster
+        if roster is None:  # start() never ran
             return
         self._started = False
-        if self._safety_task is not None:
-            self._safety_task.cancel()
-            # Await so the task is fully retired (a bare cancel() can leave
-            # "Task was destroyed but it is pending").
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._safety_task
-        if self._submitter is not None:
-            self._submitter.cancel_pending()  # cancel outstanding backoff re-arms
-        if self._dispatcher is not None:
-            self._dispatcher.cancel_all()
-        self._roster.unwatch_all()
-        self._roster.close()  # drop sibling conns so a restart can't leak them
-        if self._source is not None:
-            # stop() joins the observer thread — off the loop so shutdown never blocks.
-            await run_in_threadpool(self._source.stop)
-        # Drop the built collaborators so a subsequent start() rebuilds cleanly —
-        # a joined watchdog observer cannot be restarted (reusing it watches
-        # nothing).  A fresh start() reconstructs source + roster.
-        self._safety_task = None
-        self._reconciler = None
-        self._source = self._roster = self._dispatcher = self._submitter = None
+        source = self._source
+        try:
+            if self._safety_task is not None:
+                self._safety_task.cancel()
+                # Wait for the task to be fully retired (a bare cancel() can
+                # leave "Task was destroyed but it is pending").  ``wait`` does
+                # not raise the retired task's cancellation, so a cancel of THIS
+                # coroutine (the teardown's timeout) is never mistaken for it.
+                await asyncio.wait({self._safety_task})
+            if self._submitter is not None:
+                self._submitter.cancel_pending()  # cancel outstanding backoff re-arms
+            if self._dispatcher is not None:
+                self._dispatcher.cancel_all()
+            roster.unwatch_all()
+        finally:
+            try:
+                roster.close()  # drop sibling conns so a restart can't leak them
+            finally:
+                # Drop the built collaborators so a subsequent start() rebuilds
+                # cleanly — a joined watchdog observer cannot be restarted (reusing
+                # it watches nothing).  A fresh start() reconstructs source + roster.
+                self._safety_task = None
+                self._reconciler = None
+                self._source = self._roster = None
+                self._dispatcher = self._submitter = None
+                if source is not None:
+                    await self._join_observer(source)
+
+    @staticmethod
+    async def _join_observer(source: FsEventSource) -> None:
+        """Join the observer thread off the loop; warn if a cancel leaves it running."""
+        join = asyncio.ensure_future(run_in_threadpool(source.stop))
+        try:
+            await asyncio.shield(join)
+        except asyncio.CancelledError:
+            logger.warning(
+                "watch loop: stopped while the observer was being joined; "
+                "its thread may still be running"
+            )
+            raise
 
     def start_watching(self, collection: str, resolved_root: Path) -> None:
         """Begin watching *collection* in the active database + submit its scan."""

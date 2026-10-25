@@ -789,3 +789,29 @@ def test_a_recoverable_job_still_says_it_was_spooled(tmp_path: Path) -> None:
         assert "spooled for recovery" in state_b.error
 
     asyncio.run(_run())
+
+
+def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Dying:
+        aborted = 0
+        spooled = 0
+
+        def abort(self) -> asyncio.Task[None]:
+            async def dies() -> None:
+                msg = "worker secret detail"
+                raise RuntimeError(msg)
+
+            return asyncio.ensure_future(dies())
+
+    async def _run() -> None:
+        queue = _make_queue(concurrency=1)
+        with caplog.at_level(logging.ERROR, logger="quarry.daemon.ingest_queue"):
+            await queue._abort([cast("CollectionWorker", _Dying())], 0.05)
+
+    asyncio.run(_run())
+
+    assert "a worker task failed while aborting" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "worker secret detail" not in caplog.text  # class and frames only

@@ -67,29 +67,33 @@ class TranscriptRecords:
 class ParsedRecords:
     """The records a transcript kept, and how many of its oldest the bound dropped."""
 
+    JOIN: ClassVar[str] = "\n\n"  # between the entries of the conversation text
+
     records: tuple[dict[str, object], ...]
     dropped: int
 
-    def fit(self, budget: int) -> tuple[str, int]:
-        """Return the conversation text within *budget* characters, and the cost.
+    def fit(self, budget: int) -> FittedText:
+        """Return the conversation text within *budget* characters.
 
-        The newest entries that fit are joined; the count is how many entries
-        were lost to the budget.  The newest entry is never dropped: when it alone
-        exceeds the budget its tail is kept, so a transcript with a message never
-        reads as empty.  An entry cut to its tail counts as lost, like one dropped
-        whole.
+        The newest entries that fit are joined, the separators counted in the
+        budget.  The newest entry is never dropped for the budget: when it alone
+        exceeds it, its tail is kept, so a transcript with a message never reads
+        as empty.  A budget of zero or less is the one exception: nothing fits,
+        and every entry is lost.
         """
         parts = [e for r in self.records if (e := TurnText.message_text(r))]
-        total_chars = sum(len(p) for p in parts)
-        start = 0
-        while start < len(parts) - 1 and total_chars > budget:
-            total_chars -= len(parts[start])
-            start += 1
-        kept = parts[start:]
-        cut = len(kept) == 1 and len(kept[0]) > budget
-        if cut:
-            kept = [kept[0][-budget:]]
-        return "\n\n".join(kept), start + int(cut)
+        if budget <= 0:
+            return FittedText("", len(parts), cut=False)
+        if not parts:
+            return FittedText("", 0, cut=False)
+        newest = parts[-1]
+        if len(newest) > budget:
+            return FittedText(newest[-budget:], len(parts) - 1, cut=True)
+        start, used = len(parts) - 1, len(newest)
+        while start > 0 and used + len(self.JOIN) + len(parts[start - 1]) <= budget:
+            start -= 1
+            used += len(self.JOIN) + len(parts[start])
+        return FittedText(self.JOIN.join(parts[start:]), start, cut=False)
 
     def warn_if_truncated(self, path: Path) -> None:
         """Warn once, naming the transcript, if the record bound dropped any."""
@@ -99,3 +103,22 @@ class ParsedRecords:
                 path.name,
                 self.dropped,
             )
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class FittedText:
+    """The conversation text within a budget, and what the budget cost.
+
+    ``dropped`` is how many of the oldest entries were left out; ``cut`` says the
+    newest entry alone exceeded the budget and was kept as its tail.
+    """
+
+    text: str
+    dropped: int
+    cut: bool
+
+    @property
+    def cost(self) -> int:
+        """Return how many entries the budget cost: dropped, plus a cut one."""
+        return self.dropped + int(self.cut)

@@ -20,8 +20,8 @@ class ShutdownPolicy:
     - a backfill's scan thread is given up on :attr:`SCAN_SHARE` of it after the
       stop (never longer than :attr:`SCAN_CAP_S`), so a stuck scan normally ends
       inside the task drain that follows;
-    - the task drain gets what is left, and reserves :attr:`CANCEL_SHARE` of that
-      for its cancel wait.
+    - the task drain gets what is left (never less than :attr:`TASK_FLOOR_S`), and
+      reserves :attr:`CANCEL_SHARE` of that for its cancel wait.
 
     The service manager must not kill the daemon before it has used its budget:
     the stop timeout baked into the unit and the plist (``TimeoutStopSec`` for
@@ -30,14 +30,30 @@ class ShutdownPolicy:
     the clock a running teardown reads.
     """
 
-    # Beyond the teardown's own budget: the process exit, the sidecar removal and
-    # the lock release that follow it.
+    # Beyond the teardown's own budget: uvicorn's graceful phase, the queue's abort
+    # wait, the task drain's floor, and the process exit.  The margin must cover
+    # their sum (see :attr:`GRACEFUL_S`).
     MARGIN_S: ClassVar[float] = 10.0
+    # The most an aborted queue waits for its workers to unwind, beyond the budget.
+    ABORT_WAIT_S: ClassVar[float] = 5.0
+    # The least the task drain waits, even with the budget spent, so a task that
+    # finishes just after the queue abort is not cancelled.  Taken from the margin.
+    TASK_FLOOR_S: ClassVar[float] = 1.0
+    # What is left of the margin for the process exit itself.
+    EXIT_SLACK_S: ClassVar[float] = 1.0
     WATCH_SHARE: ClassVar[float] = 0.2
     QUEUE_MIN_SHARE: ClassVar[float] = 0.5
     SCAN_SHARE: ClassVar[float] = 0.4
     SCAN_CAP_S: ClassVar[float] = 30.0
     CANCEL_SHARE: ClassVar[float] = 0.25
+    # How long uvicorn drains open connections before it runs the lifespan
+    # teardown.  It is outside the budget, so it is what the margin has left once
+    # the abort wait, the task floor and the exit slack are paid: the worst case,
+    # graceful phase plus budget plus abort wait plus task floor, stays inside
+    # the total plus the margin.
+    GRACEFUL_S: ClassVar[int] = int(
+        MARGIN_S - ABORT_WAIT_S - TASK_FLOOR_S - EXIT_SLACK_S
+    )
     # The environment variable the installed daemon reads the total from, so the
     # stop timeout baked at install and the budget the daemon spends are one number.
     ENV_NAME: ClassVar[str] = "INGEST_DRAIN_TIMEOUT_S"
@@ -85,6 +101,11 @@ class ShutdownPolicy:
     def scan_bound_s(self) -> float:
         """Return how long after a stop a scan thread is waited for."""
         return min(self.SCAN_CAP_S, self._total_s * self.SCAN_SHARE)
+
+    @classmethod
+    def cancel_s(cls, timeout: float) -> float:
+        """Return the part of a task-drain *timeout* reserved for the cancel wait."""
+        return timeout * cls.CANCEL_SHARE
 
     def env_line(self) -> str:
         """Return the ``NAME="value"`` line that carries the total to the daemon."""

@@ -63,7 +63,7 @@ class DaemonLauncher:
             ssl_keyfile=keyfile,
         )
         settings = self._settings()
-        InstalledStopTimeout.installed().log_if_short(settings.ingest_drain_timeout_s)
+        InstalledStopTimeout.installed().report(settings.ingest_drain_timeout_s)
         DaemonServer.serve(settings, config)
 
     def _settings(self) -> Settings:

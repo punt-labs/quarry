@@ -159,9 +159,10 @@ class CollectionWorker:
     def _fail(self, item: _Queued) -> None:
         """Fail *item* with the truthful reason, spooling it first if it needs it."""
         item.state.status = "failed"
-        item.state.error = AbortReason.for_settings(self._ctx.settings).of(item.job)
+        aborted = AbortReason.for_settings(self._ctx.settings).of(item.job)
+        item.state.error = aborted.reason
         self._aborted += 1
-        self._spooled += "spooled for recovery" in item.state.error
+        self._spooled += aborted.spooled
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""

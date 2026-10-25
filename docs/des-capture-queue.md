@@ -323,7 +323,7 @@ step is needed. The ASGI **lifespan** owns only the bounded shutdown drain:
   `ExitTimeOut`) is that budget plus a margin.
 - `aclose` sets `_closing` (rejects new submits with 503), enqueues a `_Stop`
   after each collection's pending jobs, and `await`s each queue's `join()` under
-  a bounded `DRAIN_TIMEOUT` (default 30 s) so queued captures are not silently
+  a bounded `DRAIN_TIMEOUT` so queued captures are not silently
   lost on a clean shutdown. On timeout, remaining workers are cancelled;
   `TaskTerminal.recording` records `cancelled → failed` and the durable artifact is
   recoverable via backfill. Drain is bounded so shutdown never hangs.
@@ -570,7 +570,7 @@ edit list below is the design-time proposal, and `context.py` no longer holds an
   for a rejected submit.
 - **EDIT** `src/quarry/config.py` — `ingest_embed_concurrency` (default 1; clamp
   ≤ 2, but see §9.1 — 2 conflicts with DES-032 and is not recommended),
-  `ingest_queue_depth` (default 32), `ingest_drain_timeout_s` (default 30).
+  `ingest_queue_depth` (default 32), `ingest_drain_timeout_s`.
 - **UNCHANGED (by design):** `chunk_store._write_lock`, `ProgressiveIndexer`
   (`progressive.py`), and the single-document insert path (then
   `streaming.progressive_insert`, now `DocumentStreamer.insert`) are **not** modified — the

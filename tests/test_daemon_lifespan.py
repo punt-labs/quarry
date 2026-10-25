@@ -8,6 +8,7 @@ import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, ClassVar, cast
 
+import pytest
 from starlette.applications import Starlette
 
 from quarry.daemon.backfill_task import BackfillTask
@@ -18,8 +19,6 @@ from tests.queue_fixtures import ctx_with_queue
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
     from quarry.config import Settings
     from quarry.daemon.context import DaemonContext
@@ -219,3 +218,43 @@ class _Recorder:
 
     def __call__(self) -> None:
         self.calls.append(self._name)
+
+
+async def test_a_cancel_during_a_step_is_logged_and_skips_the_later_steps(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    ctx = _context(tmp_path, budget_s=300.0)
+    reached: list[str] = []
+    entered = asyncio.Event()
+
+    async def blocks() -> None:
+        entered.set()
+        await asyncio.sleep(30)
+
+    async def drain(*, drain_timeout: float) -> None:
+        reached.append("queue")
+
+    cast("SimpleNamespace", ctx).aclose_watch_loop = blocks
+    cast("SimpleNamespace", ctx).ingest_queue = SimpleNamespace(aclose=drain)
+    # The watch stop is bounded by its own timeout; the cancel under test is the
+    # outer one, as when the daemon's own shutdown is cancelled.
+    teardown = asyncio.create_task(_tear_down(tmp_path, ctx))
+    await entered.wait()
+
+    with caplog.at_level(logging.ERROR):
+        teardown.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await teardown
+
+    assert "teardown: cancelled during watch-loop stop; later steps skipped" in (
+        caplog.text
+    )
+    assert reached == []  # the queue drain did not run
+
+
+def test_uvicorn_is_given_the_graceful_phase_the_margin_leaves(
+    tmp_path: Path,
+) -> None:
+    config = _server(tmp_path)._uvicorn_config(Starlette())
+
+    assert config.timeout_graceful_shutdown == ShutdownPolicy.GRACEFUL_S

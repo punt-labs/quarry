@@ -253,6 +253,22 @@ class TestTruncation:
         assert text == "[user] m2\n\n[user] m3"
         assert truncated == 2  # the budget drop is part of the count
 
+    def test_a_cut_newest_entry_is_named_in_the_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 3))
+
+        with (
+            patch.object(TranscriptReader, "_MAX_CHARS", 4),
+            caplog.at_level(logging.WARNING, logger="quarry.transcript_reader"),
+        ):
+            reader.text()
+
+        [record] = caplog.records
+        assert "dropped 2 oldest entries and cut the newest to its tail" in (
+            record.getMessage()
+        )
+
     def test_one_message_over_the_budget_keeps_its_tail_and_is_truncated(
         self, tmp_path: Path
     ) -> None:

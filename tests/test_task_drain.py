@@ -11,6 +11,12 @@ import pytest
 from quarry.daemon.task_drain import TaskDrain
 
 
+@pytest.fixture(autouse=True)
+def _no_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most cases use sub-second budgets; the floor has its own tests below."""
+    monkeypatch.setattr(TaskDrain, "FLOOR_S", 0.0)
+
+
 async def _finishes() -> None:
     await asyncio.sleep(0.01)
 
@@ -95,7 +101,29 @@ async def test_the_cancel_wait_is_a_share_of_the_budget() -> None:
     assert release.is_set()
 
 
-async def test_a_budget_already_spent_cancels_at_once() -> None:
+async def test_a_budget_already_spent_still_waits_for_the_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(TaskDrain, "FLOOR_S", 0.4)
+    done = asyncio.Event()
+
+    async def finishes_just_after() -> None:
+        await asyncio.sleep(0.2)  # after a zero budget, inside the floor
+        done.set()
+
+    task = asyncio.ensure_future(finishes_just_after())
+
+    await TaskDrain([task]).run(timeout=0.0)
+
+    assert done.is_set()
+    assert not task.cancelled()
+
+
+async def test_the_floor_is_the_policy_floor_and_a_spent_budget_is_cut_at_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert TaskDrain.FLOOR_S == 0.0  # the fixture; the real one is the policy's
+    monkeypatch.setattr(TaskDrain, "FLOOR_S", 0.3)
     gate = asyncio.Event()
 
     async def waits() -> None:
@@ -107,5 +135,5 @@ async def test_a_budget_already_spent_cancels_at_once() -> None:
     with pytest.raises(TimeoutError):
         await TaskDrain([task]).run(timeout=0.0)
 
-    assert time.monotonic() - started < 0.5
+    assert time.monotonic() - started < 0.3 * 1.5
     assert task.cancelled()

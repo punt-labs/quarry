@@ -59,23 +59,29 @@ _MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false"
 
 
 def _write_env_file(api_key: str = "") -> None:
-    """Write daemon env file atomically with mode 0600.
+    """Write daemon env file atomically with mode 0600, durably.
 
     Always writes MALLOC_CONF (jemalloc tuning) and the teardown budget the unit's
     stop timeout was computed from.  Writes QUARRY_API_KEY only when *api_key* is
     non-empty.
 
-    Uses os.open() so the file is created with restrictive permissions
-    from the start — no chmod race window.  Writes to a .tmp sibling then
-    renames into place.
+    The temp sibling is created ``O_EXCL`` and ``O_NOFOLLOW`` with mode 0600 from
+    the first byte — no chmod race window, and never written through a planted
+    symlink.  A leftover temp (a crashed write's) is removed and the create tried
+    once more.  The file is synced before the rename and the directory after it,
+    so a crash leaves the old file or the new one, never neither.
 
     Args:
         api_key: The API key value to store.  Empty string omits the line.
     """
     _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = _ENV_FILE.with_name(_ENV_FILE.name + ".tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(str(tmp_path), flags, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    try:
+        fd = os.open(str(tmp_path), flags, 0o600)
+    except FileExistsError:
+        tmp_path.unlink(missing_ok=True)
+        fd = os.open(str(tmp_path), flags, 0o600)
     try:
         f = os.fdopen(fd, "w")
     except BaseException:
@@ -89,7 +95,14 @@ def _write_env_file(api_key: str = "") -> None:
                 f.write(f'QUARRY_API_KEY="{escaped}"\n')
             f.write(f'MALLOC_CONF="{_MALLOC_CONF}"\n')
             f.write(f"{ShutdownPolicy.from_settings().env_line()}\n")
+            f.flush()
+            os.fsync(f.fileno())
         tmp_path.replace(_ENV_FILE)
+        directory = os.open(str(_ENV_FILE.parent), os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise

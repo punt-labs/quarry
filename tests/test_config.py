@@ -189,3 +189,40 @@ class TestChunkBounds:
 
     def test_zero_overlap_is_accepted(self) -> None:
         assert Settings(chunk_overlap_chars=0).chunk_overlap_chars == 0
+
+
+class TestIngestDrainTimeout:
+    """The teardown budget must be one a service stop timeout can be built from."""
+
+    @staticmethod
+    def _bounds() -> tuple[float, float]:
+        metadata = Settings.model_fields["ingest_drain_timeout_s"].metadata
+        low = next(m.ge for m in metadata if hasattr(m, "ge"))
+        high = next(m.le for m in metadata if hasattr(m, "le"))
+        return low, high
+
+    @pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "0", "-1", "0.5"])
+    def test_a_value_that_is_not_a_usable_budget_is_refused(
+        self, raw: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with monkeypatch.context() as scoped:  # the env must not outlive the check
+            scoped.setenv("INGEST_DRAIN_TIMEOUT_S", raw)
+            with pytest.raises(ValidationError):
+                Settings()
+
+    def test_a_value_over_the_maximum_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, high = self._bounds()
+        with monkeypatch.context() as scoped:
+            scoped.setenv("INGEST_DRAIN_TIMEOUT_S", str(high + 1))
+            with pytest.raises(ValidationError):
+                Settings()
+
+    def test_the_bounds_themselves_are_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for bound in self._bounds():
+            with monkeypatch.context() as scoped:
+                scoped.setenv("INGEST_DRAIN_TIMEOUT_S", str(bound))
+                assert Settings().ingest_drain_timeout_s == bound

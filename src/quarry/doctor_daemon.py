@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import ssl
 import stat
 from functools import partial
@@ -30,8 +31,12 @@ from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.fd_headroom import FdHeadroom
 from quarry.installed_stop_timeout import InstalledStopTimeout
+from quarry.redacted_failure import RedactedFailure
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
+from quarry.stop_timeout_verdict import StopTimeoutState
+
+logger = logging.getLogger(__name__)
 
 # The literal loopback the daemon binds and login pins (never the ambiguous name
 # ``localhost``); doctor probes exactly what the client connects to.
@@ -85,15 +90,31 @@ class DaemonDiagnostics:
 
         An old unit or plist carries no stop timeout, so the service manager
         kills the daemon at its own default, inside the teardown budget.  The
-        daemon logs the same verdict at start.
+        budget it is judged against is the installed definition's own
+        ``INGEST_DRAIN_TIMEOUT_S`` when it carries one and the settings' otherwise,
+        and the message says which.  Every outcome of the read is a report, never
+        an exception: doctor goes on to its other checks.
         """
         result = partial(CheckResult, name="service stop timeout", required=False)
-        problem = InstalledStopTimeout.installed().problem(
-            Settings().ingest_drain_timeout_s
+        try:
+            installed = InstalledStopTimeout.installed()
+            total, source = installed.budget(Settings().ingest_drain_timeout_s)
+            verdict = installed.verdict(total)
+        except Exception as exc:
+            logger.error(
+                "doctor: the stop timeout check failed",
+                exc_info=RedactedFailure.of(exc),
+            )
+            return result(
+                passed=False,
+                message=f"could not check the installed service ({type(exc).__name__})",
+            )
+        if verdict.state is StopTimeoutState.NOT_INSTALLED:
+            return result(passed=True, message=verdict.message)
+        return result(
+            passed=not verdict.is_problem,
+            message=f"{verdict.message} (budget {total:g}s from {source})",
         )
-        if problem:
-            return result(passed=False, message=problem)
-        return result(passed=True, message="the installed service waits out the drain")
 
     @classmethod
     def serve_token(cls) -> CheckResult:

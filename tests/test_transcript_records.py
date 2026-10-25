@@ -6,7 +6,7 @@ import json
 import tracemalloc
 from unittest.mock import patch
 
-from quarry.transcript_records import TranscriptRecords
+from quarry.transcript_records import ParsedRecords, TranscriptRecords
 from quarry.transcript_turns import TurnText
 
 
@@ -84,3 +84,46 @@ def test_memory_held_follows_the_bound_not_the_number_of_messages() -> None:
     unbounded = _peak_bytes(raw, bound=10**9, trim=10**9)
 
     assert bounded * 2 < unbounded
+
+
+def _parsed(*texts: str) -> ParsedRecords:
+    return TranscriptRecords.parse("\n".join(_message(n) for n, _ in enumerate(texts)))
+
+
+def _entry(n: int) -> str:
+    return f"[user] m{n}"  # what the conversation text holds for _message(n)
+
+
+def test_the_joiners_count_in_the_budget() -> None:
+    parsed = _parsed("a", "b")
+    both = len(_entry(0)) + len(ParsedRecords.JOIN) + len(_entry(1))
+
+    fits = parsed.fit(both)
+    one_short = parsed.fit(both - 1)
+
+    assert (fits.text, fits.dropped, fits.cut) == (
+        f"{_entry(0)}{ParsedRecords.JOIN}{_entry(1)}",
+        0,
+        False,
+    )
+    assert (one_short.text, one_short.dropped, one_short.cut) == (_entry(1), 1, False)
+
+
+def test_a_zero_budget_loses_every_entry_and_cuts_nothing() -> None:
+    fitted = _parsed("a", "b", "c").fit(0)
+
+    assert (fitted.text, fitted.dropped, fitted.cut) == ("", 3, False)
+    assert fitted.cost == 3
+
+
+def test_the_newest_entry_over_the_budget_keeps_its_tail() -> None:
+    fitted = _parsed("a", "b").fit(2)
+
+    assert (fitted.text, fitted.dropped, fitted.cut) == ("m1", 1, True)
+    assert fitted.cost == 2  # one dropped, one cut
+
+
+def test_a_transcript_with_no_message_fits_to_nothing_at_no_cost() -> None:
+    fitted = TranscriptRecords.parse("{}\n").fit(100)
+
+    assert (fitted.text, fitted.cost) == ("", 0)

@@ -30,13 +30,20 @@ class Teardown:
     last, so a scan thread that was told to stop is waited for rather than left
     writing.
 
-    The budget is ``ingest_drain_timeout_s`` (:class:`ShutdownPolicy` splits it).
-    With the default 30 s, as an illustration only: the watch-loop stop gets at
-    most a fifth of it, the queue drain is guaranteed at least half, a scan thread
-    that will not stop is given up on two fifths of it after the stop (so a stuck
+    The budget is ``ingest_drain_timeout_s``, split by :class:`ShutdownPolicy`:
+    the watch-loop stop gets at most ``WATCH_SHARE`` of it, the queue drain is
+    guaranteed ``QUEUE_MIN_SHARE``, a scan thread that will not stop is given up
+    on ``SCAN_SHARE`` of it after the stop (capped at ``SCAN_CAP_S``, so a stuck
     scan normally ends inside the task drain), and the task drain gets the rest,
-    its cancel wait a quarter of that.  The service stop timeout is the budget
-    plus a margin, so the manager never kills a teardown inside its budget.
+    never less than ``TASK_FLOOR_S``, with ``CANCEL_SHARE`` of that for its cancel
+    wait.
+
+    End to end, the worst case is uvicorn's graceful phase (``GRACEFUL_S``), then
+    the budget, then the queue's abort wait (``ABORT_WAIT_S``) and the task floor
+    (``TASK_FLOOR_S``) that sit beyond it, then the process exit
+    (``EXIT_SLACK_S``).  ``MARGIN_S`` is, by construction, the sum of those four,
+    so the service stop timeout (the budget plus ``MARGIN_S``) is never reached by
+    a teardown that stays inside its parts.
 
     Each step runs on its own: one that fails is logged by class and frames and
     the next still runs, so a broken watch loop cannot leave the queue undrained.
@@ -76,6 +83,9 @@ class Teardown:
             await step
         except Exception as exc:
             logger.error("teardown: %s failed", name, exc_info=RedactedFailure.of(exc))
+        except BaseException:
+            logger.error("teardown: cancelled during %s; later steps skipped", name)
+            raise
 
     async def _stop_watch(self, policy: ShutdownPolicy) -> None:
         """Stop the watch loop, for no longer than its share of the budget."""

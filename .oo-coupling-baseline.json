@@ -547,7 +547,7 @@
   },
   "src/quarry/daemon/abort_reason.py": {
     "efferent_coupling": 2.0,
-    "public_names": 1.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -665,7 +665,7 @@
     "avg_lcom": 1.0
   },
   "src/quarry/daemon/ingest_queue.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 3.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.333,
@@ -931,7 +931,7 @@
     "avg_lcom": 0.6
   },
   "src/quarry/daemon/server.py": {
-    "efferent_coupling": 11.0,
+    "efferent_coupling": 12.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
@@ -1127,8 +1127,8 @@
     "public_names": 1.0
   },
   "src/quarry/doctor_daemon.py": {
-    "efferent_coupling": 7.0,
-    "public_names": 1.0,
+    "efferent_coupling": 9.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -1799,11 +1799,11 @@
     "avg_lcom": 0.0
   },
   "src/quarry/installed_stop_timeout.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 4.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.4,
-    "avg_lcom": 0.4
+    "max_lcom": 0.643,
+    "avg_lcom": 0.643
   },
   "src/quarry/latex_utils.py": {
     "avg_lcom": 0.0,
@@ -2351,6 +2351,13 @@
     "max_lcom": 0.167,
     "avg_lcom": 0.167
   },
+  "src/quarry/stop_timeout_verdict.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
+  },
   "src/quarry/stored_sessions.py": {
     "efferent_coupling": 2.0,
     "public_names": 2.0,
@@ -2507,7 +2514,7 @@
   },
   "src/quarry/transcript_records.py": {
     "efferent_coupling": 1.0,
-    "public_names": 3.0,
+    "public_names": 4.0,
     "circular_imports": 0.0,
     "max_lcom": 1.0,
     "avg_lcom": 1.0
