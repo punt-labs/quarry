@@ -148,6 +148,64 @@ class TestBuildProjectMappings:
         assert mappings == []
 
 
+class TestSharedProjectDir:
+    """Two registrations that Claude Code encodes to one projects dir (#557)."""
+
+    @staticmethod
+    def _shared_env(tmp_path: Path) -> tuple[Path, list[DirectoryRegistration]]:
+        projects_dir = tmp_path / ".claude" / "projects"
+        shared = projects_dir / "-w-my-notes"
+        shared.mkdir(parents=True)
+        for name, cwd in (("dot", "/w/my.notes"), ("under", "/w/my_notes")):
+            record = {"type": "user", "cwd": cwd}
+            (shared / f"{name}.jsonl").write_text(json.dumps(record) + "\n")
+        (shared / "nocwd.jsonl").write_text(json.dumps({"type": "user"}) + "\n")
+        regs = [
+            DirectoryRegistration(
+                directory=directory,
+                collection=collection,
+                registered_at="2025-01-01T00:00:00",
+            )
+            for directory, collection in (("/w/my.notes", "dot"), ("/w/my_notes", "u"))
+        ]
+        return projects_dir, regs
+
+    def test_each_registration_gets_only_the_transcripts_run_in_it(
+        self, tmp_path: Path
+    ) -> None:
+        projects_dir, regs = self._shared_env(tmp_path)
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            mappings = ProjectMappingResolver.resolve_all(regs)
+            files = {m.collection: m.transcript_files() for m in mappings}
+
+        assert all(m.shared for m in mappings)
+        assert [f.name for f in files["dot"]] == ["dot.jsonl"]
+        assert [f.name for f in files["u"]] == ["under.jsonl"]
+
+    def test_a_sole_registration_keeps_every_transcript(self, tmp_path: Path) -> None:
+        projects_dir, regs = self._shared_env(tmp_path)
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            (mapping,) = ProjectMappingResolver.resolve_all(regs[:1])
+            files = mapping.transcript_files()
+
+        assert not mapping.shared
+        assert len(files) == 3
+
+    def test_the_collision_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        projects_dir, regs = self._shared_env(tmp_path)
+        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+            ProjectMappingResolver.resolve_all(regs)
+
+        assert "-w-my-notes is shared by 2 registrations" in caplog.text
+
+    def test_an_unreadable_transcript_is_not_attributed(self, tmp_path: Path) -> None:
+        missing = tmp_path / "gone.jsonl"
+        mapping = ProjectMapping("x", "/w/my.notes", "c", shared=True)
+        assert mapping._recorded_cwd(missing) is None
+
+
 # ---------------------------------------------------------------------------
 # list_transcript_files
 # ---------------------------------------------------------------------------

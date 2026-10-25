@@ -14,6 +14,14 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- connector: `quarry backfill` no longer files one project's Claude transcripts
+  into another's collection. Claude Code's lossy directory encoding maps
+  `/w/my.notes` and `/w/my_notes` to the same `-w-my-notes` folder; when two
+  registrations share a folder, each now gets only the transcripts whose
+  recorded `cwd` is its own directory, and the collision is logged (#557).
+
 ## [3.5.0] - 2026-10-25
 
 ### Security

@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
+import logging
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 if TYPE_CHECKING:
     from quarry.sync_registry import DirectoryRegistration
+
+logger = logging.getLogger(__name__)
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -21,6 +27,7 @@ class ProjectMapping:
     encoded_dir: str
     project_path: str
     collection: str
+    shared: bool = False
 
     @property
     def captures_collection(self) -> str:
@@ -28,11 +35,35 @@ class ProjectMapping:
         return f"{self.collection}-captures"
 
     def transcript_files(self) -> list[Path]:
-        """Return all JSONL transcript files for this project, sorted."""
+        """Return this project's JSONL transcript files, sorted.
+
+        A ``shared`` dir is one Claude Code's lossy encoding gives to more than
+        one registration (``/w/my.notes`` and ``/w/my_notes`` both become
+        ``-w-my-notes``).  Its transcripts are filed by the ``cwd`` each records,
+        so no session lands in the collection of a project it never ran in; one
+        that records no ``cwd`` cannot be attributed and is skipped.
+        """
         project_dir = CLAUDE_PROJECTS_DIR / self.encoded_dir
         if not project_dir.is_dir():
             return []
-        return sorted(project_dir.glob("*.jsonl"))
+        files = sorted(project_dir.glob("*.jsonl"))
+        if not self.shared:
+            return files
+        mine = Path(self.project_path)
+        return [
+            f for f in files if (cwd := self._recorded_cwd(f)) and Path(cwd) == mine
+        ]
+
+    @staticmethod
+    def _recorded_cwd(transcript: Path) -> str | None:
+        """Return the first ``cwd`` *transcript* records, or ``None``."""
+        with contextlib.suppress(OSError), transcript.open(errors="replace") as lines:
+            for line in lines:
+                with contextlib.suppress(ValueError):
+                    record = json.loads(line)
+                    if isinstance(record, dict) and isinstance(record.get("cwd"), str):
+                        return str(record["cwd"])
+        return None
 
 
 @final
@@ -59,16 +90,35 @@ class ProjectMappingResolver:
         the ambiguous reverse-decode problem (hyphens in directory names).
         """
         existing_dirs = ProjectMappingResolver._project_dir_names()
+        encoded = [
+            (reg, ProjectMappingResolver.encode(reg.directory)) for reg in registrations
+        ]
+        shared = ProjectMappingResolver._shared(
+            [name for _, name in encoded if name in existing_dirs]
+        )
         return [
             ProjectMapping(
-                encoded_dir=encoded,
+                encoded_dir=name,
                 project_path=reg.directory,
                 collection=reg.collection,
+                shared=name in shared,
             )
-            for reg in registrations
-            if (encoded := ProjectMappingResolver.encode(reg.directory))
-            in existing_dirs
+            for reg, name in encoded
+            if name in existing_dirs
         ]
+
+    @staticmethod
+    def _shared(names: list[str]) -> set[str]:
+        """Return the encoded dirs more than one registration maps to, warning once."""
+        shared = {name for name, count in Counter(names).items() if count > 1}
+        for name in sorted(shared):
+            logger.warning(
+                "backfill: %s is shared by %d registrations; filing its "
+                "transcripts by their recorded cwd",
+                name,
+                names.count(name),
+            )
+        return shared
 
     @staticmethod
     def filter_by_project(
