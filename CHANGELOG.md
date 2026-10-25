@@ -14,6 +14,15 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- `/ingest <file>` now indexes the file's parent directory. The daemon
+  rejected an existing file with the same `directory not found` error as a
+  nonexistent path, and the command waited for a `FileNotFoundError` that
+  never arrived, so it never retried. `POST /v1/registrations` now answers
+  `not a directory (it is a file)` for a file, the command retries only on
+  that, and a nonexistent path is reported instead of widened (#561).
+
 ## [3.5.0] - 2026-10-25
 
 ### Security

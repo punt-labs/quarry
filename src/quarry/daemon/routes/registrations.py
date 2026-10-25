@@ -93,13 +93,22 @@ class RegistrationRoutes(RouteGroup):
         if resolved is None:
             return JSONResponse({"error": reason}, status_code=400)
         if not resolved.is_dir():
-            return JSONResponse(
-                {"error": f"directory not found: {resolved}"}, status_code=400
-            )
+            return JSONResponse({"error": self._not_a_dir(resolved)}, status_code=400)
 
         state = self.ctx.tasks.begin("register")
         lifecycle = RegistrationLifecycle(self.ctx)
         return self.accept(state, lifecycle.run_register(state, resolved, collection))
+
+    @staticmethod
+    def _not_a_dir(resolved: Path) -> str:
+        """Name why *resolved* cannot be registered: a file, or nothing at all.
+
+        Distinct wording lets ``/ingest <file>`` retry with the parent directory
+        for an existing file while a nonexistent path is reported, not widened.
+        """
+        if resolved.exists():
+            return f"not a directory (it is a file): {resolved}"
+        return f"directory not found: {resolved}"
 
     @staticmethod
     def _required_field(body: Mapping[str, object], field: str) -> str | JSONResponse:
