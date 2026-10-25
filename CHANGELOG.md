@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-10-25
+
 ### Security
 
 - Clear 43 open Dependabot alerts (6 critical, 23 high) by bumping `uv.lock`:
