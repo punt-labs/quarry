@@ -303,13 +303,17 @@ daemon directly. `quarry install` generates a self-signed CA for the managed
 daemon, local or remote, so it's TLS even on loopback:
 
 ```bash
-printf 'Authorization: Bearer %s\n' "$(cat ~/.punt-labs/quarry/data/default/serve.token)" |
+{ printf 'Authorization: Bearer '
+  tr -d '\n' < ~/.punt-labs/quarry/data/default/serve.token
+  echo; } |
   curl --cacert ~/.punt-labs/quarry/tls/ca.crt -H @- \
     "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
 ```
 
-The header goes through stdin (`-H @-`) so the token never lands in `curl`'s
-argv, which other local users can read from the process table.
+The header is built on the pipe and read from stdin (`-H @-`), so the token is
+never a command-line argument of any process (`curl`, `printf`, or `tr`):
+other local users can read argv from the process table. Avoid
+`"$(cat serve.token)"` and `-H "Authorization: Bearer $TOKEN"` for that reason.
 
 Every `/v1` endpoint requires a Bearer token, loopback included. A local
 install binds loopback-only and needs no key configured: `quarryd` mints a
