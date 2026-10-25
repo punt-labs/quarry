@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from quarry.atomic_file import AtomicFile
+from quarry.capture_file import CaptureFile
 from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
@@ -66,9 +66,7 @@ class CaptureWriter:
         """
         try:
             content = request.scrubbed_content()
-            if content:
-                AtomicFile(request.capture_path()).replace(content)
-            return bool(content)
+            return bool(content) and CaptureFile(request.capture_path()).write(content)
         except Exception:
             logger.exception("%s: capture file write failed", request.label)
             return False

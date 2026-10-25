@@ -7,6 +7,8 @@ must yield byte-identical files for identical input).
 
 from __future__ import annotations
 
+import logging
+import stat
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -184,3 +186,28 @@ def test_write_reports_whether_a_file_landed(
 
     monkeypatch.setattr("quarry.capture.scrub_and_log", boom)
     assert CaptureWriter().write(_request(tmp_path, text="x")) is False
+
+
+def test_a_capture_is_written_owner_only(tmp_path: Path) -> None:
+    req = _request(tmp_path)
+
+    assert CaptureWriter().write(req)
+
+    assert stat.S_IMODE(req.capture_path().stat().st_mode) == 0o600
+
+
+def test_a_capture_is_not_written_through_a_symlink(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    req = _request(tmp_path)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious")
+    req.capture_path().parent.mkdir(parents=True)
+    req.capture_path().symlink_to(victim)
+
+    with caplog.at_level(logging.WARNING, logger="quarry.capture_file"):
+        landed = CaptureWriter().write(req)
+
+    assert not landed
+    assert victim.read_text() == "precious"
+    assert "symlink" in caplog.text
