@@ -101,11 +101,7 @@ class RegistrationRoutes(RouteGroup):
 
     @staticmethod
     def _not_a_dir(resolved: Path) -> str:
-        """Name why *resolved* cannot be registered: a file, or nothing at all.
-
-        Distinct wording lets ``/ingest <file>`` retry with the parent directory
-        for an existing file while a nonexistent path is reported, not widened.
-        """
+        """Say why *resolved* is unregistrable: a file, or a path that is missing."""
         if resolved.exists():
             return f"not a directory (it is a file): {resolved}"
         return f"directory not found: {resolved}"
