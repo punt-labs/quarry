@@ -33,9 +33,9 @@ class FileLock:
     serializes them.
 
     The lock file lives beside its target (``.CLAUDE.md.punt-import.lock``
-    next to ``CLAUDE.md``, via :meth:`shared`) so it shares the directory the atomic rename needs anyway,
-    and is created — never removed — so a waiter and a holder always ``flock``
-    the same inode.
+    next to ``CLAUDE.md``, via :meth:`shared`) so it shares the directory the
+    atomic rename needs anyway, and is created — never removed — so a waiter
+    and a holder always ``flock`` the same inode.
 
     **Reentrant within a process.** A nested acquisition of the same lock path
     (``Enablement`` holds the lock across its whole enable/disable sequence while
