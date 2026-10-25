@@ -235,20 +235,48 @@ class TestTruncation:
 
         assert reader.truncated == 0
 
-    def test_the_character_budget_drop_is_logged_at_info_with_its_count(
+    def test_the_character_budget_drop_is_a_warning_naming_the_transcript(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 4))
 
         with (
             patch.object(TranscriptReader, "_MAX_CHARS", 20),
-            caplog.at_level(logging.INFO, logger="quarry.transcript_reader"),
+            caplog.at_level(logging.WARNING, logger="quarry.transcript_reader"),
         ):
-            reader.text()
+            text = reader.text()
+            truncated = reader.truncated
 
         [record] = caplog.records
-        assert record.levelno == logging.INFO
-        assert "dropped" in record.getMessage()
+        assert "t.jsonl" in record.getMessage()
+        assert "2 oldest entries" in record.getMessage()
+        assert text == "[user] m2\n\n[user] m3"
+        assert truncated == 2  # the budget drop is part of the count
+
+    def test_one_message_over_the_budget_keeps_its_tail_and_is_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        budget = TranscriptReader._MAX_CHARS
+        path = tmp_path / "t.jsonl"
+        path.write_text(json.dumps(_turn("user", "a" * budget + "TAIL")))
+        reader = TranscriptReader(path)
+
+        text = reader.text()
+
+        assert len(text) == budget
+        assert text.endswith("TAIL")
+        assert reader.truncated == 1
+
+    def test_the_newest_entry_is_never_dropped_for_the_budget(
+        self, tmp_path: Path
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 3))
+
+        with patch.object(TranscriptReader, "_MAX_CHARS", 1):
+            text = reader.text()
+
+        assert text != ""
+        assert text.endswith("2")
 
 
 class TestReadOnce:

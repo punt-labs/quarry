@@ -315,8 +315,12 @@ request handler, i.e. under the running serving loop), so no lifespan start
 step is needed. The ASGI **lifespan** owns only the bounded shutdown drain:
 
 - `DaemonServer._lifespan` (`daemon/server.py`): in the `finally`, `await
-  ctx.aclose_ingest_queue()` (bounded by `ingest_drain_timeout_s`) **before** the sidecar
-  cleanup.
+  Teardown(ctx).run()` (`daemon/teardown.py`) **before** the sidecar cleanup. It
+  stops the watch loop, closes and drains the ingest queue, then drains the
+  tracked background tasks, all inside the one budget `ingest_drain_timeout_s`
+  (`ShutdownPolicy` splits it); each step runs on its own, so one that fails
+  cannot skip the next. The service stop timeout (`TimeoutStopSec` /
+  `ExitTimeOut`) is that budget plus a margin.
 - `aclose` sets `_closing` (rejects new submits with 503), enqueues a `_Stop`
   after each collection's pending jobs, and `await`s each queue's `join()` under
   a bounded `DRAIN_TIMEOUT` (default 30 s) so queued captures are not silently
@@ -542,7 +546,9 @@ queue via the lifespan; verify with the daemon stopped).
 
 ## 8. Proposed write-set
 
-The design mission owns the final set; this is the proposal.
+The design mission owns the final set; this is the proposal. (Historical: the
+edit list below is the design-time proposal, and `context.py` no longer holds an
+`aclose_ingest_queue`; the teardown is `daemon/teardown.py`.)
 
 - **NEW** `src/quarry/daemon/ingest_queue.py` — `IngestQueue`, `CollectionWorker`,
   `_Queued`/`_Stop`, the `IngestUnit` Protocol. One abstraction per module.

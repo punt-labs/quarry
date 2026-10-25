@@ -42,6 +42,7 @@ from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.facade import Database
 from quarry.file_stamp import FileStamp
 from quarry.ingestion.streaming import DocumentStreamer
+from quarry.loaded_transcript import LoadedTranscript
 from quarry.results import DocumentSummary
 from quarry.run_halt import RunHalt
 from quarry.stop_signal import StopSignal
@@ -56,7 +57,6 @@ from tests.transcript_writers import DirectWriter, RecordingWriter, runtime_over
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
-    from quarry.loaded_transcript import LoadedTranscript
     from quarry.models import PageContent
 
 runner = CliRunner()
@@ -1040,13 +1040,14 @@ class TestATranscriptPastTheRecordBound:
         self, tmp_path: Path
     ) -> None:
         env = _registered_env(tmp_path)
-        self._many(env, 8)
+        self._many(env, 3)
+        real_load = TranscriptLoader.load
 
-        with (
-            patch.object(TranscriptRecords, "MAX", 5),
-            patch.object(TranscriptRecords, "TRIM", 2),
-            patch.object(TranscriptReader, "_MAX_CHARS", 1),  # nothing fits
-        ):
+        def loses_its_text(path: Path) -> LoadedTranscript:
+            loaded = real_load(path)
+            return LoadedTranscript(loaded.read, "", truncated=2)
+
+        with patch.object(TranscriptLoader, "load", loses_its_text):
             first = _run(env, RecordingWriter())
             second = _run(env, RecordingWriter())
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tracemalloc
 from unittest.mock import patch
 
 from quarry.transcript_records import TranscriptRecords
@@ -60,3 +61,26 @@ def test_old_messages_survive_a_flood_of_records_with_no_text() -> None:
 
     assert parsed.dropped == 0  # records with no text never count against the bound
     assert [TurnText.turn_text(r) for r in parsed.records] == ["m1", "m2"]
+
+
+def _peak_bytes(raw: str, *, bound: int, trim: int) -> int:
+    """Return the tracemalloc peak of parsing *raw* with the given bound."""
+    with (
+        patch.object(TranscriptRecords, "MAX", bound),
+        patch.object(TranscriptRecords, "TRIM", trim),
+    ):
+        tracemalloc.start()
+        try:
+            TranscriptRecords.parse(raw)
+            return tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+
+def test_memory_held_follows_the_bound_not_the_number_of_messages() -> None:
+    raw = "\n".join(_message(n) for n in range(30_000))
+
+    bounded = _peak_bytes(raw, bound=300, trim=30)
+    unbounded = _peak_bytes(raw, bound=10**9, trim=10**9)
+
+    assert bounded * 2 < unbounded

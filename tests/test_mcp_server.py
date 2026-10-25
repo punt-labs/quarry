@@ -181,7 +181,7 @@ class _ToolHarness:
 _TEARDOWN_DRAIN_TIMEOUT_S = 10.0
 
 
-async def _aclose_ingest_queue(ctx: DaemonContext) -> None:
+async def _drain_and_close_queue(ctx: DaemonContext) -> None:
     """Drain the ingest queue with the teardown timeout (keyword-only ``aclose``)."""
     await ctx.ingest_queue.aclose(drain_timeout=_TEARDOWN_DRAIN_TIMEOUT_S)
 
@@ -212,7 +212,7 @@ def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
                     TaskDrain(ctx.tasks.tracked()).run, _TEARDOWN_DRAIN_TIMEOUT_S
                 )
             finally:
-                portal.call(_aclose_ingest_queue, ctx)
+                portal.call(_drain_and_close_queue, ctx)
 
 
 class TestSurfaceComplete:

@@ -20,6 +20,7 @@ from quarry.crash_logging import UncaughtExceptionLog
 from quarry.daemon.bind_options import BindOptions
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.db_pointer import SELECTION
+from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.logging_config import LoggingConfig
 from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR
@@ -61,7 +62,9 @@ class DaemonLauncher:
             ssl_certfile=certfile,
             ssl_keyfile=keyfile,
         )
-        DaemonServer.serve(self._settings(), config)
+        settings = self._settings()
+        InstalledStopTimeout.installed().log_if_short(settings.ingest_drain_timeout_s)
+        DaemonServer.serve(settings, config)
 
     def _settings(self) -> Settings:
         name = self._options.db or SELECTION.persisted()

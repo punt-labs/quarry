@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, ClassVar, Self, final
+from typing import TYPE_CHECKING, Self, final
 
 from quarry import backfill
 from quarry.daemon.bounded_scan import BoundedScan
@@ -11,6 +11,7 @@ from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.run_record import RunRecord
 from quarry.daemon.thread_call import ThreadCall
+from quarry.shutdown_policy import ShutdownPolicy
 from quarry.stop_signal import StopSignal
 
 if TYPE_CHECKING:
@@ -31,20 +32,27 @@ class BackfillTask:
     when it stored nothing and left something undone, else ``completed``.
     """
 
-    # Seconds to wait for the scan thread after a stop: it can still be busy
-    # only in one step it cannot interrupt (a read, a scrub, a capture write),
-    # seconds even on a slow disk, so half a minute fires only on a hang.
-    STOP_BOUND_S: ClassVar[float] = 30.0
-
     __slots__ = ("_bound_s", "_ctx")
 
     _bound_s: float
     _ctx: DaemonContext
 
-    def __new__(cls, ctx: DaemonContext, bound_s: float = STOP_BOUND_S) -> Self:
+    def __new__(
+        cls,
+        ctx: DaemonContext,
+        bound_s: float | None = None,  # None: derived from the teardown budget
+    ) -> Self:
         self = super().__new__(cls)
         self._ctx = ctx
-        self._bound_s = bound_s
+        # How long to wait for the scan thread after a stop: it can still be busy
+        # only in a step it cannot interrupt (a read, a scrub, a capture write),
+        # seconds even on a slow disk.  The wait is a share of the daemon's
+        # teardown budget, so a stuck scan gives up inside the shutdown drain.
+        self._bound_s = (
+            bound_s
+            if bound_s is not None
+            else ShutdownPolicy(ctx.settings.ingest_drain_timeout_s).scan_bound_s
+        )
         return self
 
     async def run(self, state: TaskState, args: BackfillArgs) -> None:

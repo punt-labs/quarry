@@ -12,9 +12,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.config import DEFAULT_PORT
+from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.service import (
     _LABEL,
+    _LAUNCHD_PLIST,
     _MALLOC_CONF,
+    _SYSTEMD_UNIT,
     ServiceBackend,
     _get_tls_hostname,
     _launchd_install,
@@ -28,6 +31,7 @@ from quarry.service import (
     install,
     uninstall,
 )
+from quarry.shutdown_policy import ShutdownPolicy
 
 # Patch write_tls_files across all install() calls to avoid writing to
 # ~/.punt-labs/quarry/tls/ during tests.
@@ -1308,43 +1312,59 @@ class TestServiceBackendProtocol:
 class TestServiceStopTimeout:
     """The unit and the plist wait out the daemon's whole teardown budget."""
 
-    def test_the_plist_carries_the_stop_timeout(
+    BUDGET = 77.0  # not the default: the file must follow the setting
+
+    def _content(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, plist: bool
+    ) -> str:
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        monkeypatch.setenv(ShutdownPolicy.ENV_NAME, f"{self.BUDGET:g}")
+        _make_local_bin_quarryd(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+        ):
+            return _launchd_plist_content() if plist else _systemd_unit_content()
+
+    def test_the_plist_carries_the_stop_timeout_for_the_budget(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
-        _make_local_bin_quarryd(tmp_path)
-        with (
-            patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-        ):
-            content = _launchd_plist_content()
+        content = self._content(tmp_path, monkeypatch, plist=True)
 
-        assert "<key>ExitTimeOut</key>\n    <integer>40</integer>" in content
-        assert plistlib.loads(content.encode())["ExitTimeOut"] == 40
+        parsed = plistlib.loads(content.encode())
+        assert parsed["ExitTimeOut"] == ShutdownPolicy.stop_timeout_for(self.BUDGET)
 
-    def test_the_unit_carries_the_stop_timeout(self, tmp_path: Path) -> None:
-        _make_local_bin_quarryd(tmp_path)
-        with (
-            patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
-        ):
-            content = _systemd_unit_content()
-
-        assert "TimeoutStopSec=40" in content.splitlines()
-
-    def test_the_timeout_follows_the_drain_budget_and_exceeds_it(
-        self, tmp_path: Path
+    def test_the_plist_hands_the_daemon_the_same_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _make_local_bin_quarryd(tmp_path)
-        with (
-            patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
-            patch("quarry.shutdown_budget.Settings") as settings,
-        ):
-            settings.return_value.ingest_drain_timeout_s = 90.0
-            settings.return_value.fd_limit = 65536
-            content = _systemd_unit_content()
+        content = self._content(tmp_path, monkeypatch, plist=True)
 
-        assert "TimeoutStopSec=100" in content.splitlines()  # 90 s budget + margin
+        env = plistlib.loads(content.encode())["EnvironmentVariables"]
+        assert float(env[ShutdownPolicy.ENV_NAME]) == self.BUDGET
+
+    def test_the_unit_carries_the_stop_timeout_for_the_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        content = self._content(tmp_path, monkeypatch, plist=False)
+
+        expected = f"TimeoutStopSec={ShutdownPolicy.stop_timeout_for(self.BUDGET)}"
+        assert expected in content.splitlines()
+
+    def test_the_env_file_hands_the_daemon_the_same_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(ShutdownPolicy.ENV_NAME, f"{self.BUDGET:g}")
+        env_file = tmp_path / "quarry.env"
+
+        with patch("quarry.service._ENV_FILE", env_file):
+            _write_env_file("")
+
+        assert (
+            ShutdownPolicy(self.BUDGET).env_line() in env_file.read_text().splitlines()
+        )
+
+    def test_the_installed_path_is_the_one_the_service_writes(self) -> None:
+        expected = _LAUNCHD_PLIST if platform.system() == "Darwin" else _SYSTEMD_UNIT
+
+        assert InstalledStopTimeout.installed().path == expected

@@ -22,12 +22,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.daemon.queue_bounds import QueueGate, WorkerPool
 
 if TYPE_CHECKING:
+    from quarry.daemon.collection_worker import CollectionWorker
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.route_key import RouteKey
@@ -58,6 +58,10 @@ class IngestQueue:
     itself bounded: idle workers are reaped and the map is capped at
     ``ingest_max_workers``.
     """
+
+    # The most an abort waits for its workers to unwind: cancelling a worker whose
+    # job sits in a non-cancellable thread must not hold shutdown for good.
+    ABORT_WAIT_S: ClassVar[float] = 5.0
 
     __slots__ = ("_gate", "_pool")
 
@@ -118,7 +122,9 @@ class IngestQueue:
         Every worker gets a drain sentinel and is awaited under *drain_timeout*
         so a clean shutdown flushes queued captures.  On timeout, the remaining
         workers are aborted — their in-flight and queued jobs record ``failed``
-        (recoverable via backfill) — so shutdown never hangs.
+        (recoverable via backfill) — and awaited for :attr:`ABORT_WAIT_S` at most,
+        so shutdown never hangs.  The timeout says how many jobs it failed and
+        how many of those it spooled.
         """
         self._gate.close()
         workers = self._pool.workers()
@@ -130,11 +136,22 @@ class IngestQueue:
                 timeout=drain_timeout,
             )
         except TimeoutError:
-            for worker in workers:
-                worker.abort()
-            for worker in workers:
-                with suppress(asyncio.CancelledError):
-                    await worker.wait()
+            await self._abort(workers, drain_timeout)
+
+    async def _abort(self, workers: list[CollectionWorker], window_s: float) -> None:
+        """Abort *workers* after a drain outran its window; say what that cost."""
+        tasks = [worker.abort() for worker in workers]
+        _, pending = await asyncio.wait(tasks, timeout=self.ABORT_WAIT_S)
+        logger.warning(
+            "ingest queue: drain did not finish within %.1fs; aborted %d job(s), "
+            "%d of them spooled for recovery%s",
+            window_s,
+            sum(worker.aborted for worker in workers),
+            sum(worker.spooled for worker in workers),
+            f"; {len(pending)} worker(s) did not stop within {self.ABORT_WAIT_S:g}s"
+            if pending
+            else "",
+        )
 
     def cancel_workers(self) -> None:
         """Synchronously stop every worker (test-harness teardown, no await).

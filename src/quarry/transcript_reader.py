@@ -59,8 +59,8 @@ class TranscriptReader:
 
     @property
     def truncated(self) -> int:
-        """Return how many of the oldest message records the bound dropped."""
-        return self._parsed.dropped
+        """Return how many records or entries the record and character bounds cost."""
+        return self._parsed.dropped + self._parsed.fit(self._MAX_CHARS)[1]
 
     @staticmethod
     def _read_leniently(path: Path) -> str:
@@ -78,14 +78,19 @@ class TranscriptReader:
 
         Extracts user and assistant messages, prefixing each with the role, and
         skips tool-use content blocks, file snapshots, and system messages.  A
-        missing or unreadable file yields ``""``.
+        missing or unreadable file yields ``""``; a transcript with any message
+        never does: the newest entry is always kept, cut to its tail if it alone
+        exceeds the budget.
         """
-        parts = [
-            entry
-            for record in self._parsed.records
-            if (entry := TurnText.message_text(record))
-        ]
-        return self._join_within_budget(parts)
+        text, cut = self._parsed.fit(self._MAX_CHARS)
+        if cut:
+            logger.warning(
+                "transcript: %s: dropped or cut %d oldest entries past the "
+                "character budget",
+                self._path.name,
+                cut,
+            )
+        return text
 
     def last_assistant_text(self) -> str:
         """Return the final assistant turn's text without its role prefix, or ``""``.
@@ -100,22 +105,6 @@ class TranscriptReader:
             ):
                 last = text
         return last.strip()
-
-    @classmethod
-    def _join_within_budget(cls, parts: list[str]) -> str:
-        """Drop the oldest entries until the joined text fits the char budget."""
-        total_chars = sum(len(p) for p in parts)
-        start = 0
-        while start < len(parts) and total_chars > cls._MAX_CHARS:
-            total_chars -= len(parts[start])
-            start += 1
-        if start > 0:
-            logger.info(
-                "transcript: dropped %d oldest entries past the character budget",
-                start,
-            )
-            parts = parts[start:]
-        return "\n\n".join(parts)
 
     def archive(self, session_id: str, sessions_dir: Path) -> None:
         """Copy the raw JSONL to *sessions_dir*, dedup priors, prune retention.

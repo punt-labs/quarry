@@ -666,6 +666,7 @@ def check_environment(*, _skip_header: bool = False) -> int:
             DaemonDiagnostics.reachability(),
             DaemonDiagnostics.serve_token(),
             DaemonDiagnostics.fd_headroom(),
+            DaemonDiagnostics.stop_timeout(),
             _check_fts_health(settings.lancedb_path),
             SyncDiagnostics.directories(settings.registry_path),
             SyncDiagnostics.enable_status(settings.registry_path, cwd),

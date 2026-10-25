@@ -31,12 +31,12 @@ class TranscriptLoader:
     and ``O_NOFOLLOW`` so a symlink is refused rather than followed to whatever
     it points at.  It is refused unless it is a regular file under
     :attr:`MAX_BYTES`, checked on ``st_size`` before anything is read, and again
-    on what was read.  The cap is 32 MiB: the text is held as bytes and as a
-    string, and :class:`~quarry.transcript_reader.TranscriptReader` keeps at most
-    its newest records, which peaked at 201 MiB beyond the text on the worst of
-    the pathological inputs measured, so a transcript at the cap costs about
-    270 MiB of the daemon's memory for the length of its read.  A larger one is
-    refused rather than truncated, so it is counted and named, not silently
+    on what was read.  The text is held as bytes and as a string, and
+    :class:`~quarry.transcript_reader.TranscriptReader` keeps a bounded number of
+    records (:class:`~quarry.transcript_records.TranscriptRecords`), so a
+    transcript at the cap costs a bounded multiple of its size in the daemon's
+    memory for the length of its read.  A larger one is refused rather than
+    truncated, so it is counted and named, not silently
     half-stored.  The stamp comes from the open file.
     """
 

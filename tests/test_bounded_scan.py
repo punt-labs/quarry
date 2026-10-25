@@ -12,7 +12,7 @@ import pytest
 
 from quarry.backfill_stats import BackfillStats
 from quarry.daemon.bounded_scan import BoundedScan
-from quarry.daemon.late_outcome import ScanStillRunningError
+from quarry.daemon.late_outcome import LateOutcome, ScanStillRunningError
 from quarry.daemon.run_record import RunRecord
 from quarry.daemon.tasks import TaskState
 from quarry.stop_signal import StopSignal
@@ -324,4 +324,19 @@ async def test_a_late_return_appends_to_the_reason_the_run_record_set() -> None:
     assert state.status == "failed"
     assert state.error.startswith(
         "backfill stored nothing: a.jsonl: unreadable (EIO); scan thread returned late"
+    )
+
+
+async def test_a_scan_future_that_ends_cancelled_after_give_up_says_so() -> None:
+    state = _state()
+    late = LateOutcome(state, _record(state))
+    late.give_up("daemon shutting down")
+    future: asyncio.Future[BackfillStats] = asyncio.get_running_loop().create_future()
+    future.cancel()
+
+    late.returned(future)
+
+    assert not state.holds_thread
+    assert (
+        state.error == "backfill stopped (daemon shutting down); scan thread cancelled"
     )

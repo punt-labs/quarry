@@ -2,7 +2,7 @@
 
 The daemon is started via the ``quarryd`` entry point / :class:`DaemonLauncher`,
 which bundles the bind options into a :class:`ServeConfig` and drives a
-:class:`DaemonServer`.  The server warms the engine single-threaded (DES-032)
+:class:`DaemonServer`.  The server warms the engine single-threaded
 before accepting traffic, then --- only after a successful bind --- writes both
 sidecars beside the data dir: ``serve.port`` (so ephemeral-port ``port=0``
 callers can discover the bound port) and ``serve.token`` (the loopback bearer
@@ -157,7 +157,7 @@ class DaemonServer:
             # and lance reads LANCE_CPU_THREADS once when it builds its runtime, so
             # a later set is ignored.  is_gpu=False since the lance/OMP caps are
             # provider-independent.
-            FdEnvelope(target=self._settings.fd_limit).apply()  # DES-046
+            FdEnvelope(target=self._settings.fd_limit).apply()
             ThreadConfig(is_gpu=False).apply_env_limits()
             ctx.warm()  # Build cached resources single-threaded before serving.
 
@@ -269,24 +269,26 @@ class DaemonServer:
         UncaughtExceptionLog.bind_loop(asyncio.get_running_loop())
         monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
         # Warm + queue are ready by now; start watching every roster database so
-        # continuous indexing runs as a queue producer (DES-045).
+        # continuous indexing runs as a queue producer.
         await ctx.start_watch_loop()
         try:
             yield
         finally:
-            # Drain queued captures before touching sidecars so a clean shutdown
-            # loses no admitted-but-unwritten capture (DES-045/DES-042).
-            await Teardown(ctx).run()
-            monitor.cancel()
-            # Remove ONLY the sidecars this instance wrote after its own
-            # successful bind.  A second quarryd that fails to bind (port in
-            # use) must not delete a running peer's live serve.token / port
-            # file on the shared path on its way out.
-            if self._bound:
-                self._run_dir.port_file.remove()
-                self._run_dir.token_file.remove()
-            with suppress(asyncio.CancelledError):
-                await monitor
+            try:
+                # Drain queued captures before touching sidecars so a clean
+                # shutdown loses no admitted-but-unwritten capture.
+                await Teardown(ctx).run()
+            finally:
+                monitor.cancel()
+                # Remove ONLY the sidecars this instance wrote after its own
+                # successful bind.  A second quarryd that fails to bind (port in
+                # use) must not delete a running peer's live serve.token / port
+                # file on the shared path on its way out.
+                if self._bound:
+                    self._run_dir.port_file.remove()
+                    self._run_dir.token_file.remove()
+                with suppress(asyncio.CancelledError):
+                    await monitor
 
     def _uvicorn_config(self, app: Starlette) -> uvicorn.Config:
         return uvicorn.Config(

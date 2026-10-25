@@ -141,6 +141,26 @@ class TestWirePayload:
         sender.assert_not_called()
 
 
+class TestAnOversizedMessageIsNeverEmptyText:
+    """The hook paths keep the tail of a message over the budget, not nothing."""
+
+    def test_one_message_over_the_budget_is_captured_from_its_tail(
+        self, tmp_path: Path
+    ) -> None:
+        budget = TranscriptReader._MAX_CHARS
+        big = _write_transcript(tmp_path / "big.jsonl", "a" * budget + "TAIL")
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
+        ) as sender:
+            outcome = SessionTranscriptCapture(
+                _source(path=big), TranscriptReader(big)
+            ).capture()
+
+        assert outcome.text_captured is True
+        assert sender.call_args[0][0].content.endswith("TAIL")
+
+
 class TestUnreachableText:
     """The unreachable log must not claim an archive that was not made."""
 

@@ -81,7 +81,7 @@ class DaemonContext:
 
     @property
     def watch_loop(self) -> WatchLoop:
-        """Return the always-on filesystem watch loop (DES-045)."""
+        """Return the always-on filesystem watch loop."""
         return self._watch_loop
 
     async def start_watch_loop(self) -> None:
@@ -131,11 +131,11 @@ class DaemonContext:
         LanceDB data dir (``.../<name>/lancedb``), matching what ``quarry
         databases`` lists.  It is the ``database`` half of every content job's
         :class:`RouteKey`, so a capture/remember/ingest routes to the same
-        per-table worker the watch loop uses for that database (DES-045).
+        per-table worker the watch loop uses for that database.
         """
         return self._resources.settings.lancedb_path.parent.name or "default"
 
     def warm(self) -> None:
-        """Build cached resources single-threaded before serving (DES-032)."""
+        """Build cached resources single-threaded before serving."""
         self._resources.warm()
         self._ready = True

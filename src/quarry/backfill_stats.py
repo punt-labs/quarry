@@ -26,8 +26,8 @@ class BackfillStats:
     ``skipped_refused`` counts the transcripts refused for what they are (over
     the read limit, not a regular file): never empty, never failed, and noted in
     ``errors`` on every run.
-    ``truncated`` counts the transcripts stored from their newest records only,
-    the oldest having been dropped past the record bound.
+    ``truncated`` counts the transcripts read with their oldest records or
+    entries dropped past a bound; each is still filed from what was kept.
     ``unlocked_captures`` counts the capture files written without their lock, on
     a filesystem that cannot lock.
     ``stopped`` is the reason the run ended early, or ``""``.

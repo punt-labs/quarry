@@ -125,6 +125,20 @@ class TestRegisteredIdentity:
         memory.assert_not_called()
 
 
+class TestAnOversizedMessageIsNeverEmptyText:
+    def test_one_message_over_the_budget_is_still_captured(self, project: Path) -> None:
+        budget = TranscriptReader._MAX_CHARS
+        capture = _capture(project, _turn("user", "a" * budget + "TAIL"))
+        with (
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as raw,
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_remember"),
+        ):
+            outcome = capture.capture()
+
+        assert outcome.raw.text_captured is True
+        assert raw.call_args[0][0].content.endswith("TAIL")
+
+
 class TestSingleParse:
     def test_one_reader_serves_both_rows(self, project: Path) -> None:
         """The transcript is parsed once: the report and the raw row share a reader."""

@@ -111,7 +111,10 @@ class LateOutcome:
     def returned(self, running: asyncio.Future[BackfillStats]) -> None:
         """Done callback: release the guard, and take a late outcome if one is due."""
         self._state.holds_thread = False
-        if not self._given_up or running.cancelled():
+        if not self._given_up:
+            return
+        if running.cancelled():
+            self._state.error = f"{self._stopped}; scan thread cancelled"
             return
         failure = running.exception()
         if failure is not None:

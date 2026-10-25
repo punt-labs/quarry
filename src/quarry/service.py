@@ -24,7 +24,7 @@ from xml.sax.saxutils import escape as _xml_escape
 from quarry.config import DEFAULT_PORT
 from quarry.fd_config import FdServiceLimits
 from quarry.net import LoopbackPolicy
-from quarry.shutdown_budget import ShutdownBudget
+from quarry.shutdown_policy import ShutdownPolicy
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
 
@@ -61,8 +61,9 @@ _MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false"
 def _write_env_file(api_key: str = "") -> None:
     """Write daemon env file atomically with mode 0600.
 
-    Always writes MALLOC_CONF (jemalloc tuning).  Writes QUARRY_API_KEY
-    only when *api_key* is non-empty.
+    Always writes MALLOC_CONF (jemalloc tuning) and the teardown budget the unit's
+    stop timeout was computed from.  Writes QUARRY_API_KEY only when *api_key* is
+    non-empty.
 
     Uses os.open() so the file is created with restrictive permissions
     from the start — no chmod race window.  Writes to a .tmp sibling then
@@ -87,6 +88,7 @@ def _write_env_file(api_key: str = "") -> None:
                 escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
                 f.write(f'QUARRY_API_KEY="{escaped}"\n')
             f.write(f'MALLOC_CONF="{_MALLOC_CONF}"\n')
+            f.write(f"{ShutdownPolicy.from_settings().env_line()}\n")
         tmp_path.replace(_ENV_FILE)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
@@ -179,9 +181,12 @@ def _launchd_plist_content() -> str:
     # indent across ALL lines including the substituted env_vars_block.
     # A nested dedent produces 0-space lines, defeating the outer dedent.
     escaped_malloc = _xml_escape(_MALLOC_CONF)
+    policy = ShutdownPolicy.from_settings()
     env_entries = (
         "            <key>MALLOC_CONF</key>\n"
         f"            <string>{escaped_malloc}</string>\n"
+        f"            <key>{policy.ENV_NAME}</key>\n"
+        f"            <string>{policy.total_s:g}</string>\n"
     )
     if api_key:
         escaped_key = _xml_escape(api_key)
@@ -219,7 +224,7 @@ def _launchd_plist_content() -> str:
             <key>KeepAlive</key>
             <true/>
             <key>ExitTimeOut</key>
-            <integer>{ShutdownBudget.from_settings().stop_timeout_s}</integer>
+            <integer>{policy.stop_timeout_s}</integer>
             <key>StandardOutPath</key>
             <string>{log_dir}/quarry-stdout.log</string>
             <key>StandardErrorPath</key>
@@ -336,7 +341,7 @@ def _systemd_unit_content() -> str:
         EnvironmentFile=-{env_file_path}
         Restart=always
         RestartSec=5
-        TimeoutStopSec={ShutdownBudget.from_settings().stop_timeout_s}
+        TimeoutStopSec={ShutdownPolicy.from_settings().stop_timeout_s}
         Nice=-5
         {fd_limits_directive}
 

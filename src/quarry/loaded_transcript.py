@@ -14,8 +14,9 @@ if TYPE_CHECKING:
 class LoadedTranscript:
     """A transcript with the moment and stamp it was read at, and its text.
 
-    ``truncated`` is how many of its oldest message records the record bound
-    dropped: the text is then the newest part of the conversation.
+    ``truncated`` counts the records or entries its read lost to a bound (the
+    oldest dropped, or the newest entry cut to its tail): the text is then the
+    newest part of the conversation.
     """
 
     read: TranscriptRead

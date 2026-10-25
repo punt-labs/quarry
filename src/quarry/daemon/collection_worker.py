@@ -48,21 +48,25 @@ class CollectionWorker:
     """
 
     __slots__ = (
+        "_aborted",
         "_ctx",
         "_embed_gate",
         "_last_active",
         "_queue",
         "_release_admit",
         "_running",
+        "_spooled",
         "_task",
     )
 
+    _aborted: int
     _ctx: DaemonContext
     _embed_gate: asyncio.Semaphore
     _last_active: float
     _queue: asyncio.Queue[_Queued | None]
     _release_admit: Callable[[], None]
     _running: bool
+    _spooled: int
     _task: asyncio.Task[None]
 
     def __new__(
@@ -77,6 +81,7 @@ class CollectionWorker:
         self._queue = asyncio.Queue()
         self._release_admit = release_admit
         self._running = False
+        self._aborted = self._spooled = 0
         self._last_active = monotonic()
         # Start the resident consumer now; try_submit only ever runs inside a
         # request handler, so a running loop is guaranteed at creation.
@@ -132,16 +137,31 @@ class CollectionWorker:
         returned so a sync caller can retain it the way ``aclose`` awaits it.
         """
         self._task.cancel()
-        reason = AbortReason.for_settings(self._ctx.settings)
         while True:
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 return self._task
             if item is not None:
-                item.state.status = "failed"
-                item.state.error = reason.of(item.job)
+                self._fail(item)
                 self._release_admit()
+
+    @property
+    def aborted(self) -> int:
+        """Return how many jobs this worker failed instead of running."""
+        return self._aborted
+
+    @property
+    def spooled(self) -> int:
+        """Return how many of those were spooled for recovery."""
+        return self._spooled
+
+    def _fail(self, item: _Queued) -> None:
+        """Fail *item* with the truthful reason, spooling it first if it needs it."""
+        item.state.status = "failed"
+        item.state.error = AbortReason.for_settings(self._ctx.settings).of(item.job)
+        self._aborted += 1
+        self._spooled += "spooled for recovery" in item.state.error
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""
@@ -169,10 +189,7 @@ class CollectionWorker:
                 # remember/ingest is never silently lost, then let the
                 # cancellation propagate.  This also covers a job cancelled while
                 # still awaiting the embed gate (its TaskTerminal never ran).
-                item.state.status = "failed"
-                item.state.error = AbortReason.for_settings(self._ctx.settings).of(
-                    item.job
-                )
+                self._fail(item)
                 raise
             finally:
                 self._running = False

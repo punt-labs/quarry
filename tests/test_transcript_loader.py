@@ -133,10 +133,8 @@ def test_the_refusal_names_the_limit_it_derives_from_the_cap(tmp_path: Path) -> 
         TranscriptLoader.load(path)
 
 
-def test_the_limit_is_32_mib_and_the_cost_of_one_at_the_cap_is_stated() -> None:
+def test_the_limit_is_32_mib() -> None:
     assert TranscriptLoader.MAX_BYTES == 32 * 1024 * 1024
-    assert "270 MiB" in (TranscriptLoader.__doc__ or "")
-    assert "201 MiB" in (TranscriptLoader.__doc__ or "")
 
 
 def test_a_file_that_grew_while_it_was_read_is_refused(tmp_path: Path) -> None:

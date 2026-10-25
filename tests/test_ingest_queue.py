@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
+from unittest.mock import patch
 
 from quarry.daemon import ingest_queue as iq
 from quarry.daemon.ingest_queue import IngestQueue
@@ -26,8 +29,10 @@ from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskRegistry, TaskState
 
 if TYPE_CHECKING:
+    import pytest
     from pytest import MonkeyPatch
 
+    from quarry.daemon.collection_worker import CollectionWorker
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
 
@@ -423,6 +428,72 @@ def test_drain_abort_fails_a_job_blocked_on_the_embed_gate() -> None:
         assert a.status == "failed"
 
     asyncio.run(_run())
+
+
+def test_a_drain_that_times_out_says_the_window_and_what_it_aborted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(concurrency=1)
+        held = asyncio.Event()
+        a, b = _state("a"), _state("b")
+        assert queue.try_submit(_rk("cA"), _StubUnit("cA", "a", ledger, gate=held), a)
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(_rk("cB"), _StubUnit("cB", "b", ledger), b)
+        await asyncio.sleep(0.02)
+        with caplog.at_level(logging.WARNING, logger="quarry.daemon.ingest_queue"):
+            await queue.aclose(drain_timeout=0.05)
+
+    asyncio.run(_run())
+
+    [record] = [r for r in caplog.records if "drain did not finish" in r.getMessage()]
+    assert "0.1s" in record.getMessage() or "0.0s" in record.getMessage()
+    assert "aborted 2 job(s)" in record.getMessage()
+    assert "spooled for recovery" in record.getMessage()
+
+
+def test_the_wait_after_an_abort_is_bounded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Stubborn:
+        aborted = 1
+        spooled = 0
+
+        def __init__(self) -> None:
+            self.task: asyncio.Task[None] | None = None
+            self.release = asyncio.Event()
+
+        def abort(self) -> asyncio.Task[None]:
+            async def ignores() -> None:
+                while not self.release.is_set():
+                    try:
+                        await asyncio.sleep(0.05)
+                    except asyncio.CancelledError:
+                        continue
+
+            self.task = asyncio.ensure_future(ignores())
+            return self.task
+
+    async def _run() -> float:
+        queue = _make_queue(concurrency=1)
+        stubborn = _Stubborn()
+        started = time.monotonic()
+        with (
+            patch.object(IngestQueue, "ABORT_WAIT_S", 0.2),
+            caplog.at_level(logging.WARNING, logger="quarry.daemon.ingest_queue"),
+        ):
+            await queue._abort([cast("CollectionWorker", stubborn)], 0.05)
+        elapsed = time.monotonic() - started
+        assert stubborn.task is not None
+        stubborn.release.set()
+        await stubborn.task
+        return elapsed
+
+    elapsed = asyncio.run(_run())
+
+    assert elapsed < 1.0
+    assert "did not stop within" in caplog.text
 
 
 def test_idle_workers_are_reaped_so_client_keys_cannot_accrue() -> None:

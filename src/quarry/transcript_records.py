@@ -27,12 +27,9 @@ class TranscriptRecords:
     never push the messages out.  A line that is not a JSON object (or nests too
     deeply to parse) is skipped.  Lines are parsed one at a time and the oldest
     records are dropped as the list grows, so the memory held is the records kept,
-    not a list of every line; :meth:`parse` says how many it dropped.  Measured
-    with ``tracemalloc`` on pathological 32 MiB inputs, beyond the text itself:
-    11 million ``{}`` lines peaked at 1.3 GiB before the bound and 135 MiB with
-    it (they are no longer kept at all); 559 thousand one-line messages, 431 MiB
-    before and 201 MiB with it (the worst case now); 167 non-ASCII lines of
-    100 kB, 79 MiB.
+    not a list of every line; :meth:`parse` says how many it dropped.  The memory
+    this saves is measured with ``tracemalloc`` by
+    ``tests/test_transcript_records.py``.
     """
 
     MAX: ClassVar[int] = 100_000
@@ -72,6 +69,27 @@ class ParsedRecords:
 
     records: tuple[dict[str, object], ...]
     dropped: int
+
+    def fit(self, budget: int) -> tuple[str, int]:
+        """Return the conversation text within *budget* characters, and the cost.
+
+        The newest entries that fit are joined; the count is how many entries
+        were lost to the budget.  The newest entry is never dropped: when it alone
+        exceeds the budget its tail is kept, so a transcript with a message never
+        reads as empty.  An entry cut to its tail counts as lost, like one dropped
+        whole.
+        """
+        parts = [e for r in self.records if (e := TurnText.message_text(r))]
+        total_chars = sum(len(p) for p in parts)
+        start = 0
+        while start < len(parts) - 1 and total_chars > budget:
+            total_chars -= len(parts[start])
+            start += 1
+        kept = parts[start:]
+        cut = len(kept) == 1 and len(kept[0]) > budget
+        if cut:
+            kept = [kept[0][-budget:]]
+        return "\n\n".join(kept), start + int(cut)
 
     def warn_if_truncated(self, path: Path) -> None:
         """Warn once, naming the transcript, if the record bound dropped any."""

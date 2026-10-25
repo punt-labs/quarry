@@ -29,6 +29,7 @@ from quarry.api.meta import FdHealth
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.fd_headroom import FdHeadroom
+from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
 
@@ -77,6 +78,22 @@ class DaemonDiagnostics:
             passed=False,
             message=f"not ready on {_HEALTH_HOST}:{port} — start or check the service",
         )
+
+    @staticmethod
+    def stop_timeout() -> CheckResult:
+        """Report whether the installed service gives the daemon time to drain.
+
+        An old unit or plist carries no stop timeout, so the service manager
+        kills the daemon at its own default, inside the teardown budget.  The
+        daemon logs the same verdict at start.
+        """
+        result = partial(CheckResult, name="service stop timeout", required=False)
+        problem = InstalledStopTimeout.installed().problem(
+            Settings().ingest_drain_timeout_s
+        )
+        if problem:
+            return result(passed=False, message=problem)
+        return result(passed=True, message="the installed service waits out the drain")
 
     @classmethod
     def serve_token(cls) -> CheckResult:

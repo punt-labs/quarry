@@ -6,14 +6,13 @@ import asyncio
 import logging
 import time
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from starlette.applications import Starlette
 
 from quarry.daemon.backfill_task import BackfillTask
-from quarry.daemon.bounded_scan import BoundedScan
 from quarry.daemon.server import DaemonServer, ServeConfig
-from quarry.daemon.task_drain import TaskDrain
+from quarry.shutdown_policy import ShutdownPolicy
 from quarry.stop_signal import StopSignal
 from tests.queue_fixtures import ctx_with_queue
 
@@ -24,6 +23,7 @@ if TYPE_CHECKING:
 
     from quarry.config import Settings
     from quarry.daemon.context import DaemonContext
+    from quarry.run_dir import RunDir
 
 
 async def _no_op() -> None:
@@ -109,8 +109,113 @@ async def test_a_straggler_is_logged_and_teardown_still_ends_inside_the_budget(
     await task
 
 
-def test_the_cancel_wait_is_derived_from_the_backfill_stop_bound() -> None:
-    assert (
-        TaskDrain.CANCEL_WAIT_S == BackfillTask.STOP_BOUND_S + BoundedScan.POLL_S + 1.0
+async def test_a_failing_watch_loop_stop_does_not_skip_the_rest_of_the_teardown(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    ctx = _context(tmp_path)
+    state = ctx.tasks.begin("backfill")
+    state.holds_thread = True
+    finished = asyncio.Event()
+
+    async def finishes() -> None:
+        finished.set()
+
+    async def broken_stop() -> None:
+        msg = "the watch loop is broken"
+        raise RuntimeError(msg)
+
+    cast("SimpleNamespace", ctx).aclose_watch_loop = broken_stop
+    ctx.tasks.track(state, asyncio.ensure_future(finishes()))
+    server = _server(tmp_path)
+    run_dir = SimpleNamespace(
+        port_file=SimpleNamespace(remove=_Recorder("port")),
+        token_file=SimpleNamespace(remove=_Recorder("token")),
     )
-    assert TaskDrain.CANCEL_WAIT_S > BackfillTask.STOP_BOUND_S
+    server._run_dir = cast("RunDir", run_dir)
+    server._bound = True
+    app = Starlette()
+    app.state.ctx = ctx
+
+    with caplog.at_level(logging.ERROR):
+        async with server._lifespan(app):
+            pass
+
+    assert finished.is_set()  # the task drain still ran
+    assert "teardown: watch-loop stop failed" in caplog.text
+    assert "the watch loop is broken" not in caplog.text  # class and frames only
+    assert "still running at shutdown" in caplog.text  # the straggler loop ran
+    assert _Recorder.calls == ["port", "token"]  # and so did the sidecar removal
+    _Recorder.calls.clear()
+
+
+async def test_a_watch_loop_stop_that_hangs_is_cut_to_its_share(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    ctx = _context(tmp_path, budget_s=1.0)
+
+    async def hangs() -> None:
+        await asyncio.sleep(30)
+
+    cast("SimpleNamespace", ctx).aclose_watch_loop = hangs
+    started = time.monotonic()
+
+    with caplog.at_level(logging.WARNING):
+        await _tear_down(tmp_path, ctx)
+
+    assert time.monotonic() - started < 1.0  # the share, not the sleep
+    assert "did not stop within its" in caplog.text
+
+
+async def test_an_exhausted_budget_is_logged_and_the_queue_still_gets_its_share(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    ctx = _context(tmp_path, budget_s=0.4)
+    windows: list[float] = []
+
+    async def aclose(*, drain_timeout: float) -> None:
+        windows.append(drain_timeout)
+
+    cast("SimpleNamespace", ctx).ingest_queue = SimpleNamespace(aclose=aclose)
+
+    async def spends_the_budget() -> None:
+        await asyncio.sleep(0.15)  # inside the watch share, but not free
+
+    cast("SimpleNamespace", ctx).aclose_watch_loop = spends_the_budget
+    policy = ShutdownPolicy(0.4)
+
+    with caplog.at_level(logging.WARNING):
+        await _tear_down(tmp_path, ctx)
+
+    assert windows[0] >= policy.queue_min_s
+    assert windows[0] <= policy.total_s
+
+
+def test_the_scan_bound_is_a_share_of_the_budget_and_never_over_its_cap() -> None:
+    small = ShutdownPolicy(10.0)
+    large = ShutdownPolicy(10_000.0)
+
+    assert small.scan_bound_s == small.total_s * ShutdownPolicy.SCAN_SHARE
+    assert large.scan_bound_s == ShutdownPolicy.SCAN_CAP_S
+
+
+def test_a_backfill_task_derives_its_scan_bound_from_the_budget(
+    tmp_path: Path,
+) -> None:
+    ctx = _context(tmp_path, budget_s=12.0)
+
+    bound = BackfillTask(ctx)._bound_s
+
+    assert bound == ShutdownPolicy(12.0).scan_bound_s
+    assert BackfillTask(ctx, bound_s=0.3)._bound_s == 0.3
+
+
+class _Recorder:
+    """A sidecar ``remove`` that notes it ran."""
+
+    calls: ClassVar[list[str]] = []
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __call__(self) -> None:
+        self.calls.append(self._name)
