@@ -454,7 +454,7 @@ def _sample_invariant(
     for _ in range(samples):
         # Sample marker and import together UNDER the lock, so no enable/disable
         # is mid-flight: the snapshot is a committed state, never a torn one.
-        with FileLock(claude):
+        with FileLock.shared(claude):
             marker_present = marker.is_present()
             text = claude.read_text() if claude.exists() else ""
         if marker_present and REPO_IMPORT_LINE not in text:
