@@ -82,7 +82,7 @@
 % Tracks iteration count. Major for structural changes, minor for feedback edits.
 % /prfaq:feedback auto-increments after each application.
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{1}{0}
+\prfaqversion{1}{1}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -228,7 +228,7 @@ one click from its source. If the passages do not cover the question, the
 answer says so instead of guessing (see \faqref{faq:wrong}).
 
 The same answer is available from the terminal with
-\texttt{quarry find -{}-answer}. Because the daemon does the work, the menu bar
+\texttt{quarry answer}. Because the daemon does the work, the menu bar
 app gets answers whether it is connected to the local \texttt{quarryd} or to a
 remote one, and the app never holds a model key (see \faqref{faq:why-daemon}).
 
@@ -257,7 +257,7 @@ Users who already run Quarry need about five minutes:
         name to Quarry's configuration and restart the daemon. Synthesis stays
         off until this step, and nothing else changes.
   \item \textbf{Ask.} Press Command-Return in the menu bar search panel, or run
-        \texttt{quarry find -{}-answer "your question"}.
+        \texttt{quarry answer "your question"}.
 \end{enumerate}
 
 \prsection{Spokesperson Quote}
@@ -321,8 +321,8 @@ half a US cent per answer for Claude Haiku 4.5 at list price
 \begin{faqpair}{How do I get started?}\label{faq:start}
   Pick a model, add its endpoint URL and model name to Quarry's configuration,
   restart \texttt{quarryd}, then press Command-Return in the menu bar search
-  panel or run \texttt{quarry find -{}-answer}. Until a model is configured, the
-  menu bar app hides the Answer action and the CLI flag reports that synthesis
+  panel or run \texttt{quarry answer}. Until a model is configured, the
+  menu bar app hides the Answer action and the CLI command reports that synthesis
   is not configured.
 \end{faqpair}
 
@@ -411,12 +411,12 @@ half a US cent per answer for Claude Haiku 4.5 at list price
 \end{faqpair}
 
 \begin{faqpair}{What is the next step to validate the vision?}\label{faq:next-step}
-  Before building the menu bar card, ship the daemon route and the CLI flag,
+  Before building the menu bar card, ship the daemon route and the CLI command,
   then run the eval spike in \faqref{faq:tech-risks} and use
-  \texttt{quarry find -{}-answer} for two weeks of normal work. Record how often
+  \texttt{quarry answer} for two weeks of normal work. Record how often
   an answer is requested compared with a plain search, how often the answer
   says the passages do not cover the question, and how often the user still
-  opens a result. If the author stops using \texttt{-{}-answer} within the two
+  opens a result. If the author stops using \texttt{quarry answer} within the two
   weeks, the menu bar work does not start.
 \end{faqpair}
 
@@ -480,11 +480,11 @@ half a US cent per answer for Claude Haiku 4.5 at list price
 \begin{faqpair}{What is the delivery order?}\label{faq:timeline}
   (1) Daemon: configuration, the OpenAI-compatible client, the answer route
   with citation checking, the OpenAPI update and tests against a fake endpoint.
-  (2) CLI: \texttt{quarry find -{}-answer}. (3) Eval spike and two weeks of use
+  (2) CLI: \texttt{quarry answer}. (3) Eval spike and two weeks of use
   (\faqref{faq:next-step}); this gates the next phase. (4) Menu bar: the Answer
   action, the answer card with clickable citations, and the endpoint host
   label. (5) Streaming, if the measured latency calls for it. If scope
-  compresses, streaming is cut first, then the CLI flag; the daemon route and
+  compresses, streaming is cut first, then the CLI command; the daemon route and
   the menu bar card are the feature.
 \end{faqpair}
 
@@ -545,7 +545,7 @@ half a US cent per answer for Claude Haiku 4.5 at list price
 \toprule
 \textbf{\color{SectionBlue}Risk} & \textbf{\color{SectionBlue}Rating} & \textbf{\color{SectionBlue}Assessment} \\
 \midrule
-Value       & \textcolor{RiskAmber}{Medium} & Demand evidence is the author's own use (\faqref{faq:evidence}). The two-week \texttt{-{}-answer} trial is the test, and it runs before the menu bar work. \\
+Value       & \textcolor{RiskAmber}{Medium} & Demand evidence is the author's own use (\faqref{faq:evidence}). The two-week \texttt{quarry answer} trial is the test, and it runs before the menu bar work. \\
 Usability   & \textcolor{RiskAmber}{Medium} & One keystroke to use, but setup asks the user to choose and run a model and edit configuration. Users without a model see no change. \\
 Feasibility & \textcolor{RiskAmber}{Medium} & The plumbing is one route and one HTTP call over existing search. Answer quality and latency from small local models are unmeasured (\faqref{faq:tech-risks}). \\
 Viability   & \textcolor{RiskGreen}{Low}    & No cost to Punt Labs; users pay their own model costs. Main exposure is a shared remote daemon spending its owner's tokens. \\
@@ -574,7 +574,7 @@ Viability   & \textcolor{RiskGreen}{Low}    & No cost to Punt Labs; users pay th
 \subsection*{Should Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{\texttt{quarry find -{}-answer}}{the CLI surface, cheap once the route exists, and the vehicle for the validation trial}\label{feat:cli}
+  \featureitem{\texttt{quarry answer}}{the CLI surface, cheap once the route exists, and the vehicle for the validation trial}\label{feat:cli}
   \featureitem{Answer quality eval}{run Quarry's eval fixtures through candidate models and score citation correctness, to choose a recommended default}\label{feat:eval}
   \featureitem{Platform secret lookup}{read the model key from the macOS Keychain or \texttt{pass} so it need not sit in a file the daemon reads}\label{feat:secrets}
   \featureitem{Answer telemetry}{record answer requests, ``not covered'' replies and latency in Quarry's local recall telemetry}\label{feat:telemetry}
