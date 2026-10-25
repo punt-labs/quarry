@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-10-25T20:00:00+00:00",
+  "spec": "backfill-run-lifecycle.spec.tex",
+  "note": "Written by hand from direct probcli runs (probcli 1.15.1). Commands: probcli backfill-run-lifecycle.spec.tex -model_check -p MAX_INITIALISATIONS 100 -p TIME_OUT 30000 -p MAX_OPERATIONS 100000 -nodead [-goal '<w> : wit'] [-ctlformula <f>]. The old build is the spec with the axdef `fixed = 0`.",
+  "fuzz": "OK",
+  "fixed": 1,
+  "initial_states": 18,
+  "states_analysed": 145081,
+  "transitions_fired": 418915,
+  "checks": [
+    {"name": "model_check", "status": "passed", "detail": "all states visited; no invariant violation (-nodead)"},
+    {"name": "witness_goal", "status": "passed", "detail": "wOverlap, wLate, wReason, wUncounted, wRecord: -goal 'card(wit)>0' none reached (No counter example found. ALL states visited.)"},
+    {"name": "ctl_reaches_done", "status": "passed", "detail": "AG(EF(task /= trunning & thr = treturned & every transcript has an outcome)) TRUE"},
+    {"name": "ctl_no_early_deadlock", "status": "passed", "detail": "AG(done or EX true) TRUE: the only states with no successor are reported-and-returned runs"}
+  ],
+  "old_build": {
+    "fixed": 0,
+    "witnesses_reached": [
+      {"witness": "wOverlap", "property": "L1", "trace_length": 6, "states_analysed": 320},
+      {"witness": "wLate", "property": "L2", "trace_length": 12, "states_analysed": 3316},
+      {"witness": "wReason", "property": "L3", "trace_length": 7, "states_analysed": 442},
+      {"witness": "wUncounted", "property": "L4", "trace_length": 5, "states_analysed": 537},
+      {"witness": "wRecord", "property": "L5", "trace_length": 12, "states_analysed": 10428}
+    ]
+  }
+}

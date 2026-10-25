@@ -1,0 +1,1038 @@
+%
+% backfill-run-lifecycle.spec.tex
+%
+% Backfill run lifecycle: a Z specification of one backfill run, from the
+% singleton guard admitting it to the report it leaves behind, with cancel,
+% daemon shutdown, a full queue, a hung worker, and a hung scan thread
+% all in play (quarry-70zm).
+%
+% Check:        z-spec check docs/design/backfill-run-lifecycle.spec.tex
+% Model-check:  probcli with -p MAX_INITIALISATIONS 100 (the command lines
+%               are in backfill-run-lifecycle.spec.report.json)
+%
+% Must be .tex, not .md: the z-spec tools glob for .tex.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage{booktabs}
+
+\newcommand{\field}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{Backfill Run Lifecycle: A Z Specification}
+\author{Raymond H, for Punt Labs}
+\date{October 2026}
+\maketitle
+
+% ===================================================================
+\section{Scope and modelling choices}
+\label{sec:scope}
+% ===================================================================
+
+One backfill run has four cooperating parts. The \emph{registry task}
+(\field{task}) is what a client polls and what the singleton guard reads. The
+\emph{scan thread} (\field{thr}) walks the transcripts in order. The
+\emph{waiter} (\field{waiter}) is the coroutine that awaits the thread and
+turns its result, or a cancellation, into the task's terminal state. The
+\emph{worker} is the collection's single FIFO consumer; it runs the jobs the
+thread submits, one transcript to a job, beside a \emph{foreign} job (a hook's
+capture) that may occupy it.
+
+The model has two transcripts and bounded counters: it checks the lifecycle,
+not the arithmetic. A transcript is, in order, \emph{examined}, handed to the
+queue as a \emph{job} (admitted, pending, running, finished), and
+\emph{collected}, which gives it exactly one outcome.
+
+\subsection{Two builds, one switch}
+
+\field{fixed}~$=1$ is the lifecycle this design requires. \field{fixed}~$=0$ is
+the lifecycle as it stood before: the second cancel escapes the wait, a
+cancelled waiter leaves its job queued, a running job abandoned by the thread is
+counted \emph{not attempted}, the guard reads the task alone, the cancel
+overwrites the stop reason, and an unindexable transcript is recorded without
+the racily-clean test. The same witnesses are checked against both; the
+fixed build must reach none of them and the old build must reach each.
+
+\subsection{Witnesses, not invariants}
+
+A schema invariant that an operation can violate makes that operation
+unsatisfiable, so ProB would report nothing rather than a violation. Each
+property is therefore a latched witness in the set \field{wit}, set by the
+transition that commits the bad step, and checked by asking ProB whether any
+state with the witness in \field{wit} is reachable.
+
+\subsection{Properties}
+
+\begin{center}
+\begin{tabular}{@{}cll@{}}
+\toprule
+ & Witness & Meaning \\
+\midrule
+L1 & \field{wOverlap} & the guard admitted a new run while the previous run's
+  thread was still alive \\
+L2 & \field{wLate} & a job wrote although its transcript was already counted
+  as not attempted or not examined (the report did not count the write) \\
+L3 & \field{wReason} & the task reports a reason other than the first stop
+  reason \\
+L4 & \field{wUncounted} & the run was reported while a transcript was still
+  in flight, so it was counted in no outcome \\
+L5 & \field{wRecord} & a transcript was recorded as unindexable although its
+  mtime was racy or had changed \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+L4 is also structural: \field{out} is a function from transcripts to outcomes,
+so every transcript has exactly one, and the outcomes are disjoint.
+
+\subsection{Non-goals}
+
+\begin{itemize}
+  \item Time. A timeout, the bound on the wait for the thread, and the
+    admission wait are transitions that may fire whenever their guard holds;
+    that they fire only after the configured seconds is not modelled.
+  \item The transcript count, the chunk text, and the queue depth.
+  \item The single strict read (L5): the read, the parse, and the verdict are
+    one step here. That the code reads once is pinned by a test, not by this
+    model.
+  \item More than one foreign job, and more than one run at a time. The guard is
+    modelled by a second start, \field{Start2}, that fires at most once.
+\end{itemize}
+
+% ===================================================================
+\section{Types and constants}
+\label{sec:types}
+% ===================================================================
+
+\begin{zed}
+ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+TASK ::= trunning | tcompleted | tfailed | tcancelled
+\end{zed}
+
+\begin{zed}
+THR ::= talive | treturned
+\end{zed}
+
+The stop signal's reason. The first reason set is the one it keeps.
+
+\begin{zed}
+REASON ::= rnone | rcancel | rshutdown | rhung
+\end{zed}
+
+\begin{zed}
+WAITER ::= wwaiting | wgone
+\end{zed}
+
+A transcript's job. \field{jadmit}: waiting for a queue slot, nothing enqueued.
+\field{jpending}: queued. \field{jrunning}: the worker holds it.
+\field{jstored}, \field{jnothing} (stored nothing: the text chunks to nothing),
+\field{jfailed}: the worker finished it. \field{jskipped}: it will never write.
+
+\begin{zed}
+JOB ::= jnone | jadmit | jpending | jrunning
+      | jstored | jnothing | jfailed | jskipped
+\end{zed}
+
+\begin{zed}
+OUT ::= onone | oingested | oskipped | ofailed | onotattempted | onotexamined
+\end{zed}
+
+A transcript's content: ordinary; chunks to nothing with a stable mtime; chunks
+to nothing with an mtime inside the racy window.
+
+\begin{zed}
+KIND ::= knormal | kstable | kracy
+\end{zed}
+
+\begin{zed}
+WIT ::= wOverlap | wLate | wReason | wUncounted | wRecord
+\end{zed}
+
+\begin{axdef}
+fixed : \nat
+\where
+fixed = 1
+\end{axdef}
+
+How the thread abandons a wait on a job, by the job's state: what the job
+becomes and what the transcript is counted as. A queued job is cancelled so the
+worker skips it; a running job continues and is counted \emph{failed} (it may
+still land); the old build left the queued job in place and counted the running
+one \emph{not attempted}.
+
+\begin{axdef}
+abortJob : JOB \pfun JOB \\
+abortOut : JOB \pfun OUT
+\where
+\dom abortJob = \{ jadmit, jpending, jrunning \} \\
+\dom abortOut = \{ jadmit, jpending, jrunning \} \\
+abortJob~jadmit = jskipped \\
+abortJob~jrunning = jrunning \\
+abortOut~jadmit = onotattempted \\
+abortOut~jpending = onotattempted \\
+fixed = 1 \implies abortJob~jpending = jskipped \\
+fixed = 0 \implies abortJob~jpending = jpending \\
+fixed = 1 \implies abortOut~jrunning = ofailed \\
+fixed = 0 \implies abortOut~jrunning = onotattempted
+\end{axdef}
+
+% ===================================================================
+\section{State}
+\label{sec:state}
+% ===================================================================
+
+\begin{schema}{Run}
+task : TASK \\
+rep, stop : REASON \\
+thr : THR \\
+waiter : WAITER \\
+hung, gate, second, fbusy : ZBOOL \\
+cancels : 0 \upto 2 \\
+cur : 1 \upto 3 \\
+job : 1 \upto 2 \fun JOB \\
+out : 1 \upto 2 \fun OUT \\
+kind : 1 \upto 2 \fun KIND \\
+touched, unind : 1 \upto 2 \fun ZBOOL \\
+wit : \power WIT
+\end{schema}
+
+\begin{itemize}
+  \item \field{task}, \field{rep}: the registry task's status, and the stop
+    reason the task state carries once the run is reported.
+  \item \field{stop}: the first reason the stop signal was given.
+  \item \field{thr}: the scan thread. \field{hung}: it is blocked in a step it
+    controls (a read, a scrub, a directory listing) and takes no step until it
+    returns from it.
+  \item \field{waiter}: the coroutine that reports the run; \field{wgone} once
+    the run is reported.
+  \item \field{gate}: the queue's gate is closed (shutdown). \field{second}: the
+    guard has admitted a second run. \field{fbusy}: a foreign job holds the
+    worker.
+  \item \field{cancels}: how many times the task was cancelled.
+  \item \field{cur}: the transcript the thread is on; $3$ means the scan is
+    complete.
+  \item \field{touched}: the transcript's mtime changed after the snapshot.
+    \field{unind}: the transcript is recorded as unindexable.
+\end{itemize}
+
+\begin{schema}{Init}
+Run'
+\where
+task' = trunning \\
+rep' = rnone \\
+stop' = rnone \\
+thr' = talive \\
+waiter' = wwaiting \\
+hung' = zfalse \\
+gate' = zfalse \\
+second' = zfalse \\
+cancels' = 0 \\
+cur' = 1 \\
+\forall i : 1 \upto 2 @ job'~i = jnone \land out'~i = onone \land
+  touched'~i = zfalse \land unind'~i = zfalse \\
+wit' = \emptyset
+\end{schema}
+
+\field{kind} and \field{fbusy} are free in the initial state.
+
+% ===================================================================
+\section{Stop, cancel, and the foreign job}
+\label{sec:stop}
+% ===================================================================
+
+Every operation below spells out what it leaves unchanged. (A shared frame
+schema would itself be an operation to ProB, free to change the variables it
+does not mention.) A stop reason is recorded only if none is set: the first
+reason wins.
+
+\begin{schema}{Cancel}
+\Delta Run
+\where
+task = trunning \\
+cancels < 2 \\
+fixed = 1 \lor cancels = 0 \lor thr = treturned \lor waiter = wgone \\
+cancels' = cancels + 1 \\
+stop = rnone \implies stop' = rcancel \\
+stop \neq rnone \implies stop' = stop \\
+gate' = gate \\
+task' = task \\
+rep' = rep \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{GateClose}
+\Delta Run
+\where
+task = trunning \\
+gate = zfalse \\
+gate' = ztrue \\
+cancels' = cancels \\
+stop = rnone \implies stop' = rshutdown \\
+stop \neq rnone \implies stop' = stop \\
+task' = task \\
+rep' = rep \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+
+The old build's second cancel arrived while the waiter was awaiting the thread;
+it escaped the wait, the task became cancelled at once, and whatever the thread
+was in the middle of was left out of the report.
+
+\begin{schema}{CancelAbandon}
+\Delta Run
+\where
+fixed = 0 \\
+task = trunning \\
+cancels = 1 \\
+waiter = wwaiting \\
+thr = talive \\
+cancels' = 2 \\
+task' = tcancelled \\
+rep' = rcancel \\
+waiter' = wgone \\
+out' = out \oplus \{ j : 1 \upto 2 | out~j = onone \land job~j = jnone @
+  j \mapsto onotexamined \} \\
+wit' = wit \cup \{ w : WIT |
+  (w = wUncounted \land (\exists j : 1 \upto 2 @ out~j = onone \land job~j \neq jnone))
+  \lor (w = wReason \land stop \neq rnone \land stop \neq rcancel) \} \\
+stop' = stop \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+job' = job \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second
+\end{schema}
+
+\begin{schema}{FoeStart}
+\Delta Run
+\where
+fbusy = zfalse \\
+fbusy' = ztrue \\
+kind' = kind \\
+second' = second \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{FoeEnd}
+\Delta Run
+\where
+fbusy = ztrue \\
+fbusy' = zfalse \\
+kind' = kind \\
+second' = second \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+wit' = wit
+\end{schema}
+
+% ===================================================================
+\section{The scan thread}
+\label{sec:thread}
+% ===================================================================
+
+The thread checks the stop signal before every step it controls: before it
+examines a transcript, before it reads one, before the scrub, and before the
+capture file is written. \field{Examine} and \field{SkipInline} are those steps;
+neither fires once a reason is set. A thread that is blocked inside a step
+(\field{Hang}) takes no step until \field{Unhang}.
+
+\begin{schema}{Examine}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+stop = rnone \\
+job~cur = jnone \\
+out~cur = onone \\
+job' = job \oplus \{ cur \mapsto jadmit \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{SkipInline}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+stop = rnone \\
+job~cur = jnone \\
+out~cur = onone \\
+out' = out \oplus \{ cur \mapsto oskipped \} \\
+cur' = cur + 1 \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+waiter' = waiter \\
+job' = job \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{Hang}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+job~cur = jnone \\
+out~cur = onone \\
+hung' = ztrue \\
+thr' = thr \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{Unhang}
+\Delta Run
+\where
+hung = ztrue \\
+hung' = zfalse \\
+thr' = thr \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+The thread returns when the scan is complete, or when it sees a stop reason
+between transcripts; every transcript it did not reach is counted \emph{not
+examined}.
+
+\begin{schema}{ReturnDone}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur = 3 \\
+thr' = treturned \\
+hung' = hung \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{ReturnStopped}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+stop \neq rnone \\
+job~cur = jnone \\
+thr' = treturned \\
+hung' = hung \\
+out' = out \oplus \{ j : 1 \upto 2 | out~j = onone @ j \mapsto onotexamined \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+% ===================================================================
+\section{The queue and the worker}
+\label{sec:queue}
+% ===================================================================
+
+\field{Admit} takes a slot (a closed gate admits nothing). \field{AdmitTimeout}
+ends the admission wait with the transcript not attempted; nothing was
+enqueued. \field{AbortWait} is the thread leaving a wait because a stop reason
+was set, honored within a poll. \field{GiveUp} is the finish timeout: it sets
+the reason \field{rhung} and leaves the wait the same way.
+
+\begin{schema}{Admit}
+\Delta Run \\ i? : 1 \upto 2
+\where
+job~i? = jadmit \\
+gate = zfalse \\
+job' = job \oplus \{ i? \mapsto jpending \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{AdmitTimeout}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+stop = rnone \\
+job~cur = jadmit \\
+job' = job \oplus \{ cur \mapsto jskipped \} \\
+out' = out \oplus \{ cur \mapsto onotattempted \} \\
+cur' = cur + 1 \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+waiter' = waiter \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{AbortWait}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+stop \neq rnone \\
+job~cur \in \dom abortJob \\
+job' = job \oplus \{ cur \mapsto abortJob~(job~cur) \} \\
+out' = out \oplus \{ cur \mapsto abortOut~(job~cur) \} \\
+cur' = cur + 1 \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+waiter' = waiter \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{GiveUp}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+stop = rnone \\
+job~cur \in \{ jpending, jrunning \} \\
+stop' = rhung \\
+cancels' = cancels \\
+gate' = gate \\
+job' = job \oplus \{ cur \mapsto abortJob~(job~cur) \} \\
+out' = out \oplus \{ cur \mapsto abortOut~(job~cur) \} \\
+cur' = cur + 1 \\
+task' = task \\
+rep' = rep \\
+thr' = thr \\
+hung' = hung \\
+waiter' = waiter \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+The worker takes the oldest pending job when no foreign job holds it. It runs a
+job to one of three ends. A job that stores writes; a job whose transcript was
+already counted \emph{not attempted} or \emph{not examined} that then writes is
+the late write L2 forbids.
+
+\begin{schema}{WorkerStart}
+\Delta Run \\ i? : 1 \upto 2
+\where
+job~i? = jpending \\
+fbusy = zfalse \\
+\forall j : 1 \upto 2 @ job~j \neq jrunning \\
+\forall j : 1 \upto 2 | j < i? @ job~j \neq jpending \\
+job' = job \oplus \{ i? \mapsto jrunning \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{WorkerStores}
+\Delta Run \\ i? : 1 \upto 2
+\where
+job~i? = jrunning \\
+kind~i? = knormal \\
+job' = job \oplus \{ i? \mapsto jstored \} \\
+wit' = wit \cup \{ w : WIT | w = wLate \land out~i? \in \{ onotattempted, onotexamined \} \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second
+\end{schema}
+
+\begin{schema}{WorkerStoresNothing}
+\Delta Run \\ i? : 1 \upto 2
+\where
+job~i? = jrunning \\
+kind~i? \neq knormal \\
+job' = job \oplus \{ i? \mapsto jnothing \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{WorkerFails}
+\Delta Run \\ i? : 1 \upto 2
+\where
+job~i? = jrunning \\
+job' = job \oplus \{ i? \mapsto jfailed \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+% ===================================================================
+\section{Collecting a transcript}
+\label{sec:collect}
+% ===================================================================
+
+The thread collects a finished job into the transcript's one outcome and moves
+on. A transcript whose job stored nothing is recorded as unindexable only if
+its mtime is unchanged since the snapshot and, in the fixed build, outside the
+racy window as well (L5). \field{Touch} is the file changing under the scan.
+
+\begin{schema}{CollectStored}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+out~cur = onone \\
+job~cur = jstored \\
+out' = out \oplus \{ cur \mapsto oingested \} \\
+cur' = cur + 1 \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+waiter' = waiter \\
+job' = job \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{CollectFailed}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+out~cur = onone \\
+job~cur = jfailed \\
+out' = out \oplus \{ cur \mapsto ofailed \} \\
+cur' = cur + 1 \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+waiter' = waiter \\
+job' = job \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{CollectRecord}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+out~cur = onone \\
+job~cur = jnothing \\
+touched~cur = zfalse \\
+kind~cur = kstable \lor (fixed = 0 \land kind~cur = kracy) \\
+out' = out \oplus \{ cur \mapsto oskipped \} \\
+unind' = unind \oplus \{ cur \mapsto ztrue \} \\
+touched' = touched \\
+cur' = cur + 1 \\
+wit' = wit \cup \{ w : WIT | w = wRecord \land kind~cur = kracy \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+waiter' = waiter \\
+job' = job \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second
+\end{schema}
+
+\begin{schema}{CollectNoRecord}
+\Delta Run
+\where
+thr = talive \\
+hung = zfalse \\
+cur \in 1 \upto 2 \\
+out~cur = onone \\
+job~cur = jnothing \\
+touched~cur = ztrue \lor kind~cur = knormal \lor
+  (fixed = 1 \land kind~cur = kracy) \\
+out' = out \oplus \{ cur \mapsto oskipped \} \\
+cur' = cur + 1 \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+waiter' = waiter \\
+job' = job \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+\begin{schema}{Touch}
+\Delta Run \\ i? : 1 \upto 2
+\where
+out~i? = onone \\
+touched~i? = zfalse \\
+touched' = touched \oplus \{ i? \mapsto ztrue \} \\
+unind' = unind \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit
+\end{schema}
+
+% ===================================================================
+\section{Reporting the run, and the guard}
+\label{sec:report}
+% ===================================================================
+
+\field{Settle} is the waiter reporting a run whose thread has returned. A
+cancelled run is \field{tcancelled}; otherwise it completes or fails. The task
+carries the first stop reason (L3); the old build carried \field{rcancel}
+whenever the task was cancelled.
+
+\begin{schema}{Settle}
+\Delta Run
+\where
+task = trunning \\
+waiter = wwaiting \\
+thr = treturned \\
+cancels = 0 \implies task' \in \{ tcompleted, tfailed \} \\
+cancels > 0 \implies task' = tcancelled \\
+(fixed = 1 \lor cancels = 0) \implies rep' = stop \\
+(fixed = 0 \land cancels > 0) \implies rep' = rcancel \\
+waiter' = wgone \\
+wit' = wit \cup \{ w : WIT |
+  (w = wReason \land stop \neq rnone \land rep' \neq stop)
+  \lor (w = wUncounted \land (\exists j : 1 \upto 2 @ out~j = onone)) \} \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second
+\end{schema}
+
+\field{Bound} is the bounded wait: the thread is blocked in a step the stop
+signal cannot interrupt, the stop reason has been set, and the waiter stops
+waiting. The task is reported at once, the thread is still alive, and the guard
+reads the thread as well as the task, so it refuses a second run until the
+thread returns.
+
+\begin{schema}{Bound}
+\Delta Run
+\where
+fixed = 1 \\
+task = trunning \\
+waiter = wwaiting \\
+thr = talive \\
+hung = ztrue \\
+stop \neq rnone \\
+cancels = 0 \implies task' = tfailed \\
+cancels > 0 \implies task' = tcancelled \\
+rep' = stop \\
+waiter' = wgone \\
+out' = out \oplus \{ j : 1 \upto 2 | out~j = onone @ j \mapsto onotexamined \} \\
+wit' = wit \cup \{ w : WIT |
+  w = wUncounted \land (\exists j : 1 \upto 2 @ out~j = onone \land job~j \neq jnone) \} \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+job' = job \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second
+\end{schema}
+
+\field{Start2} is a second backfill request reaching the singleton guard once
+the task is no longer running. The fixed guard also waits for the thread.
+
+\begin{schema}{Start2}
+\Delta Run
+\where
+second = zfalse \\
+task \neq trunning \\
+fixed = 0 \lor thr = treturned \\
+second' = ztrue \\
+kind' = kind \\
+fbusy' = fbusy \\
+wit' = wit \cup \{ w : WIT | w = wOverlap \land thr = talive \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind
+\end{schema}
+
+% ===================================================================
+\section{Properties checked}
+\label{sec:props}
+% ===================================================================
+
+For \field{fixed}~$=1$, ProB finds no reachable state with any witness in
+\field{wit}, no deadlock before the run is reported, and from every reachable
+state a state in which the task is terminal, the thread has returned and
+every transcript has an outcome is reachable (\field{AG(EF(done))}). For
+\field{fixed}~$=0$, each witness is reachable; the reports record the shortest
+path ProB found for each.
+
+\end{document}
