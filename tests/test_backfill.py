@@ -18,6 +18,7 @@ from quarry.backfill_session import BackfillSession
 from quarry.config import Settings
 from quarry.shared_project_dirs import SharedProjectDirs
 from quarry.sync_registry import DirectoryRegistration
+from quarry.transcript_snapshot import TranscriptSnapshot
 
 runner = CliRunner()
 
@@ -489,7 +490,8 @@ class TestBackfillSessions:
             "total_pages": 1,
             "chunk_count": 5,
             "indexed_pages": 1,
-            "ingestion_timestamp": "2999-01-01T00:00:00",
+            "ingestion_timestamp": "2000-01-01T00:00:00",
+            "source_version": TranscriptSnapshot.taken(env["transcript"]).version,
         }
         with (
             patch(
@@ -527,7 +529,8 @@ class TestBackfillSessions:
             "total_pages": 1,
             "chunk_count": 5,
             "indexed_pages": 1,
-            "ingestion_timestamp": "2000-01-01T00:00:00",
+            "ingestion_timestamp": "2999-01-01T00:00:00",
+            "source_version": "1:1",
         }
         with (
             patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
@@ -542,6 +545,8 @@ class TestBackfillSessions:
         mock_ingest.assert_called_once()
         assert mock_ingest.call_args.args[1] == "session-abcd1234"
         assert mock_ingest.call_args.args[3].overwrite is True
+        stamped = mock_ingest.call_args.args[3].source_version
+        assert stamped == TranscriptSnapshot.taken(env["transcript"]).version
         assert stats.ingested == 1
         assert stats.skipped_existing == 0
 

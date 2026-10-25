@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast
 
 import numpy as np
+import pyarrow as pa
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -20,7 +22,7 @@ from quarry.db import (
     TableOptimizer,
     get_db,
 )
-from quarry.db.schema import TABLE_NAME
+from quarry.db.schema import TABLE_NAME, SchemaManager
 from quarry.models import Chunk
 from quarry.retrieval import HybridRetriever, RetrievalConfig
 
@@ -239,6 +241,36 @@ class TestListDocuments:
         db = get_db(tmp_path / "db")
         docs = ChunkCatalog(db).list_documents()
         assert docs == []
+
+    def test_reports_the_source_version_a_document_was_stored_at(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunk = replace(_make_chunk(document_name="session-1"), source_version="9:42")
+        ChunkStore(db).insert([chunk], _random_vectors(1))
+
+        [doc] = ChunkCatalog(db).list_documents()
+        assert doc["source_version"] == "9:42"
+
+    def test_chunks_stored_at_different_versions_report_none(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        base = _make_chunk(document_name="session-1")
+        chunks = [
+            replace(base, chunk_index=0, source_version="9:42"),
+            replace(base, chunk_index=1, source_version="7:40"),
+        ]
+        ChunkStore(db).insert(chunks, _random_vectors(2))
+
+        [doc] = ChunkCatalog(db).list_documents()
+        assert doc["source_version"] == ""
+
+    def test_a_table_from_before_the_column_reports_no_version(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        legacy = [f for f in SchemaManager.schema() if f.name != "source_version"]
+        row = {**asdict(_make_chunk()), "vector": _random_vectors(1)[0].tolist()}
+        del row["source_version"]
+        db.create_table(TABLE_NAME, data=[row], schema=pa.schema(legacy))
+
+        [doc] = ChunkCatalog(db).list_documents()
+        assert doc["source_version"] == ""
 
 
 class TestCountChunks:

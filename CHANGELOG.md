@@ -33,6 +33,12 @@ across `transform`, `index`, and `connector`).
   `not a directory (it is a file)` for a file, the command retries only on
   that, and a nonexistent path is reported instead of widened (#561).
 
+- Session backfill no longer skips a transcript that grew while it was being
+  ingested (#556). Each stored session now records the transcript's size and
+  mtime as read (a new `source_version` column, migrated in place), and
+  backfill re-ingests any session whose transcript no longer matches it.
+  Sessions stored before this change carry no version and are re-ingested once.
+
 ## [3.5.0] - 2026-10-25
 
 ### Security

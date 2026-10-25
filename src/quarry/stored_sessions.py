@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.display_name import DisplayName
-from quarry.transcript import Transcript
+from quarry.transcript_snapshot import TranscriptSnapshot
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -18,68 +16,47 @@ logger = logging.getLogger(__name__)
 
 @final
 class StoredSessions:
-    """Tell a session that is stored in full from one that has since grown.
+    """Tell a session that is stored in full from one whose transcript has changed.
 
     The compaction hook and backfill file a session under the same
     ``session-<id[:8]>`` name, so one document stands for it whoever wrote it.
     The hook writes mid-session, so that document can stop at the last
-    compaction: a transcript modified after its document was stored holds
-    conversation the document lacks.  Existing under the name is therefore not
-    enough to be skipped; the document must also be at least as new as the
-    transcript.
+    compaction.  Backfill stamps each row with the version of a
+    :class:`~quarry.transcript_snapshot.TranscriptSnapshot` taken *before* the
+    read: a stored version equal to the transcript's current one is current,
+    and a transcript that grew while it was read or stored no longer matches.
+    A row with no version (a hook capture, or one stored before the column
+    existed) cannot vouch for being complete, so its session is ingested again
+    rather than skipped.
     """
 
     __slots__ = ("_stored",)
 
-    _stored: dict[str, datetime | None]
+    _stored: dict[str, str]
 
     def __new__(cls, documents: Iterable[Mapping[str, object]]) -> Self:
         self = super().__new__(cls)
         self._stored = {
-            name: cls._parsed(name, doc.get("ingestion_timestamp"))
+            name: str(doc.get("source_version") or "")
             for doc in documents
             if (name := str(doc["document_name"])).startswith("session-")
         }
         return self
 
-    def is_current(self, transcript: Path) -> bool:
-        """Return whether *transcript* is stored and unchanged since it was.
-
-        A stored timestamp that cannot be read, or a transcript that cannot be
-        examined, is not current: the session is ingested again rather than
-        silently skipped.
-        """
-        name = Transcript(transcript).document_name()
-        if name not in self._stored:
-            return False
-        stored = self._stored[name]
-        if stored is None:
-            return False
-        try:
-            modified = datetime.fromtimestamp(transcript.stat().st_mtime, tz=UTC)
-        except OSError as exc:
-            logger.warning(
-                "session %s: transcript could not be examined (%s); re-ingesting",
-                DisplayName(name).redacted(),
-                type(exc).__name__,
-            )
-            return False
-        return modified <= stored
-
-    def record(self, transcript: Path) -> None:
-        """Note that *transcript* has just been stored, in full."""
-        self._stored[Transcript(transcript).document_name()] = datetime.now(tz=UTC)
-
     @staticmethod
-    def _parsed(name: str, raw: object) -> datetime | None:
-        """Return the stored timestamp as an aware datetime, or ``None``."""
-        try:
-            when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        except ValueError as exc:
-            logger.warning(
-                "session %s: stored ingestion_timestamp unreadable (%s); re-ingesting",
-                DisplayName(name).redacted(),
-                type(exc).__name__,
-            )
-            return None
-        return when if when.tzinfo else when.replace(tzinfo=UTC)
+    def snapshot(transcript: Path) -> TranscriptSnapshot:
+        """Snapshot *transcript* now, before it is read; see :meth:`is_current`."""
+        return TranscriptSnapshot.taken(transcript)
+
+    def is_current(self, snapshot: TranscriptSnapshot) -> bool:
+        """Return whether *snapshot*'s session is stored at *snapshot*'s version.
+
+        A transcript that could not be examined, or an unversioned row, is
+        never current.
+        """
+        stored = self._stored.get(snapshot.document_name(), "")
+        return bool(snapshot.version) and stored == snapshot.version
+
+    def record(self, snapshot: TranscriptSnapshot) -> None:
+        """Note that *snapshot*'s session has just been stored, in full, at it."""
+        self._stored[snapshot.document_name()] = snapshot.version
