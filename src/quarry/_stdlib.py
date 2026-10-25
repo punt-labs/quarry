@@ -314,7 +314,7 @@ class _SessionSetup:
 
 
 def handle_session_setup(payload: dict[str, object]) -> dict[str, object]:
-    """Handle session-setup hook: deploy commands and allow MCP tools.
+    """Handle session-setup hook: deploy commands; grant no permissions.
 
     Emits one INFO breadcrumb (``quarry.hooks: session-setup: entered ...``)
     on every path — no-plugin-root, unreadable manifest, nothing-to-do, or a
