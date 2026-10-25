@@ -82,7 +82,7 @@
 % Tracks iteration count. Major for structural changes, minor for feedback edits.
 % /prfaq:feedback auto-increments after each application.
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{1}{3}
+\prfaqversion{1}{4}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -250,9 +250,9 @@ on my laptop, so the incident notes stay on my laptop too.''}
 Users who already run Quarry need about five minutes:
 
 \begin{enumerate}[leftmargin=2em]
-  \item \textbf{Pick a model.} The recommended default is IBM's
-        open-weight Granite 3.3 2B, a 1.5~GB download, run locally with
-        \texttt{ollama pull granite3.3:2b}. Any larger local model or hosted
+  \item \textbf{Pick a model.} The recommended default is NVIDIA's
+        open-weight Nemotron 3 Nano 4B, a 2.8~GB download, run locally with
+        \texttt{ollama pull nemotron-3-nano:4b}. Any larger local model or hosted
         OpenAI-compatible endpoint also works.
   \item \textbf{Point \texttt{quarryd} at it.} \texttt{quarry install} asks
         for the endpoint, model and optional key, writes them under
@@ -321,7 +321,7 @@ half a US cent per answer for Claude Haiku 4.5 at list price
 \end{faqpair}
 
 \begin{faqpair}{How do I get started?}\label{faq:start}
-  Run \texttt{ollama pull granite3.3:2b}, or choose another OpenAI-compatible
+  Run \texttt{ollama pull nemotron-3-nano:4b}, or choose another OpenAI-compatible
   endpoint. Run \texttt{quarry install}, which records the endpoint, model and
   optional key under \path{~/.punt-labs/quarry/}, and restart
   \texttt{quarryd}. Then press Command-Return in the menu bar search panel or
@@ -450,29 +450,28 @@ half a US cent per answer for Claude Haiku 4.5 at list price
 \end{faqpair}
 
 \begin{faqpair}{Which model is the default, and why?}\label{faq:default-model}
-  IBM's Granite 3.3 2B, served by Ollama, on every platform. The criteria are
-  the smallest US open-weight model that has some reasoning, with no need for
-  tool use. Granite 3.3 2B has 2 billion parameters, a 128K context window, an
-  optional thinking mode and an Apache 2.0
-  license~\cite{ibm2025granite33}, and is a 1.5~GB download in
-  Ollama~\cite{ollama2026library}. Users with more memory can point
-  \texttt{quarryd} at a larger model; Quarry never requires one. Two larger
-  US open-weight options are NVIDIA's Nemotron 3 Nano 4B, 2.8~GB with a
-  reasoning switch under NVIDIA's own open model
-  license~\cite{nvidia2026nemotron}, and OpenAI's gpt-oss-20b, 14~GB with 3.6
-  billion active parameters and configurable reasoning
-  effort~\cite{openai2025gptoss}. Meta's Llama 3.2 1B and 3B are as small but
-  have no thinking mode, and its smallest Llama 4 download is
-  67~GB~\cite{ollama2026library}. The eval in \featureref{feat:eval} checks
-  that a 2B model cites correctly; answer latency on an M-series Mac has not
-  been measured.
+  NVIDIA's Nemotron 3 Nano 4B, served by Ollama, on every platform. The
+  criteria are a small US open-weight model with some reasoning and no need
+  for tool use. NVIDIA describes it as one model for reasoning and
+  non-reasoning tasks, with a switch to turn the reasoning trace on or off; it
+  is released under the NVIDIA Nemotron Open Model
+  License~\cite{nvidia2026nemotron}. In Ollama it is a 2.8~GB download with a
+  256K context window~\cite{ollama2026library}. Users with a bigger and better
+  model can point \texttt{quarryd} at it; Quarry never requires one. Other US
+  open-weight options considered: IBM's Granite 3.3 2B, 1.5~GB with an
+  optional thinking mode and an Apache 2.0 license~\cite{ibm2025granite33};
+  OpenAI's gpt-oss-20b, 14~GB with configurable reasoning
+  effort~\cite{openai2025gptoss}; and Meta's Llama 3.2 1B and 3B, as small but
+  with no thinking mode. The eval in \featureref{feat:eval} checks that the
+  default cites correctly; answer latency on an M-series Mac has not been
+  measured.
 \end{faqpair}
 
 \begin{faqpair}{What are the major technical risks?}\label{faq:tech-risks}
-  \textbf{Answer quality from small local models (high, unknown).} A 2B
+  \textbf{Answer quality from small local models (high, unknown).} A 4B
   parameter model may cite the wrong passage or merge two passages into a claim
-  neither makes. Mitigation: run Quarry's eval fixtures through Granite 3.3
-  2B, one larger local model and one hosted model, scored for citation
+  neither makes. Mitigation: run Quarry's eval fixtures through Nemotron 3
+  Nano 4B, one larger local model and one hosted model, scored for citation
   correctness by hand, before release. \textbf{Latency on a laptop
   (medium, unknown).} A local model's time to a full answer on an M-series Mac
   is not measured; the spike records it. \textbf{Provider compatibility
@@ -598,7 +597,7 @@ Viability   & \textcolor{RiskGreen}{Low}    & No cost to Punt Labs; users pay th
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
   \featureitem{\texttt{quarry answer}}{the CLI command, cheap once the route exists}\label{feat:cli}
-  \featureitem{Answer quality eval}{run Quarry's eval fixtures through Granite 3.3 2B, a larger local model and a hosted model and score citation correctness, to confirm the default}\label{feat:eval}
+  \featureitem{Answer quality eval}{run Quarry's eval fixtures through Nemotron 3 Nano 4B, a larger local model and a hosted model and score citation correctness, to confirm the default}\label{feat:eval}
     \featureitem{Answer telemetry}{record answer requests, ``not covered'' replies and latency in Quarry's local recall telemetry}\label{feat:telemetry}
   \featureitem{Streaming}{show the answer as it is written, if measured latency makes waiting noticeable}\label{feat:streaming}
 \end{enumerate}
