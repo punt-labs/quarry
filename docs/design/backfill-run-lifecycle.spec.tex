@@ -178,8 +178,9 @@ fixed = 1
 
 How the thread abandons a wait on a job, by the job's state: what the job
 becomes and what the transcript is counted as. In the fixed build a job still
-waiting or running before its commit is withdrawn (the worker skips it, or stops
-at the commit) and is \emph{not attempted}; a job past its commit is counted
+waiting is withdrawn (the worker skips it) and is \emph{not attempted}; a job
+running before its commit is withdrawn too (it stops at the commit and writes
+nothing) and is counted \emph{failed}, since it did not finish; a job past its commit is counted
 \emph{stored}; a job that finished just before the withdraw is counted by how it
 finished (stored, nothing, failed). The old build left a queued job in place,
 counted a running or committing job \emph{failed} though it went on to write, and
@@ -202,7 +203,7 @@ fixed = 1 \implies abortJob~jpending = jskipped \\
 fixed = 0 \implies abortJob~jpending = jpending \\
 fixed = 1 \implies abortJob~jrunning = jskipped \\
 fixed = 0 \implies abortJob~jrunning = jrunning \\
-fixed = 1 \implies abortOut~jrunning = onotattempted \\
+fixed = 1 \implies abortOut~jrunning = ofailed \\
 fixed = 1 \implies abortOut~jcommit = oingested \\
 fixed = 1 \implies abortOut~jstored = oingested \\
 fixed = 1 \implies abortOut~jnothing = oskipped \\

@@ -5,31 +5,106 @@
   "fuzz": "OK",
   "fixed": 1,
   "initial_states": 18,
-  "states_analysed": 142309,
-  "transitions_fired": 389371,
+  "states_analysed": 177517,
+  "transitions_fired": 473971,
   "checks": [
-    {"name": "model_check", "status": "passed", "detail": "all states visited; no invariant violation (-nodead)"},
-    {"name": "witness_goal", "status": "passed", "detail": "wOverlap, wLate, wReason, wUncounted, wRecord, wSecond, wStats: -goal 'card(wit)>0' none reached (No counter example found. ALL states visited.)"},
-    {"name": "ctl_reaches_done", "status": "passed", "detail": "AG(EF(task /= trunning & thr = treturned & every transcript has an outcome)) TRUE"},
-    {"name": "ctl_no_early_deadlock", "status": "passed", "detail": "AG(done or EX true) TRUE"},
-    {"name": "ctl_holds", "status": "passed", "detail": "AG((thr = talive => holds = ztrue) & (inreg = zfalse => holds = zfalse)) TRUE: a live thread is always held, and a state that left the registry holds nothing"}
+    {
+      "name": "model_check",
+      "status": "passed",
+      "detail": "all states visited; no invariant violation (-nodead)"
+    },
+    {
+      "name": "witness_goal",
+      "status": "passed",
+      "detail": "wOverlap, wLate, wReason, wUncounted, wRecord, wSecond, wStats: -goal 'card(wit)>0' none reached (No counter example found. ALL states visited.)"
+    },
+    {
+      "name": "ctl_reaches_done",
+      "status": "passed",
+      "detail": "AG(EF(task /= trunning & thr = treturned & every transcript has an outcome)) TRUE"
+    },
+    {
+      "name": "ctl_no_early_deadlock",
+      "status": "passed",
+      "detail": "AG(done or EX true) TRUE"
+    },
+    {
+      "name": "ctl_holds",
+      "status": "passed",
+      "detail": "AG((thr = talive => holds = ztrue) & (inreg = zfalse => holds = zfalse)) TRUE: a live thread is always held, and a state that left the registry holds nothing"
+    }
   ],
   "old_build": {
     "fixed": 0,
     "witnesses_reached": [
-      {"witness": "wOverlap", "property": "L1", "trace_length": 7, "states_analysed": 69},
-      {"witness": "wLate", "property": "L2", "trace_length": 19, "states_analysed": 3032},
-      {"witness": "wReason", "property": "L3", "trace_length": 5, "states_analysed": 46},
-      {"witness": "wUncounted", "property": "L4", "trace_length": 5, "states_analysed": 483},
-      {"witness": "wRecord", "property": "L5", "trace_length": 7, "states_analysed": 27637},
-      {"witness": "wSecond", "property": "L6", "trace_length": 12, "states_analysed": 3767},
-      {"witness": "wStats", "property": "L7", "trace_length": 8, "states_analysed": 10}
+      {
+        "witness": "wOverlap",
+        "property": "L1",
+        "trace_length": 9,
+        "states_analysed": 41
+      },
+      {
+        "witness": "wLate",
+        "property": "L2",
+        "trace_length": 16,
+        "states_analysed": 2752
+      },
+      {
+        "witness": "wReason",
+        "property": "L3",
+        "trace_length": 8,
+        "states_analysed": 138
+      },
+      {
+        "witness": "wUncounted",
+        "property": "L4",
+        "trace_length": 6,
+        "states_analysed": 530
+      },
+      {
+        "witness": "wRecord",
+        "property": "L5",
+        "trace_length": 9,
+        "states_analysed": 37667
+      },
+      {
+        "witness": "wSecond",
+        "property": "L6",
+        "trace_length": 14,
+        "states_analysed": 3489
+      },
+      {
+        "witness": "wStats",
+        "property": "L7",
+        "trace_length": 8,
+        "states_analysed": 43
+      }
     ]
   },
   "ablations": [
-    {"change": "Evict ignores holds (TTL GC drops a held task)", "witness": "wOverlap", "trace_length": 11, "states_analysed": 129},
-    {"change": "Bound does not record the outcomes so far", "witness": "wStats", "trace_length": 8, "states_analysed": 67},
-    {"change": "a job that had just stored is counted failed at the withdraw", "witness": "wStats", "trace_length": 13, "states_analysed": 23937},
-    {"change": "a running job is not withdrawn (no claim check before the commit)", "witness": "wSecond", "trace_length": 14, "states_analysed": 2926}
+    {
+      "change": "Evict ignores holds (TTL GC drops a held task)",
+      "witness": "wOverlap",
+      "trace_length": 9,
+      "states_analysed": 116
+    },
+    {
+      "change": "Bound does not record the outcomes so far",
+      "witness": "wStats",
+      "trace_length": 5,
+      "states_analysed": 102
+    },
+    {
+      "change": "a job that had just stored is counted failed at the withdraw",
+      "witness": "wStats",
+      "trace_length": 12,
+      "states_analysed": 10094
+    },
+    {
+      "change": "a running job is not withdrawn (no claim check before the commit)",
+      "witness": "wSecond",
+      "trace_length": 15,
+      "states_analysed": 11099
+    }
   ]
 }
