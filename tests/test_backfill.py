@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -204,6 +205,56 @@ class TestSharedProjectDir:
     def test_an_unreadable_transcript_is_not_attributed(self, tmp_path: Path) -> None:
         missing = tmp_path / "gone.jsonl"
         assert SharedProjectDirs.recorded_cwd(missing) is None
+
+    def test_a_transcript_that_cannot_be_opened_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        directory = tmp_path / "-w-my-notes" / "dir.jsonl"
+        directory.mkdir(parents=True)
+
+        assert SharedProjectDirs.recorded_cwd(directory) is None
+        assert "transcript in shared dir -w-my-notes could not be read" in caplog.text
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["{not json", "[" * 100_000, json.dumps({"cwd": 7}), json.dumps(["/w/x"])],
+        ids=["malformed", "too-deep", "non-string-cwd", "not-an-object"],
+    )
+    def test_a_bad_record_is_passed_over(self, tmp_path: Path, bad: str) -> None:
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(bad + "\n" + json.dumps({"cwd": "/w/my.notes"}) + "\n")
+        assert SharedProjectDirs.recorded_cwd(transcript) == "/w/my.notes"
+
+    def test_only_bad_records_attribute_to_no_project(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text("{not json\n" + json.dumps({"cwd": None}) + "\n")
+        assert SharedProjectDirs.recorded_cwd(transcript) is None
+
+    def test_a_cwd_beyond_the_scanned_head_is_not_read(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "t.jsonl"
+        filler = json.dumps({"text": "x" * (2 << 20)})
+        transcript.write_text(filler + "\n" + json.dumps({"cwd": "/w/my.notes"}) + "\n")
+        assert SharedProjectDirs.recorded_cwd(transcript) is None
+
+    def test_sharing_registrations_scan_each_transcript_once(
+        self, tmp_path: Path
+    ) -> None:
+        projects_dir, regs = self._shared_env(tmp_path)
+        opened: list[str] = []
+        real_open = Path.open
+
+        def counting_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+            opened.append(self.name)
+            return real_open(self, *args, **kwargs)
+
+        with (
+            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir),
+            patch.object(Path, "open", counting_open),
+        ):
+            for mapping in ProjectMappingResolver.resolve_all(regs):
+                mapping.transcript_files()
+
+        assert sorted(opened) == ["dot.jsonl", "nocwd.jsonl", "under.jsonl"]
 
 
 # ---------------------------------------------------------------------------

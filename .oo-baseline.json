@@ -3811,10 +3811,10 @@
   "src/quarry/shared_project_dirs.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.33,
+    "avg_params": 1.75,
     "max_complexity": 6.0,
-    "avg_complexity": 4.67,
-    "module_size": 51.0,
+    "avg_complexity": 4.0,
+    "module_size": 82.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
