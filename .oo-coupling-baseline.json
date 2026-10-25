@@ -255,8 +255,8 @@
     "efferent_coupling": 2.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.533,
-    "avg_lcom": 0.533
+    "max_lcom": 0.267,
+    "avg_lcom": 0.267
   },
   "src/quarry/cli_captures.py": {
     "avg_lcom": 0.0,
