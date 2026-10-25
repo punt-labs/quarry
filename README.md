@@ -303,12 +303,21 @@ daemon directly. `quarry install` generates a self-signed CA for the managed
 daemon, local or remote, so it's TLS even on loopback:
 
 ```bash
-curl --cacert ~/.punt-labs/quarry/tls/ca.crt "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
+TOKEN=$(cat ~/.punt-labs/quarry/data/default/serve.token)
+curl --cacert ~/.punt-labs/quarry/tls/ca.crt \
+  -H "Authorization: Bearer $TOKEN" \
+  "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
 ```
 
-Local installs bind loopback-only with no auth required; a `--network`
-install additionally requires a Bearer token (`QUARRY_API_KEY`) — see
-[ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
+Every `/v1` endpoint requires a Bearer token, loopback included. A local
+install binds loopback-only and needs no key configured: `quarryd` mints a
+fresh token at each start and writes it to `serve.token` (mode 0600) in its
+data directory, where the CLI, MCP server, and hooks read it. Scripts read
+the same file; a `401` after a daemon restart means the token rotated, so
+re-read it. Only `/health` and `/ca.crt` are unauthenticated, so a client can
+probe liveness and bootstrap TLS trust. A `--network` install refuses to
+start without an operator key (`QUARRY_API_KEY`), which remote clients
+present instead — see [ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
 is generated at [`docs/openapi.json`](docs/openapi.json) (`make openapi`
 regenerates it).
 

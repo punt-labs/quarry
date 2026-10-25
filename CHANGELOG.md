@@ -14,6 +14,12 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- docs: the README HTTP API section no longer says loopback needs no auth.
+  Every `/v1` endpoint requires a Bearer token; local installs get one minted
+  automatically in `serve.token`, and the `curl` example now sends it (#551).
+
 ## [3.5.0] - 2026-10-25
 
 ### Security
