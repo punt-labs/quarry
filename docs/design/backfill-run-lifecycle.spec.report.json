@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-10-25T23:00:00+00:00",
+  "timestamp": "2026-10-25T23:30:00+00:00",
   "spec": "backfill-run-lifecycle.spec.tex",
-  "note": "Written by hand from direct probcli runs (probcli 1.15.1). Commands: probcli backfill-run-lifecycle.spec.tex -model_check -p MAX_INITIALISATIONS 100 -p TIME_OUT 30000 -p MAX_OPERATIONS 100000 -nodead [-goal '<w> : wit'] [-ctlformula <f>]. The old build is the spec with the axdef `fixed = 0`; each ablation changes one line of the fixed build.",
+  "note": "Written by hand from direct probcli runs (probcli 1.15.1). Commands: probcli backfill-run-lifecycle.spec.tex -model_check -p MAX_INITIALISATIONS 100 -p TIME_OUT 300000 -p MAX_OPERATIONS 100000 -nodead [-goal '<w> : wit'] [-ctlformula <f>]. The old build is the spec with the axdef `fixed = 0`; each ablation changes one line of the fixed build. CTL atoms are braced, e.g. -ctlformula 'AG(EF({task /= trunning & thr = treturned & out(1) /= onone & out(2) /= onone}))'. Trace lengths are the TRACE (length=N) probcli prints. In the fixed build probcli reports one operation not covered (AdmitTimeout).",
   "fuzz": "OK",
   "fixed": 1,
   "initial_states": 18,
-  "states_analysed": 177517,
-  "transitions_fired": 473971,
+  "states_analysed": 195277,
+  "transitions_fired": 529123,
   "checks": [
     {
       "name": "model_check",
@@ -16,7 +16,7 @@
     {
       "name": "witness_goal",
       "status": "passed",
-      "detail": "wOverlap, wLate, wReason, wUncounted, wRecord, wSecond, wStats: -goal 'card(wit)>0' none reached (No counter example found. ALL states visited.)"
+      "detail": "wOverlap, wLate, wReason, wUncounted, wRecord, wSecond, wStats, wMiscommit: -goal 'card(wit)>0' none reached (No counter example found. ALL states visited.)"
     },
     {
       "name": "ctl_reaches_done",
@@ -40,44 +40,50 @@
       {
         "witness": "wOverlap",
         "property": "L1",
-        "trace_length": 9,
-        "states_analysed": 41
+        "trace_length": 8,
+        "states_analysed": 66
       },
       {
         "witness": "wLate",
         "property": "L2",
         "trace_length": 16,
-        "states_analysed": 2752
+        "states_analysed": 3415
       },
       {
         "witness": "wReason",
         "property": "L3",
-        "trace_length": 8,
-        "states_analysed": 138
+        "trace_length": 6,
+        "states_analysed": 56
       },
       {
         "witness": "wUncounted",
         "property": "L4",
-        "trace_length": 6,
-        "states_analysed": 530
+        "trace_length": 7,
+        "states_analysed": 861
       },
       {
         "witness": "wRecord",
         "property": "L5",
-        "trace_length": 9,
-        "states_analysed": 37667
+        "trace_length": 7,
+        "states_analysed": 7213
       },
       {
         "witness": "wSecond",
         "property": "L6",
-        "trace_length": 14,
-        "states_analysed": 3489
+        "trace_length": 16,
+        "states_analysed": 4079
       },
       {
         "witness": "wStats",
         "property": "L7",
-        "trace_length": 8,
-        "states_analysed": 43
+        "trace_length": 10,
+        "states_analysed": 63
+      },
+      {
+        "witness": "wMiscommit",
+        "property": "L8",
+        "trace_length": 14,
+        "states_analysed": 4621
       }
     ]
   },
@@ -105,6 +111,12 @@
       "witness": "wSecond",
       "trace_length": 15,
       "states_analysed": 11099
+    },
+    {
+      "change": "a job past its commit point is counted stored at the withdraw, not unconfirmed",
+      "witness": "wMiscommit",
+      "trace_length": 11,
+      "states_analysed": 18691
     }
   ]
 }
