@@ -107,20 +107,29 @@ class ChunkStoreFunnel:
 
     @staticmethod
     def _insert(chunks: list[Chunk], document_name: str, context: IngestContext) -> int:
-        """Embed and insert *chunks*; a failed page leaves no partial copy behind.
+        """Embed and insert *chunks*; a failed URL page leaves no partial copy behind.
 
-        Any earlier copy under the name was deleted (overwrite) or the job was
-        skipped (create-if-absent), so what a failed URL-sourced insert removes is
-        only its own partial write.  A label keeps whatever landed, as before.
+        Only a write that owns the name is cleaned up: the name held nothing when
+        the insert began (an overwrite has already deleted the prior copy).  An
+        insert on top of an existing page that fails must not delete that page.  A
+        label keeps whatever landed, as before.
         """
+        owns = ChunkStoreFunnel._owns(document_name, context)
         try:
             return DocumentStreamer(context.settings).insert(
                 chunks, context.database.store, document_name
             )
         except Exception:
-            if context.url_sourced:
+            if owns:
                 ChunkStoreFunnel._discard_partial(document_name, context)
             raise
+
+    @staticmethod
+    def _owns(document_name: str, context: IngestContext) -> bool:
+        """Return whether a URL page's insert starts with the name unheld."""
+        return context.url_sourced and not context.database.catalog.document_exists(
+            document_name, context.collection
+        )
 
     @staticmethod
     def _discard_partial(document_name: str, context: IngestContext) -> None:
@@ -129,7 +138,7 @@ class ChunkStoreFunnel:
             context.database.store.delete_document(
                 document_name, collection=context.collection, count=False
             )
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, ValueError):
             logger.exception(
                 "insert of %s failed and its partial copy could not be removed",
                 DisplayName(document_name).redacted(),

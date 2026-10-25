@@ -10,6 +10,7 @@ from quarry.ingest_collection import IngestCollection
 from quarry.ingestion.bulk_ingest import BulkIngestRunner, BulkOptions
 from quarry.ingestion.crawl_guard import CrawlGuard
 from quarry.ingestion.fetch_refused import FetchRefusedError
+from quarry.ingestion.legacy_url_names import LegacyUrlNames
 from quarry.ingestion.safe_entry_selector import SafeEntrySelector
 from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
@@ -147,6 +148,30 @@ class SitemapIngest:
         )
 
     @staticmethod
+    def _single_page(
+        url: HttpUrl, progress: Progress, context: IngestContext, options: BulkOptions
+    ) -> IngestResult:
+        """Ingest one page; without ``overwrite`` that is create-if-absent.
+
+        A page already stored under its name is reported as skipped, the way the
+        content jobs do, instead of being fetched and written on top of itself.
+        """
+        name = url.document_name
+        if not context.overwrite and LegacyUrlNames(context.database).exists(
+            name, context.collection
+        ):
+            progress("Already stored, skipping")
+            return {
+                "document_name": name,
+                "collection": context.collection,
+                "chunks": 0,
+                "skipped": "exists",
+            }
+        return ingest_url(
+            UrlIngest(url=url, timeout=options.timeout), progress, context
+        )
+
+    @staticmethod
     def ingest_auto(
         url: HttpUrl,
         progress: Progress,
@@ -217,8 +242,7 @@ class SitemapIngest:
 
         if not entries:
             progress("No sitemap found, ingesting single page")
-            request = UrlIngest(url=url, timeout=options.timeout)
-            return ingest_url(request, progress, context)
+            return SitemapIngest._single_page(url, progress, context, options)
 
         progress("Discovered %d pages via sitemap", len(entries))
 
@@ -235,8 +259,7 @@ class SitemapIngest:
         # contain the requested path (e.g. namespace-prefixed XML).
         if not entries:
             progress("Sitemap has no pages matching the path, ingesting single page")
-            request = UrlIngest(url=url, timeout=options.timeout)
-            return ingest_url(request, progress, context)
+            return SitemapIngest._single_page(url, progress, context, options)
 
         return SitemapIngest._bulk_ingest_entries(
             SitemapCrawl(entries=entries, source_url=url), progress, context, options

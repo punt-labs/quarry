@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
+from quarry.web_fetch_name import WebFetchName
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -80,7 +81,7 @@ class IngestJob:
             )
         logger.warning("ingest of %s is not recoverable from the spool", self.source)
         return SpoolRecord(
-            kind="ingest",
+            kind="ingest-unrecoverable",
             collection=self.collection,
             name=name,
             payload="not recoverable: the URL's query or parameters are never written",
@@ -102,8 +103,32 @@ class IngestJob:
         layer replaces their messages before they can reach a log or a task).
         """
         if self.scrub:
-            return self._captured().run(ctx)
+            return self._capture_unless_held(ctx)
         return self._ingest_plain(ctx)
+
+    def _capture_unless_held(self, ctx: DaemonContext) -> dict[str, object]:
+        """Re-fetch the capture, unless ``overwrite`` is off and it is stored.
+
+        Without ``overwrite`` a single-URL ingest is create-if-absent: a capture
+        already stored under its name is reported as skipped, the way the content
+        jobs do, not fetched and written on top of itself.
+        """
+        held = self._held_name(ctx)
+        if held is None:
+            return self._captured().run(ctx)
+        return {
+            "document_name": held,
+            "collection": self.collection,
+            "chunks": 0,
+            "skipped": "exists",
+        }
+
+    def _held_name(self, ctx: DaemonContext) -> str | None:
+        """Return the capture's name if it is held and is not being overwritten."""
+        name = WebFetchName.maybe(self.source.fetch_url)
+        if self.labels.overwrite or name is None:
+            return None
+        return name if self.labels.holds(ctx, name, url_sourced=True) else None
 
     def _ingest_plain(self, ctx: DaemonContext) -> dict[str, object]:
         """Run a plain, unscrubbed ``quarry ingest``: sitemap-aware, byte-for-byte."""

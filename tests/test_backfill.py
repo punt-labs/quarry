@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,7 @@ from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.backfill_session import BackfillSession
 from quarry.config import Settings
 from quarry.sync_registry import DirectoryRegistration
+from quarry.transcript_reader import TranscriptReader
 
 runner = CliRunner()
 
@@ -440,10 +442,7 @@ class TestBackfillSessions:
         self, tmp_path: Path
     ) -> None:
         """The stored time is when backfill read the transcript, not when it stored."""
-        from datetime import UTC, datetime
-
         from quarry.backfill import backfill_sessions
-        from quarry.transcript_reader import TranscriptReader
 
         env = _make_env(tmp_path)
         settings = _make_settings(env["db_path"], env["registry_path"])

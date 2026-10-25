@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# What a LanceDB call raises on a fault: the codebase's convention.
+_STORE_ERRORS = (OSError, RuntimeError, ValueError)
+
 
 @final
 class LegacyUrlNames:
@@ -169,7 +172,16 @@ class LegacyUrlNames:
         failed embed or write leaves the old copy in place.  A document someone
         named with a URL is a label and is never touched.
         """
-        for legacy in self.aliases(name, collection):
+        try:
+            twins = self.aliases(name, collection)
+        except _STORE_ERRORS:
+            logger.exception(
+                "stored %s but could not look up its legacy-named twins; "
+                "re-ingest with overwrite to replace them",
+                DisplayName(name).redacted(),
+            )
+            return
+        for legacy in twins:
             logger.warning(
                 "replacing legacy-named document %s with %s",
                 DisplayName(legacy).redacted(),
@@ -179,7 +191,7 @@ class LegacyUrlNames:
                 self._database.store.delete_document(
                     legacy, collection=collection, count=False
                 )
-            except (OSError, RuntimeError):
+            except _STORE_ERRORS:
                 # The page is stored; a twin that stays is a duplicate, not a loss.
                 logger.exception(
                     "stored %s but could not delete its legacy-named twin %s; "

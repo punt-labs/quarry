@@ -164,6 +164,7 @@ class TestSpoolingAUrl:
             record = job.spool_record()
         assert record is not None
         assert record.recoverable is False
+        assert record.kind == "ingest-unrecoverable"  # never replayable as a URL
         blob = record.as_json()
         assert "SECRET" not in blob
         assert "token" not in blob
@@ -187,6 +188,7 @@ class TestSpoolingAUrl:
         record = job.spool_record()
         assert record is not None
         assert record.recoverable is True
+        assert record.kind == "ingest"
         assert record.payload == job.source.document_name
         assert "?" not in record.payload
 
@@ -197,4 +199,5 @@ class TestSpoolingAUrl:
         record = _plain_job_for(url).spool_record()
         assert record is not None
         assert record.recoverable is False
+        assert record.kind == "ingest-unrecoverable"
         assert "SECRET" not in record.as_json()

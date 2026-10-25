@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import patch
 
 import pytest
 
@@ -19,10 +20,12 @@ from quarry.config import Settings
 from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.db import Database
+from quarry.db.chunk_store import ChunkStore
 from quarry.db.name_prefix import NamePrefix
 from quarry.http_url import HttpUrl
 from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.legacy_url_names import LegacyUrlNames
+from quarry.ingestion.streaming import DocumentStreamer
 from quarry.ingestion.web_ingest import InlineIngest, UrlIngest, ingest_content
 from quarry.models import Chunk
 from tests.fakes import FakeEmbeddingBackend, patched_embedder
@@ -30,6 +33,7 @@ from tests.url_names import with_query
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from contextlib import AbstractContextManager
     from pathlib import Path
 
     from quarry.daemon.context import DaemonContext
@@ -310,8 +314,6 @@ class TestOneListingPerHost:
     def test_a_crawl_of_many_pages_from_one_host_lists_it_once(
         self, db: Database
     ) -> None:
-        from unittest.mock import patch
-
         from quarry.http_url import HttpUrl
         from quarry.ingestion.bulk_ingest import BulkIngestRunner, BulkOptions
 
@@ -343,8 +345,6 @@ class TestOneListingPerHost:
         assert len(_names(db)) == 8
 
     def test_a_single_ingest_lists_its_host_once_too(self, db: Database) -> None:
-        from unittest.mock import patch
-
         real = NamePrefix.names
         with patch.object(NamePrefix, "names", autospec=True, side_effect=real) as spy:
             _store(db, "https://example.com/page")
@@ -353,8 +353,6 @@ class TestOneListingPerHost:
     def test_a_listing_is_not_shared_between_collections_or_hosts(
         self, db: Database
     ) -> None:
-        from unittest.mock import patch
-
         real = NamePrefix.names
         names = LegacyUrlNames(db)
         with patch.object(NamePrefix, "names", autospec=True, side_effect=real) as spy:
@@ -662,10 +660,6 @@ class TestAFailedInsertLeavesTheLegacyTwin:
     def test_the_old_copy_survives_when_the_new_one_cannot_be_stored(
         self, db: Database, *, overwrite: bool
     ) -> None:
-        from unittest.mock import patch
-
-        from quarry.ingestion.streaming import DocumentStreamer
-
         _store_as_stored_by_an_older_build(db, "https://example.com/café")
         with (
             patch.object(DocumentStreamer, "insert", side_effect=RuntimeError("embed")),
@@ -738,14 +732,11 @@ class TestTwinCleanupNeverFailsAStoredPage:
     def test_a_failing_twin_delete_still_reports_the_page_stored(
         self, db: Database, caplog: pytest.LogCaptureFixture
     ) -> None:
-        from unittest.mock import patch
-
-        from quarry.db.chunk_store import ChunkStore
-
         _store_as_stored_by_an_older_build(db, "https://example.com/café")
         real = ChunkStore.delete_document
 
         def flaky(self: ChunkStore, name: str, *a: Any, **k: Any) -> int:
+            # Any: the store's own delete arguments are forwarded unchanged.
             if name == "https://example.com/café":
                 msg = "delete failed"
                 raise OSError(msg)
@@ -765,16 +756,13 @@ class TestTwinCleanupNeverFailsAStoredPage:
     def test_the_listing_cache_stays_consistent_after_a_failed_twin_delete(
         self, db: Database
     ) -> None:
-        from unittest.mock import patch
-
-        from quarry.db.chunk_store import ChunkStore
-
         _store_as_stored_by_an_older_build(db, "https://example.com/café")
         names = LegacyUrlNames(db)
         assert names.aliases("https://example.com/caf%C3%A9", _COLLECTION)
         real = ChunkStore.delete_document
 
         def flaky(self: ChunkStore, name: str, *a: Any, **k: Any) -> int:
+            # Any: the store's own delete arguments are forwarded unchanged.
             if name == "https://example.com/café":
                 msg = "delete failed"
                 raise OSError(msg)
@@ -792,15 +780,11 @@ class TestAFailedUrlInsertLeavesNoPartialCopy:
     def test_the_partial_write_is_removed_and_the_twin_survives(
         self, db: Database
     ) -> None:
-        from unittest.mock import patch
-
-        from quarry.ingestion.streaming import DocumentStreamer
-
         _store_as_stored_by_an_older_build(db, "https://example.com/café")
         real_insert = DocumentStreamer.insert
 
         def partial_then_fail(
-            self: DocumentStreamer, chunks: Any, store: Any, name: str
+            self: DocumentStreamer, chunks: list[Chunk], store: ChunkStore, name: str
         ) -> int:
             real_insert(self, chunks[:1], store, name)  # one window lands
             msg = "second window failed"
@@ -824,14 +808,10 @@ class TestAFailedUrlInsertLeavesNoPartialCopy:
     def test_a_label_is_not_cleaned_up_after_a_failed_insert(
         self, db: Database
     ) -> None:
-        from unittest.mock import patch
-
-        from quarry.ingestion.streaming import DocumentStreamer
-
         real_insert = DocumentStreamer.insert
 
         def partial_then_fail(
-            self: DocumentStreamer, chunks: Any, store: Any, name: str
+            self: DocumentStreamer, chunks: list[Chunk], store: ChunkStore, name: str
         ) -> int:
             real_insert(self, chunks[:1], store, name)
             msg = "boom"
@@ -848,3 +828,78 @@ class TestAFailedUrlInsertLeavesNoPartialCopy:
                 IngestContext(db, Settings(), overwrite=True, collection=_COLLECTION),
             )
         assert "my-label" in _names(db)  # only a URL-sourced page is cleaned up
+
+
+def _delete_fails_for(
+    names: set[str], error: Exception
+) -> AbstractContextManager[object]:
+    """Make the store's delete raise *error* for a document in *names*."""
+    real = ChunkStore.delete_document
+
+    def flaky(self: ChunkStore, name: str, *args: Any, **kwargs: Any) -> int:
+        # Any: the store's own delete arguments are forwarded unchanged.
+        if name in names:
+            raise error
+        return real(self, name, *args, **kwargs)
+
+    return patch.object(ChunkStore, "delete_document", flaky)
+
+
+class TestCleanupFailuresNeverReplaceTheRealOutcome:
+    @pytest.mark.parametrize(
+        "error", [OSError("io"), RuntimeError("rt"), ValueError("value")]
+    )
+    def test_a_twin_delete_failure_is_logged_not_raised(
+        self, db: Database, error: Exception, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _store_as_stored_by_an_older_build(db, "https://example.com/café")
+        with (
+            _delete_fails_for({"https://example.com/café"}, error),
+            caplog.at_level(logging.ERROR),
+        ):
+            _store(db, "https://example.com/caf%C3%A9", overwrite=True)
+        assert "https://example.com/caf%C3%A9" in _names(db)
+        assert [r for r in caplog.records if r.levelno == logging.ERROR]
+
+    def test_a_failed_partial_cleanup_does_not_replace_the_original_error(
+        self, db: Database
+    ) -> None:
+        new = "https://example.com/caf%C3%A9"
+        real_insert = DocumentStreamer.insert
+
+        def partial_then_fail(
+            self: DocumentStreamer, chunks: list[Chunk], store: ChunkStore, name: str
+        ) -> int:
+            real_insert(self, chunks[:1], store, name)
+            msg = "the insert failed"
+            raise RuntimeError(msg)
+
+        body = "<p>" + "a sentence of text. " * 400 + "</p>"
+        with (
+            patch.object(DocumentStreamer, "insert", partial_then_fail),
+            _delete_fails_for({new}, ValueError("cleanup failed")),
+            pytest.raises(RuntimeError, match="the insert failed"),
+        ):
+            ingest_content(
+                InlineIngest(body, format_hint="html", url_sourced=True),
+                new,
+                Progress(None),
+                IngestContext(db, Settings(), overwrite=False, collection=_COLLECTION),
+            )
+
+    def test_a_failed_twin_lookup_after_the_store_still_reports_the_page_stored(
+        self, db: Database, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def broken(*_a: object, **_k: object) -> list[str]:
+            msg = "listing failed"
+            raise RuntimeError(msg)
+
+        with (
+            patch.object(NamePrefix, "names", broken),
+            caplog.at_level(logging.ERROR),
+        ):
+            _store(db, "https://example.com/p", overwrite=True)
+        assert "https://example.com/p" in _names(db)
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors
+        assert "re-ingest with overwrite" in errors[0].getMessage()

@@ -158,7 +158,7 @@ class CollectionWorker:
             if not record.recoverable:
                 return (
                     "daemon shut down before ingest; URL not recoverable "
-                    "(query not persisted), re-run the ingest"
+                    "(query or parameters not persisted), re-run the ingest"
                 )
             return "daemon shut down before ingest; spooled for recovery"
         return (

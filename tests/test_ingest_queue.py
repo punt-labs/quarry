@@ -680,7 +680,7 @@ def test_an_unrecoverable_job_never_claims_to_be_spooled(tmp_path: Path) -> None
         gate = asyncio.Event()
         a = _StubUnit("c", "a", ledger, gate=gate)
         record = SpoolRecord(
-            "ingest", "c", "https://x.test/a", "note", recoverable=False
+            "ingest-unrecoverable", "c", "https://x.test/a", "note", recoverable=False
         )
         b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
         state_b = _state("b")
@@ -690,7 +690,7 @@ def test_an_unrecoverable_job_never_claims_to_be_spooled(tmp_path: Path) -> None
         await queue.aclose(drain_timeout=0.05)
         assert state_b.status == "failed"
         assert "spooled for recovery" not in state_b.error
-        assert "not recoverable" in state_b.error
+        assert "query or parameters not persisted" in state_b.error
         assert "re-run the ingest" in state_b.error
 
     asyncio.run(_run())
