@@ -43,6 +43,7 @@ _ALLOWED: dict[str, int] = {
     "ingestion/fetch_refused.py": 5,
     "ingestion/sitemap_reader.py": 1,
     "daemon/refusal_aware_terminal.py": 1,
+    "daemon/queued_transcript_writer.py": 1,  # a job's state.error: a FailureReason
     "extractors/sheet_tables.py": 0,
 }
 

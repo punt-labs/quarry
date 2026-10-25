@@ -10,17 +10,14 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.backfill_session import BackfillSession
-from quarry.db.facade import Database
 from quarry.failure_reason import FailureReason
-from quarry.ingestion.ingest_context import IngestContext, Progress
-from quarry.ingestion.web_ingest import InlineIngest, ingest_content
-from quarry.scrub import scrub_and_log
 from quarry.stored_sessions import StoredSessions
 from quarry.sync_registry import SyncRegistry
 from quarry.transcript_reader import TranscriptReader
 
 if TYPE_CHECKING:
-    from quarry.config import Settings
+    from quarry.backfill_writer import TranscriptWriter
+    from quarry.db.facade import Database
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +36,13 @@ class BackfillConfig:
         return bool(self.limit) and processed >= (self.limit or 0)
 
 
-# A shared immutable default: a bare name reference in the signature below,
-# never a call, so it carries no branch of its own (unlike `config or
-# BackfillConfig()`) and keeps backfill_sessions' cyclomatic complexity flat.
-_DEFAULT_BACKFILL_CONFIG = BackfillConfig()
-
-
 @dataclass(frozen=True, slots=True)
-class _Runtime:
-    """The database and settings shared by every project processed in a run."""
+class BackfillRuntime:
+    """What a run reads (the database, the registry) and writes through (the writer)."""
 
     database: Database
-    settings: Settings
+    writer: TranscriptWriter
+    registry_path: Path
 
 
 @dataclass(frozen=True)
@@ -62,6 +54,17 @@ class BackfillStats:
     skipped_unregistered: int = 0
     skipped_empty: int = 0
     errors: list[str] = field(default_factory=list)
+
+    def as_results(self, *, dry_run: bool) -> dict[str, object]:
+        """Return the stats as a task's results."""
+        return {
+            "ingested": self.ingested,
+            "skipped_existing": self.skipped_existing,
+            "skipped_unregistered": self.skipped_unregistered,
+            "skipped_empty": self.skipped_empty,
+            "errors": list(self.errors),
+            "dry_run": dry_run,
+        }
 
 
 @dataclass
@@ -86,7 +89,7 @@ class _ProjectProcessor:
     """
 
     _mapping: ProjectMapping
-    _runtime: _Runtime
+    _runtime: BackfillRuntime
     _acc: _Accumulator
     _config: BackfillConfig
     _collection: str
@@ -97,7 +100,7 @@ class _ProjectProcessor:
     def __new__(
         cls,
         mapping: ProjectMapping,
-        runtime: _Runtime,
+        runtime: BackfillRuntime,
         acc: _Accumulator,
         config: BackfillConfig,
     ) -> Self:
@@ -157,27 +160,11 @@ class _ProjectProcessor:
         session = BackfillSession(transcript, self._mapping.project_path, text)
         session.write_capture_file()
         try:
-            # Scrub via the pipeline choke point: passing a content_scrubber makes
-            # ingest_content redact the content AND the metadata, so the chunks
-            # honour the DES-036 write-time scrub invariant through the one scrub
-            # every scrubbed caller shares — backfill can never drift from it.
-            # (The capture .md is scrubbed independently by CaptureWriter.)
-            ingest_content(
-                InlineIngest(
-                    session.body,
-                    format_hint="plain",
-                    content_scrubber=lambda t: scrub_and_log(t, "backfill"),
-                ),
-                session.name,
-                Progress(None),
-                IngestContext(
-                    self._runtime.database,
-                    self._runtime.settings,
-                    overwrite=True,
-                    collection=self._collection,
-                    ingested_at=snapshot,
-                ),
-            )
+            # The writer scrubs through the pipeline choke point (a ``backfill``
+            # scrubber redacts content AND metadata), so backfill cannot drift
+            # from the write-time scrub invariant.  The capture .md is scrubbed
+            # independently by CaptureWriter.
+            self._runtime.writer.write(self._collection, session, snapshot)
         except Exception as exc:
             self._acc.errors.append(FailureReason.line(transcript.name, exc))
             logger.exception("backfill: failed to ingest %s", transcript.name)
@@ -192,11 +179,10 @@ class _ProjectProcessor:
 
 
 def backfill_sessions(
-    settings: Settings,
-    config: BackfillConfig = _DEFAULT_BACKFILL_CONFIG,
+    config: BackfillConfig, runtime: BackfillRuntime
 ) -> BackfillStats:
-    """Scan Claude Code project transcripts and ingest into quarry."""
-    conn = SyncRegistry(settings.registry_path)
+    """Scan Claude Code project transcripts and file them through *runtime*."""
+    conn = SyncRegistry(runtime.registry_path)
     try:
         registrations = conn.list_registrations()
     finally:
@@ -207,7 +193,6 @@ def backfill_sessions(
         all_mappings, config.project_filter
     )
 
-    runtime = _Runtime(Database.connect(settings.lancedb_path), settings)
     acc = _Accumulator()
     skipped_unregistered = ProjectMappingResolver.count_unmapped(all_mappings)
 

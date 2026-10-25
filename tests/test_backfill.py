@@ -12,12 +12,15 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.backfill import BackfillConfig
+from quarry.backfill import BackfillConfig, BackfillStats, backfill_sessions
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.backfill_session import BackfillSession
+from quarry.backfill_writer import BackfillWriteError
 from quarry.config import Settings
+from quarry.db.facade import Database
 from quarry.sync_registry import DirectoryRegistration
 from quarry.transcript_reader import TranscriptReader
+from tests.transcript_writers import DirectWriter, RecordingWriter, runtime_over
 
 runner = CliRunner()
 
@@ -327,77 +330,80 @@ def _make_env(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def _run(
+    env: dict[str, Path],
+    writer: RecordingWriter | DirectWriter,
+    config: BackfillConfig | None = None,
+) -> BackfillStats:
+    """Backfill *env* through *writer*, reading the env's (empty) database."""
+    database = Database.connect(env["db_path"])
+    runtime = runtime_over(database, writer, env["registry_path"])
+    with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]):
+        return backfill_sessions(config or BackfillConfig(), runtime)
+
+
+def _registered_env(tmp_path: Path) -> dict[str, Path]:
+    env = _make_env(tmp_path)
+    _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
+    return env
+
+
+def _stored_doc(timestamp: str) -> dict[str, object]:
+    return {
+        "document_name": "session-abcd1234",
+        "document_path": "",
+        "collection": "myproject-captures",
+        "total_pages": 1,
+        "chunk_count": 5,
+        "indexed_pages": 1,
+        "ingestion_timestamp": timestamp,
+    }
+
+
+class TestBackfillStats:
+    def test_results_carry_every_count_and_the_dry_run_flag(self) -> None:
+        stats = BackfillStats(ingested=3, skipped_existing=1, errors=["a: boom"])
+
+        assert stats.as_results(dry_run=True) == {
+            "ingested": 3,
+            "skipped_existing": 1,
+            "skipped_unregistered": 0,
+            "skipped_empty": 0,
+            "errors": ["a: boom"],
+            "dry_run": True,
+        }
+
+
 class TestBackfillSessions:
     def test_dry_run_no_writes(self, tmp_path: Path) -> None:
-        from quarry.backfill import backfill_sessions
+        writer = RecordingWriter()
+        stats = _run(_registered_env(tmp_path), writer, BackfillConfig(dry_run=True))
 
-        env = _make_env(tmp_path)
-        settings = _make_settings(env["db_path"], env["registry_path"])
-        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
-
-        with (
-            patch(
-                "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
-                env["projects_dir"],
-            ),
-            patch("quarry.backfill.ingest_content") as mock_ingest,
-        ):
-            stats = backfill_sessions(settings, BackfillConfig(dry_run=True))
-
-        mock_ingest.assert_not_called()
+        assert writer.calls == []
         assert stats.ingested == 1
         assert stats.skipped_existing == 0
 
     def test_skip_unregistered_projects(self, tmp_path: Path) -> None:
-        from quarry.backfill import backfill_sessions
         from quarry.sync_registry import SyncRegistry
 
         env = _make_env(tmp_path)
-        settings = _make_settings(env["db_path"], env["registry_path"])
-
         # Initialize empty registry (no registrations)
-        conn = SyncRegistry(env["registry_path"])
-        conn.close()
+        SyncRegistry(env["registry_path"]).close()
 
-        with patch(
-            "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
-            env["projects_dir"],
-        ):
-            stats = backfill_sessions(settings)
+        stats = _run(env, RecordingWriter())
 
         assert stats.ingested == 0
         assert stats.skipped_unregistered == 1
 
     def test_dedup_skips_existing(self, tmp_path: Path) -> None:
-        from quarry.backfill import backfill_sessions
-
-        env = _make_env(tmp_path)
-        settings = _make_settings(env["db_path"], env["registry_path"])
-        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
-
-        fake_doc = {
-            "document_name": "session-abcd1234",
-            "document_path": "",
-            "collection": "myproject-captures",
-            "total_pages": 1,
-            "chunk_count": 5,
-            "indexed_pages": 1,
-            "ingestion_timestamp": "2999-01-01T00:00:00",
-        }
-        with (
-            patch(
-                "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
-                env["projects_dir"],
-            ),
-            patch(
-                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
-                return_value=[fake_doc],
-            ),
-            patch("quarry.backfill.ingest_content") as mock_ingest,
+        writer = RecordingWriter()
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
+            return_value=[_stored_doc("2999-01-01T00:00:00")],
         ):
-            stats = backfill_sessions(settings)
+            stats = _run(_registered_env(tmp_path), writer)
 
-        mock_ingest.assert_not_called()
+        assert writer.calls == []
         assert stats.ingested == 0
         assert stats.skipped_existing == 1
 
@@ -407,34 +413,16 @@ class TestBackfillSessions:
         """The compaction hook stores the session up to that moment; the rest of
         the conversation reaches the transcript afterwards, and backfill must file
         it over the partial document instead of skipping on its mere existence."""
-        from quarry.backfill import backfill_sessions
-
-        env = _make_env(tmp_path)
-        settings = _make_settings(env["db_path"], env["registry_path"])
-        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
-
-        partial = {
-            "document_name": "session-abcd1234",
-            "document_path": "",
-            "collection": "myproject-captures",
-            "total_pages": 1,
-            "chunk_count": 5,
-            "indexed_pages": 1,
-            "ingestion_timestamp": "2000-01-01T00:00:00",
-        }
-        with (
-            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
-            patch(
-                "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
-                return_value=[partial],
-            ),
-            patch("quarry.backfill.ingest_content") as mock_ingest,
+        writer = RecordingWriter()
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
+            return_value=[_stored_doc("2000-01-01T00:00:00")],
         ):
-            stats = backfill_sessions(settings)
+            stats = _run(_registered_env(tmp_path), writer)
 
-        mock_ingest.assert_called_once()
-        assert mock_ingest.call_args.args[1] == "session-abcd1234"
-        assert mock_ingest.call_args.args[3].overwrite is True
+        [call] = writer.calls
+        assert call.name == "session-abcd1234"
+        assert call.collection == "myproject-captures"
         assert stats.ingested == 1
         assert stats.skipped_existing == 0
 
@@ -442,11 +430,7 @@ class TestBackfillSessions:
         self, tmp_path: Path
     ) -> None:
         """The stored time is when backfill read the transcript, not when it stored."""
-        from quarry.backfill import backfill_sessions
-
-        env = _make_env(tmp_path)
-        settings = _make_settings(env["db_path"], env["registry_path"])
-        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
+        writer = RecordingWriter()
         read_at: list[datetime] = []
         real_text = TranscriptReader.text
 
@@ -454,38 +438,48 @@ class TestBackfillSessions:
             read_at.append(datetime.now(UTC))
             return real_text(self)
 
-        with (
-            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
-            patch.object(TranscriptReader, "text", timed_text),
-            patch("quarry.backfill.ingest_content") as mock_ingest,
-        ):
-            backfill_sessions(settings)
+        with patch.object(TranscriptReader, "text", timed_text):
+            _run(_registered_env(tmp_path), writer)
 
-        context = mock_ingest.call_args.args[3]
-        assert context.ingested_at is not None
-        assert context.ingested_at <= read_at[0]
+        assert writer.calls[0].snapshot <= read_at[0]
 
     def test_an_ingest_failure_reports_the_class_not_the_message(
         self, tmp_path: Path
     ) -> None:
-        from quarry.backfill import backfill_sessions
+        env = _registered_env(tmp_path)
+        writer = RecordingWriter(OSError("/home/jane/secret-token-path"))
 
-        env = _make_env(tmp_path)
-        settings = _make_settings(env["db_path"], env["registry_path"])
-        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
-        boom = OSError("/home/jane/secret-token-path")
-        with (
-            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
-            patch("quarry.backfill.ingest_content", side_effect=boom),
-        ):
-            stats = backfill_sessions(settings)
+        stats = _run(env, writer)
 
         assert stats.errors == [f"{env['transcript'].name}: internal error: OSError"]
 
-    def test_limit_flag(self, tmp_path: Path) -> None:
-        from quarry.backfill import backfill_sessions
+    def test_a_transcript_the_queue_never_admitted_is_a_failure_with_its_reason(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        writer = RecordingWriter(BackfillWriteError("ingest queue full; not admitted"))
 
-        env = _make_env(tmp_path)
+        stats = _run(env, writer)
+
+        assert stats.ingested == 0
+        assert stats.errors == [
+            f"{env['transcript'].name}: ingest queue full; not admitted"
+        ]
+
+    def test_a_transcript_is_recorded_as_stored_only_after_the_write_succeeds(
+        self, tmp_path: Path
+    ) -> None:
+        bad, good = tmp_path / "bad", tmp_path / "good"
+        bad.mkdir()
+        good.mkdir()
+        with patch("quarry.backfill.StoredSessions.record") as record:
+            _run(_registered_env(bad), RecordingWriter(OSError("x")))
+            record.assert_not_called()
+            _run(_registered_env(good), RecordingWriter())
+            record.assert_called_once()
+
+    def test_limit_flag(self, tmp_path: Path) -> None:
+        env = _registered_env(tmp_path)
         # Add a second transcript
         second = env["project_dir"] / "ef567890-0000-0000-0000-000000000000.jsonl"
         _make_transcript(
@@ -496,79 +490,54 @@ class TestBackfillSessions:
             ],
         )
 
-        settings = _make_settings(env["db_path"], env["registry_path"])
-        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
-
-        with patch(
-            "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
-            env["projects_dir"],
-        ):
-            stats = backfill_sessions(settings, BackfillConfig(dry_run=True, limit=1))
+        stats = _run(env, RecordingWriter(), BackfillConfig(dry_run=True, limit=1))
 
         assert stats.ingested == 1
 
     def test_collection_override(self, tmp_path: Path) -> None:
-        from quarry.backfill import backfill_sessions
-
-        env = _make_env(tmp_path)
-        settings = _make_settings(env["db_path"], env["registry_path"])
-        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
-
-        with patch(
-            "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
-            env["projects_dir"],
-        ):
-            stats = backfill_sessions(
-                settings,
-                BackfillConfig(collection_override="my-override", dry_run=True),
-            )
+        writer = RecordingWriter()
+        stats = _run(
+            _registered_env(tmp_path),
+            writer,
+            BackfillConfig(collection_override="my-override"),
+        )
 
         assert stats.ingested == 1
+        assert [call.collection for call in writer.calls] == ["my-override"]
 
     def test_empty_transcript_skipped(self, tmp_path: Path) -> None:
-        from quarry.backfill import backfill_sessions
-
         env = _make_env(tmp_path)
         # Overwrite with empty content
         env["transcript"].write_text("")
-
-        settings = _make_settings(env["db_path"], env["registry_path"])
         _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
+        writer = RecordingWriter()
 
-        with (
-            patch(
-                "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR",
-                env["projects_dir"],
-            ),
-            patch("quarry.backfill.ingest_content") as mock_ingest,
-        ):
-            stats = backfill_sessions(settings)
+        stats = _run(env, writer)
 
-        mock_ingest.assert_not_called()
+        assert writer.calls == []
         assert stats.ingested == 0
         assert stats.skipped_empty == 1
 
     def test_ingested_text_is_scrubbed(self, tmp_path: Path) -> None:
         """Transcript text is scrubbed before store — the DES-036 leak lock.
 
-        Backfill routes through the pipeline choke point (it passes a
-        content_scrubber, no manual pre-scrub), so ingest_content redacts the
-        content before store.  A secret token and an email in a transcript must
-        never reach the searchable LanceDB store (retrievable via /v1/search).
-        Patching the store boundary asserts the REAL pipeline scrub ran.
+        Backfill's job passes a content_scrubber, no manual pre-scrub, so the
+        pipeline redacts the content before store.  A secret token and an email in
+        a transcript must never reach the searchable LanceDB store (retrievable via
+        /v1/search).  Patching the store boundary asserts the REAL pipeline scrub
+        ran.
         """
-        from quarry.backfill import backfill_sessions
         from quarry.ingestion.streaming import DocumentStreamer
 
         fake_pat = "ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8"
         email = "leak.user@evil-example.com"
-        env = _make_env(tmp_path)
+        env = _registered_env(tmp_path)
         _make_transcript(
             env["transcript"],
             [_user_message(f"my token is {fake_pat} and my email is {email}")],
         )
         settings = _make_settings(env["db_path"], env["registry_path"])
-        _setup_registry(env["registry_path"], str(env["real_project"]), "myproject")
+        writer = DirectWriter(Database.connect(env["db_path"]), settings)
 
         stored: list[object] = []
 
@@ -579,13 +548,12 @@ class TestBackfillSessions:
             return []
 
         with (
-            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
             patch.object(DocumentStreamer, "build_chunks", _capture_build_chunks),
             patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
-            backfill_sessions(settings)
+            _run(env, writer)
 
-        assert stored, "ingest_content never reached the chunker"
+        assert stored, "the job never reached the chunker"
         joined = " ".join(page.text for page in stored)  # type: ignore[attr-defined]
         assert fake_pat not in joined
         assert email not in joined

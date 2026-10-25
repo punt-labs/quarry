@@ -4271,7 +4271,7 @@ class TestMaintenance:
         app = build_app(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
+        def _fake_backfill(config: object, _runtime: object) -> BackfillStats:
             captured.update(
                 dry_run=config.dry_run,  # type: ignore[attr-defined]
                 collection=config.collection_override,  # type: ignore[attr-defined]
@@ -4291,6 +4291,7 @@ class TestMaintenance:
             assert resp.status_code == 202
             data = _poll_task_done(tc, resp.json()["task_id"])
 
+        assert len(ctx.tasks) == 1  # the backfill itself; never one per transcript
         # Every CLI param reached the engine call (bug-class-3: param -> server).
         assert captured == {
             "dry_run": True,
@@ -4351,7 +4352,7 @@ class TestMaintenance:
         _inject_mocks(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
+        def _fake_backfill(config: object, _runtime: object) -> BackfillStats:
             captured["limit"] = config.limit  # type: ignore[attr-defined]
             return BackfillStats()
 
@@ -4390,7 +4391,7 @@ class TestMaintenance:
         _inject_mocks(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
+        def _fake_backfill(config: object, _runtime: object) -> BackfillStats:
             captured.update(
                 dry_run=config.dry_run,  # type: ignore[attr-defined]
                 collection_override=config.collection_override,  # type: ignore[attr-defined]

@@ -37,7 +37,7 @@ import numpy as np
 import pytest
 from lancedb.index import FTS, Bitmap
 
-from quarry.backfill import backfill_sessions
+from quarry.backfill import BackfillConfig, backfill_sessions
 from quarry.backfill_mapping import ProjectMappingResolver
 from quarry.config import Settings
 from quarry.db import Database
@@ -48,6 +48,7 @@ from quarry.models import Chunk
 from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
 from tests.fakes import FakeEmbeddingBackend
+from tests.transcript_writers import DirectWriter, runtime_over
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -315,7 +316,11 @@ def test_large_backfill_does_not_leak_descriptors(tmp_path: Path) -> None:
             return_value=embedder,
         ),
     ):
-        stats = backfill_sessions(settings)
+        database = Database.connect(settings.lancedb_path)
+        runtime = runtime_over(
+            database, DirectWriter(database, settings), settings.registry_path
+        )
+        stats = backfill_sessions(BackfillConfig(), runtime)
 
     assert stats.ingested == _BACKFILL_TRANSCRIPTS, (
         f"backfill ingested {stats.ingested} of {_BACKFILL_TRANSCRIPTS} "
