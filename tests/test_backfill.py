@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import json
 import logging
 import os
-import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,17 +16,27 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.backfill import Backfill, BackfillConfig
+from quarry.atomic_file import AtomicFile
+from quarry.backfill import Backfill, BackfillConfig, BackfillRuntime
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
+from quarry.backfill_project import BackfillRun
+from quarry.backfill_report import BackfillReport
 from quarry.backfill_session import BackfillSession
 from quarry.backfill_stats import BackfillStats, BackfillTally
+from quarry.backfill_unindexable import UnindexableTranscripts
 from quarry.backfill_writer import BackfillWriteError, WriteOutcome
 from quarry.config import Settings
+from quarry.daemon.content_jobs import ScrubbedIngestJob
+from quarry.daemon.queued_ingest import QueuedIngest, QueuePolicy
+from quarry.daemon.tasks import TaskState
 from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.facade import Database
 from quarry.results import DocumentSummary
+from quarry.stop_signal import StopSignal
 from quarry.sync_registry import DirectoryRegistration
+from quarry.transcript_read import TranscriptRead
 from quarry.transcript_reader import TranscriptReader
+from tests.queue_fixtures import ctx_with_queue, writer_for
 from tests.transcript_writers import DirectWriter, RecordingWriter, runtime_over
 
 runner = CliRunner()
@@ -288,8 +299,6 @@ def _setup_registry(
 
 def _make_settings(db_path: Path, registry_path: Path) -> Settings:
     """Load settings with overridden paths."""
-    from quarry.config import Settings
-
     settings = Settings.load().resolve_db_paths(None)
     return settings.model_copy(
         update={
@@ -340,7 +349,7 @@ def _run(
     env: dict[str, Path],
     writer: RecordingWriter | DirectWriter,
     config: BackfillConfig | None = None,
-    stop: threading.Event | None = None,
+    stop: StopSignal | None = None,
 ) -> BackfillStats:
     """Backfill *env* through *writer*, reading the env's (empty) database."""
     database = Database.connect(env["db_path"])
@@ -679,15 +688,17 @@ class TestStopping:
     ) -> None:
         env = _registered_env(tmp_path)
         _write_sessions(env, "bbbb0001", "bbbb0002")
-        runtime_stop = threading.Event()
-        writer = RecordingWriter(after_write=runtime_stop.set)
+        runtime_stop = StopSignal()
+        writer = RecordingWriter(
+            after_write=lambda: runtime_stop.set("daemon shutting down")
+        )
 
         with caplog.at_level(logging.INFO):
             stats = _run(env, writer, stop=runtime_stop)
 
         assert stats.ingested == 1
         assert stats.not_attempted == 2
-        assert stats.errors == ["backfill stopped: stopped before finishing"]
+        assert stats.errors == ["backfill stopped: daemon shutting down"]
         loud = [r for r in _library_records(caplog) if r.levelno >= logging.WARNING]
         assert len(loud) == 1  # one line, with the count: not a traceback per file
         assert "2 not attempted" in loud[0].getMessage()
@@ -726,7 +737,7 @@ class TestStopping:
         assert len(writer.calls) == BackfillTally.MAX_UNADMITTED
         assert stats.failed == BackfillTally.MAX_UNADMITTED
         assert stats.not_attempted == 2
-        assert stats.errors[-1] == "backfill stopped: ingest queue stayed full"
+        assert stats.errors[0] == "backfill stopped: ingest queue stayed full"
 
     def test_a_store_that_takes_a_transcript_resets_the_count(
         self, tmp_path: Path
@@ -862,12 +873,285 @@ class TestProjectsAreIsolated:
 
         assert [c.collection for c in writer.calls] == ["other-captures"]
         assert stats.ingested == 1
-        assert stats.not_attempted == 1
+        assert stats.not_examined == 1
         assert len(stats.errors) == 1
         assert stats.errors[0].endswith(": internal error: RuntimeError")
         assert str(env["real_project"]) in stats.errors[0]
         assert "hidden-path" not in caplog.text
         assert project.exists()
+
+
+_NOW = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _state_file(env: dict[str, Path]) -> Path:
+    return env["registry_path"].with_name("backfill-unindexable.json")
+
+
+def _bump_mtime(path: Path) -> None:
+    """Make *path* look newer, as if it had been appended to."""
+    later = path.stat().st_mtime + 60
+    os.utime(path, (later, later))
+
+
+def _recorded(env: dict[str, Path]) -> dict[str, int]:
+    state = _state_file(env)
+    return json.loads(state.read_text()) if state.exists() else {}
+
+
+class TestAReadFaultIsNotAnEmptyTranscript:
+    def test_a_read_error_is_unreadable_never_recorded_and_retried_next_run(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        real_read_text = Path.read_text
+
+        def emfile(self: Path, *args: Any, **kwargs: Any) -> str:
+            if self.suffix == ".jsonl":
+                raise OSError(errno.EMFILE, "Too many open files")
+            return real_read_text(self, *args, **kwargs)
+
+        with (
+            patch.object(Path, "read_text", emfile),
+            caplog.at_level(logging.WARNING),
+        ):
+            stats = _run(env, RecordingWriter())
+
+        assert stats.skipped_unreadable == 1
+        assert stats.skipped_empty == 0
+        assert _recorded(env) == {}
+        assert "EMFILE" in caplog.text
+        again = RecordingWriter()
+        _run(env, again)
+        assert [call.name for call in again.calls] == ["session-abcd1234"]
+
+
+class TestATranscriptThatChangedIsNotRecorded:
+    def test_text_appended_between_the_read_and_the_record_is_not_skipped_next_time(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        env["transcript"].write_text("")
+        real_text = TranscriptReader.text
+
+        def empty_then_appended(self: TranscriptReader) -> str:
+            real_text(self)
+            _bump_mtime(env["transcript"])  # a session appends after the read
+            return ""
+
+        with patch.object(TranscriptReader, "text", empty_then_appended):
+            _run(env, RecordingWriter())
+
+        assert _recorded(env) == {}
+
+    def test_the_same_holds_for_a_worker_that_found_nothing_to_index(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        nothing = BackfillWriteError("nothing was stored").as_outcome(
+            WriteOutcome.UNINDEXABLE
+        )
+        writer = RecordingWriter(
+            errors_by_name={"session-abcd1234": nothing},
+            after_write=lambda: _bump_mtime(env["transcript"]),
+        )
+
+        _run(env, writer)
+
+        assert _recorded(env) == {}
+
+
+class TestAFailedSaveNeverDecidesTheRun:
+    def test_the_stats_come_back_with_one_non_fatal_line(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = _registered_env(tmp_path)
+        env["transcript"].write_text("")  # something to remember, so a save happens
+
+        with (
+            patch.object(
+                AtomicFile, "replace", side_effect=OSError(errno.ENOSPC, "full")
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            stats = _run(env, RecordingWriter())
+
+        assert stats.errors == ["unindexable cache not saved: ENOSPC"]
+        assert not stats.stored_nothing
+        assert "ENOSPC" in caplog.text
+
+    def test_a_save_in_the_cleanup_does_not_mask_a_fault_in_the_run(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+
+        with (
+            patch.object(BackfillRun, "process", side_effect=RuntimeError("the run")),
+            pytest.raises(RuntimeError, match="the run"),
+        ):
+            _run(env, RecordingWriter())
+
+
+class TestTheNotAdmittedStreakIsConsecutive:
+    @staticmethod
+    def _full() -> BackfillWriteError:
+        return BackfillWriteError("ingest queue full").as_outcome(
+            WriteOutcome.NOT_ADMITTED
+        )
+
+    def test_a_store_result_in_between_ends_the_streak(self, tmp_path: Path) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002", "bbbb0003")
+        nothing = BackfillWriteError("nothing was stored").as_outcome(
+            WriteOutcome.UNINDEXABLE
+        )
+        writer = RecordingWriter(
+            errors_by_name={
+                "session-abcd1234": self._full(),
+                "session-bbbb0001": self._full(),
+                "session-bbbb0002": nothing,
+                "session-bbbb0003": self._full(),
+            }
+        )
+
+        stats = _run(env, writer)
+
+        assert stats.stopped == ""
+        assert stats.failed == 3
+
+    def test_a_failure_that_never_reached_the_queue_does_not_end_it(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002", "bbbb0003", "bbbb0004")
+        writer = RecordingWriter(
+            errors_by_name={
+                "session-abcd1234": self._full(),
+                "session-bbbb0002": self._full(),
+                "session-bbbb0003": self._full(),
+            }
+        )
+        real = BackfillSession.write_capture_file
+
+        def capture_fails_for_the_second(session: BackfillSession) -> bool:
+            return False if session.name == "session-bbbb0001" else real(session)
+
+        with patch.object(
+            BackfillSession, "write_capture_file", capture_fails_for_the_second
+        ):
+            stats = _run(env, writer)
+
+        assert stats.stopped == "ingest queue stayed full"
+        assert stats.not_attempted == 1  # bbbb0004 was never tried
+        assert "session-bbbb0004" not in [call.name for call in writer.calls]
+
+
+class TestAHungWorkerStopsTheRun:
+    async def test_the_run_stops_after_the_first_job_that_never_finishes(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002")
+        ctx = ctx_with_queue(tmp_path / "queue")
+        stop = StopSignal()
+        policy = QueuePolicy(
+            admit_timeout_s=1.0, finish_timeout_s=0.3, grace_s=0.5, reserve=0
+        )
+        writer = writer_for(ctx, asyncio.get_running_loop(), stop, policy)
+        runtime = BackfillRuntime(
+            Database.connect(env["db_path"]), writer, env["registry_path"], stop
+        )
+        ran: list[str] = []
+
+        async def hangs(job: ScrubbedIngestJob, _ctx: object, _state: object) -> None:
+            ran.append(job.name)
+
+        with (
+            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch.object(ScrubbedIngestJob, "run", hangs),
+        ):
+            stats = await asyncio.to_thread(
+                Backfill.sessions, BackfillConfig(), runtime
+            )
+
+        assert ran == ["session-abcd1234"]  # not one orphan per transcript
+        assert stats.failed == 0
+        assert stats.not_attempted == 3
+        assert stats.errors[0].startswith(
+            "backfill stopped: ingest did not finish within"
+        )
+
+    async def test_a_cancelled_loop_is_a_shutdown_not_a_cancellederror(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        ctx = ctx_with_queue(tmp_path / "queue")
+        stop = StopSignal()
+        writer = writer_for(ctx, asyncio.get_running_loop(), stop)
+        runtime = BackfillRuntime(
+            Database.connect(env["db_path"]), writer, env["registry_path"], stop
+        )
+
+        async def cancelled(_self: QueuedIngest, _job: object) -> TaskState:
+            raise asyncio.CancelledError
+
+        with (
+            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch.object(QueuedIngest, "run", cancelled),
+        ):
+            stats = await asyncio.to_thread(
+                Backfill.sessions, BackfillConfig(), runtime
+            )
+
+        assert stats.errors == ["backfill stopped: daemon shutting down"]
+        assert "Cancelled" not in " ".join(stats.errors)
+
+
+class TestNotAttemptedCountsOnlyWhatStillNeededWork:
+    def test_current_and_known_unindexable_transcripts_are_not_counted(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _write_sessions(env, "bbbb0001", "bbbb0002", "bbbb0003")
+        quiet = env["project_dir"] / "bbbb0002-0000-0000-0000-000000000000.jsonl"
+        cache = UnindexableTranscripts(_state_file(env))
+        cache.record(TranscriptRead(quiet, quiet.stat().st_mtime_ns, _NOW))
+        cache.save()
+        current = {
+            "document_name": "session-bbbb0001",
+            "document_path": "",
+            "collection": "myproject-captures",
+            "total_pages": 1,
+            "chunk_count": 1,
+            "indexed_pages": 1,
+            "ingestion_timestamp": "2999-01-01T00:00:00",
+        }
+        stop = StopSignal()
+        writer = RecordingWriter(after_write=lambda: stop.set("task cancelled"))
+
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
+            return_value=[current],
+        ):
+            stats = _run(env, writer, stop=stop)
+
+        # abcd1234 was written; bbbb0001 is current, bbbb0002 known unindexable.
+        assert stats.ingested == 1
+        assert stats.not_attempted == 1  # only bbbb0003 was left to do
+
+    def test_a_project_the_run_never_reached_is_not_examined(
+        self, tmp_path: Path
+    ) -> None:
+        env = _registered_env(tmp_path)
+        _add_project(env, tmp_path, "other")
+        stop = StopSignal()
+        stop.set("daemon shutting down")
+
+        stats = _run(env, RecordingWriter(), stop=stop)
+
+        assert stats.not_examined == 2
+        assert stats.not_attempted == 0
+        assert "2 not examined" in BackfillReport(stats).summary()
 
 
 # ---------------------------------------------------------------------------

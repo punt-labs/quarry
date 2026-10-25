@@ -10,8 +10,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast, final
 
 from quarry.daemon.ingest_queue import IngestQueue
+from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY, QueuePolicy
+from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskRegistry, TaskState, task_terminal
+from quarry.daemon.thread_call import ThreadCall
+from quarry.stop_signal import StopSignal
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -20,6 +24,7 @@ if TYPE_CHECKING:
 
 def ctx_with_queue(tmp_path: Path, *, depth: int = 32) -> DaemonContext:
     """Return a context with a real queue and registry, over a fake settings."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     settings = SimpleNamespace(
         ingest_embed_concurrency=1,
         ingest_queue_depth=depth,
@@ -62,3 +67,14 @@ def admit_like_a_hook(ctx: DaemonContext, unit: BlockingUnit) -> None:
     state = TaskState(task_id="hook", kind="capture")
     key = RouteKey("db", unit.collection)
     assert ctx.ingest_queue.try_submit(key, unit, state)
+
+
+def writer_for(
+    ctx: DaemonContext,
+    loop: asyncio.AbstractEventLoop,
+    stop: StopSignal | None = None,
+    policy: QueuePolicy = DEFAULT_QUEUE_POLICY,
+) -> QueuedTranscriptWriter:
+    """Return a backfill writer over *ctx*'s queue whose waits follow *policy*."""
+    call = ThreadCall(loop, stop or StopSignal(), policy.total_s)
+    return QueuedTranscriptWriter(ctx, call, policy)

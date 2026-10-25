@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-import logging
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 from quarry.backfill_mapping import ProjectMappingResolver
 from quarry.backfill_project import BackfillRun
+from quarry.backfill_report import BackfillReport
 from quarry.backfill_stats import BackfillStats, BackfillTally
 from quarry.backfill_unindexable import UnindexableTranscripts
+from quarry.stop_signal import StopSignal
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
     from quarry.backfill_writer import TranscriptWriter
     from quarry.db.facade import Database
-
-logger = logging.getLogger(__name__)
 
 _UNINDEXABLE_FILE = "backfill-unindexable.json"
 
@@ -42,14 +40,14 @@ class BackfillRuntime:
     """What a run reads (database, registry), writes through, and is stopped by.
 
     ``stop`` is set from another thread (the daemon shutting down, the task
-    cancelled); the run checks it between transcripts and ends with the rest
-    recorded as not attempted.
+    cancelled) with its reason; the run checks it between transcripts and ends
+    with the rest recorded as not attempted.
     """
 
     database: Database
     writer: TranscriptWriter
     registry_path: Path
-    stop: threading.Event = field(default_factory=threading.Event)
+    stop: StopSignal = field(default_factory=StopSignal)
 
 
 @final
@@ -80,8 +78,8 @@ class Backfill:
         try:
             run.process(mappings)
         finally:
-            unindexable.save()
+            run.close()
 
         stats = tally.stats(ProjectMappingResolver.count_unmapped(all_mappings))
-        stats.log(dry_run=config.dry_run)
+        BackfillReport(stats).log(dry_run=config.dry_run)
         return stats

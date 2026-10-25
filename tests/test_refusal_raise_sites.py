@@ -47,6 +47,7 @@ _ALLOWED: dict[str, int] = {
     # re-raised across the thread boundary as backfill's.
     "daemon/queued_transcript_writer.py": 3,
     "daemon/ingest_refusal.py": 1,  # the factory: its callers pass fixed reasons
+    "daemon/thread_call.py": 1,  # the caller's stop reason: a fixed phrase of the run
     "extractors/sheet_tables.py": 0,
 }
 

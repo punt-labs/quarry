@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from quarry.strict_transcript_reader import StrictTranscriptReader
 from quarry.transcript_reader import TranscriptReader
 
 
@@ -287,3 +291,37 @@ class TestArchive:
             else:
                 msg = "expected archive to propagate the copy failure"
                 raise AssertionError(msg)
+
+
+class TestAReadFaultIsNotAnEmptyConversation:
+    @staticmethod
+    def _failing_read(monkeypatch: pytest.MonkeyPatch) -> None:
+        def emfile(self: Path, *args: object, **kwargs: object) -> str:
+            raise OSError(errno.EMFILE, "Too many open files")
+
+        monkeypatch.setattr(Path, "read_text", emfile)
+
+    def test_the_default_reader_still_reads_it_as_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text("{}")
+        self._failing_read(monkeypatch)
+
+        assert TranscriptReader(transcript).text() == ""
+
+    def test_a_strict_reader_raises_the_fault(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text("{}")
+        self._failing_read(monkeypatch)
+
+        with pytest.raises(OSError, match="Too many open files"):
+            StrictTranscriptReader(transcript)
+
+    def test_a_strict_reader_reads_a_good_file_as_before(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text("")
+
+        assert StrictTranscriptReader(transcript).text() == ""

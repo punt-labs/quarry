@@ -8,7 +8,7 @@ import logging
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Self
 
 from quarry.transcript_turns import TurnText
 
@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@final
 class TranscriptReader:
     """Reads a Claude Code JSONL transcript into conversation text and archives it.
 

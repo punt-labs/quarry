@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 
 from quarry.daemon.queue_bounds import QueueGate
+from quarry.stop_signal import StopSignal
 
 
 def test_slots_are_taken_up_to_the_depth() -> None:
@@ -43,20 +43,21 @@ def test_a_closed_gate_admits_nothing() -> None:
     assert not gate.try_take()
 
 
-def test_closing_sets_the_stop_events_registered_for_the_block() -> None:
+def test_closing_sets_the_stop_signals_registered_for_the_block() -> None:
     gate = QueueGate(1)
-    event = threading.Event()
+    event = StopSignal()
 
     with gate.stopping(event):
         assert not event.is_set()
         gate.close()
         assert event.is_set()
+        assert event.reason == "daemon shutting down"
 
 
 def test_an_event_registered_after_the_close_is_set_at_once() -> None:
     gate = QueueGate(1)
     gate.close()
-    event = threading.Event()
+    event = StopSignal()
 
     with gate.stopping(event):
         assert event.is_set()
@@ -64,7 +65,7 @@ def test_an_event_registered_after_the_close_is_set_at_once() -> None:
 
 def test_an_event_registered_for_a_finished_block_is_left_alone() -> None:
     gate = QueueGate(1)
-    event = threading.Event()
+    event = StopSignal()
     with gate.stopping(event):
         pass
 

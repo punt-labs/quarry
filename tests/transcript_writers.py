@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast, final
 
 from quarry.backfill import BackfillRuntime
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
+from quarry.stop_signal import StopSignal
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -78,7 +78,7 @@ def runtime_over(
     database: Database,
     writer: RecordingWriter | DirectWriter,
     registry_path: Path,
-    stop: threading.Event | None = None,
+    stop: StopSignal | None = None,
 ) -> BackfillRuntime:
     """Return a backfill run reading *database* and writing through *writer*."""
-    return BackfillRuntime(database, writer, registry_path, stop or threading.Event())
+    return BackfillRuntime(database, writer, registry_path, stop or StopSignal())

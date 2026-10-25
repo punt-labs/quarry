@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING, Self, final
 from quarry.daemon.collection_worker import CollectionWorker
 
 if TYPE_CHECKING:
-    import threading
     from collections.abc import Callable, Generator
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.route_key import RouteKey
+    from quarry.stop_signal import StopSignal
 
 
 @final
@@ -34,7 +34,7 @@ class QueueGate:
     _closing: bool
     _depth: int
     _max_depth: int
-    _stops: set[threading.Event]
+    _stops: set[StopSignal]
     _waiters: list[asyncio.Future[None]]
 
     def __new__(cls, max_depth: int) -> Self:
@@ -88,20 +88,20 @@ class QueueGate:
     def close(self) -> None:
         """Stop admitting, signal every registered stop event, wake the waiters."""
         self._closing = True
-        for event in self._stops:
-            event.set()
+        for signal in self._stops:
+            signal.set("daemon shutting down")
         self._wake()
 
     @contextmanager
-    def stopping(self, event: threading.Event) -> Generator[None]:
-        """Set *event* when the gate closes, for as long as the block runs."""
-        self._stops.add(event)
+    def stopping(self, signal: StopSignal) -> Generator[None]:
+        """Set *signal* when the gate closes, for as long as the block runs."""
+        self._stops.add(signal)
         if self._closing:
-            event.set()
+            signal.set("daemon shutting down")
         try:
             yield
         finally:
-            self._stops.discard(event)
+            self._stops.discard(signal)
 
     def _wake(self) -> None:
         for waiter in self._waiters:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.backfill_writer import BackfillWriteError, WriteOutcome
@@ -12,13 +11,16 @@ from quarry.daemon.ingest_labels import IngestLabels
 from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
 from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY, QueuedIngest, QueuePolicy
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
+from quarry.daemon.thread_call import ThreadCall, ThreadCallAbortedError
 
-# What each way the wait can end means for the backfill run.
+# What each way the wait can end means for the backfill run.  An unfinished job
+# aborts it as a dead worker does: a hung worker would otherwise collect one
+# orphaned job, and one full wait, per transcript.
 _OUTCOMES = {
     IngestRefusal.SHUTTING_DOWN: WriteOutcome.ABORTED,
     IngestRefusal.WORKER_STOPPED: WriteOutcome.ABORTED,
     IngestRefusal.NOT_ADMITTED: WriteOutcome.NOT_ADMITTED,
-    IngestRefusal.UNFINISHED: WriteOutcome.FAILED,
+    IngestRefusal.UNFINISHED: WriteOutcome.ABORTED,
 }
 
 if TYPE_CHECKING:
@@ -38,25 +40,23 @@ class QueuedTranscriptWriter:
     the transcript landed.  It is the same worker, in submission order, that a
     hook's capture of the same session goes through, so the two never interleave
     a delete with an insert.  The wait on the loop is bounded by the policy, and
-    so is this thread's wait for the loop: a stopped or closed loop fails the run
-    rather than blocking the thread for good.
+    so is this thread's wait for the loop (:class:`ThreadCall`): a stopped or
+    closed loop fails the run rather than blocking the thread for good.
     """
 
-    __slots__ = ("_loop", "_policy", "_queued")
+    __slots__ = ("_call", "_queued")
 
-    _loop: asyncio.AbstractEventLoop
-    _policy: QueuePolicy
+    _call: ThreadCall
     _queued: QueuedIngest
 
     def __new__(
         cls,
         ctx: DaemonContext,
-        loop: asyncio.AbstractEventLoop,
+        call: ThreadCall,
         policy: QueuePolicy = DEFAULT_QUEUE_POLICY,
     ) -> Self:
         self = super().__new__(cls)
-        self._loop = loop
-        self._policy = policy
+        self._call = call
         self._queued = QueuedIngest(ctx, "backfill", policy)
         return self
 
@@ -97,20 +97,13 @@ class QueuedTranscriptWriter:
 
     def _submit(self, job: BackfillTranscriptJob) -> TaskState:
         """Run *job* on the loop and return its terminal state, or raise the refusal."""
-        if self._loop.is_closed():
-            raise self._aborted("event loop closed")
         try:
-            future = asyncio.run_coroutine_threadsafe(self._queued.run(job), self._loop)
-        except RuntimeError as exc:  # the loop closed between the check and the call
-            raise self._aborted("event loop closed") from exc
-        try:
-            return future.result(timeout=self._policy.total_s)
+            return self._call.result(self._queued.run(job))
         except IngestRefusedError as exc:
             outcome = _OUTCOMES[exc.reason]
             raise BackfillWriteError(str(exc)).as_outcome(outcome) from exc
-        except TimeoutError as exc:
-            future.cancel()
-            raise self._aborted("event loop not responding") from exc
+        except ThreadCallAbortedError as exc:
+            raise self._aborted(str(exc)) from exc
 
     @staticmethod
     def _aborted(reason: str) -> BackfillWriteError:

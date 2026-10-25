@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import TYPE_CHECKING, Self, cast, final
+from typing import TYPE_CHECKING, Self, final
 
-from quarry.atomic_file import AtomicFile
+from quarry.backfill_unindexable_file import UnindexableFile
+from quarry.os_fault import OsFault
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from quarry.transcript_read import TranscriptRead
 
 logger = logging.getLogger(__name__)
 
@@ -20,23 +22,23 @@ class UnindexableTranscripts:
 
     A conversation of tool calls only has no text to store, so it is never
     stored and never "current": every run would read it again and find the same
-    nothing.  This keeps its mtime in a small JSON file beside the registry, the
-    other state backfill reads, so a later run skips it until the transcript
-    changes.  The file is rewritten atomically; one that is missing or unreadable
-    starts empty, so the cost of losing it is a re-read, never a wrong skip.
+    nothing.  The cache keeps its mtime, beside the registry, so a later run skips
+    it until the transcript changes.  A transcript is recorded only if its mtime
+    is still the one it had before it was read, so text appended mid-run is never
+    skipped as empty.
     """
 
-    __slots__ = ("_dirty", "_known", "_store")
+    __slots__ = ("_file", "_known", "_saved")
 
-    _store: Path
+    _file: UnindexableFile
     _known: dict[str, int]
-    _dirty: bool
+    _saved: dict[str, int]
 
     def __new__(cls, store: Path) -> Self:
         self = super().__new__(cls)
-        self._store = store
-        self._known = cls._load(store)
-        self._dirty = False
+        self._file = UnindexableFile(store)
+        self._saved = self._file.load()
+        self._known = dict(self._saved)
         return self
 
     def knows(self, transcript: Path) -> bool:
@@ -47,31 +49,22 @@ class UnindexableTranscripts:
             return False
         return self._known.get(str(transcript)) == mtime
 
-    def record(self, transcript: Path) -> None:
-        """Note that *transcript*, as it is now, holds nothing to index."""
+    def record(self, read: TranscriptRead) -> None:
+        """Note that *read*'s transcript held nothing to index, if it is unchanged."""
         try:
-            self._known[str(transcript)] = transcript.stat().st_mtime_ns
-        except OSError:
+            current = read.transcript.stat().st_mtime_ns
+        except OSError as exc:
+            logger.debug("backfill: cannot record a transcript: %s", OsFault.named(exc))
             return
-        self._dirty = True
+        if current == read.mtime_ns:
+            self._known[str(read.transcript)] = read.mtime_ns
 
-    def save(self) -> None:
-        """Write what was learned this run, if anything was."""
-        if not self._dirty:
-            return
-        AtomicFile(self._store).replace(json.dumps(self._known, sort_keys=True))
-        self._dirty = False
-
-    @staticmethod
-    def _load(store: Path) -> dict[str, int]:
-        """Return the saved mtimes, or an empty map if there is no usable file."""
-        try:
-            saved_text = AtomicFile(store).read()  # "" when there is no file yet
-            raw = json.loads(saved_text) if saved_text else {}
-        except (OSError, ValueError):
-            logger.warning("backfill: unindexable-transcript file unreadable; ignoring")
-            return {}
-        if not isinstance(raw, dict):
-            return {}
-        saved = cast("dict[str, object]", raw)
-        return {path: mtime for path, mtime in saved.items() if isinstance(mtime, int)}
+    def save(self) -> str:
+        """Write what was learned, pruned; return the fault's name if that failed."""
+        live = self._file.prune(self._known)
+        if live == self._saved:
+            return ""
+        fault = self._file.write(live)
+        if not fault:
+            self._known, self._saved = live, dict(live)
+        return fault

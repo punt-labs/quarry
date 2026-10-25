@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-import threading
+from functools import partial
 from typing import TYPE_CHECKING, Self, final
 
-from starlette.concurrency import run_in_threadpool
-
 from quarry import backfill
+from quarry.daemon.guarded_scan import GuardedScan
+from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
+from quarry.daemon.thread_call import ThreadCall
+from quarry.stop_signal import StopSignal
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -23,9 +24,9 @@ class BackfillTask:
     The scan reads transcripts and the store on a worker thread, as it always
     did; every write goes through :class:`QueuedTranscriptWriter`, the single
     writer each collection has, so backfill holds no connection of its own.  The
-    run's stop event is set when the queue closes and when this task is
-    cancelled, so a scan on its thread never outlives either.  The task ends
-    ``failed`` when it stored nothing and had errors, else ``completed``.
+    run's stop signal is set (with its reason) when the queue closes and when
+    this task is cancelled (:class:`GuardedScan`).  The task ends ``failed``
+    when it stored nothing and left something undone, else ``completed``.
     """
 
     __slots__ = ("_ctx",)
@@ -53,18 +54,16 @@ class BackfillTask:
             project_filter=project,
             limit=limit,
         )
-        stop = threading.Event()
-        writer = QueuedTranscriptWriter(self._ctx, asyncio.get_running_loop())
+        stop = StopSignal()
+        call = ThreadCall.here(stop, DEFAULT_QUEUE_POLICY.total_s)
+        writer = QueuedTranscriptWriter(self._ctx, call)
         runtime = backfill.BackfillRuntime(
             self._ctx.database, writer, self._ctx.settings.registry_path, stop
         )
-        try:
-            with self._ctx.ingest_queue.gate.stopping(stop):
-                stats = await run_in_threadpool(
-                    backfill.Backfill.sessions, config, runtime
-                )
-        finally:
-            stop.set()  # a cancelled task leaves no scan running past its next file
+        with self._ctx.ingest_queue.gate.stopping(stop):
+            stats = await GuardedScan(stop).run(
+                partial(backfill.Backfill.sessions, config, runtime)
+            )
         state.results = stats.as_results(dry_run=dry_run)
         if stats.stored_nothing:
             state.status = "failed"
