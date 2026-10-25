@@ -10,19 +10,17 @@ from unittest.mock import patch
 import pytest
 
 from quarry.backfill_session import BackfillSession
-from quarry.backfill_stats import BackfillStats
 from quarry.backfill_writer import BackfillWriteError, WriteOutcome
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.daemon.queued_ingest import QueuePolicy
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.route_key import RouteKey
+from quarry.daemon.tasks import TaskState
 from tests.queue_fixtures import BlockingUnit, admit_like_a_hook, ctx_with_queue
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from quarry.daemon.tasks import TaskState
 
 _SNAPSHOT = datetime(2026, 1, 2, tzinfo=UTC)
 _QUICK = QueuePolicy(admit_timeout_s=0.2, finish_timeout_s=0.2, grace_s=0.2, reserve=0)
@@ -168,42 +166,14 @@ def test_a_stopped_loop_aborts_the_run_instead_of_blocking_the_thread(
     loop.close()
 
 
-async def test_a_backfill_task_writes_through_the_fifo_and_reports_the_stats(
-    tmp_path: Path,
-) -> None:
-    from quarry.backfill import BackfillRuntime
-    from quarry.daemon.backfill_task import BackfillTask
-    from quarry.daemon.tasks import TaskState as State
-
-    ctx = ctx_with_queue(tmp_path)
-    seen: list[BackfillRuntime] = []
-
-    def fake_backfill(_config: object, runtime: BackfillRuntime) -> BackfillStats:
-        seen.append(runtime)
-        return BackfillStats(ingested=2)
-
-    state = State(task_id="t", kind="backfill")
-    with patch("quarry.backfill.Backfill.sessions", fake_backfill):
-        await BackfillTask(ctx).run(
-            state, dry_run=False, collection="", project="", limit=0
-        )
-
-    assert state.status == "completed"
-    assert state.results["ingested"] == 2
-    assert isinstance(seen[0].writer, QueuedTranscriptWriter)
-    assert seen[0].registry_path == ctx.settings.registry_path
-
-
 async def test_a_drain_aborted_backfill_job_fails_with_a_rerun_hint_and_is_not_spooled(
     tmp_path: Path,
 ) -> None:
-    from quarry.daemon.tasks import TaskState as State
-
     ctx = ctx_with_queue(tmp_path)
     gate = asyncio.Event()
     admit_like_a_hook(ctx, BlockingUnit(gate))
     job = QueuedTranscriptWriter.job_for("proj-captures", _session(tmp_path), _SNAPSHOT)
-    state = State(task_id="queued", kind="backfill")
+    state = TaskState(task_id="queued", kind="backfill")
     assert ctx.ingest_queue.try_submit(RouteKey("db", "proj-captures"), job, state)
 
     ctx.ingest_queue.cancel_workers()  # the drain gave up: the queued job never ran

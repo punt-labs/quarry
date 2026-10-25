@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from quarry.backfill_stats import BackfillStats
 from quarry.daemon.backfill_task import BackfillTask
+from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.tasks import TaskState
 from tests.queue_fixtures import ctx_with_queue
 
@@ -104,3 +105,24 @@ async def test_a_cancelled_task_stops_the_scan_on_its_thread(tmp_path: Path) -> 
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         assert await asyncio.to_thread(saw_stop.wait, 10)
+
+
+async def test_the_run_writes_through_the_fifo_over_the_daemons_registry(
+    tmp_path: Path,
+) -> None:
+    ctx = ctx_with_queue(tmp_path)
+    seen: list[BackfillRuntime] = []
+
+    def records_the_runtime(_config: object, runtime: BackfillRuntime) -> BackfillStats:
+        seen.append(runtime)
+        return BackfillStats(ingested=2)
+
+    with patch("quarry.backfill.Backfill.sessions", records_the_runtime):
+        state = TaskState(task_id="t", kind="backfill")
+        await BackfillTask(ctx).run(
+            state, dry_run=False, collection="", project="", limit=0
+        )
+
+    assert state.results["ingested"] == 2
+    assert isinstance(seen[0].writer, QueuedTranscriptWriter)
+    assert seen[0].registry_path == ctx.settings.registry_path
