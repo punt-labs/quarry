@@ -91,16 +91,16 @@ def test_scrub_failure_writes_no_file(
 def test_write_failure_swallowed_leaves_no_partial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A write_text failure is swallowed and leaves neither file nor temp."""
-    real_write_text = Path.write_text
+    """A failed rename is swallowed and leaves neither file nor temp."""
+    real_replace = Path.replace
 
-    def failing_write_text(self: Path, *args: object, **kwargs: object) -> int:
+    def failing_replace(self: Path, target: Path) -> Path:
         if self.name.endswith(".tmp"):
             msg = "disk full"
             raise OSError(msg)
-        return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+        return real_replace(self, target)
 
-    monkeypatch.setattr(Path, "write_text", failing_write_text)
+    monkeypatch.setattr(Path, "replace", failing_replace)
     req = _request(tmp_path)
     CaptureWriter().write(req)  # must not raise
 
@@ -109,29 +109,38 @@ def test_write_failure_swallowed_leaves_no_partial(
     assert not list(path.parent.glob("*.tmp"))
 
 
+def test_an_unencodable_capture_is_swallowed_and_leaves_no_temp(
+    tmp_path: Path,
+) -> None:
+    """Any exception, not only OSError, removes the temp file."""
+    req = _request(tmp_path, text="lone surrogate \ud800 cannot be utf-8")
+
+    assert CaptureWriter().write(req) is False
+
+    assert not req.capture_path().exists()
+    assert not list(req.capture_path().parent.glob("*.tmp"))
+
+
 def test_concurrent_writers_of_one_session_never_clobber_each_other(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The hook and a backfill can write one session at once: each gets a temp file.
 
-    Both writers are held after writing their temp file until the other has
-    written its own, so a shared temp name would be written by both before either
-    renames it.
+    Both writers are held before renaming their temp file until the other has
+    reached the same point, so a shared temp name would be written by both
+    before either renames it.
     """
-    real_write_text = Path.write_text
+    real_replace = Path.replace
     both_written = threading.Barrier(2, timeout=10)
     temps: list[str] = []
 
-    def synchronized_write_text(
-        self: Path, data: str, encoding: str | None = None
-    ) -> int:
-        written = real_write_text(self, data, encoding=encoding)
+    def synchronized_replace(self: Path, target: Path) -> Path:
         if self.name.endswith(".tmp"):
             temps.append(self.name)
             both_written.wait()
-        return written
+        return real_replace(self, target)
 
-    monkeypatch.setattr(Path, "write_text", synchronized_write_text)
+    monkeypatch.setattr(Path, "replace", synchronized_replace)
     first = _request(tmp_path, text="first writer " * 40)
     second = _request(tmp_path, text="second writer " * 40)
     complete = {first.scrubbed_content(), second.scrubbed_content()}
