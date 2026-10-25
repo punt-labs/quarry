@@ -29,7 +29,8 @@ Call the appropriate tool(s):
 - **Local path**: Call `mcp__quarry__register_directory` with
   `directory` set to the absolute path. If the result says
   `not a directory (it is a file)`, the path is an existing file: retry once
-  with its parent directory. If it says `directory not found`, the path does
+  with the parent of the path that error names (the daemon resolves symlinks,
+  so it names the real file, whose directory holds it). If it says `directory not found`, the path does
   not exist — report that and stop; do not retry with the parent. Any other
   error (already registered, name conflict, etc.) — report it as-is, do not
   retry. After a successful registration, call
