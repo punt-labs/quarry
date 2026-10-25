@@ -102,9 +102,10 @@ class RegistrationRoutes(RouteGroup):
     @staticmethod
     def _not_a_dir(resolved: Path) -> str:
         """Say why *resolved* is unregistrable: a file, or a path that is missing."""
-        if resolved.exists():
-            return f"not a directory (it is a file): {resolved}"
-        return f"directory not found: {resolved}"
+        if not resolved.exists():
+            return f"directory not found: {resolved}"
+        kind = "it is a file" if resolved.is_file() else "not a regular file"
+        return f"not a directory ({kind}): {resolved}"
 
     @staticmethod
     def _required_field(body: Mapping[str, object], field: str) -> str | JSONResponse:
