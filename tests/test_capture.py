@@ -7,6 +7,8 @@ must yield byte-identical files for identical input).
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -104,7 +106,43 @@ def test_write_failure_swallowed_leaves_no_partial(
 
     path = req.capture_path()
     assert not path.exists()
-    assert not path.with_name(path.name + ".tmp").exists()
+    assert not list(path.parent.glob("*.tmp"))
+
+
+def test_concurrent_writers_of_one_session_never_clobber_each_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hook and a backfill can write one session at once: each gets a temp file.
+
+    Both writers are held after writing their temp file until the other has
+    written its own, so a shared temp name would be written by both before either
+    renames it.
+    """
+    real_write_text = Path.write_text
+    both_written = threading.Barrier(2, timeout=10)
+    temps: list[str] = []
+
+    def synchronized_write_text(
+        self: Path, data: str, encoding: str | None = None
+    ) -> int:
+        written = real_write_text(self, data, encoding=encoding)
+        if self.name.endswith(".tmp"):
+            temps.append(self.name)
+            both_written.wait()
+        return written
+
+    monkeypatch.setattr(Path, "write_text", synchronized_write_text)
+    first = _request(tmp_path, text="first writer " * 40)
+    second = _request(tmp_path, text="second writer " * 40)
+    complete = {first.scrubbed_content(), second.scrubbed_content()}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        landed = list(pool.map(CaptureWriter().write, [first, second]))
+
+    assert landed == [True, True]
+    assert len(set(temps)) == 2
+    assert first.capture_path().read_text() in complete
+    assert not list(first.capture_path().parent.glob("*.tmp"))
 
 
 # ---------------------------------------------------------------------------

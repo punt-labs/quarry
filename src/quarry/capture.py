@@ -10,6 +10,7 @@ atomic, so a partial or half-redacted capture is never left behind.
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -77,9 +78,9 @@ class CaptureWriter:
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
-        """Write *content* to *path* via a temp file and atomic rename."""
+        """Write *content* to *path* via a temp file of its own and atomic rename."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
+        tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
         try:
             tmp.write_text(content, encoding="utf-8")
             tmp.replace(path)
