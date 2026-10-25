@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# What an unrecoverable record is named: the host, path and digest of a URL whose
+# query was dropped can be as sensitive as the query, so none of them is written.
+_UNRECORDED_NAME = "(url not recorded)"
+
 
 @dataclass(frozen=True, slots=True)
 class IngestJob:
@@ -74,8 +78,8 @@ class IngestJob:
         name is spooled.  Otherwise the query is never written to disk: the record
         says the job is not recoverable, and it is logged.
         """
-        name = self.source.document_name
         if not self.source.has_query_or_params:
+            name = self.source.document_name
             return SpoolRecord(
                 kind="ingest", collection=self.collection, name=name, payload=name
             )
@@ -83,7 +87,7 @@ class IngestJob:
         return SpoolRecord(
             kind="ingest-unrecoverable",
             collection=self.collection,
-            name=name,
+            name=_UNRECORDED_NAME,
             payload="not recoverable: the URL's query or parameters are never written",
             recoverable=False,
         )
@@ -120,15 +124,4 @@ class IngestJob:
 
     def _ingest_plain(self, ctx: DaemonContext) -> dict[str, object]:
         """Run a plain, unscrubbed ``quarry ingest``: sitemap-aware, byte-for-byte."""
-        from quarry.ingestion.bulk_ingest import BulkOptions  # noqa: PLC0415
-        from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
-        from quarry.ingestion.sitemap_ingest import ingest_auto  # noqa: PLC0415
-
-        return dict(
-            ingest_auto(
-                self.source,
-                Progress(None),
-                self.labels.context(ctx),
-                BulkOptions(),
-            )
-        )
+        return self.labels.plain_ingest(ctx, self.source)

@@ -42,7 +42,7 @@ class SafeEntrySelector:
         Dedup compares each entry's ``<lastmod>`` against the stored ingestion
         timestamp of the same document in *context*'s collection.  Only a document
         fetched from a URL (one with a source path) counts: a label named like a page
-        is not that page.
+        is not that page.  Entries that store as one name keep the first.
         """
         existing = context.database.catalog.list_documents(
             collection_filter=context.collection
@@ -52,7 +52,7 @@ class SafeEntrySelector:
             for doc in existing
             if doc["document_path"]  # a label has no source; only a fetched page counts
         }
-        to_ingest: list[tuple[HttpUrl, str | None]] = []
+        by_name: dict[str, tuple[HttpUrl, str | None]] = {}
         skipped = 0
         for entry in filtered:
             url = HttpUrl(entry.loc)
@@ -65,8 +65,8 @@ class SafeEntrySelector:
             ):
                 skipped += 1
                 continue
-            to_ingest.append((url, None))
-        return to_ingest, skipped
+            by_name.setdefault(url.document_name, (url, None))
+        return list(by_name.values()), skipped
 
     @staticmethod
     def _entry_is_current(existing_ts: str, lastmod: datetime) -> bool:

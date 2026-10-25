@@ -5,14 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
-from quarry.ingestion import web_ingest
+from quarry.ingestion import sitemap_ingest, web_ingest
+from quarry.ingestion.bulk_ingest import BulkOptions
 from quarry.ingestion.existing_page import ExistingPage
-from quarry.ingestion.ingest_context import IngestContext, MemoryType
+from quarry.ingestion.ingest_context import IngestContext, MemoryType, Progress
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from quarry.daemon.context import DaemonContext
+    from quarry.http_url import HttpUrl
 
 
 @final
@@ -42,6 +44,13 @@ class IngestLabels:
             agent_handle=self.agent_handle,
             memory_type=self.memory_type,
             summary=self.summary,
+        )
+
+    def plain_ingest(self, ctx: DaemonContext, source: HttpUrl) -> dict[str, object]:
+        """Ingest *source* as ``quarry ingest`` does: sitemap-aware, unscrubbed."""
+        context = self.context(ctx)
+        return dict(
+            sitemap_ingest.ingest_auto(source, Progress(None), context, BulkOptions())
         )
 
     def existing(

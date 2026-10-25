@@ -172,6 +172,13 @@ class TestSpoolingAUrl:
         assert "not recoverable" in caplog.text
         assert "SECRET" not in caplog.text
 
+    def test_an_unrecoverable_record_names_no_host_and_no_path(self) -> None:
+        record = _plain_job_for("https://x.test/private/a?token=SECRET").spool_record()
+        assert record is not None
+        assert record.name == "(url not recorded)"
+        assert "x.test" not in record.payload  # the collection is a label, not a name
+        assert "private" not in record.as_json()
+
     @pytest.mark.parametrize(
         "url",
         [
