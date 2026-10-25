@@ -61,7 +61,7 @@ class BackfillTask:
         try:
             with self._ctx.ingest_queue.gate.stopping(stop):
                 stats = await run_in_threadpool(
-                    backfill.backfill_sessions, config, runtime
+                    backfill.Backfill.sessions, config, runtime
                 )
         finally:
             stop.set()  # a cancelled task leaves no scan running past its next file

@@ -96,34 +96,34 @@ class BackfillTally:
     not_attempted: int = 0
     processed: int = 0
     errors: list[str] = field(default_factory=list)
-    abort_reason: str = field(default="", init=False)
-    unadmitted: int = field(default=0, init=False)
+    _abort: str = field(default="", init=False)
+    _unadmitted: int = field(default=0, init=False)
 
     def halted(self) -> bool:
         """Return whether the run must stop before its next transcript."""
-        if self.stop.is_set() and not self.abort_reason:
-            self.abort_reason = "stopped before finishing"
-        return bool(self.abort_reason)
+        if self.stop.is_set() and not self._abort:
+            self._abort = "stopped before finishing"
+        return bool(self._abort)
 
     def abort(self, reason: str) -> None:
         """Stop the run for *reason* (the first one given is kept)."""
-        self.abort_reason = self.abort_reason or reason
+        self._abort = self._abort or reason
 
     def admitted(self) -> None:
         """Note that a transcript got past the queue."""
-        self.unadmitted = 0
+        self._unadmitted = 0
 
     def not_admitted(self) -> None:
         """Note a transcript the queue would not take; give up if they keep coming."""
-        self.unadmitted += 1
-        if self.unadmitted >= self.MAX_UNADMITTED:
+        self._unadmitted += 1
+        if self._unadmitted >= self.MAX_UNADMITTED:
             self.abort("ingest queue stayed full")
 
     def stats(self, skipped_unregistered: int) -> BackfillStats:
         """Return the run's stats, naming the stop in the errors if there was one."""
         errors = [*self.errors]
-        if self.abort_reason:
-            errors.append(f"backfill stopped: {self.abort_reason}")
+        if self._abort:
+            errors.append(f"backfill stopped: {self._abort}")
         return BackfillStats(
             ingested=self.ingested,
             would_ingest=self.would_ingest,

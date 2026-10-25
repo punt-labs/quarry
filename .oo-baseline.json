@@ -356,7 +356,7 @@
     "avg_params": 1.5,
     "max_complexity": 3.0,
     "avg_complexity": 2.0,
-    "module_size": 70.0,
+    "module_size": 66.0,
     "classes_per_module": 3.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
@@ -376,6 +376,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/backfill_project.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.62,
+    "max_complexity": 7.0,
+    "avg_complexity": 3.75,
+    "module_size": 182.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/backfill_session.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -383,6 +396,32 @@
     "max_complexity": 1.0,
     "avg_complexity": 1.0,
     "module_size": 52.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/backfill_stats.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.44,
+    "max_complexity": 3.0,
+    "avg_complexity": 1.89,
+    "module_size": 116.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/backfill_unindexable.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.8,
+    "max_complexity": 5.0,
+    "avg_complexity": 2.4,
+    "module_size": 62.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
@@ -857,6 +896,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/daemon/abort_reason.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 5.0,
+    "avg_complexity": 2.33,
+    "module_size": 47.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/daemon/app.py": {
     "method_ratio": 0.9,
     "encapsulation_ratio": 1.0,
@@ -866,6 +918,19 @@
     "module_size": 132.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.667,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/daemon/backfill_job.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.67,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 30.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
@@ -1065,6 +1130,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/daemon/ingest_refusal.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 24.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/daemon/ingest_unit.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1143,6 +1221,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/daemon/queue_bounds.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.58,
+    "max_complexity": 6.0,
+    "avg_complexity": 2.05,
+    "module_size": 191.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/daemon/queued_ingest.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1190,6 +1281,19 @@
     "avg_complexity": 2.4,
     "module_size": 131.0,
     "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/daemon/rerunnable_unit.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 13.0,
+    "classes_per_module": 0.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,

@@ -4282,7 +4282,7 @@ class TestMaintenance:
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.backfill.backfill_sessions", _fake_backfill),
+            patch("quarry.backfill.Backfill.sessions", _fake_backfill),
         ):
             resp = tc.post(
                 "/v1/backfill-sessions",
@@ -4342,7 +4342,7 @@ class TestMaintenance:
         a time and does not leak descriptors (proven by
         ``test_large_backfill_does_not_leak_descriptors``) — so no magic-number
         cap stands in for resource safety. ``limit=0``/empty means "all"
-        (matching ``backfill_sessions(limit=0)``) and a positive limit passes
+        (matching ``Backfill.sessions(limit=0)``) and a positive limit passes
         through unchanged with no ceiling; a *negative* limit is rejected at the
         boundary (``expected=None`` → 400, engine never called), never silently
         normalised to "all". This is the remote half of the local/remote
@@ -4359,7 +4359,7 @@ class TestMaintenance:
 
         with (
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
-            patch("quarry.backfill.backfill_sessions", _fake_backfill),
+            patch("quarry.backfill.Backfill.sessions", _fake_backfill),
         ):
             resp = tc.post("/v1/backfill-sessions", json=json_body, headers=headers)
             if expected is None:
@@ -4375,12 +4375,12 @@ class TestMaintenance:
     def test_cli_backfill_request_reaches_engine_unchanged(
         self, tmp_path: Path, limit: int
     ) -> None:
-        """A CLI ``BackfillRequest`` reaches ``backfill_sessions`` field-for-field.
+        """A CLI ``BackfillRequest`` reaches ``Backfill.sessions`` field-for-field.
 
         The full local/remote equivalence (bug class 3): the CLI builds a
         ``BackfillRequest`` and the client posts ``model_dump()`` as the body, so
         serializing that exact contract and driving the route must hand
-        ``backfill_sessions`` the same values the CLI asked for. This locks both
+        ``Backfill.sessions`` the same values the CLI asked for. This locks both
         the ``0 == all`` limit semantics (no silent rewrite into a cap) AND the
         two field *renames* the route performs — ``collection`` →
         ``collection_override`` and ``project`` → ``project_filter`` — where a
@@ -4406,7 +4406,7 @@ class TestMaintenance:
         )
         with (
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
-            patch("quarry.backfill.backfill_sessions", _fake_backfill),
+            patch("quarry.backfill.Backfill.sessions", _fake_backfill),
         ):
             resp = tc.post("/v1/backfill-sessions", json=req.model_dump())
             assert resp.status_code == 202

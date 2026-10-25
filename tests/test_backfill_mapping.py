@@ -2,7 +2,7 @@
 
 These give ``count_unmapped`` and ``filter_by_project`` direct unit coverage,
 closing the gap where they were previously only reached transitively through
-``backfill_sessions`` in ``tests/test_backfill.py``.
+``Backfill.sessions`` in ``tests/test_backfill.py``.
 """
 
 from __future__ import annotations

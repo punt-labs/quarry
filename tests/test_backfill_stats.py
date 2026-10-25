@@ -54,7 +54,7 @@ class TestBackfillTally:
         stop.set()
 
         assert tally.halted()
-        assert tally.abort_reason == "stopped before finishing"
+        assert tally.stats(0).errors == ["backfill stopped: stopped before finishing"]
 
     def test_the_first_reason_a_run_stopped_for_is_kept(self) -> None:
         tally = BackfillTally(threading.Event())
@@ -62,7 +62,7 @@ class TestBackfillTally:
         tally.abort("daemon shutting down")
         tally.abort("something later")
 
-        assert tally.abort_reason == "daemon shutting down"
+        assert tally.stats(0).errors == ["backfill stopped: daemon shutting down"]
 
     def test_the_stats_name_the_stop_in_the_errors(self) -> None:
         tally = BackfillTally(threading.Event())
@@ -79,7 +79,7 @@ class TestBackfillTally:
         tally.not_admitted()
 
         assert tally.halted()
-        assert tally.abort_reason == "ingest queue stayed full"
+        assert tally.stats(0).errors == ["backfill stopped: ingest queue stayed full"]
 
     def test_an_admitted_transcript_resets_the_count(self) -> None:
         tally = BackfillTally(threading.Event())

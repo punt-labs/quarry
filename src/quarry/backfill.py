@@ -85,9 +85,3 @@ class Backfill:
         stats = tally.stats(ProjectMappingResolver.count_unmapped(all_mappings))
         stats.log(dry_run=config.dry_run)
         return stats
-
-
-# Module-level alias: the route, the task and the tests spell this
-# ``backfill_sessions(...)`` and patch it by that name, so the entry point keeps
-# its bare name while the work lives as a method of :class:`Backfill`.
-backfill_sessions = Backfill.sessions

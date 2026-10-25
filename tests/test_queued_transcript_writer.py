@@ -183,7 +183,7 @@ async def test_a_backfill_task_writes_through_the_fifo_and_reports_the_stats(
         return BackfillStats(ingested=2)
 
     state = State(task_id="t", kind="backfill")
-    with patch("quarry.backfill.backfill_sessions", fake_backfill):
+    with patch("quarry.backfill.Backfill.sessions", fake_backfill):
         await BackfillTask(ctx).run(
             state, dry_run=False, collection="", project="", limit=0
         )

@@ -37,7 +37,7 @@ import numpy as np
 import pytest
 from lancedb.index import FTS, Bitmap
 
-from quarry.backfill import BackfillConfig, backfill_sessions
+from quarry.backfill import Backfill, BackfillConfig
 from quarry.backfill_mapping import ProjectMappingResolver
 from quarry.config import Settings
 from quarry.db import Database
@@ -320,7 +320,7 @@ def test_large_backfill_does_not_leak_descriptors(tmp_path: Path) -> None:
         runtime = runtime_over(
             database, DirectWriter(database, settings), settings.registry_path
         )
-        stats = backfill_sessions(BackfillConfig(), runtime)
+        stats = Backfill.sessions(BackfillConfig(), runtime)
 
     assert stats.ingested == _BACKFILL_TRANSCRIPTS, (
         f"backfill ingested {stats.ingested} of {_BACKFILL_TRANSCRIPTS} "

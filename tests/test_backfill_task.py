@@ -25,7 +25,7 @@ async def _run(tmp_path: Path, stats: BackfillStats) -> TaskState:
     def fake(_config: object, _runtime: object) -> BackfillStats:
         return stats
 
-    with patch("quarry.backfill.backfill_sessions", fake):
+    with patch("quarry.backfill.Backfill.sessions", fake):
         await BackfillTask(ctx).run(
             state, dry_run=False, collection="", project="", limit=0
         )
@@ -69,7 +69,7 @@ async def test_a_queue_that_closes_stops_the_scan_on_its_thread(tmp_path: Path) 
             saw_stop.set()
         return BackfillStats(not_attempted=3, errors=["backfill stopped: daemon"])
 
-    with patch("quarry.backfill.backfill_sessions", waits_for_stop):
+    with patch("quarry.backfill.Backfill.sessions", waits_for_stop):
         task = asyncio.create_task(
             BackfillTask(ctx).run(
                 state, dry_run=False, collection="", project="", limit=0
@@ -94,7 +94,7 @@ async def test_a_cancelled_task_stops_the_scan_on_its_thread(tmp_path: Path) -> 
             saw_stop.set()
         return BackfillStats()
 
-    with patch("quarry.backfill.backfill_sessions", waits_for_stop):
+    with patch("quarry.backfill.Backfill.sessions", waits_for_stop):
         task = asyncio.create_task(
             BackfillTask(ctx).run(
                 state, dry_run=False, collection="", project="", limit=0

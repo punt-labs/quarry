@@ -15,7 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
-from quarry.backfill import BackfillConfig, backfill_sessions
+from quarry.backfill import Backfill, BackfillConfig
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.backfill_session import BackfillSession
 from quarry.backfill_stats import BackfillStats, BackfillTally
@@ -239,7 +239,7 @@ class TestBackfillSessionName:
 
 
 # ---------------------------------------------------------------------------
-# backfill_sessions integration
+# Backfill.sessions integration
 # ---------------------------------------------------------------------------
 
 
@@ -346,7 +346,7 @@ def _run(
     database = Database.connect(env["db_path"])
     runtime = runtime_over(database, writer, env["registry_path"], stop)
     with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]):
-        return backfill_sessions(config or BackfillConfig(), runtime)
+        return Backfill.sessions(config or BackfillConfig(), runtime)
 
 
 def _registered_env(tmp_path: Path) -> dict[str, Path]:
