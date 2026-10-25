@@ -51,9 +51,12 @@ queue as a \emph{job} (admitted, pending, running, finished), and
 \field{fixed}~$=1$ is the lifecycle this design requires. \field{fixed}~$=0$ is
 the lifecycle as it stood before: the second cancel escapes the wait, a
 cancelled waiter leaves its job queued, a running job abandoned by the thread is
-counted \emph{not attempted}, the guard reads the task alone, the cancel
-overwrites the stop reason, and an unindexable transcript is recorded without
-the racily-clean test. The same witnesses are checked against both; the
+counted \emph{failed} though it goes on to write, a job that had just stored is
+counted failed too, the registry's garbage collection evicts a task whose scan
+thread is still held, the bound drops the outcomes recorded so far and, after a
+cancel, the stop reason, the guard reads the task alone, the cancel overwrites
+the stop reason, and an unindexable transcript is recorded without the
+racily-clean test. The same witnesses are checked against both; the
 fixed build must reach none of them and the old build must reach each.
 
 \subsection{Witnesses, not invariants}
@@ -72,7 +75,8 @@ state with the witness in \field{wit} is reachable.
  & Witness & Meaning \\
 \midrule
 L1 & \field{wOverlap} & the guard admitted a new run while the previous run's
-  thread was still alive \\
+  thread was still alive; the guard reads \field{holds} (and the registry),
+  never the thread \\
 L2 & \field{wLate} & a job wrote although its transcript was already counted
   as not attempted or not examined (the report did not count the write) \\
 L3 & \field{wReason} & the task reports a reason other than the first stop
@@ -81,6 +85,11 @@ L4 & \field{wUncounted} & the run was reported while a transcript was still
   in flight, so it was counted in no outcome \\
 L5 & \field{wRecord} & a transcript was recorded as unindexable although its
   mtime was racy or had changed \\
+L6 & \field{wSecond} & a job wrote after its run was reported, while a second run
+  was active, and the report had not counted the write as stored \\
+L7 & \field{wStats} & the stats the task carries differ from the outcomes (the
+  bound dropped them, a late outcome was not recorded, or a job that had just
+  stored was counted failed) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -98,6 +107,10 @@ so every transcript has exactly one, and the outcomes are disjoint.
   \item The single strict read (L5): the read, the parse, and the verdict are
     one step here. That the code reads once is pinned by a test, not by this
     model.
+  \item The embed step of a withdrawn job: the model frees the worker at the
+    withdraw, so it does not show a second job starting while the first is
+    still embedding. The commit point (\field{jcommit}) is where a withdrawn job
+    stops writing.
   \item More than one foreign job, and more than one run at a time. The guard is
     modelled by a second start, \field{Start2}, that fires at most once.
 \end{itemize}
@@ -130,13 +143,15 @@ WAITER ::= wwaiting | wgone
 \end{zed}
 
 A transcript's job. \field{jadmit}: waiting for a queue slot, nothing enqueued.
-\field{jpending}: queued. \field{jrunning}: the worker holds it.
+\field{jpending}: queued. \field{jrunning}: the worker holds it and has not
+committed (the claim is checked again at the commit, so a withdrawn job stops
+there). \field{jcommit}: past the commit point, so the write is certain.
 \field{jstored}, \field{jnothing} (stored nothing: the text chunks to nothing),
 \field{jfailed}: the worker finished it. \field{jskipped}: it will never write.
 
 \begin{zed}
 JOB ::= jnone | jadmit | jpending | jrunning
-      | jstored | jnothing | jfailed | jskipped
+      | jcommit | jstored | jnothing | jfailed | jskipped
 \end{zed}
 
 \begin{zed}
@@ -152,6 +167,7 @@ KIND ::= knormal | kstable | kracy
 
 \begin{zed}
 WIT ::= wOverlap | wLate | wReason | wUncounted | wRecord
+    | wSecond | wStats
 \end{zed}
 
 \begin{axdef}
@@ -161,25 +177,41 @@ fixed = 1
 \end{axdef}
 
 How the thread abandons a wait on a job, by the job's state: what the job
-becomes and what the transcript is counted as. A queued job is cancelled so the
-worker skips it; a running job continues and is counted \emph{failed} (it may
-still land); the old build left the queued job in place and counted the running
-one \emph{not attempted}.
+becomes and what the transcript is counted as. In the fixed build a job still
+waiting or running before its commit is withdrawn (the worker skips it, or stops
+at the commit) and is \emph{not attempted}; a job past its commit is counted
+\emph{stored}; a job that finished just before the withdraw is counted by how it
+finished (stored, nothing, failed). The old build left a queued job in place,
+counted a running or committing job \emph{failed} though it went on to write, and
+counted a job that had just stored as failed.
 
 \begin{axdef}
 abortJob : JOB \pfun JOB \\
 abortOut : JOB \pfun OUT
 \where
-\dom abortJob = \{ jadmit, jpending, jrunning \} \\
-\dom abortOut = \{ jadmit, jpending, jrunning \} \\
+\dom abortJob = \{ jadmit, jpending, jrunning, jcommit, jstored, jnothing, jfailed \} \\
+\dom abortOut = \{ jadmit, jpending, jrunning, jcommit, jstored, jnothing, jfailed \} \\
 abortJob~jadmit = jskipped \\
-abortJob~jrunning = jrunning \\
+abortJob~jcommit = jcommit \\
+abortJob~jstored = jstored \\
+abortJob~jnothing = jnothing \\
+abortJob~jfailed = jfailed \\
 abortOut~jadmit = onotattempted \\
 abortOut~jpending = onotattempted \\
 fixed = 1 \implies abortJob~jpending = jskipped \\
 fixed = 0 \implies abortJob~jpending = jpending \\
-fixed = 1 \implies abortOut~jrunning = ofailed \\
-fixed = 0 \implies abortOut~jrunning = onotattempted
+fixed = 1 \implies abortJob~jrunning = jskipped \\
+fixed = 0 \implies abortJob~jrunning = jrunning \\
+fixed = 1 \implies abortOut~jrunning = onotattempted \\
+fixed = 1 \implies abortOut~jcommit = oingested \\
+fixed = 1 \implies abortOut~jstored = oingested \\
+fixed = 1 \implies abortOut~jnothing = oskipped \\
+fixed = 1 \implies abortOut~jfailed = ofailed \\
+fixed = 0 \implies abortOut~jrunning = ofailed \\
+fixed = 0 \implies abortOut~jcommit = ofailed \\
+fixed = 0 \implies abortOut~jstored = ofailed \\
+fixed = 0 \implies abortOut~jnothing = ofailed \\
+fixed = 0 \implies abortOut~jfailed = ofailed
 \end{axdef}
 
 % ===================================================================
@@ -192,11 +224,11 @@ task : TASK \\
 rep, stop : REASON \\
 thr : THR \\
 waiter : WAITER \\
-hung, gate, second, fbusy : ZBOOL \\
+hung, gate, second, fbusy, holds, inreg : ZBOOL \\
 cancels : 0 \upto 2 \\
 cur : 1 \upto 3 \\
 job : 1 \upto 2 \fun JOB \\
-out : 1 \upto 2 \fun OUT \\
+out, carried : 1 \upto 2 \fun OUT \\
 kind : 1 \upto 2 \fun KIND \\
 touched, unind : 1 \upto 2 \fun ZBOOL \\
 wit : \power WIT
@@ -217,6 +249,12 @@ wit : \power WIT
   \item \field{cancels}: how many times the task was cancelled.
   \item \field{cur}: the transcript the thread is on; $3$ means the scan is
     complete.
+  \item \field{holds}: the registry task is marked as holding the scan thread. It
+    is set at the start and cleared only when the thread returns.
+    \field{inreg}: the task state is still in the registry, where the guard can
+    see it; the registry's TTL garbage collection (\field{Evict}) removes it.
+  \item \field{carried}: the per-transcript outcomes the task state carries as its
+    results; $\mathit{onone}$ until the run records them.
   \item \field{touched}: the transcript's mtime changed after the snapshot.
     \field{unind}: the transcript is recorded as unindexable.
 \end{itemize}
@@ -232,9 +270,11 @@ waiter' = wwaiting \\
 hung' = zfalse \\
 gate' = zfalse \\
 second' = zfalse \\
+holds' = ztrue \\
+inreg' = ztrue \\
 cancels' = 0 \\
 cur' = 1 \\
-\forall i : 1 \upto 2 @ job'~i = jnone \land out'~i = onone \land
+\forall i : 1 \upto 2 @ job'~i = jnone \land out'~i = onone \land carried'~i = onone \land
   touched'~i = zfalse \land unind'~i = zfalse \\
 wit' = \emptyset
 \end{schema}
@@ -274,7 +314,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{GateClose}
@@ -299,7 +342,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 
@@ -319,6 +365,7 @@ cancels' = 2 \\
 task' = tcancelled \\
 rep' = rcancel \\
 waiter' = wgone \\
+carried' = out' \\
 out' = out \oplus \{ j : 1 \upto 2 | out~j = onone \land job~j = jnone @
   j \mapsto onotexamined \} \\
 wit' = wit \cup \{ w : WIT |
@@ -334,7 +381,9 @@ touched' = touched \\
 unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
-second' = second
+second' = second \\
+holds' = holds \\
+inreg' = inreg
 \end{schema}
 
 \begin{schema}{FoeStart}
@@ -357,7 +406,10 @@ job' = job \\
 out' = out \\
 touched' = touched \\
 unind' = unind \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{FoeEnd}
@@ -380,7 +432,10 @@ job' = job \\
 out' = out \\
 touched' = touched \\
 unind' = unind \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 % ===================================================================
@@ -419,7 +474,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{SkipInline}
@@ -447,7 +505,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{Hang}
@@ -474,7 +535,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{Unhang}
@@ -497,7 +561,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 The thread returns when the scan is complete, or when it sees a stop reason
@@ -512,6 +579,9 @@ hung = zfalse \\
 cur = 3 \\
 thr' = treturned \\
 hung' = hung \\
+holds' = zfalse \\
+(waiter = wgone \land fixed = 1) \implies carried' = out' \\
+\lnot (waiter = wgone \land fixed = 1) \implies carried' = carried \\
 task' = task \\
 rep' = rep \\
 stop' = stop \\
@@ -526,7 +596,8 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \cup \{ w : WIT | w = wStats \land waiter = wgone \land carried' \neq out' \} \\
+inreg' = inreg
 \end{schema}
 
 \begin{schema}{ReturnStopped}
@@ -539,6 +610,9 @@ stop \neq rnone \\
 job~cur = jnone \\
 thr' = treturned \\
 hung' = hung \\
+holds' = zfalse \\
+(waiter = wgone \land fixed = 1) \implies carried' = out' \\
+\lnot (waiter = wgone \land fixed = 1) \implies carried' = carried \\
 out' = out \oplus \{ j : 1 \upto 2 | out~j = onone @ j \mapsto onotexamined \} \\
 task' = task \\
 rep' = rep \\
@@ -553,7 +627,8 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \cup \{ w : WIT | w = wStats \land waiter = wgone \land carried' \neq out' \} \\
+inreg' = inreg
 \end{schema}
 
 % ===================================================================
@@ -588,7 +663,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{AdmitTimeout}
@@ -615,7 +693,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{AbortWait}
@@ -642,7 +723,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \cup \{ w : WIT | w = wStats \land ((job~cur = jstored \land abortOut~(job~cur) \neq oingested) \lor (job~cur = jnothing \land abortOut~(job~cur) \neq oskipped)) \} \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{GiveUp}
@@ -652,7 +736,7 @@ thr = talive \\
 hung = zfalse \\
 cur \in 1 \upto 2 \\
 stop = rnone \\
-job~cur \in \{ jpending, jrunning \} \\
+job~cur \in \{ jpending, jrunning, jcommit \} \\
 stop' = rhung \\
 cancels' = cancels \\
 gate' = gate \\
@@ -669,7 +753,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 The worker takes the oldest pending job when no foreign job holds it. It runs a
@@ -682,7 +769,7 @@ the late write L2 forbids.
 \where
 job~i? = jpending \\
 fbusy = zfalse \\
-\forall j : 1 \upto 2 @ job~j \neq jrunning \\
+\forall j : 1 \upto 2 @ job~j \notin \{ jrunning, jcommit \} \\
 \forall j : 1 \upto 2 | j < i? @ job~j \neq jpending \\
 job' = job \oplus \{ i? \mapsto jrunning \} \\
 task' = task \\
@@ -700,16 +787,18 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
-\begin{schema}{WorkerStores}
+\begin{schema}{Commit}
 \Delta Run \\ i? : 1 \upto 2
 \where
 job~i? = jrunning \\
 kind~i? = knormal \\
-job' = job \oplus \{ i? \mapsto jstored \} \\
-wit' = wit \cup \{ w : WIT | w = wLate \land out~i? \in \{ onotattempted, onotexamined \} \} \\
+job' = job \oplus \{ i? \mapsto jcommit \} \\
 task' = task \\
 rep' = rep \\
 stop' = stop \\
@@ -724,7 +813,38 @@ touched' = touched \\
 unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
-second' = second
+second' = second \\
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
+\end{schema}
+
+\begin{schema}{WorkerStores}
+\Delta Run \\ i? : 1 \upto 2
+\where
+job~i? = jcommit \\
+kind~i? = knormal \\
+job' = job \oplus \{ i? \mapsto jstored \} \\
+wit' = wit \cup \{ w : WIT | (w = wLate \land out~i? \in \{ onotattempted, onotexamined \}) \lor (w = wSecond \land second = ztrue \land task \neq trunning \land out~i? \neq oingested) \} \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{WorkerStoresNothing}
@@ -748,7 +868,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{WorkerFails}
@@ -771,7 +894,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 % ===================================================================
@@ -808,7 +934,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{CollectFailed}
@@ -835,7 +964,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{CollectRecord}
@@ -864,7 +996,10 @@ waiter' = waiter \\
 job' = job \\
 kind' = kind \\
 fbusy' = fbusy \\
-second' = second
+second' = second \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{CollectNoRecord}
@@ -893,7 +1028,10 @@ unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 \begin{schema}{Touch}
@@ -917,7 +1055,10 @@ out' = out \\
 kind' = kind \\
 fbusy' = fbusy \\
 second' = second \\
-wit' = wit
+wit' = wit \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 % ===================================================================
@@ -941,6 +1082,7 @@ cancels > 0 \implies task' = tcancelled \\
 (fixed = 1 \lor cancels = 0) \implies rep' = stop \\
 (fixed = 0 \land cancels > 0) \implies rep' = rcancel \\
 waiter' = wgone \\
+carried' = out \\
 wit' = wit \cup \{ w : WIT |
   (w = wReason \land stop \neq rnone \land rep' \neq stop)
   \lor (w = wUncounted \land (\exists j : 1 \upto 2 @ out~j = onone)) \} \\
@@ -956,7 +1098,9 @@ touched' = touched \\
 unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
-second' = second
+second' = second \\
+holds' = holds \\
+inreg' = inreg
 \end{schema}
 
 \field{Bound} is the bounded wait: the thread is blocked in a step the stop
@@ -968,7 +1112,6 @@ thread returns.
 \begin{schema}{Bound}
 \Delta Run
 \where
-fixed = 1 \\
 task = trunning \\
 waiter = wwaiting \\
 thr = talive \\
@@ -976,11 +1119,15 @@ hung = ztrue \\
 stop \neq rnone \\
 cancels = 0 \implies task' = tfailed \\
 cancels > 0 \implies task' = tcancelled \\
-rep' = stop \\
+fixed = 1 \implies rep' = stop \\
+(fixed = 0 \land cancels = 0) \implies rep' = stop \\
+(fixed = 0 \land cancels > 0) \implies rep' = rnone \\
+fixed = 1 \implies carried' = out' \\
+fixed = 0 \implies carried' = \{ 1 \mapsto onone, 2 \mapsto onone \} \\
 waiter' = wgone \\
 out' = out \oplus \{ j : 1 \upto 2 | out~j = onone @ j \mapsto onotexamined \} \\
 wit' = wit \cup \{ w : WIT |
-  w = wUncounted \land (\exists j : 1 \upto 2 @ out~j = onone \land job~j \neq jnone) \} \\
+  (w = wUncounted \land (\exists j : 1 \upto 2 @ out~j = onone \land job~j \neq jnone)) \lor (w = wReason \land stop \neq rnone \land rep' \neq stop) \lor (w = wStats \land carried' \neq out') \} \\
 stop' = stop \\
 cancels' = cancels \\
 gate' = gate \\
@@ -992,18 +1139,54 @@ touched' = touched \\
 unind' = unind \\
 kind' = kind \\
 fbusy' = fbusy \\
-second' = second
+second' = second \\
+holds' = holds \\
+inreg' = inreg
+\end{schema}
+
+\field{Evict} is the registry's TTL garbage collection dropping a terminal task
+state. The old build dropped it whatever the thread was doing, which opened the
+guard to a second run beside a live scan; the fixed build never evicts a state
+that still holds its thread.
+
+\begin{schema}{Evict}
+\Delta Run
+\where
+inreg = ztrue \\
+task \neq trunning \\
+fixed = 0 \lor holds = zfalse \\
+inreg' = zfalse \\
+task' = task \\
+rep' = rep \\
+stop' = stop \\
+cancels' = cancels \\
+gate' = gate \\
+thr' = thr \\
+hung' = hung \\
+cur' = cur \\
+waiter' = waiter \\
+job' = job \\
+out' = out \\
+touched' = touched \\
+unind' = unind \\
+kind' = kind \\
+fbusy' = fbusy \\
+second' = second \\
+wit' = wit \\
+holds' = holds \\
+carried' = carried
 \end{schema}
 
 \field{Start2} is a second backfill request reaching the singleton guard once
-the task is no longer running. The fixed guard also waits for the thread.
+the task is no longer running or has been evicted. The fixed guard reads the\emph{holds} mark, not the thread: a state that holds its thread stays in the
+registry and keeps the guard shut.
 
 \begin{schema}{Start2}
 \Delta Run
 \where
 second = zfalse \\
-task \neq trunning \\
-fixed = 0 \lor thr = treturned \\
+(fixed = 0 \land (inreg = zfalse \lor task \neq trunning)) \lor
+  (fixed = 1 \land (inreg = zfalse \lor (task \neq trunning \land holds = zfalse))) \\
 second' = ztrue \\
 kind' = kind \\
 fbusy' = fbusy \\
@@ -1020,7 +1203,10 @@ waiter' = waiter \\
 job' = job \\
 out' = out \\
 touched' = touched \\
-unind' = unind
+unind' = unind \\
+holds' = holds \\
+inreg' = inreg \\
+carried' = carried
 \end{schema}
 
 % ===================================================================
