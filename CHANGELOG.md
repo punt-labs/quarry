@@ -14,6 +14,12 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Security
+
+- Clear 43 open Dependabot alerts (6 critical, 23 high) by bumping `uv.lock`:
+  Pillow 12.3.0 → 13.0.0, certifi 2026.1.4 → 2026.10.23, opentelemetry-api
+  1.45.0 → 1.45.1.
+
 ### Added
 
 - infra: `--relax-category` on the suppression ratchet
