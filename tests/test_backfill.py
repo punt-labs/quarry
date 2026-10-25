@@ -15,6 +15,7 @@ from quarry.backfill import BackfillConfig
 from quarry.backfill_mapping import ProjectMapping, ProjectMappingResolver
 from quarry.backfill_session import BackfillSession
 from quarry.config import Settings
+from quarry.shared_project_dirs import SharedProjectDirs
 from quarry.sync_registry import DirectoryRegistration
 
 runner = CliRunner()
@@ -202,8 +203,7 @@ class TestSharedProjectDir:
 
     def test_an_unreadable_transcript_is_not_attributed(self, tmp_path: Path) -> None:
         missing = tmp_path / "gone.jsonl"
-        mapping = ProjectMapping("x", "/w/my.notes", "c", shared=True)
-        assert mapping._recorded_cwd(missing) is None
+        assert SharedProjectDirs.recorded_cwd(missing) is None
 
 
 # ---------------------------------------------------------------------------

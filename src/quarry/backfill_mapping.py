@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
-import json
-import logging
 import re
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
+from quarry.shared_project_dirs import SharedProjectDirs
+
 if TYPE_CHECKING:
     from quarry.sync_registry import DirectoryRegistration
-
-logger = logging.getLogger(__name__)
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -27,7 +23,7 @@ class ProjectMapping:
     encoded_dir: str
     project_path: str
     collection: str
-    shared: bool = False
+    shared: bool = False  # another registration encodes to the same dir (#557)
 
     @property
     def captures_collection(self) -> str:
@@ -37,33 +33,16 @@ class ProjectMapping:
     def transcript_files(self) -> list[Path]:
         """Return this project's JSONL transcript files, sorted.
 
-        A ``shared`` dir is one Claude Code's lossy encoding gives to more than
-        one registration (``/w/my.notes`` and ``/w/my_notes`` both become
-        ``-w-my-notes``).  Its transcripts are filed by the ``cwd`` each records,
-        so no session lands in the collection of a project it never ran in; one
-        that records no ``cwd`` cannot be attributed and is skipped.
+        A ``shared`` dir holds other projects' sessions too, so only the
+        transcripts that record this project as their ``cwd`` are its own.
         """
         project_dir = CLAUDE_PROJECTS_DIR / self.encoded_dir
         if not project_dir.is_dir():
             return []
         files = sorted(project_dir.glob("*.jsonl"))
-        if not self.shared:
-            return files
-        mine = Path(self.project_path)
-        return [
-            f for f in files if (cwd := self._recorded_cwd(f)) and Path(cwd) == mine
-        ]
-
-    @staticmethod
-    def _recorded_cwd(transcript: Path) -> str | None:
-        """Return the first ``cwd`` *transcript* records, or ``None``."""
-        with contextlib.suppress(OSError), transcript.open(errors="replace") as lines:
-            for line in lines:
-                with contextlib.suppress(ValueError):
-                    record = json.loads(line)
-                    if isinstance(record, dict) and isinstance(record.get("cwd"), str):
-                        return str(record["cwd"])
-        return None
+        return (
+            SharedProjectDirs.ran_in(files, self.project_path) if self.shared else files
+        )
 
 
 @final
@@ -90,35 +69,18 @@ class ProjectMappingResolver:
         the ambiguous reverse-decode problem (hyphens in directory names).
         """
         existing_dirs = ProjectMappingResolver._project_dir_names()
-        encoded = [
-            (reg, ProjectMappingResolver.encode(reg.directory)) for reg in registrations
-        ]
-        shared = ProjectMappingResolver._shared(
-            [name for _, name in encoded if name in existing_dirs]
+        return SharedProjectDirs.mark(
+            [
+                ProjectMapping(
+                    encoded_dir=encoded,
+                    project_path=reg.directory,
+                    collection=reg.collection,
+                )
+                for reg in registrations
+                if (encoded := ProjectMappingResolver.encode(reg.directory))
+                in existing_dirs
+            ]
         )
-        return [
-            ProjectMapping(
-                encoded_dir=name,
-                project_path=reg.directory,
-                collection=reg.collection,
-                shared=name in shared,
-            )
-            for reg, name in encoded
-            if name in existing_dirs
-        ]
-
-    @staticmethod
-    def _shared(names: list[str]) -> set[str]:
-        """Return the encoded dirs more than one registration maps to, warning once."""
-        shared = {name for name, count in Counter(names).items() if count > 1}
-        for name in sorted(shared):
-            logger.warning(
-                "backfill: %s is shared by %d registrations; filing its "
-                "transcripts by their recorded cwd",
-                name,
-                names.count(name),
-            )
-        return shared
 
     @staticmethod
     def filter_by_project(
