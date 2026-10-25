@@ -1,0 +1,602 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ── Geometry ──────────────────────────────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+
+% ── Pagination ────────────────────────────────────────────────────────────────
+\usepackage[all]{nowidow}    % Require ≥2 lines on each side of a page break
+\brokenpenalty=10000         % No hyphenated words across page breaks
+\raggedbottom                % Allow uneven page bottoms rather than stretching
+
+% ── Fonts ─────────────────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage{newpxtext}     % Palatino-based serif (TeX Gyre Pagella)
+\usepackage{newpxmath}     % Matching math font
+
+% ── Colors ────────────────────────────────────────────────────────────────────
+\usepackage[dvipsnames]{xcolor}
+\definecolor{SectionBlue}{HTML}{1B3A5C}
+\definecolor{AccentGray}{HTML}{4A4A4A}
+\definecolor{QuoteBorder}{HTML}{8B9DAF}
+\definecolor{RiskRed}{HTML}{C0392B}
+\definecolor{RiskAmber}{HTML}{E67E22}
+\definecolor{RiskGreen}{HTML}{27AE60}
+\definecolor{BoxBg}{HTML}{F7F8FA}
+
+% ── Tables ────────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{tabularx}
+
+% ── Boxes ─────────────────────────────────────────────────────────────────────
+\usepackage[framemethod=tikz]{mdframed}
+
+% ── Lists ─────────────────────────────────────────────────────────────────────
+\usepackage{enumitem}
+\usepackage{needspace}
+
+% ── Hyperlinks ────────────────────────────────────────────────────────────────
+\usepackage{hyperref}
+\usepackage{xurl}  % break bibliography URLs at any character, not just at slashes
+\hypersetup{
+  colorlinks=true,
+  linkcolor=SectionBlue,
+  urlcolor=SectionBlue,
+  citecolor=SectionBlue,
+  pdfauthor={JM Freeman},
+  pdftitle={Quarry Answer Synthesis: PR/FAQ},
+  pdfsubject={Working Backwards: Product Discovery},
+}
+
+% ── Bibliography ─────────────────────────────────────────────────────────────
+\usepackage[style=numeric,backend=biber,sorting=none]{biblatex}
+\addbibresource{prfaq-answer-synthesis.bib}
+
+% ── Section styling ───────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}
+  {\needspace{6\baselineskip}\Large\bfseries\color{SectionBlue}}
+  {}
+  {0pt}
+  {}
+
+\titleformat{\subsection}
+  {\needspace{5\baselineskip}\large\bfseries\color{AccentGray}}
+  {}
+  {0pt}
+  {}
+
+\titleformat{\subsubsection}
+  {\normalsize\bfseries\color{AccentGray}}
+  {}
+  {0pt}
+  {}
+\titlespacing*{\subsubsection}{0pt}{1em}{0.5em}[0pt]
+
+% ── Document stage ───────────────────────────────────────────────────────────
+% Stage calibrates evidence expectations across discovery, drafting, peer review, and meetings.
+% Valid values: hypothesis | validated | growth
+\newcommand{\prfaqstage}[1]{\def\theprfaqstage{#1}}
+\prfaqstage{hypothesis}  % Default: pre-validation
+
+% ── Document version ─────────────────────────────────────────────────────────
+% Tracks iteration count. Major for structural changes, minor for feedback edits.
+% /prfaq:feedback auto-increments after each application.
+\newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
+\prfaqversion{1}{0}
+
+% ── Header/footer ────────────────────────────────────────────────────────────
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\textcolor{AccentGray}{Stage: \theprfaqstage{} \enspace\textbar\enspace v\theprfaqmajor.\theprfaqminor}}
+\fancyhead[R]{\footnotesize\textcolor{AccentGray}{\thepage}}
+\renewcommand{\headrulewidth}{0pt}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Custom environments
+% ══════════════════════════════════════════════════════════════════════════════
+
+% ── \prsection{title} — styled press release section header ──────────────────
+\newcommand{\prsection}[1]{%
+  \vspace{1em}%
+  {\large\bfseries\color{SectionBlue}#1}%
+  \vspace{0.3em}\par%
+}
+
+% ── customerquote — indented, italic customer quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=QuoteBorder,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{customerquote}
+
+% ── spokespersonquote — indented spokesperson quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=SectionBlue,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{spokespersonquote}
+
+% ── faqpair — numbered Q&A pair with bold question ─────────────────────────
+% Label FAQ pairs that explain judgment calls: \begin{faqpair}{Question}\label{faq:slug}
+% Then cross-reference from the press release: (see \faqref{faq:slug})
+\newcounter{faqnum}
+\newenvironment{faqpair}[1]{%
+  \needspace{4\baselineskip}%
+  \vspace{0.5em}%
+  \refstepcounter{faqnum}%
+  \noindent\textbf{\color{SectionBlue}Q\thefaqnum: #1}\par\nopagebreak[4]%
+  \vspace{0.2em}%
+  \begin{adjustwidth}{1em}{0pt}%
+  \setlength{\parindent}{0pt}%
+}{%
+  \end{adjustwidth}%
+  \vspace{0.5em}%
+}
+% ── \faqref{faq:slug} — clickable "FAQ 3" reference ──────────────────────────
+\newcommand{\faqref}[1]{\hyperref[#1]{FAQ~\ref*{#1}}}
+
+% ── \featureitem — numbered, referenceable feature entry ──────────────────────
+% Use inside enumerate: \featureitem{Name}{Rationale}\label{feat:slug}
+% Then cross-reference: (see \featureref{feat:slug})
+\newcounter{featurenum}
+\newcommand{\featureitem}[2]{%
+  \refstepcounter{featurenum}%
+  \item[\textbf{\color{SectionBlue}F\thefeaturenum.}]%
+  \textbf{#1}: #2%
+}
+\newcommand{\featureref}[1]{\hyperref[#1]{Feature~\ref*{#1}}}
+
+% ── adjustwidth (for faqpair indentation) ────────────────────────────────────
+\usepackage{changepage}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Document
+% ══════════════════════════════════════════════════════════════════════════════
+
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries\color{SectionBlue} Quarry Now Answers the Question Instead of Listing Ten Passages} \\[0.8em]
+  {\large\color{AccentGray} quarryd turns its own search results into a short answer with numbered citations, using any OpenAI-compatible model on the same Mac or in the cloud} \\[0.3em]
+  {\large\color{AccentGray} The menu bar app and the \texttt{quarry} CLI show the answer in one keystroke, against a local or a remote daemon}
+\end{center}
+
+\vspace{0.5em}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% PRESS RELEASE
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Press Release}
+
+PORTLAND, OR, April 2027. Punt Labs today added answer synthesis to Quarry,
+its local semantic search engine. Developers who search their own Quarry index
+from the macOS menu bar or the terminal can now press one key and get a three
+to six sentence answer, written from the passages Quarry already found, with a
+numbered citation on every claim. Each citation opens the source page. The
+answer is written by whichever OpenAI-compatible model the user points
+\texttt{quarryd} at: Ollama or LM Studio on the same machine for fully local
+use, or a hosted Haiku-class model. Chat assistants answer from documents
+the user uploads to them; Quarry answers from the index it already keeps, and
+search stays as fast as it was (see \faqref{faq:vs-chat}).
+
+\prsection{Problem}
+
+A Quarry search returns up to ten passages, and each passage can be up to
+1{,}800 characters long. A full page of results is about 18{,}000 characters,
+roughly the length of a ten-page memo. The menu bar app shows the first 200
+characters of each result. To answer a question like ``which port does the
+staging daemon listen on, and who changed it?'', the user opens results one at
+a time, reads each passage, and assembles the answer in their head.
+
+Inside Claude Code this is not a problem, because the agent reads the
+passages for the user through Quarry's MCP tools. Outside an agent session it
+is: a quick lookup from the menu bar or a shell ends in reading. The usual
+workaround is to copy passages into a chat window, which loses the link back
+to the source and sends the text to whichever service the chat window uses
+(see \faqref{faq:evidence}).
+
+\prsection{Solution}
+
+The user types a question into the menu bar search panel as they do today.
+Results appear as they type, with no model call. When they want an answer, they
+press Command-Return. \texttt{quarryd} runs the same search, sends the top
+passages to the configured model with instructions to answer only from those
+passages and to cite them by number, and returns the answer together with the
+results it used. The answer appears in a card above the result list. Clicking
+\texttt{[3]} opens result 3 in the existing detail view, so every sentence is
+one click from its source. If the passages do not cover the question, the
+answer says so instead of guessing (see \faqref{faq:wrong}).
+
+The same answer is available from the terminal with
+\texttt{quarry find -{}-answer}. Because the daemon does the work, the menu bar
+app gets answers whether it is connected to the local \texttt{quarryd} or to a
+remote one, and the app never holds a model key (see \faqref{faq:why-daemon}).
+
+\prsection{Customer Quote}
+
+\begin{customerquote}
+\textit{``I keep runbooks, design records and two years of incident notes in
+Quarry. A search used to give me ten snippets, and I'd open four of them to
+piece the answer together. Now I press Command-Return and get two sentences
+with a [2] and a [5] after them. I still click [5] before I change anything in
+production, and it takes me straight to the paragraph. The model runs in Ollama
+on my laptop, so the incident notes stay on my laptop too.''}
+
+\raggedleft \textbf{Priya Raman}, Platform Engineer at a 40-person logistics software company
+\end{customerquote}
+
+\prsection{Getting Started}
+
+Users who already run Quarry need about five minutes:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Pick a model.} Run one locally with Ollama, LM Studio or
+        llama.cpp, or use a hosted OpenAI-compatible endpoint and its API
+        key.
+  \item \textbf{Point \texttt{quarryd} at it.} Add the endpoint URL and model
+        name to Quarry's configuration and restart the daemon. Synthesis stays
+        off until this step, and nothing else changes.
+  \item \textbf{Ask.} Press Command-Return in the menu bar search panel, or run
+        \texttt{quarry find -{}-answer "your question"}.
+\end{enumerate}
+
+\prsection{Spokesperson Quote}
+
+\begin{spokespersonquote}
+``Quarry already finds the right passages. The step it left to the user was
+reading ten of them to get one fact. That step is a small, well-bounded job for
+a small model: answer from these passages and say which ones. We put it in the
+daemon so every Quarry client gets the same answer from the same configuration,
+and we made the model a setting so users choose whether their notes ever leave
+the machine. Search stays exactly as fast as it was; the answer is one
+keystroke on top.''
+
+\raggedleft \textbf{JM Freeman}, Creator of Quarry
+\end{spokespersonquote}
+
+\prsection{Call to Action}
+
+Answer synthesis ships in the next minor releases of \texttt{punt-quarry} and
+Quarry Menu Bar, free and MIT-licensed like the rest of Quarry. The model is
+the user's choice and the user's cost: nothing for a local model, and about
+half a US cent per answer for Claude Haiku 4.5 at list price
+(see \faqref{faq:cost}). Install or upgrade with
+\texttt{uv tool install punt-quarry}.
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FAQ
+% ══════════════════════════════════════════════════════════════════════════════
+
+\newpage
+\section*{Frequently Asked Questions}
+
+\subsection*{External FAQs}
+
+\begin{faqpair}{What is answer synthesis and who is it for?}\label{faq:what}
+  It is a short written answer to a Quarry search, with numbered citations
+  back to the results. It is for people who already keep their documents,
+  notes and captured research in Quarry and look things up from the menu bar
+  app or the terminal, outside an agent session. The job it does is the last
+  step of a lookup: turning ten relevant passages into the one or two facts the
+  user wanted.
+\end{faqpair}
+
+\begin{faqpair}{How is this different from pasting the results into ChatGPT or Claude?}\label{faq:vs-chat}
+  The result is similar; the work is gone. There is no copying, the citations
+  stay linked to the source pages, and the user decides once, in
+  configuration, which model sees their passages. Hosted notebook products
+  such as NotebookLM also answer with citations~\cite{google2026notebooklm},
+  but they answer from documents uploaded to that service. Quarry answers from
+  the local index that already holds the user's files, web captures and session
+  notes.
+\end{faqpair}
+
+\begin{faqpair}{I use Quarry through Claude Code. Does this change anything for me?}\label{faq:claude-code}
+  No. In Claude Code the agent already reads Quarry's results and writes the
+  answer itself. Quarry's MCP tools keep returning passages, because a
+  pre-written answer would cost the agent tokens and hide the source text it
+  reasons over (see \featureref{feat:no-mcp}).
+\end{faqpair}
+
+\begin{faqpair}{How do I get started?}\label{faq:start}
+  Pick a model, add its endpoint URL and model name to Quarry's configuration,
+  restart \texttt{quarryd}, then press Command-Return in the menu bar search
+  panel or run \texttt{quarry find -{}-answer}. Until a model is configured, the
+  menu bar app hides the Answer action and the CLI flag reports that synthesis
+  is not configured.
+\end{faqpair}
+
+\begin{faqpair}{How much does it cost?}\label{faq:cost}
+  Quarry is free. The model costs whatever the chosen endpoint charges. A local
+  model costs nothing beyond electricity. For a hosted model, one answer sends
+  about eight passages plus instructions, roughly 4{,}000 input tokens at four
+  characters per token, and returns about 250 output tokens. At Claude Haiku
+  4.5 list prices of \$1 per million input tokens and \$5 per million output
+  tokens~\cite{anthropic2026pricing}, that is about \$0.005 per answer, or
+  \$5 for a thousand answers.
+\end{faqpair}
+
+\begin{faqpair}{What happens to my data?}\label{faq:privacy}
+  With a local model, nothing leaves the machine. With a hosted model, each
+  answer sends that question and the top passages for it to the configured
+  endpoint, and nothing else: the index, other documents and the search history
+  stay local. Every answer response names the endpoint host that wrote it, and
+  the menu bar card shows that host under the answer. Quarry stores no answers
+  and sends nothing to Punt Labs. Session captures are passed through Quarry's
+  secret scrubber when they are ingested, but the rest of the user's corpus is
+  sent as indexed, so users with sensitive files should choose a local model.
+\end{faqpair}
+
+\begin{faqpair}{What if the answer is wrong?}\label{faq:wrong}
+  The model is told to answer only from the numbered passages, to cite each
+  claim, and to say when the passages do not answer the question. Quarry then
+  checks the citations: a number that does not match a returned result is
+  removed before the answer reaches the user. The results are always shown
+  under the answer, so the user can check any sentence in one click. A small
+  model can still misread a passage; the citations make that visible rather
+  than preventing it (see \faqref{faq:tech-risks}).
+\end{faqpair}
+
+\begin{faqpair}{I connect the menu bar app to Quarry on another machine. Whose model answers?}\label{faq:remote}
+  The remote daemon's. The model call runs on the machine that runs
+  \texttt{quarryd}, with that machine's configuration and key. The menu bar app
+  sends the question with the same bearer token it already uses for search and
+  stores no model settings of its own. If the remote daemon has no model
+  configured, the Answer action is hidden.
+\end{faqpair}
+
+\begin{faqpair}{Will this make search slower?}\label{faq:speed}
+  No. Search-as-you-type keeps calling the existing search endpoint with no
+  model in the path. An answer is a separate request that runs only when the
+  user asks for one, and if the model is slow or down, the answer card shows
+  the error while search results keep working.
+\end{faqpair}
+
+\subsection*{Internal FAQs}
+
+\subsubsection*{Value \& Market}
+
+\begin{faqpair}{What is the total addressable market?}\label{faq:tam}
+  Quarry is free and open source, so the relevant market is Quarry's own users,
+  and the feature is judged by whether it makes Quarry more useful to them.
+  \texttt{punt-quarry} had 469 PyPI downloads in the month to
+  2026-10-25~\cite{pypistats2026quarry}; downloads include CI and repeat
+  installs, so active users are fewer. The menu bar app is macOS-only and has
+  no download or usage counter, so its share of that population is unknown.
+  The upper bound on reach is every Quarry user who searches outside an agent
+  session, through the menu bar app or the CLI.
+\end{faqpair}
+
+\begin{faqpair}{What evidence do we have that users want this?}\label{faq:evidence}
+  Little beyond the author's own use. The request comes from the Quarry author
+  using the menu bar app daily, which is the weakest kind of evidence: the
+  customer is the team. Two indirect signals support it. First, the size of the
+  results: ten passages of up to 1{,}800 characters, of which the menu bar
+  shows 200, leave reading as the main cost of a lookup. Second, products built
+  on the same pattern, such as NotebookLM~\cite{google2026notebooklm}, answer
+  from a user's sources with citations. Neither shows that Quarry users want an
+  answer more than they want the passages.
+\end{faqpair}
+
+\begin{faqpair}{Who are the alternatives and why would a user pick this?}\label{faq:competitors}
+  The real alternatives are habits. (1) Reading the results, which costs
+  nothing and needs no model. (2) Asking an agent that has Quarry's MCP tools,
+  which already synthesizes but means opening a session for a quick lookup.
+  (3) Pasting passages into a chat assistant, which loses citations and sends
+  text to that service. (4) Hosted notebook products~\cite{google2026notebooklm},
+  which require uploading documents and do not see Quarry's captures. Quarry's
+  advantage is position: it already holds the corpus and the ranked passages,
+  so the answer is one model call away. Any of these alternatives could add
+  something similar; none of them has the user's local index.
+\end{faqpair}
+
+\begin{faqpair}{What is the next step to validate the vision?}\label{faq:next-step}
+  Before building the menu bar card, ship the daemon route and the CLI flag,
+  then run the eval spike in \faqref{faq:tech-risks} and use
+  \texttt{quarry find -{}-answer} for two weeks of normal work. Record how often
+  an answer is requested compared with a plain search, how often the answer
+  says the passages do not cover the question, and how often the user still
+  opens a result. If the author stops using \texttt{-{}-answer} within the two
+  weeks, the menu bar work does not start.
+\end{faqpair}
+
+\subsubsection*{Technical}
+
+\begin{faqpair}{Why put synthesis in \texttt{quarryd} instead of the menu bar app?}\label{faq:why-daemon}
+  Three reasons. Every client gets the same behavior: the menu bar app, the CLI
+  and any future client call one route, and a remote menu bar connection gets
+  answers without its own model setup. Keys live in one place, on the machine
+  that runs the daemon; the menu bar app has no settings screen today and would
+  otherwise need one plus Keychain storage. And the daemon already has the
+  passages in memory when it searches, so it can send them to the model without
+  a second round trip. The cost is that the daemon now makes outbound HTTP calls
+  and holds a model key, and a remote daemon spends its owner's tokens on
+  behalf of every caller holding its bearer token.
+\end{faqpair}
+
+\begin{faqpair}{Why not run a generative model inside \texttt{quarryd}, like the embedding model?}\label{faq:why-not-bundled}
+  The embedding model is a small encoder that ONNX Runtime runs on the CPU
+  inside the daemon. A generative model of useful quality is many times larger,
+  would add gigabytes of download and resident memory to a daemon that is
+  always running, and on macOS would run on the CPU because Quarry's ONNX path
+  has no GPU provider there. Generation also needs chat templates, a sampling
+  loop and stop handling that Quarry would have to own. Ollama, LM Studio and
+  llama.cpp already serve local models behind an OpenAI-compatible
+  API~\cite{ollama2026openai,lmstudio2026openai,llamacpp2026server} and use the
+  Mac's GPU, so one HTTP client in Quarry gets local synthesis without Quarry
+  managing a model.
+\end{faqpair}
+
+\begin{faqpair}{What are the major technical risks?}\label{faq:tech-risks}
+  \textbf{Answer quality from small local models (high, unknown).} A 1--4B
+  parameter model may cite the wrong passage or merge two passages into a claim
+  neither makes. Mitigation: a spike that runs Quarry's eval fixtures through
+  two local models and one hosted model, scored for citation correctness by
+  hand, before choosing a recommended default. \textbf{Latency on a laptop
+  (medium, unknown).} A local model's time to a full answer on an M-series Mac
+  is not measured; the spike records it. \textbf{Provider compatibility
+  (medium).} ``OpenAI-compatible'' varies between servers. Anthropic describes
+  its compatibility layer as intended for testing and not a long-term or
+  production-ready solution for most use cases~\cite{anthropic2026openaisdk},
+  so the client must stay within the core chat completions fields and treat
+  provider differences as test cases. \textbf{Key delivery to a background
+  daemon (medium).} \texttt{quarryd} runs as a service, so keys exported in a
+  shell do not reach it; the design must name where the key comes from on macOS
+  and Linux. \textbf{Cost exposure on a shared daemon (low for personal use).}
+  Any holder of a remote daemon's bearer token can spend its model budget; a
+  per-daemon request limit bounds this.
+\end{faqpair}
+
+\begin{faqpair}{What dependencies exist on other systems?}\label{faq:dependencies}
+  The OpenAI chat completions request and response format, as implemented by
+  the endpoint the user chooses. \texttt{httpx}, already a Quarry dependency,
+  for the outbound call. The existing \texttt{SearchService}, authorization and
+  collection filtering inside \texttt{quarryd}, reused unchanged. On the client
+  side, the menu bar app's existing \texttt{QuarryClient} and detail view. No
+  new third-party service is required: a user with no model configured sees no
+  change.
+\end{faqpair}
+
+\begin{faqpair}{What is the delivery order?}\label{faq:timeline}
+  (1) Daemon: configuration, the OpenAI-compatible client, the answer route
+  with citation checking, the OpenAPI update and tests against a fake endpoint.
+  (2) CLI: \texttt{quarry find -{}-answer}. (3) Eval spike and two weeks of use
+  (\faqref{faq:next-step}); this gates the next phase. (4) Menu bar: the Answer
+  action, the answer card with clickable citations, and the endpoint host
+  label. (5) Streaming, if the measured latency calls for it. If scope
+  compresses, streaming is cut first, then the CLI flag; the daemon route and
+  the menu bar card are the feature.
+\end{faqpair}
+
+\begin{faqpair}{What breaks first if it is used heavily?}\label{faq:scaling}
+  The model endpoint. Each answer is one search plus one model call, so the
+  daemon's own load barely changes, but a local model serves one request at a
+  time and a hosted one has rate limits. The daemon needs a timeout on the model
+  call, a cap on concurrent answer requests, and an error the client can show
+  without blocking search.
+\end{faqpair}
+
+\subsubsection*{Business}
+
+\begin{faqpair}{What is the revenue model?}\label{faq:revenue}
+  None. Quarry is free and MIT-licensed. The value to Punt Labs is a menu bar
+  app that is useful on its own for quick lookups, which brings users to the
+  rest of Quarry. Punt Labs pays no model costs: the user's endpoint and key
+  are used for every call.
+\end{faqpair}
+
+\begin{faqpair}{How will we measure success?}\label{faq:metrics}
+  Quarry's local recall telemetry already records searches; answer requests
+  would be recorded the same way, on the user's machine only. (1) Answer
+  requests as a share of searches, per active user per week; below 10\% after
+  the two-week trial suggests users prefer passages. (2) Share of answers that
+  say the passages do not cover the question; above 30\% points at retrieval,
+  not synthesis. (3) Citation clicks per answer, a sign that users check
+  answers. (4) Median time to a full answer for local and hosted models; above
+  five seconds makes streaming a must. (5) Model call error rate.
+\end{faqpair}
+
+\begin{faqpair}{Why now?}\label{faq:why-now}
+  Three things are in place. The common local model servers expose the same
+  OpenAI-compatible
+  API~\cite{ollama2026openai,lmstudio2026openai,llamacpp2026server}, so one
+  client covers local and hosted models. Haiku-class models answer a
+  4{,}000-token question for about half a cent~\cite{anthropic2026pricing}. And
+  Quarry is now daemon-first, with every client going through \texttt{quarryd},
+  so a feature added there reaches the menu bar app, the CLI and remote
+  connections at once.
+\end{faqpair}
+
+\begin{faqpair}{What are we not building?}\label{faq:not-building}
+  Multi-turn chat, a synthesis tool in MCP, a model bundled inside Quarry,
+  model settings in the menu bar app, and answers that run on every keystroke.
+  The Feature Appendix lists each with its reason.
+\end{faqpair}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FOUR RISKS ASSESSMENT
+% ══════════════════════════════════════════════════════════════════════════════
+
+\newpage
+\section*{Risk Assessment}
+
+\renewcommand{\arraystretch}{1.6}
+\begin{tabularx}{\textwidth}{@{} l l X @{}}
+\toprule
+\textbf{\color{SectionBlue}Risk} & \textbf{\color{SectionBlue}Rating} & \textbf{\color{SectionBlue}Assessment} \\
+\midrule
+Value       & \textcolor{RiskAmber}{Medium} & Demand evidence is the author's own use (\faqref{faq:evidence}). The two-week \texttt{-{}-answer} trial is the test, and it runs before the menu bar work. \\
+Usability   & \textcolor{RiskAmber}{Medium} & One keystroke to use, but setup asks the user to choose and run a model and edit configuration. Users without a model see no change. \\
+Feasibility & \textcolor{RiskAmber}{Medium} & The plumbing is one route and one HTTP call over existing search. Answer quality and latency from small local models are unmeasured (\faqref{faq:tech-risks}). \\
+Viability   & \textcolor{RiskGreen}{Low}    & No cost to Punt Labs; users pay their own model costs. Main exposure is a shared remote daemon spending its owner's tokens. \\
+\bottomrule
+\end{tabularx}
+\renewcommand{\arraystretch}{1.0}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FEATURE APPENDIX
+% ══════════════════════════════════════════════════════════════════════════════
+
+\newpage
+\section*{Feature Appendix}
+
+\subsection*{Must Do}
+
+\begin{enumerate}[nosep,leftmargin=2.5em]
+  \featureitem{Answer route in \texttt{quarryd}}{a \texttt{/v1} route separate from search that reuses \texttt{SearchService}, authorization and collection filtering, and returns the answer with the results it cites}\label{feat:route}
+  \featureitem{OpenAI-compatible client}{one chat completions call over \texttt{httpx} with a timeout and a concurrency cap; works with Ollama, LM Studio, llama.cpp and hosted endpoints}\label{feat:client}
+  \featureitem{Off until configured}{endpoint URL, model and key come from daemon configuration; with none set, the route reports ``not configured'' and the daemon's status tells clients to hide the feature}\label{feat:config}
+  \featureitem{Grounded prompt and citation check}{numbered passages, answer-only-from-sources instructions, an explicit ``not covered'' reply, and server-side removal of citation numbers that match no result}\label{feat:grounding}
+  \featureitem{Endpoint disclosure}{every answer names the endpoint host that wrote it, and clients display it}\label{feat:disclosure}
+  \featureitem{Menu bar Answer card}{an explicit Command-Return or button trigger, a card above the results, clickable citations that open the existing detail view, and cancellation when the query changes}\label{feat:menubar}
+\end{enumerate}
+
+\subsection*{Should Do}
+
+\begin{enumerate}[nosep,leftmargin=2.5em]
+  \featureitem{\texttt{quarry find -{}-answer}}{the CLI surface, cheap once the route exists, and the vehicle for the validation trial}\label{feat:cli}
+  \featureitem{Answer quality eval}{run Quarry's eval fixtures through candidate models and score citation correctness, to choose a recommended default}\label{feat:eval}
+  \featureitem{Platform secret lookup}{read the model key from the macOS Keychain or \texttt{pass} so it need not sit in a file the daemon reads}\label{feat:secrets}
+  \featureitem{Answer telemetry}{record answer requests, ``not covered'' replies and latency in Quarry's local recall telemetry}\label{feat:telemetry}
+  \featureitem{Streaming}{show the answer as it is written, if measured latency makes waiting noticeable}\label{feat:streaming}
+\end{enumerate}
+
+\subsection*{Won't Do}
+
+\begin{enumerate}[nosep,leftmargin=2.5em]
+  \featureitem{Synthesis in MCP}{the MCP caller is already a model; a pre-written answer costs it tokens and hides the passages it reasons over}\label{feat:no-mcp}
+  \featureitem{A bundled generative model}{gigabytes of download and memory in an always-on daemon, CPU-only on macOS, and a sampling loop to own, when local servers already exist (\faqref{faq:why-not-bundled})}\label{feat:no-bundle}
+  \featureitem{Model settings in the menu bar app}{keys and endpoints belong to the daemon that makes the call; the app stays a thin client}\label{feat:no-app-config}
+  \featureitem{Answers on every keystroke}{search-as-you-type would fire a model call for every half-typed query}\label{feat:no-auto}
+  \featureitem{Multi-turn chat}{follow-up questions turn a lookup tool into a chat client, a different product with its own state and UI}\label{feat:no-chat}
+  \featureitem{Native, non-OpenAI provider APIs}{one request format keeps the client small; providers without an OpenAI-compatible endpoint can be reached through a gateway}\label{feat:no-native}
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% REFERENCES
+% ══════════════════════════════════════════════════════════════════════════════
+
+\newpage
+\printbibliography[title={References}]
+
+\end{document}
