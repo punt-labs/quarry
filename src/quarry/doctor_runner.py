@@ -31,12 +31,16 @@ class CheckEntry:
     ``required`` is what a check that *crashes* counts as: the same as the
     result it would have returned, so a crash never downgrades a required check.
     ``call`` returns ``None`` for a diagnostic that has nothing to say.
+    ``needs_home`` marks a check that reads something under the home directory:
+    with no home it is not run, because the Home check already reports that one
+    fault and a second line for the same cause would count it twice.
     """
 
     name: str
     # None: the diagnostic has nothing to report
     call: Callable[[], CheckResult | None]
     required: bool = False
+    needs_home: bool = False
 
 
 @final
@@ -85,7 +89,10 @@ class CheckRunner:
     @classmethod
     def run(cls, entries: Iterable[CheckEntry]) -> list[CheckResult]:
         """Run every entry in order; return the results that have something to say."""
-        results = [cls.attempt(entry) for entry in entries]
+        has_home = cls.home().passed
+        results = [
+            cls.attempt(entry) for entry in entries if has_home or not entry.needs_home
+        ]
         return [result for result in results if result is not None]
 
 
@@ -108,16 +115,25 @@ class SettingsChecks:
             raise RuntimeError(msg) from exc
 
     @staticmethod
+    def is_the_home(failure: BaseException | None) -> bool:  # None: end of the chain
+        """Return whether *failure* is, or was raised from, an unresolvable home."""
+        while failure is not None:
+            if isinstance(failure, HomeUnresolvedError):
+                return True
+            failure = failure.__cause__ or failure.__context__
+        return False
+
+    @staticmethod
     def entries(fts: Callable[[Path], CheckResult]) -> list[CheckEntry]:
         """Return the settings-dependent entries; *fts* is the index check."""
         try:
             settings = Settings()
         except Exception as exc:
-            if CheckRunner.home().passed is False:
-                return []  # the Home check reports it; the settings are not "invalid"
             logger.info(
                 "doctor: settings are invalid", exc_info=RedactedFailure.of(exc)
             )
+            if SettingsChecks.is_the_home(exc):
+                return []  # the Home check reports it; the settings are not "invalid"
             failed = CheckResult(
                 name="Settings",
                 passed=False,

@@ -640,6 +640,17 @@ class TestRegisterDeregister:
             result = harness.documents.register_directory(str(target))
         assert result.startswith("Error:")
 
+    @pytest.mark.parametrize("home", ["", "relative/home"])
+    def test_register_with_an_unusable_home_is_a_clean_error(
+        self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch, home: str
+    ) -> None:
+        monkeypatch.setenv("HOME", home)
+
+        result = harness.documents.register_directory("~/proj")
+
+        assert result.startswith("Error:")
+        assert "home directory" in result
+
     def test_deregister_unknown_is_clean_error(self, harness: _ToolHarness) -> None:
         result = harness.documents.deregister_directory("ghost")
         assert result.startswith("Error:")

@@ -218,20 +218,24 @@ class DaemonDiagnostics:
             context=pinned or cls._unverified_context(),
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
+        ca = QuarryHome.daemon_ca().name
         try:
             return cls._read_health(https)
         except ssl.SSLCertVerificationError as exc:
-            msg = (
-                f"the daemon's certificate does not match ca.crt ({exc.verify_message})"
-            )
+            reason = exc.verify_message or type(exc).__name__
+            msg = f"the daemon's certificate fails verification against {ca} ({reason})"
             raise DaemonCaError(msg) from exc
-        except ssl.SSLError as exc:
+        except (ssl.SSLError, ConnectionResetError) as exc:
             if pinned is not None:
+                tls_reason = exc.reason if isinstance(exc, ssl.SSLError) else None
+                reason = tls_reason or type(exc).__name__
                 msg = (
-                    "the daemon does not answer TLS although ca.crt is "
-                    f"installed ({exc.reason})"
+                    f"the daemon does not complete TLS although {ca} is installed "
+                    f"({reason})"
                 )
                 raise DaemonCaError(msg) from exc
+            if isinstance(exc, ConnectionResetError):
+                return None
             http_conn = http.client.HTTPConnection(
                 _HEALTH_HOST, port, timeout=_PROBE_TIMEOUT_SECONDS
             )
@@ -251,12 +255,21 @@ class DaemonDiagnostics:
                 return None
             body = response.read()
         except (OSError, http.client.HTTPException) as exc:
-            if isinstance(exc, ssl.SSLError):
-                raise  # a TLS handshake failure: let the HTTP fallback retry
+            if isinstance(exc, ssl.SSLError) or cls._reset_in_handshake(conn, exc):
+                raise  # a TLS handshake failure: the caller decides what it means
             return None
         finally:
             conn.close()
         return cls._parse_object(body)
+
+    @staticmethod
+    def _reset_in_handshake(conn: http.client.HTTPConnection, exc: Exception) -> bool:
+        """Return whether *exc* reset an HTTPS connection before TLS was up."""
+        return (
+            isinstance(exc, ConnectionResetError)
+            and isinstance(conn, http.client.HTTPSConnection)
+            and not isinstance(conn.sock, ssl.SSLSocket)
+        )
 
     @staticmethod
     def _pinned_context() -> ssl.SSLContext | None:  # None: no CA is installed

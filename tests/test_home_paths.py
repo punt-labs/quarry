@@ -95,3 +95,13 @@ def test_a_tilde_path_with_no_home_raises_the_typed_error() -> None:
 
 def test_a_path_without_a_tilde_is_returned_as_it_is() -> None:
     assert QuarryHome.expanded(Path("/srv/proj")) == Path("/srv/proj")
+
+
+@pytest.mark.parametrize("home", ["", "relative/home"])
+def test_a_tilde_path_with_an_empty_or_relative_home_raises_the_typed_error(
+    monkeypatch: pytest.MonkeyPatch, home: str
+) -> None:
+    monkeypatch.setenv("HOME", home)
+
+    with pytest.raises(HomeUnresolvedError):
+        QuarryHome.expanded(Path("~/proj"))

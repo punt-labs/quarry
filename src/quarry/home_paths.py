@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, cast, final
 
@@ -40,6 +41,9 @@ class QuarryHome:
         a path that moves with it, so neither is a home: every path built under it
         would land wherever the process happens to be.
         """
+        if os.environ.get("HOME") == "":  # set but empty: Path.home() says "/"
+            msg = "the home directory is empty"
+            raise HomeUnresolvedError(msg)
         try:
             home = Path.home()
         except RuntimeError as exc:
@@ -50,14 +54,18 @@ class QuarryHome:
             raise HomeUnresolvedError(msg)
         return home
 
-    @staticmethod
-    def expanded(path: Path) -> Path:
-        """Return *path* with a leading ``~`` expanded, or raise on an unknown home.
+    @classmethod
+    def expanded(cls, path: Path) -> Path:
+        """Return *path* with a leading ``~`` expanded, or raise on an unusable home.
 
         ``Path.expanduser`` raises a bare ``RuntimeError`` for a ``~`` it cannot
-        resolve; user input goes through here so the entry points see the typed
-        error and print one line.
+        resolve, and quietly leaves an empty or relative home to land wherever
+        the process is; a path that starts with ``~`` goes through :meth:`home`'s
+        checks first, so every such home is the one typed error and the entry
+        points print one line.
         """
+        if path.parts[:1] == ("~",):
+            cls.home()
         try:
             return path.expanduser()
         except RuntimeError as exc:

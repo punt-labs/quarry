@@ -9,7 +9,9 @@ and the run dir are mocked.
 from __future__ import annotations
 
 import resource
+import socket
 import ssl
+import struct
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -477,7 +479,7 @@ class TestInstalledCaIsNeverBypassed:
             result = DaemonDiagnostics.reachability()
 
         assert result.passed is False
-        assert "does not match ca.crt" in result.message
+        assert "fails verification against ca.crt" in result.message
 
     def test_a_plaintext_listener_answering_ready_fails_the_check(
         self, tmp_path: Path
@@ -492,7 +494,7 @@ class TestInstalledCaIsNeverBypassed:
             result = DaemonDiagnostics.reachability()
 
         assert result.passed is False
-        assert "does not answer TLS although ca.crt is installed" in result.message
+        assert "does not complete TLS although ca.crt is installed" in result.message
 
     def test_a_certificate_signed_by_the_ca_passes(self, tmp_path: Path) -> None:
         installed = generate_ca()
@@ -519,3 +521,68 @@ class TestInstalledCaIsNeverBypassed:
             result = DaemonDiagnostics.reachability()
 
         assert result.passed is True
+
+
+@contextmanager
+def _resetting_listener() -> Generator[int]:
+    """Listen on the loopback and reset every connection the moment it is made."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.settimeout(0.05)
+    done = threading.Event()
+
+    def reset() -> None:
+        while not done.is_set():
+            try:
+                conn, _ = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            conn.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            conn.close()
+
+    thread = threading.Thread(target=reset, daemon=True)
+    thread.start()
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        done.set()
+        thread.join()
+        listener.close()
+
+
+@pytest.mark.network
+class TestAResetHandshake:
+    def test_with_a_ca_installed_it_is_a_tls_fault_not_not_ready(
+        self, tmp_path: Path
+    ) -> None:
+        installed = generate_ca()
+        with (
+            _resetting_listener() as port,
+            _run_dir_at(tmp_path),
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is False
+        assert "does not complete TLS although ca.crt is installed" in result.message
+
+    def test_without_a_ca_it_is_just_not_ready(self, tmp_path: Path) -> None:
+        with (
+            _resetting_listener() as port,
+            _run_dir_at(tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.daemon_ca",
+                return_value=tmp_path / "ca.crt",
+            ),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is False
+        assert "not ready" in result.message

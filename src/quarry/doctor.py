@@ -82,18 +82,6 @@ def _check_python_version() -> CheckResult:
     )
 
 
-def _check_data_directory() -> CheckResult:
-    data_dir = InstallDirectories.data_dir()
-    is_usable = data_dir.exists() and os.access(data_dir, os.W_OK)
-    if is_usable:
-        message = str(data_dir)
-    elif data_dir.exists():
-        message = f"{data_dir} exists but is not writable"
-    else:
-        message = f"{data_dir} does not exist (run 'quarry install')"
-    return CheckResult(name="Data directory", passed=is_usable, message=message)
-
-
 def _check_embedding_model() -> CheckResult:
     # Imported here, inside a try: a broken install is a failed check, not an
     # import error that takes the whole report down.
@@ -428,16 +416,22 @@ def _run_checks() -> list[CheckResult]:
     entries = [
         CheckEntry("Home directory", CheckRunner.home, required=True),
         CheckEntry("Python", _check_python_version, required=True),
-        CheckEntry("Data directory", _check_data_directory, required=True),
-        CheckEntry("Embedding model", _check_embedding_model, required=True),
+        CheckEntry(
+            "Data directory", InstallDirectories.check, required=True, needs_home=True
+        ),
+        CheckEntry(
+            "Embedding model", _check_embedding_model, required=True, needs_home=True
+        ),
         CheckEntry("ONNX provider", InferenceDiagnostics.onnx_provider),
         CheckEntry("Core imports", _check_imports, required=True),
-        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().check()),
-        CheckEntry("Claude Desktop MCP", lambda: ClaudeDesktopMcp().check()),
-        CheckEntry("Daemon", DaemonDiagnostics.reachability),
-        CheckEntry("Serve token", DaemonDiagnostics.serve_token),
-        CheckEntry("Fd headroom", DaemonDiagnostics.fd_headroom),
-        CheckEntry("Stop timeout", DaemonDiagnostics.stop_timeout),
+        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().check(), needs_home=True),
+        CheckEntry(
+            "Claude Desktop MCP", lambda: ClaudeDesktopMcp().check(), needs_home=True
+        ),
+        CheckEntry("Daemon", DaemonDiagnostics.reachability, needs_home=True),
+        CheckEntry("Serve token", DaemonDiagnostics.serve_token, needs_home=True),
+        CheckEntry("Fd headroom", DaemonDiagnostics.fd_headroom, needs_home=True),
+        CheckEntry("Stop timeout", DaemonDiagnostics.stop_timeout, needs_home=True),
         *SettingsChecks.entries(_check_fts_health),
     ]
     with _quiet_logging():

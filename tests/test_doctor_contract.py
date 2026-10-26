@@ -145,9 +145,7 @@ class TestInstallAlwaysCompletes:
 
         assert code == 1
         out = capsys.readouterr().out
-        assert (
-            "Failed to locate the data and logs directories: HomeUnresolvedError" in out
-        )
+        assert "Failed to create the data directory: HomeUnresolvedError" in out
 
     def test_the_fp16_step_says_why_it_was_skipped(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
@@ -589,7 +587,7 @@ pwd.getpwuid = missing
 
 
 def _run_without_a_home(
-    body: str, *, roots: Path | None = None
+    body: str, *, roots: Path | None = None, env_extra: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run *body* in a fresh interpreter with no HOME and no passwd entry.
 
@@ -607,6 +605,7 @@ def _run_without_a_home(
     if roots is not None:
         env["QUARRY_ROOT"] = str(roots / "data")
         env["QUARRY_LOG_DIR"] = str(roots / "logs")
+    env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, "-c", _NO_HOME_PRELUDE + textwrap.dedent(body)],
         capture_output=True,
@@ -765,7 +764,7 @@ def test_install_runs_its_real_steps_without_a_home(
     if with_roots:
         assert (tmp_path / "data" / "default" / "lancedb").is_dir()
     else:
-        assert "Failed to locate the data and logs directories" in done.stdout
+        assert "Failed to create the data directory" in done.stdout
 
 
 def test_a_command_prints_one_clean_line_when_only_the_roots_are_set(
@@ -881,3 +880,27 @@ def test_a_working_directory_without_permission_says_so(
     check_environment()
 
     assert "the current directory is not accessible" in capsys.readouterr().out
+
+
+def test_a_missing_home_is_exactly_one_doctor_issue() -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"])
+
+    failing = [line for line in done.stdout.splitlines() if "✗" in line]
+    assert "1 issue(s) found" in done.stdout, done.stdout
+    assert len(failing) == 1, failing
+    assert "Home directory" in failing[0]
+
+
+def test_a_malformed_setting_is_reported_beside_the_missing_home(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS["quarry doctor"],
+        roots=tmp_path,
+        env_extra={"INGEST_DRAIN_TIMEOUT_S": "not-a-number"},
+    )
+
+    failing = [line for line in done.stdout.splitlines() if "✗" in line]
+    assert "2 issue(s) found" in done.stdout, done.stdout
+    assert any("Home directory" in line for line in failing)
+    assert any("invalid settings (ingest_drain_timeout_s" in line for line in failing)
