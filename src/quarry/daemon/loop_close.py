@@ -45,8 +45,20 @@ class LoopClose:
         stores = [s for w in self._workers for s in w.unobserved_stores()]
         await self._wait_for(stores, deadline)
         removing = await self._drain(deadline)
-        stragglers = [s for w in self._workers for s in w.straggling_stores()]
-        self._report([s for s in stores if s.is_unobserved] + stragglers, removing)
+        self._report(self._running(), removing)
+
+    def _running(self) -> list[StoreRun]:
+        """Return every store still running, each once, as of now.
+
+        Asked at report time, so a store detached after the wait began is named
+        too; one that is both unobserved and a straggler is named once.
+        """
+        found: list[StoreRun] = []
+        for worker in self._workers:
+            for store in (*worker.unobserved_stores(), *worker.straggling_stores()):
+                if store not in found:
+                    found.append(store)
+        return found
 
     @staticmethod
     async def _wait_for(stores: list[StoreRun], deadline: float) -> None:

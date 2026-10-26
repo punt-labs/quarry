@@ -298,8 +298,8 @@ async def test_a_late_spool_that_raises_or_is_cancelled_is_logged_by_kind(
                 await abort.fail_in_flight(_job("a"))
             await asyncio.sleep(0.25)
 
-    assert "a late spool of a _Unit job for c failed" in caplog.text
-    assert "a late spool of a _Unit job for c was cancelled" in caplog.text
+    assert "a late spool of a _Unit job for c (task a) failed" in caplog.text
+    assert "a late spool of a _Unit job for c (task a) was cancelled" in caplog.text
     assert "late disk failure detail" not in caplog.text
     # The write that raised is settled as not written; the one whose future was
     # cancelled may still land, so that job stays unfinished.

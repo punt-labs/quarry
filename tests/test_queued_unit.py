@@ -36,6 +36,6 @@ def test_a_failure_is_logged_by_the_jobs_kind_and_collection_never_its_message(
     with caplog.at_level(logging.ERROR, logger="quarry.daemon"):
         unit.log_failure("spooling", RuntimeError("secret detail"))
 
-    assert "abort: spooling a _Unit job for notes failed" in caplog.text
+    assert "abort: spooling a _Unit job for notes (task t) failed" in caplog.text
     assert "RuntimeError" in caplog.text
     assert "secret detail" not in caplog.text

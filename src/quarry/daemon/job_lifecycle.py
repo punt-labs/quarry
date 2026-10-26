@@ -146,6 +146,16 @@ class JobLifecycle:
                 "failed": self.Withdrawn.FAILED,
             }.get(status, self.Withdrawn.STARTED)
 
+    @property
+    def kind(self) -> str:
+        """Return the kind of the task this lifecycle moves."""
+        return self._state.kind
+
+    @property
+    def task_id(self) -> str:
+        """Return the id of the task this lifecycle moves."""
+        return self._state.task_id
+
     def settle_stored(self, results: Mapping[str, object]) -> bool:
         """Complete the job with *results*; return whether it was.
 

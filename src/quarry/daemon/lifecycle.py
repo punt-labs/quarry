@@ -16,6 +16,16 @@ class Lifecycle(Protocol):
     so what records the end takes whichever lifecycle fits the task's kind.
     """
 
+    @property
+    def kind(self) -> str:
+        """Return the kind of the task this lifecycle moves."""
+        ...
+
+    @property
+    def task_id(self) -> str:
+        """Return the id of the task this lifecycle moves."""
+        ...
+
     def settle_stored(self, results: Mapping[str, object]) -> bool:
         """Complete the task with *results*; return whether it was."""
         ...

@@ -32,36 +32,34 @@ class Terminal:
     same either way.
     """
 
-    __slots__ = ("_lifecycle", "_state")
+    __slots__ = ("_lifecycle",)
 
     _lifecycle: Lifecycle
-    _state: TaskState
 
-    def __new__(cls, state: TaskState, lifecycle: Lifecycle) -> Self:
+    def __new__(cls, lifecycle: Lifecycle) -> Self:
         self = super().__new__(cls)
-        self._state = state
         self._lifecycle = lifecycle
         return self
 
     @classmethod
     def for_job(cls, state: TaskState) -> Self:
         """Return the terminal of a queued job's body."""
-        return cls(state, JobLifecycle(state))
+        return cls(JobLifecycle(state))
 
     @classmethod
     def for_task(cls, state: TaskState) -> Self:
         """Return the terminal of a polled task that is not a queued job."""
-        return cls(state, TaskLifecycle(state))
+        return cls(TaskLifecycle(state))
 
     @property
     def kind(self) -> str:
         """Return the kind of task this terminal records."""
-        return self._state.kind
+        return self._lifecycle.kind
 
     @property
     def task_id(self) -> str:
         """Return the id of the task this terminal records."""
-        return self._state.task_id
+        return self._lifecycle.task_id
 
     def settle_stored(self, results: Mapping[str, object]) -> bool:
         """Complete the task with *results*; return whether it was."""
@@ -87,8 +85,9 @@ class Terminal:
             raise
         except Exception as exc:
             logger.error(
-                "Background %s failed",
-                self._state.kind,
+                "Background %s (task %s) failed",
+                self.kind,
+                self.task_id,
                 exc_info=RedactedFailure.of(exc),
             )
             self._lifecycle.settle_failed(FailureReason.of(exc))

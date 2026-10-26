@@ -547,7 +547,10 @@ async def test_a_respool_that_dies_is_retrieved_and_named_with_its_job(
         await world.landed(fragile)
         await asyncio.sleep(0.1)
 
-    assert "abort: respooling a ScrubbedIngestJob job for c1 failed" in caplog.text
+    assert (
+        "abort: respooling a ScrubbedIngestJob job for c1 (task fragile) failed"
+        in caplog.text
+    )
     assert "respool exploded" not in caplog.text  # the cause is redacted
 
 
@@ -565,3 +568,29 @@ async def test_a_worker_names_the_store_of_the_job_it_has_not_let_go(
     assert [store.describe() for store in held] == [
         "remember ScrubbedIngestJob for c4 (task held)"
     ]
+
+
+async def _decide_cancelled(self: JobAbort, item: QueuedUnit) -> None:
+    del self, item
+    raise asyncio.CancelledError
+
+
+async def test_a_respool_that_is_cancelled_is_named_with_its_job(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    fragile = world.admit("cancelled", commits=True)
+    await world.running("cancelled")
+    await world.abort()
+
+    with (
+        patch.object(JobAbort, "_decide", _decide_cancelled),
+        caplog.at_level(logging.WARNING, logger="quarry.daemon"),
+    ):
+        fragile.store.land(RefusalError("insert failed"))
+        await world.landed(fragile)
+        await asyncio.sleep(0.1)
+
+    assert (
+        "abort: respooling a ScrubbedIngestJob job for c1 (task cancelled) "
+        "was cancelled"
+    ) in caplog.text

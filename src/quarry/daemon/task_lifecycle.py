@@ -33,6 +33,16 @@ class TaskLifecycle:
         self._state = state
         return self
 
+    @property
+    def kind(self) -> str:
+        """Return the kind of the task this lifecycle moves."""
+        return self._state.kind
+
+    @property
+    def task_id(self) -> str:
+        """Return the id of the task this lifecycle moves."""
+        return self._state.task_id
+
     def settle_stored(self, results: Mapping[str, object]) -> bool:
         """Complete the task with *results*; always done, so always ``True``."""
         with self._state.claim:

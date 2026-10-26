@@ -202,3 +202,40 @@ async def test_the_wait_never_cancels_the_store_it_waits_for() -> None:
     gate.open()
     await asyncio.wait_for(store.observed(), 5)
     assert store.outcome() == Settlement.done({"chunks": 1})
+
+
+async def test_a_store_detached_after_the_wait_began_is_still_named(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gate, other_gate = _Gate(), _Gate()
+    store, waited_for = _store(gate, "late"), _store(other_gate, "waited")
+    waited_for.detach()  # the wait set: something to wait on while "late" is detached
+    worker = _Worker(stores=(waited_for, store))
+    asyncio.get_running_loop().call_later(0.02, store.detach)
+
+    with caplog.at_level(logging.WARNING):
+        await _close(worker).run(await _deadline(0.1))
+    gate.open()
+    other_gate.open()
+
+    assert _named(caplog, "(task late): store still running") != []
+
+
+async def test_a_store_both_unobserved_and_straggling_is_named_exactly_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gate = _Gate()
+    store = _store(gate, "both")
+    store.detach()
+    worker = _Worker(stores=(store,), stragglers=(store,))
+
+    with caplog.at_level(logging.WARNING):
+        await _close(worker).run(await _deadline(0.05))
+    gate.open()
+
+    assert _named(caplog, "still running") == [
+        (
+            "remember _Job for c9 (task both): store still running at shutdown; "
+            "its spool record (if any) may duplicate stored content"
+        )
+    ]

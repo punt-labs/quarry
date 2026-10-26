@@ -37,7 +37,7 @@ def test_an_arbitrary_exception_records_only_its_class(
 
     assert (state.status, state.error) == ("failed", "internal error: RuntimeError")
     [record] = caplog.records
-    assert record.getMessage() == "Background sync failed"
+    assert record.getMessage() == "Background sync (task t-1) failed"
     assert record.exc_info is not None
     assert record.exc_info[1] is not secret  # the stand-in names the class only
     assert str(record.exc_info[1]) == "RuntimeError"
@@ -182,6 +182,14 @@ class _Spy:
         return self
 
     @property
+    def kind(self) -> str:
+        return "sync"
+
+    @property
+    def task_id(self) -> str:
+        return "t-1"
+
+    @property
     def moves(self) -> list[str]:
         return list(self._moves)
 
@@ -202,7 +210,7 @@ class _Spy:
 
 def test_a_terminal_drives_whatever_lifecycle_it_is_given() -> None:
     spy = _Spy()
-    terminal = Terminal(_state(), spy)
+    terminal = Terminal(spy)
 
     with pytest.raises(asyncio.CancelledError), terminal.recording():
         _fail(asyncio.CancelledError())
@@ -215,7 +223,7 @@ def test_a_terminal_drives_whatever_lifecycle_it_is_given() -> None:
 
 def test_a_terminal_hands_the_settle_moves_to_its_lifecycle() -> None:
     spy = _Spy()
-    terminal = Terminal(_state(), spy)
+    terminal = Terminal(spy)
 
     stored = terminal.settle_stored({"chunks": 1})
     failed = terminal.settle_failed("refused")

@@ -116,11 +116,7 @@ class AbortRecord:
         elif term is not AbortTerm.UNFINISHED:
             return
         elif spooling.cancelled():
-            logger.warning(
-                "abort: a late spool of a %s job for %s was cancelled",
-                type(item.job).__name__,
-                item.job.collection,
-            )
+            item.log_cancelled("a late spool of")
         elif (failure := spooling.exception()) is not None:
             item.log_failure("a late spool of", failure)
             outcome = AbortReason.NOT_WRITTEN

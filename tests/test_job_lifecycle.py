@@ -143,16 +143,16 @@ def test_a_job_past_its_commit_cannot_be_withdrawn() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "verdict"),
+    ("status", "expected"),
     [("completed", _Withdrawn.STORED), ("failed", _Withdrawn.FAILED)],
 )
 def test_a_finished_job_is_reported_as_it_finished(
-    status: TaskStatus, verdict: JobLifecycle.Withdrawn
+    status: TaskStatus, expected: JobLifecycle.Withdrawn
 ) -> None:
     state = _state(status)
 
     verdict = JobLifecycle(state).withdraw()
-    assert verdict is verdict
+    assert verdict is expected
     assert state.status == status
 
 
@@ -516,7 +516,7 @@ def test_a_write_without_the_claim_raises_and_changes_nothing() -> None:
 def test_a_cancel_reads_the_stores_outcome_under_the_claim(
     status: TaskStatus,
 ) -> None:
-    _state, store = _cancelled(status, Settlement.failed("no"))
+    _, store = _cancelled(status, Settlement.failed("no"))
 
     assert store.reads_under_the_claim == [True]
 

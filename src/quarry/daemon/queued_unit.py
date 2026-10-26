@@ -24,11 +24,22 @@ class QueuedUnit:
     state: TaskState
 
     def log_failure(self, what: str, failure: BaseException) -> None:
-        """Log that *what* failed for this job, by its kind and collection only."""
+        """Log that *what* failed for this job: its kind, collection and task only."""
         logger.error(
-            "abort: %s a %s job for %s failed",
+            "abort: %s a %s job for %s (task %s) failed",
             what,
             type(self.job).__name__,
             self.job.collection,
+            self.state.task_id,
             exc_info=RedactedFailure.of(failure),
+        )
+
+    def log_cancelled(self, what: str) -> None:
+        """Log that *what* was cancelled for this job: its kind, collection and task."""
+        logger.warning(
+            "abort: %s a %s job for %s (task %s) was cancelled",
+            what,
+            type(self.job).__name__,
+            self.job.collection,
+            self.state.task_id,
         )

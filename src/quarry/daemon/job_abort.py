@@ -131,7 +131,9 @@ class JobAbort:
     def _respooled(self, item: QueuedUnit, respooling: asyncio.Future[None]) -> None:
         """Done callback: forget the respool, and say so if it died of anything."""
         self._respooling.discard(respooling)
-        if not respooling.cancelled() and (failure := respooling.exception()):
+        if respooling.cancelled():
+            item.log_cancelled("respooling")
+        elif failure := respooling.exception():
             item.log_failure("respooling", failure)
 
     async def await_spool(
