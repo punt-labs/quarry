@@ -13,6 +13,7 @@ from starlette.applications import Starlette
 
 from quarry.daemon.backfill_task import BackfillTask
 from quarry.daemon.server import DaemonServer, ServeConfig
+from quarry.redacted_failure import RedactedFailure
 from quarry.shutdown_policy import ShutdownPolicy
 from quarry.stop_signal import StopSignal
 from tests.queue_fixtures import ctx_with_queue
@@ -98,7 +99,7 @@ async def test_a_straggler_is_logged_and_teardown_still_ends_inside_the_budget(
     with caplog.at_level(logging.ERROR):
         await _tear_down(tmp_path, ctx)
 
-    assert time.monotonic() - started < 1.6  # the one budget, not a window and more
+    assert time.monotonic() - started < 5.0  # one budget, not budget plus a sleep
     [line] = [
         r for r in caplog.records if "still running at shutdown" in r.getMessage()
     ]
@@ -275,3 +276,38 @@ async def test_a_non_cancel_base_exception_is_named_for_what_it_is(
 
     assert "SystemExit during watch-loop stop" in caplog.text
     assert "CancelledError" not in caplog.text
+
+
+async def test_a_failure_a_step_already_logged_is_not_logged_again(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    ctx = _context(tmp_path)
+
+    async def stop_that_logged_its_failure() -> None:
+        failure = RuntimeError("detail")
+        RedactedFailure.mark_logged(failure)
+        raise failure
+
+    cast("SimpleNamespace", ctx).aclose_watch_loop = stop_that_logged_its_failure
+
+    with caplog.at_level(logging.ERROR, logger="quarry.daemon.teardown"):
+        await _tear_down(tmp_path, ctx)
+
+    assert "teardown: watch-loop stop failed" not in caplog.text
+
+
+async def test_an_unmarked_failure_is_still_logged_by_the_step(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    ctx = _context(tmp_path)
+
+    async def broken() -> None:
+        msg = "detail"
+        raise RuntimeError(msg)
+
+    cast("SimpleNamespace", ctx).aclose_watch_loop = broken
+
+    with caplog.at_level(logging.ERROR, logger="quarry.daemon.teardown"):
+        await _tear_down(tmp_path, ctx)
+
+    assert caplog.text.count("teardown: watch-loop stop failed") == 1

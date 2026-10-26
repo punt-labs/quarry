@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from quarry import __version__
-from quarry.config import Settings
+from quarry.config import INGEST_DRAIN_MAX_S, INGEST_DRAIN_MIN_S, Settings
 
 
 class TestVersion:
@@ -196,10 +196,7 @@ class TestIngestDrainTimeout:
 
     @staticmethod
     def _bounds() -> tuple[float, float]:
-        metadata = Settings.model_fields["ingest_drain_timeout_s"].metadata
-        low = next(m.ge for m in metadata if hasattr(m, "ge"))
-        high = next(m.le for m in metadata if hasattr(m, "le"))
-        return low, high
+        return INGEST_DRAIN_MIN_S, INGEST_DRAIN_MAX_S
 
     @pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "0", "-1", "0.5"])
     def test_a_value_that_is_not_a_usable_budget_is_refused(
@@ -226,3 +223,11 @@ class TestIngestDrainTimeout:
             with monkeypatch.context() as scoped:
                 scoped.setenv("INGEST_DRAIN_TIMEOUT_S", str(bound))
                 assert Settings().ingest_drain_timeout_s == bound
+
+
+def test_the_field_enforces_exactly_the_named_bounds() -> None:
+    field = Settings.model_fields["ingest_drain_timeout_s"]
+    walked = {type(m).__name__: m for m in field.metadata}
+
+    assert walked["Ge"].ge == INGEST_DRAIN_MIN_S
+    assert walked["Le"].le == INGEST_DRAIN_MAX_S

@@ -179,3 +179,23 @@ def test_raising_sink_never_crashes_the_loop() -> None:
         assert len(sink.batches) == 2
 
     asyncio.run(_run())
+
+
+def test_a_feed_after_cancel_all_arms_nothing() -> None:
+    """An event already marshalled when the shutdown began must not re-arm a timer."""
+
+    async def _run() -> None:
+        sink = _Sink()
+        dispatcher = _dispatcher(sink)
+        dispatcher.feed(_KEY, FsEvent(Path("/r/a.md"), deleted=False))
+        dispatcher.cancel_all()
+
+        dispatcher.feed(_KEY, FsEvent(Path("/r/b.md"), deleted=False))
+        await asyncio.sleep(0.15)
+
+        assert dispatcher.pending_count() == 0
+        assert (
+            sink.batches == []
+        )  # nothing fired: the first was cancelled, the second refused
+
+    asyncio.run(_run())

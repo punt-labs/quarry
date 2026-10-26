@@ -323,9 +323,9 @@ class TestWriteEnvFile:
 
         with (
             patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.service.os.open", recording_open),
-            patch("quarry.service.os.fdopen", side_effect=OSError("injected")),
-            patch("quarry.service.os.close", recording_close),
+            patch("quarry.env_file.os.open", recording_open),
+            patch("quarry.env_file.os.fdopen", side_effect=OSError("injected")),
+            patch("quarry.env_file.os.close", recording_close),
             pytest.raises(OSError, match="injected"),
         ):
             _write_env_file("k1")
@@ -359,7 +359,7 @@ class TestWriteEnvFile:
 
         with (
             patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.service.os.open", recording),
+            patch("quarry.env_file.os.open", recording),
         ):
             _write_env_file("first")
             _write_env_file("second")
@@ -391,7 +391,7 @@ class TestWriteEnvFile:
 
         with (
             patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.service.os.fsync", fsync),
+            patch("quarry.env_file.os.fsync", fsync),
             caplog.at_level(logging.WARNING, logger="quarry.service"),
         ):
             _write_env_file("k1")  # does not raise
@@ -418,7 +418,7 @@ class TestWriteEnvFile:
         try:
             with (
                 patch("quarry.service._ENV_FILE", env_file),
-                patch("quarry.service.os.open", recording),
+                patch("quarry.env_file.os.open", recording),
             ):
                 _write_env_file("k1")
         finally:
@@ -439,7 +439,7 @@ class TestWriteEnvFile:
 
         with (
             patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.service.os.open", recording),
+            patch("quarry.env_file.os.open", recording),
         ):
             _write_env_file("k1")
 
@@ -467,7 +467,7 @@ class TestWriteEnvFile:
 
         with (
             patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.service.os.fsync", fsync),
+            patch("quarry.env_file.os.fsync", fsync),
             patch.object(type(env_file), "replace", replace),
         ):
             _write_env_file("k1")
@@ -481,7 +481,7 @@ class TestWriteEnvFile:
         env_file.write_text("OLD=1\n")
         with (
             patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.service.os.fsync", side_effect=OSError("injected")),
+            patch("quarry.env_file.os.fsync", side_effect=OSError("injected")),
             pytest.raises(OSError, match="injected"),
         ):
             _write_env_file("k1")
@@ -1106,8 +1106,8 @@ class TestLaunchdPlistAtomicWrite:
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
             patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
-            patch("quarry.service.os.fdopen", side_effect=OSError("injected")),
-            patch("quarry.service.os.close", side_effect=fake_close),
+            patch("quarry.env_file.os.fdopen", side_effect=OSError("injected")),
+            patch("quarry.env_file.os.close", side_effect=fake_close),
             pytest.raises(OSError, match="injected"),
         ):
             _launchd_install()
@@ -1529,4 +1529,4 @@ class TestServiceStopTimeout:
     def test_the_installed_path_is_the_one_the_service_writes(self) -> None:
         expected = _LAUNCHD_PLIST if platform.system() == "Darwin" else _SYSTEMD_UNIT
 
-        assert InstalledStopTimeout.installed().path == expected
+        assert InstalledStopTimeout.installed().verdict(30.0).path == expected

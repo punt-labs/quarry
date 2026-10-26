@@ -4,9 +4,9 @@ Captures, remembers, and URL ingests arrive in bursts (several sessions compact
 at once, a web-fetch lands beside a compaction, a backfill replays a directory).
 Each is an independent LanceDB delete-then-insert against a shared ONNX embed
 session.  Unbounded, a burst oversubscribes the cores and interleaves two
-same-document overwrites so both chunk sets survive (DES-042 §2.1).
+same-document overwrites so both chunk sets survive.
 
-This module supplies the missing top layer above DES-034's op-level ``_write_lock``
+This module supplies the missing top layer above the op-level ``_write_lock``
 and single-consumer ``ProgressiveIndexer``: exactly one in-flight
 ``DocumentStreamer.insert`` caller per collection (a :class:`CollectionWorker`), and
 at most ``EMBED_CONCURRENCY_CEILING`` embed jobs anywhere (a shared semaphore).
@@ -14,7 +14,7 @@ Admission is a non-blocking bounded gate — a full queue is a 503, never a bloc
 hook (I-NOBLOCK).  The route key is client-controlled, so the resident worker map
 is itself bounded: idle workers are reaped and the map is capped.  The routing
 key is a :class:`RouteKey` — ``(database, collection)`` — so the always-on watch
-loop (DES-045) can feed jobs for every database in the roster onto the same queue
+loop can feed jobs for every database in the roster onto the same queue
 without two databases' same-named collections ever sharing a worker.
 """
 
@@ -24,6 +24,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from quarry.daemon.abort_reason import AbortTally
 from quarry.daemon.queue_bounds import QueueGate, WorkerPool
 from quarry.redacted_failure import RedactedFailure
 from quarry.shutdown_policy import ShutdownPolicy
@@ -38,9 +39,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Hard ceiling on how many embed jobs run at once, across every collection.
-# DES-032/DES-042: >1 buys no matmul parallelism (capture jobs share one ingest
+# >1 buys no matmul parallelism (capture jobs share one ingest
 # ONNX session and serialize on its ORT mutex regardless) and re-adds the
-# >2-thread arena contention DES-032 tuned the per-job thread caps to avoid.
+# >2-thread arena contention the per-job thread caps were tuned to avoid.
 # One line widens the ceiling for an operator who accepts that trade; the
 # ``ingest_embed_concurrency`` setting is clamped to it so an env override cannot
 # exceed what this constant permits.
@@ -83,8 +84,7 @@ class IngestQueue:
         configured = ctx.settings.ingest_embed_concurrency
         if configured > EMBED_CONCURRENCY_CEILING:
             logger.warning(
-                "ingest_embed_concurrency=%d exceeds the hard ceiling %d; "
-                "clamping (see DES-032)",
+                "ingest_embed_concurrency=%d exceeds the hard ceiling %d; clamping",
                 configured,
                 EMBED_CONCURRENCY_CEILING,
             )
@@ -153,12 +153,9 @@ class IngestQueue:
                     exc_info=RedactedFailure.of(failure),
                 )
         logger.warning(
-            "ingest queue: drain did not finish within %.1fs; aborted %d job(s): "
-            "%d spooled for recovery, %d spooled but not recoverable%s",
+            "ingest queue: drain did not finish within %.1fs; aborted %s%s",
             window_s,
-            sum(worker.aborted for worker in workers),
-            sum(worker.spooled for worker in workers),
-            sum(worker.unrecoverable for worker in workers),
+            AbortTally.total(worker.tally for worker in workers).summary(),
             f"; {len(pending)} worker(s) did not stop within {self.ABORT_WAIT_S:g}s"
             if pending
             else "",

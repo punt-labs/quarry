@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, cast, final
 
-from quarry.daemon.abort_reason import Aborted, AbortReason
+from quarry.daemon.abort_reason import Aborted, AbortReason, AbortTally
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 
 if TYPE_CHECKING:
@@ -121,3 +121,49 @@ def test_a_recoverable_record_is_spooled_and_recoverable() -> None:
     outcome = _outcome(_Spool(ok=True), _Unit(record))
 
     assert (outcome.spooled, outcome.recoverable) == (True, True)
+
+
+def test_a_failed_spool_write_is_lost_and_nothing_else_is_claimed() -> None:
+    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
+
+    outcome = _outcome(_Spool(ok=False), _Unit(record))
+
+    assert (outcome.lost, outcome.spooled, outcome.recoverable) == (True, False, False)
+
+
+def test_no_other_outcome_is_lost() -> None:
+    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
+
+    assert not _outcome(_Spool(ok=True), _Unit(record)).lost
+    assert not _outcome(_Spool(), _Unit(None)).lost
+    assert not _outcome(_Spool(), _Rerunnable()).lost
+
+
+def test_a_tally_counts_each_aborted_job_exactly_once() -> None:
+    tally = AbortTally()
+    for outcome in (
+        Aborted("a", spooled=True, recoverable=True),
+        Aborted("b", spooled=True),
+        Aborted("c", lost=True),
+        Aborted("d"),
+    ):
+        tally.record(outcome)
+
+    assert tally.aborted == 4
+    assert tally.summary() == (
+        "4 job(s): 1 spooled for recovery, 1 spooled but not recoverable, "
+        "1 lost (spool write failed), 1 needed no spool"
+    )
+
+
+def test_tallies_combine_into_one_whose_terms_still_add_up() -> None:
+    first, second = AbortTally(), AbortTally()
+    first.record(Aborted("a", spooled=True, recoverable=True))
+    second.record(Aborted("b", lost=True))
+    second.record(Aborted("c"))
+
+    total = AbortTally.total([first, second])
+
+    assert total.aborted == 3
+    assert "1 spooled for recovery, 0 spooled but not recoverable" in total.summary()
+    assert "1 lost (spool write failed), 1 needed no spool" in total.summary()

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
+from unittest.mock import patch
 
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 
@@ -118,3 +120,23 @@ def test_distinct_records_get_distinct_filenames(tmp_path: Path) -> None:
     spool.write(SpoolRecord("remember", "c", "a", "one"))
     spool.write(SpoolRecord("remember", "c", "b", "two"))
     assert len(list((tmp_path / "spool").glob("remember-*.json"))) == 2
+
+
+def test_a_failed_write_is_logged_by_class_and_frames_never_its_message(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    spool = JobSpool(tmp_path / "spool")
+    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
+    detail = "/home/me/secret/path denied"
+
+    with (
+        patch.object(
+            JobSpool, "_atomic_write", side_effect=PermissionError(13, detail)
+        ),
+        caplog.at_level(logging.ERROR, logger="quarry.daemon.job_spool"),
+    ):
+        assert spool.write(record) is False
+
+    assert "failed to spool aborted remember job for c" in caplog.text
+    assert "PermissionError" in caplog.text
+    assert "secret" not in caplog.text

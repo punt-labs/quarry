@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.daemon.abort_reason import AbortReason
+from quarry.daemon.abort_reason import AbortReason, AbortTally
 from quarry.daemon.job_lifecycle import JobLifecycle
 
 if TYPE_CHECKING:
@@ -48,28 +48,24 @@ class CollectionWorker:
     """
 
     __slots__ = (
-        "_aborted",
         "_ctx",
         "_embed_gate",
         "_last_active",
         "_queue",
         "_release_admit",
         "_running",
-        "_spooled",
+        "_tally",
         "_task",
-        "_unrecoverable",
     )
 
-    _aborted: int
     _ctx: DaemonContext
     _embed_gate: asyncio.Semaphore
     _last_active: float
     _queue: asyncio.Queue[_Queued | None]
     _release_admit: Callable[[], None]
     _running: bool
-    _spooled: int
+    _tally: AbortTally
     _task: asyncio.Task[None]
-    _unrecoverable: int
 
     def __new__(
         cls,
@@ -83,7 +79,7 @@ class CollectionWorker:
         self._queue = asyncio.Queue()
         self._release_admit = release_admit
         self._running = False
-        self._aborted = self._spooled = self._unrecoverable = 0
+        self._tally = AbortTally()
         self._last_active = monotonic()
         # Start the resident consumer now; try_submit only ever runs inside a
         # request handler, so a running loop is guaranteed at creation.
@@ -149,28 +145,16 @@ class CollectionWorker:
                 self._release_admit()
 
     @property
-    def aborted(self) -> int:
-        """Return how many jobs this worker failed instead of running."""
-        return self._aborted
-
-    @property
-    def spooled(self) -> int:
-        """Return how many of those were spooled and can be recovered."""
-        return self._spooled
-
-    @property
-    def unrecoverable(self) -> int:
-        """Return how many were spooled but cannot be run again from the record."""
-        return self._unrecoverable
+    def tally(self) -> AbortTally:
+        """Return how this worker's aborted jobs ended."""
+        return self._tally
 
     def _fail(self, item: _Queued) -> None:
         """Fail *item* with the truthful reason, spooling it first if it needs it."""
         item.state.status = "failed"
         aborted = AbortReason.for_settings(self._ctx.settings).of(item.job)
         item.state.error = aborted.reason
-        self._aborted += 1
-        self._spooled += aborted.spooled and aborted.recoverable
-        self._unrecoverable += aborted.spooled and not aborted.recoverable
+        self._tally.record(aborted)
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""

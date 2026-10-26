@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Self, cast, final
 from unittest.mock import patch
 
 from quarry.daemon import ingest_queue as iq
+from quarry.daemon.abort_reason import Aborted, AbortTally
 from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.route_key import RouteKey
@@ -453,15 +454,14 @@ def test_a_drain_that_times_out_says_the_window_and_what_it_aborted(
     assert "0 spooled for recovery, 0 spooled but not recoverable" in (
         record.getMessage()
     )
+    assert "0 lost (spool write failed), 2 needed no spool" in record.getMessage()
 
 
 def test_the_wait_after_an_abort_is_bounded(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     class _Stubborn:
-        aborted = 1
-        spooled = 0
-        unrecoverable = 0
+        tally = AbortTally()
 
         def __init__(self) -> None:
             self.task: asyncio.Task[None] | None = None
@@ -798,9 +798,7 @@ def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     class _Dying:
-        aborted = 0
-        spooled = 0
-        unrecoverable = 0
+        tally = AbortTally()
 
         def abort(self) -> asyncio.Task[None]:
             async def dies() -> None:
@@ -819,3 +817,39 @@ def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
     assert "a worker task failed while aborting" in caplog.text
     assert "RuntimeError" in caplog.text
     assert "worker secret detail" not in caplog.text  # class and frames only
+
+
+def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Counted:
+        def __init__(self, outcomes: list[Aborted]) -> None:
+            self.tally = AbortTally()
+            for outcome in outcomes:
+                self.tally.record(outcome)
+
+        def abort(self) -> asyncio.Task[None]:
+            async def done() -> None:
+                return None
+
+            return asyncio.ensure_future(done())
+
+    async def _run() -> None:
+        queue = _make_queue(concurrency=1)
+        recoverable = Aborted("r", spooled=True, recoverable=True)
+        unrecoverable = Aborted("u", spooled=True)
+        lost = Aborted("l", lost=True)
+        none = Aborted("n")
+        workers = [
+            _Counted([recoverable, recoverable, unrecoverable, lost, none]),
+            _Counted([lost, lost, lost]),
+        ]
+        with caplog.at_level(logging.WARNING, logger="quarry.daemon.ingest_queue"):
+            await queue._abort([cast("CollectionWorker", w) for w in workers], 1.0)
+
+    asyncio.run(_run())
+
+    assert (
+        "aborted 8 job(s): 2 spooled for recovery, 1 spooled but not recoverable, "
+        "4 lost (spool write failed), 1 needed no spool"
+    ) in caplog.text

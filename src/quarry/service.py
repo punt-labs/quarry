@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import os
 import platform
-import secrets
 import socket
 import subprocess
 import textwrap
@@ -23,7 +22,7 @@ from typing import Protocol, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
 from quarry.config import DEFAULT_PORT
-from quarry.failure_reason import FailureReason
+from quarry.env_file import EnvFile
 from quarry.fd_config import FdServiceLimits
 from quarry.net import LoopbackPolicy
 from quarry.shutdown_policy import ShutdownPolicy
@@ -61,57 +60,23 @@ _MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false"
 
 
 def _write_env_file(api_key: str = "") -> None:
-    """Write daemon env file atomically with mode 0600, durably.
+    """Write the daemon env file atomically with mode 0600, durably.
 
     Always writes MALLOC_CONF (jemalloc tuning) and the teardown budget the unit's
     stop timeout was computed from.  Writes QUARRY_API_KEY only when *api_key* is
-    non-empty.
-
-    The temp sibling has a name of its own (``mkstemp`` semantics), so two
-    installs at once never share one, and is created ``O_EXCL`` and
-    ``O_NOFOLLOW`` with mode 0600 from the first byte: no chmod race window, and
-    never written through a planted symlink.  The file is synced before the rename
-    and the directory after it; a failed directory sync is a warning, since the
-    file is already in place.  A crash can leave a temp behind, under its own
-    name, which nothing reuses.
+    non-empty.  How the file is written is :class:`~quarry.env_file.EnvFile`.
 
     Args:
         api_key: The API key value to store.  Empty string omits the line.
     """
-    _ENV_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    tmp_path = _ENV_FILE.with_name(f"{_ENV_FILE.name}.{secrets.token_hex(6)}.tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-    fd = os.open(str(tmp_path), flags, 0o600)
-    try:
-        f = os.fdopen(fd, "w")
-    except BaseException:
-        os.close(fd)
-        tmp_path.unlink(missing_ok=True)
-        raise
-    try:
-        with f:
-            if api_key:
-                escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
-                f.write(f'QUARRY_API_KEY="{escaped}"\n')
-            f.write(f'MALLOC_CONF="{_MALLOC_CONF}"\n')
-            f.write(f"{ShutdownPolicy.from_settings().env_line()}\n")
-            f.flush()
-            os.fsync(f.fileno())
-        tmp_path.replace(_ENV_FILE)
-    except BaseException:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    try:
-        directory = os.open(str(_ENV_FILE.parent), os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    except OSError as exc:
-        logger.warning(
-            "env file written; directory sync failed (%s); durability not guaranteed",
-            FailureReason.os_name(exc),
-        )
+    lines = [
+        f'MALLOC_CONF="{_MALLOC_CONF}"',
+        ShutdownPolicy.from_settings().env_line(),
+    ]
+    if api_key:
+        escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
+        lines.insert(0, f'QUARRY_API_KEY="{escaped}"')
+    EnvFile(_ENV_FILE).write(lines)
 
 
 def _quarryd_exec_args() -> list[str]:

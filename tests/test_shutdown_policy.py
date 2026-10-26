@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from quarry.config import Settings
+from quarry.config import INGEST_DRAIN_MAX_S, INGEST_DRAIN_MIN_S, Settings
 from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.task_drain import TaskDrain
 from quarry.shutdown_policy import ShutdownPolicy
@@ -116,9 +116,11 @@ def test_the_worst_case_is_strictly_below_the_stop_timeout_at_both_bounds(
     assert ShutdownPolicy.stop_timeout_for(total) - worst >= ShutdownPolicy.HEADROOM_S
 
 
-def test_the_bounds_are_the_settings_own() -> None:
+def test_the_bounds_are_the_named_constants_the_setting_uses() -> None:
+    assert ShutdownPolicy.total_bounds() == (INGEST_DRAIN_MIN_S, INGEST_DRAIN_MAX_S)
+    assert (ShutdownPolicy.TOTAL_MIN_S, ShutdownPolicy.TOTAL_MAX_S) == (
+        INGEST_DRAIN_MIN_S,
+        INGEST_DRAIN_MAX_S,
+    )
     low, high = ShutdownPolicy.total_bounds()
-
     assert 0 < low < high
-    assert Settings(ingest_drain_timeout_s=low).ingest_drain_timeout_s == low
-    assert Settings(ingest_drain_timeout_s=high).ingest_drain_timeout_s == high

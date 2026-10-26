@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from quarry.redacted_failure import RedactedFailure
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
     from quarry.daemon.debounce import DebouncedDispatcher
     from quarry.daemon.fs_events import FsEventSource
@@ -58,22 +58,30 @@ class WatchStop:
         return self
 
     async def run(self) -> None:
-        """Retire the safety task, unwatch and close the roster, join the observer."""
+        """Retire the safety task, cancel timers, close the roster, join the observer.
+
+        Each stage that can fail runs in the ``finally`` of the one before, so a
+        failure or a cancel anywhere still cancels the timers, closes the roster
+        and joins the observer.
+        """
         try:
             await self._retire_safety()
-            if self._submitter is not None:
-                self._submitter.cancel_pending()  # cancel outstanding backoff re-arms
-            if self._dispatcher is not None:
-                self._dispatcher.cancel_all()
-            with self._logged("unwatching the roster"):
-                self._roster.unwatch_all()
         finally:
             try:
-                with self._logged("closing the roster"):
-                    self._roster.close()  # drop sibling conns so a restart can't leak
+                self._attempt_all(
+                    [
+                        ("cancelling the submitter's retries", self._cancel_retries),
+                        ("cancelling the debounce timers", self._cancel_timers),
+                        ("unwatching the roster", self._roster.unwatch_all),
+                    ]
+                )
             finally:
-                if self._source is not None:
-                    await self._join_observer(self._source)
+                try:
+                    with self._logged("closing the roster"):
+                        self._roster.close()  # drop sibling conns: no leak on restart
+                finally:
+                    if self._source is not None:
+                        await self._join_observer(self._source)
 
     @staticmethod
     def safety_ended(task: asyncio.Task[None]) -> None:
@@ -102,14 +110,49 @@ class WatchStop:
                 "(see the earlier error)"
             )
 
+    def _cancel_retries(self) -> None:
+        """Cancel outstanding backoff re-arms, if there is a submitter."""
+        if self._submitter is not None:
+            self._submitter.cancel_pending()
+
+    def _cancel_timers(self) -> None:
+        """Cancel every debounce timer and refuse more, if there is a dispatcher."""
+        if self._dispatcher is not None:
+            self._dispatcher.cancel_all()
+
+    @classmethod
+    def _attempt_all(cls, steps: list[tuple[str, Callable[[], None]]]) -> None:
+        """Run every step, logging each failure; raise the first once all have run."""
+        failures = [cls._failure_of(name, call) for name, call in steps]
+        for failure in failures:
+            if failure is not None:
+                raise failure
+
+    @classmethod
+    def _failure_of(cls, step: str, call: Callable[[], None]) -> Exception | None:
+        """Run *call*; return its failure, logged once, or ``None`` if it succeeded."""
+        try:
+            call()
+        except Exception as exc:
+            logger.error("watch: %s failed", step, exc_info=RedactedFailure.of(exc))
+            RedactedFailure.mark_logged(exc)
+            return exc
+        return None
+
     @staticmethod
+    def _log_failure(step: str, exc: Exception) -> None:
+        """Log *step*'s failure by class and frames, and note it as logged."""
+        logger.error("watch: %s failed", step, exc_info=RedactedFailure.of(exc))
+        RedactedFailure.mark_logged(exc)
+
+    @classmethod
     @contextmanager
-    def _logged(step: str) -> Generator[None]:
-        """Log *step*'s failure by class and frames where it happens, then raise it."""
+    def _logged(cls, step: str) -> Generator[None]:
+        """Log *step*'s failure once, where it happens, then raise it."""
         try:
             yield
         except Exception as exc:
-            logger.error("watch: %s failed", step, exc_info=RedactedFailure.of(exc))
+            cls._log_failure(step, exc)
             raise
 
     @classmethod
@@ -120,8 +163,23 @@ class WatchStop:
             with cls._logged("joining the observer"):
                 await asyncio.shield(join)
         except asyncio.CancelledError:
+            join.add_done_callback(cls._joined_late)
             logger.warning(
                 "watch loop: stopped while the observer was being joined; "
                 "its thread may still be running"
             )
             raise
+
+    @staticmethod
+    def _joined_late(join: asyncio.Future[None]) -> None:
+        """Done callback: say how an observer join the cancel abandoned ended."""
+        if join.cancelled():
+            return
+        failure = join.exception()  # retrieved, so asyncio never reports it unread
+        if failure is not None:
+            logger.error(
+                "watch: the observer join failed after the stop was cancelled",
+                exc_info=RedactedFailure.of(failure),
+            )
+        else:
+            logger.info("watch: the observer joined after all")

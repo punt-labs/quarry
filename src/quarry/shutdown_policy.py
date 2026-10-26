@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import ClassVar, Self, final
 
-from quarry.config import Settings
+from quarry.config import INGEST_DRAIN_MAX_S, INGEST_DRAIN_MIN_S, Settings
 
 
 @final
@@ -60,6 +60,9 @@ class ShutdownPolicy:
     # The environment variable the installed daemon reads the total from, so the
     # stop timeout baked at install and the budget the daemon spends are one number.
     ENV_NAME: ClassVar[str] = "INGEST_DRAIN_TIMEOUT_S"
+    # The least and the most a total may be: the setting's own bounds.
+    TOTAL_MIN_S: ClassVar[float] = INGEST_DRAIN_MIN_S
+    TOTAL_MAX_S: ClassVar[float] = INGEST_DRAIN_MAX_S
 
     __slots__ = ("_total_s",)
 
@@ -107,15 +110,8 @@ class ShutdownPolicy:
 
     @staticmethod
     def total_bounds() -> tuple[float, float]:
-        """Return the least and the most a configured total may be, in seconds.
-
-        Read off the setting itself, so the bounds an installed definition is
-        checked against are the ones the daemon would refuse it by.
-        """
-        metadata = Settings.model_fields["ingest_drain_timeout_s"].metadata
-        low = next(m.ge for m in metadata if hasattr(m, "ge"))
-        high = next(m.le for m in metadata if hasattr(m, "le"))
-        return low, high
+        """Return the least and the most a configured total may be, in seconds."""
+        return ShutdownPolicy.TOTAL_MIN_S, ShutdownPolicy.TOTAL_MAX_S
 
     @classmethod
     def cancel_s(cls, timeout: float) -> float:

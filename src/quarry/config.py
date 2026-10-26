@@ -21,6 +21,11 @@ ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 # roster, well under any reasonable hard limit — years of roster growth headroom.
 DEFAULT_FD_LIMIT = 8192
 
+# The bounds of the teardown budget (``Settings.ingest_drain_timeout_s``), named
+# so the installed-service check judges by the same numbers the setting enforces.
+INGEST_DRAIN_MIN_S: Final[float] = 5.0
+INGEST_DRAIN_MAX_S: Final[float] = 300.0
+
 # The data root when QUARRY_ROOT is unset.  One binding shared by the field
 # default and by data_root(), so the two can never disagree about where a
 # default deployment lives.
@@ -75,7 +80,10 @@ class Settings(BaseSettings):
     # minutes.  Never inf or nan: a service stop timeout cannot be computed from
     # them and the budget's deadline would never arrive.
     ingest_drain_timeout_s: float = Field(
-        default=30.0, ge=5.0, le=300.0, allow_inf_nan=False
+        default=30.0,
+        ge=INGEST_DRAIN_MIN_S,
+        le=INGEST_DRAIN_MAX_S,
+        allow_inf_nan=False,
     )
     ingest_max_workers: int = Field(default=256, ge=1)
     ingest_worker_idle_s: float = Field(default=60.0, ge=0)

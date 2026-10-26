@@ -82,7 +82,10 @@ class Teardown:
         try:
             await step
         except Exception as exc:
-            logger.error("teardown: %s failed", name, exc_info=RedactedFailure.of(exc))
+            if not RedactedFailure.is_logged(exc):  # a step may have logged it already
+                logger.error(
+                    "teardown: %s failed", name, exc_info=RedactedFailure.of(exc)
+                )
         except BaseException as exc:
             logger.error(
                 "teardown: %s during %s; later steps skipped", type(exc).__name__, name

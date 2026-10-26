@@ -104,6 +104,7 @@ class DebouncedDispatcher:
 
     __slots__ = (
         "_bulk_threshold",
+        "_closed",
         "_debounce",
         "_loop",
         "_max_delay",
@@ -111,6 +112,7 @@ class DebouncedDispatcher:
         "_sink",
     )
 
+    _closed: bool
     _loop: asyncio.AbstractEventLoop
     _debounce: float
     _max_delay: float
@@ -134,6 +136,7 @@ class DebouncedDispatcher:
         self._bulk_threshold = bulk_threshold
         self._sink = sink
         self._pending = {}
+        self._closed = False
         return self
 
     def feed(self, key: RouteKey, event: FsEvent) -> None:
@@ -141,8 +144,12 @@ class DebouncedDispatcher:
 
         Called on the event loop (the watch loop marshals observer-thread events
         here).  Never raises: an arming failure is logged, not propagated, so a
-        stray event can never crash the loop (bug-class 2).
+        stray event can never crash the loop.  After :meth:`cancel_all` it does
+        nothing: an event already marshalled onto the loop when the shutdown began
+        must not re-arm a timer the shutdown just cancelled.
         """
+        if self._closed:
+            return
         try:
             pending = self._pending.get(key)
             if pending is None:
@@ -160,7 +167,8 @@ class DebouncedDispatcher:
             pending.cancel_timer()
 
     def cancel_all(self) -> None:
-        """Cancel every pending timer (loop shutdown)."""
+        """Cancel every pending timer and refuse more (loop shutdown)."""
+        self._closed = True
         for pending in self._pending.values():
             pending.cancel_timer()
         self._pending.clear()

@@ -393,13 +393,32 @@ class TestHumanSize:
 
 
 class TestQuietLogging:
-    def test_suppresses_logging(self):
+    def test_suppresses_third_party_logging_and_restores_it(self):
         import logging
 
+        third_party = logging.getLogger("rapidocr")
+        before = third_party.level
         with _quiet_logging():
-            assert logging.getLogger().level == logging.CRITICAL
-        # Level restored after context
-        assert logging.getLogger().level != logging.CRITICAL
+            assert third_party.level == logging.CRITICAL
+        assert third_party.level == before
+
+    def test_leaves_quarrys_own_errors_reaching_the_handlers(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.ERROR), _quiet_logging():
+            logging.getLogger("quarry.doctor_stop_timeout").error("check failed")
+            logging.getLogger("rapidocr").error("noisy third party")
+
+        assert "check failed" in caplog.text
+        assert "noisy third party" not in caplog.text
+
+    def test_does_not_touch_the_root_logger(self):
+        import logging
+
+        root = logging.getLogger()
+        before = root.level
+        with _quiet_logging():
+            assert root.level == before
 
 
 class TestNoExpensiveChecks:

@@ -28,22 +28,40 @@ def _quarry_version() -> str:
     return version("punt-quarry")
 
 
+# The third-party loggers whose output the checks drown the report in.  Only
+# these are silenced: quarry's own errors (a check that failed unexpectedly) must
+# still reach the log file.
+_QUIETED_LOGGERS = (
+    "rapidocr",
+    "onnxruntime",
+    "lancedb",
+    "huggingface_hub",
+    "urllib3",
+    "httpx",
+    "PIL",
+)
+
+
 @contextlib.contextmanager
 def _quiet_logging() -> Generator[None]:
     """Temporarily suppress third-party logging during checks.
 
-    RapidOCR adds its own StreamHandler that writes to stderr during init.
-    Setting root logger level isn't enough — we must redirect stderr to
-    suppress output from handlers created after our context enters.
+    RapidOCR adds its own StreamHandler that writes to stderr during init, so
+    the named third-party loggers are raised to CRITICAL and stderr is redirected
+    to suppress output from handlers created after our context enters.  The root
+    logger is left alone, so quarry's own ERROR records still reach the file
+    handler.
     """
-    root = logging.getLogger()
-    previous_level = root.level
-    root.setLevel(logging.CRITICAL)
+    loggers = [logging.getLogger(name) for name in _QUIETED_LOGGERS]
+    previous = [logger.level for logger in loggers]
+    for logger in loggers:
+        logger.setLevel(logging.CRITICAL)
     try:
         with Path(os.devnull).open("w") as devnull, contextlib.redirect_stderr(devnull):
             yield
     finally:
-        root.setLevel(previous_level)
+        for logger, level in zip(loggers, previous, strict=True):
+            logger.setLevel(level)
 
 
 def _check_python_version() -> CheckResult:

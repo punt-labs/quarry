@@ -65,6 +65,10 @@ class StopTimeoutDiagnostic:
     def _judge(result: Callable[..., CheckResult], configured: float) -> CheckResult:
         """Judge the installed definition against its own budget, else *configured*."""
         installed = InstalledStopTimeout.installed()
+        # Nothing installed is nothing to judge: a stale env file left behind by
+        # an earlier install says nothing about a service that is not there.
+        if installed.verdict(configured).state is StopTimeoutState.NOT_INSTALLED:
+            return result(passed=True, message="no installed service; not checked")
         budget = installed.budget()
         if budget.state is BudgetState.INVALID:
             return result(passed=False, message=budget.message)
@@ -72,8 +76,6 @@ class StopTimeoutDiagnostic:
         total = budget.value if valid else configured
         source = "the installed service definition" if valid else "settings"
         verdict = installed.verdict(total)
-        if verdict.state is StopTimeoutState.NOT_INSTALLED:
-            return result(passed=True, message=verdict.message)
         return result(
             passed=not verdict.is_problem,
             message=f"{verdict.message} (budget {total:g}s from {source})",

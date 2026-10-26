@@ -260,10 +260,13 @@ def test_the_last_env_file_assignment_wins(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("raw", "reason"),
     [
-        ("soon", "is not a number"),
-        ("inf", "outside"),
-        ("nan", "outside"),
-        ("-3", "outside"),
+        ("soon", "is not a plain number"),
+        ("inf", "is not a plain number"),
+        ("nan", "is not a plain number"),
+        ("-3", "is not a plain number"),
+        ("1e2", "is not a plain number"),
+        (" 30", "is not a plain number"),
+        ("", "is not a plain number"),
         (str(_LOW - 1), "outside"),
         (str(_HIGH + 1), "outside"),
     ],
@@ -377,9 +380,9 @@ def test_a_hostile_time_span_is_read_in_linear_time(tmp_path: Path) -> None:
         _unit(tmp_path / "d.service", f"TimeoutStopSec={terms}"),
     ]
 
-    started = time.monotonic()
+    started = time.process_time()
     states = [_state(path) for path in hostile]
-    elapsed = time.monotonic() - started
+    elapsed = time.process_time() - started
 
     assert states[:3] == [_STATE.UNRECOGNIZED] * 3
     assert states[3] is _STATE.OK  # 5000 seconds of terms, and they all parse
@@ -589,8 +592,9 @@ def test_each_platform_reads_its_own_service_definition(system: str, name: str) 
     with patch("quarry.installed_stop_timeout.platform.system", return_value=system):
         reader = InstalledStopTimeout.installed()
 
-    assert reader.path.suffix == name
-    assert reader.path.name.startswith(
+    path = reader.verdict(_BUDGET).path  # the file the reader looks at
+    assert path.suffix == name
+    assert path.name.startswith(
         "com.punt-labs.quarry" if system == "Darwin" else "quarry"
     )
 
@@ -676,3 +680,81 @@ def test_doctor_names_the_settings_when_they_are_what_is_wrong(
     assert "settings are invalid" in check.message
     assert "ingest_drain_timeout_s" in check.message
     assert "installed service" not in check.message
+
+
+def test_a_unit_is_read_the_way_systemd_reads_it(tmp_path: Path) -> None:
+    ok = f"TimeoutStopSec={_NEEDED}"
+    sections = _unit(tmp_path / "a.service", "TimeoutStopSec=1")
+    sections.write_text(
+        f"[Unit]\nTimeoutStopSec={_NEEDED}\n[Service]\nTimeoutStopSec=1\n"
+        f"[Install]\n{ok}\n"
+    )
+
+    assert _state(sections) is _STATE.SHORT  # only [Service] counts
+
+
+def test_a_directive_outside_the_service_section_does_not_count(
+    tmp_path: Path,
+) -> None:
+    unit = tmp_path / "q.service"
+    unit.write_text(f"[Unit]\nTimeoutStopSec={_NEEDED}\n[Service]\nRestart=always\n")
+
+    assert _state(unit) is _STATE.SHORT
+
+
+def test_a_backslash_continuation_is_joined(tmp_path: Path) -> None:
+    unit = tmp_path / "q.service"
+    unit.write_text("[Service]\nTimeoutStopSec=1min \\\n30s\n")
+
+    assert InstalledStopTimeout(unit).verdict(_BUDGET).value == 90.0
+
+
+@pytest.mark.parametrize("comment", ["#", ";", "  #", "\t;"])
+def test_comment_lines_are_skipped(tmp_path: Path, comment: str) -> None:
+    unit = tmp_path / "q.service"
+    unit.write_text(f"[Service]\n{comment}TimeoutStopSec=1\nTimeoutStopSec={_NEEDED}\n")
+
+    assert _state(unit) is _STATE.OK
+
+
+def test_only_a_newline_ends_a_line(tmp_path: Path) -> None:
+    unit = tmp_path / "q.service"
+    # A form feed or a lone carriage return is not a line break to systemd, so
+    # the second "assignment" is part of the first line's value.
+    unit.write_text(f"[Service]\nTimeoutStopSec={_NEEDED}\x0cTimeoutStopSec=1\n")
+
+    assert _state(unit) is _STATE.UNRECOGNIZED
+
+
+def test_an_env_file_that_cannot_be_decoded_is_invalid_with_that_reason(
+    tmp_path: Path,
+) -> None:
+    unit = _unit(tmp_path / "q.service")
+    env_file = tmp_path / "quarry.env"
+    env_file.write_bytes(b"INGEST_DRAIN_TIMEOUT_S=\xff\xfe\n")
+
+    budget = InstalledStopTimeout(unit, env_file).budget()
+
+    assert budget.state is BudgetState.INVALID
+    assert budget.reason == "cannot be decoded"
+    assert budget.path == env_file  # the file actually read, not the unit
+
+
+def test_an_invalid_plist_budget_names_the_plist(tmp_path: Path) -> None:
+    plist = _with_env(tmp_path / "q.plist", **{ShutdownPolicy.ENV_NAME: "soon"})
+
+    assert InstalledStopTimeout(plist).budget().path == plist
+
+
+def test_a_stale_env_file_with_no_unit_installed_passes_as_not_installed(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "quarry.env"
+    env_file.write_text(f'{ShutdownPolicy.ENV_NAME}="soon"\n')  # unusable, but stale
+    absent = InstalledStopTimeout(tmp_path / "gone.service", env_file)
+
+    with patch.object(InstalledStopTimeout, "installed", return_value=absent):
+        check = DaemonDiagnostics.stop_timeout()
+
+    assert check.passed
+    assert check.message == "no installed service; not checked"

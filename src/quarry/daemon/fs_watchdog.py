@@ -4,7 +4,7 @@ Everything else in the watch loop talks to the :class:`FsEventSource` Protocol
 (:mod:`~quarry.daemon.fs_events`), so watchdog stays confined to this module
 and its Linux collaborator :mod:`~quarry.daemon.inotify_prune_chain`.
 
-One recursive watch per registered root (DES-045e — supersedes DES-045d's
+One recursive watch per registered root (this supersedes the earlier
 per-directory scheduling, which was structurally wrong on Linux: every
 ``ObservedWatch`` gets its own emitter, and each Linux emitter's ``Inotify``
 wrapper calls the libc ``inotify_init()`` — one kernel INSTANCE plus threads
@@ -74,8 +74,8 @@ _JOIN_TIMEOUT_S = 5.0
 # The pruned Linux observer, or None off Linux -- imported at module scope
 # (not lazily inside a function) so this is a plain conditional import, not a
 # PLC0415 violation, and so pyright/mypy narrow the None-check below rather
-# than needing a suppression.  Branches explicitly on platform.system() (djb
-# major): a Linux host whose import fails (e.g. a future watchdog release
+# than needing a suppression.  Branches explicitly on platform.system(): a Linux
+# host whose import fails (e.g. a future watchdog release
 # renaming the private internals this module subclasses) is loud and
 # distinct from the expected, silent macOS/Windows fallback -- an
 # `except (ImportError, UnsupportedLibcError)` with no platform check would
@@ -172,12 +172,12 @@ class WatchdogSource:
 
     @staticmethod
     def _build_observer(*, use_polling: bool, poll_interval_s: float) -> BaseObserver:
-        """Return the platform-appropriate, not-yet-started observer (DES-045e).
+        """Return the platform-appropriate, not-yet-started observer.
 
         Picks the pruned Linux observer when the module-scope import at the
         top of this file succeeded (see ``_PrunedInotifyObserver``); falls
         back to watchdog's standard recursive observer everywhere else.
-        Logs the choice at ``INFO`` (djb minor) so "which watcher am I
+        Logs the choice at ``INFO`` so "which watcher am I
         running" is one grep-able line in the daemon's own log, rather than
         something only inferable from platform + the earlier import-failure
         ``logger.error`` (which fires only when the pruned path was tried
@@ -210,7 +210,7 @@ class WatchdogSource:
         the tree's ignore spec, which is written to never raise for a
         malformed ignore file
         (:meth:`~quarry.ignore_spec.IgnoreRules._compile_lines`); this is
-        caught anyway (djb/rev-silent finding) because this method's whole
+        caught anyway because this method's whole
         contract is "never crash the caller, return ``None`` instead" — a
         second layer here is cheap and this is the one boundary a
         surprising ignore-spec failure would otherwise reach
@@ -241,7 +241,7 @@ class WatchdogSource:
             self._observer.unschedule(cast("ObservedWatch", handle))
 
     def is_alive(self, handle: object | None) -> bool:
-        """Whether *handle*'s background emitter thread is still running (djb minor).
+        """Whether *handle*'s background emitter thread is still running.
 
         ``schedule()`` returning a handle only proves the watch was
         installed at that moment — it says nothing about later: an

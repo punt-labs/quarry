@@ -1,13 +1,13 @@
-"""The always-on filesystem watch loop: a producer onto the DES-042 queue.
+"""The always-on filesystem watch loop: a producer onto the ingest queue.
 
 One ``WatchLoop`` per daemon watches every registered directory across every
-database in the roster (DES-045).  It owns the *lifecycle* (start/stop, per-tree
+database in the roster.  It owns the *lifecycle* (start/stop, per-tree
 scheduling, roster startup) and marshals observer-thread events onto the event
 loop; the *producer* half — turning a debounced batch or a scan into IngestUnits
 on the per-``(database, collection)`` queue — lives in
 :class:`~quarry.daemon.watch_submit.WatchSubmitter`.  It writes no LanceDB table
 itself and invents no second queue, inheriting the whole serialization stack
-(DES-042 FIFO → DES-034 progressive commit → DES-026 WAL).
+(the FIFO, the progressive commit, the write-ahead log).
 """
 
 from __future__ import annotations
@@ -97,8 +97,8 @@ class WatchLoop:
 
         The roster + submitter are built unconditionally so an explicit ``quarry
         sync`` enqueues scans regardless of ``watch_enabled`` — the queue is
-        always up; only the always-on fs-watch observer is gated (DES-045:
-        watch_enabled gates the observer, not on-demand sync).
+        always up; only the always-on fs-watch observer is gated
+        (``watch_enabled`` gates the observer, not on-demand sync).
         """
         settings = self._ctx.settings
         self._loop = asyncio.get_running_loop()
@@ -346,9 +346,12 @@ class WatchLoop:
         Never propagates: a raising marshal (loop closed mid-shutdown) is logged,
         so the observer thread survives.
         """
-        if self._loop is None or self._dispatcher is None or self._roster is None:
+        # One snapshot: stop() on the loop thread nulls these at any moment, so the
+        # observer thread decides and acts on the locals alone.
+        loop, dispatcher, roster = self._loop, self._dispatcher, self._roster
+        if loop is None or dispatcher is None or roster is None:
             return
-        root = self._roster.resolved_root(key)
+        root = roster.resolved_root(key)
         # Observer thread stays cheap: only a lexical dot-segment reject here (no
         # resolve, no .gitignore reads), so a hot writer never backs up the
         # observer queue.  The authoritative filter — suffix (at the source),
@@ -356,7 +359,7 @@ class WatchLoop:
         if root is None or self._has_hidden_segment(root, event.path):
             return
         try:
-            self._loop.call_soon_threadsafe(self._dispatcher.feed, key, event)
+            loop.call_soon_threadsafe(dispatcher.feed, key, event)
         except RuntimeError as exc:
             logger.debug("watch: dropped event after loop close: %s", exc)
 

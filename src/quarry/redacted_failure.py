@@ -19,23 +19,50 @@ class RedactedFailure:
     """
 
     MAX_CHAIN: ClassVar[int] = 4
+    _LOGGED_KEY: ClassVar[str] = "quarry_logged"  # on the exception's own __dict__
 
     __slots__ = ()
 
     @classmethod
-    def of(cls, exc: BaseException, _depth: int = 0) -> ReportedError:
+    def of(cls, exc: BaseException) -> ReportedError:
         """Return the stand-in for *exc*, to pass as a record's ``exc_info``.
 
         An ``OSError`` also names its errno (``OSError [ENOSPC]``): the errno
         carries no path, and it is what tells a full disk from a denied write.
-        The cause (or the exception being handled when *exc* was raised) gets a
-        stand-in of its own, chained, so the root failure survives a cleanup that
-        raised another; the chain is as deep as :attr:`MAX_CHAIN`.
+        The cause (or the exception being handled when *exc* was raised, unless
+        the raise suppressed it) gets a stand-in of its own, chained, so the root
+        failure survives a cleanup that raised another.  A chain past
+        :attr:`MAX_CHAIN`, or one that loops, ends with a stand-in that says so.
         """
+        return cls._chain(exc, 0, frozenset())
+
+    @classmethod
+    def mark_logged(cls, exc: BaseException) -> None:
+        """Note that *exc* was logged, so a later boundary does not log it again."""
+        vars(exc)[cls._LOGGED_KEY] = True
+
+    @classmethod
+    def is_logged(cls, exc: BaseException) -> bool:
+        """Return whether :meth:`mark_logged` was called for *exc*."""
+        return bool(vars(exc).get(cls._LOGGED_KEY))
+
+    @classmethod
+    def _chain(
+        cls, exc: BaseException, depth: int, seen: frozenset[int]
+    ) -> ReportedError:
+        """Return *exc*'s stand-in, linked to its origin's, *depth* links in."""
         standin = ReportedError(cls._name(exc)).with_traceback(exc.__traceback__)
-        origin = exc.__cause__ or exc.__context__
-        if origin is not None and _depth < cls.MAX_CHAIN:
-            standin.__cause__ = cls.of(origin, _depth + 1)
+        origin = exc.__cause__
+        if origin is None and not exc.__suppress_context__:
+            origin = exc.__context__
+        if origin is None:
+            return standin
+        if depth >= cls.MAX_CHAIN or id(origin) in seen | {id(exc)}:
+            standin.__cause__ = ReportedError(
+                f"chain truncated after {depth + 1} links"
+            )
+        else:
+            standin.__cause__ = cls._chain(origin, depth + 1, seen | {id(exc)})
         return standin
 
     @staticmethod

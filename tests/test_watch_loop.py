@@ -1681,3 +1681,25 @@ def test_each_cleanup_failure_in_stop_is_logged_where_it_happens(
         assert _is_torn_down(loop)
 
     asyncio.run(_run())
+
+
+def test_a_stop_between_the_none_check_and_the_feed_never_raises(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        ctx, root = _build(tmp_path, queue=_RecordingQueue())
+        loop = WatchLoop(ctx, source=_FakeSource())
+        await loop.start()
+        key = RouteKey(ctx.database_name, "col")
+        real = WatchRoster.resolved_root
+
+        def stop_lands_here(self: WatchRoster, which: RouteKey) -> Path | None:
+            found = real(self, which)
+            # stop() on the loop thread nulls everything after the None check.
+            loop._loop = loop._dispatcher = loop._roster = None
+            return found
+
+        with patch.object(WatchRoster, "resolved_root", stop_lands_here):
+            loop._on_fs_event(key, FsEvent(root / "a.md", deleted=False))
+
+    asyncio.run(_run())

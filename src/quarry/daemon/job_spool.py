@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.redacted_failure import RedactedFailure
+
 if TYPE_CHECKING:
     from quarry.config import Settings
 
@@ -100,9 +102,12 @@ class JobSpool:
         try:
             self._ensure_private_dir()
             self._atomic_write(self._dir / record.filename(), record.as_json())
-        except OSError:
-            logger.exception(
-                "failed to spool aborted %s job for %s", record.kind, record.collection
+        except OSError as exc:
+            logger.error(
+                "failed to spool aborted %s job for %s",
+                record.kind,
+                record.collection,
+                exc_info=RedactedFailure.of(exc),
             )
             return False
         return True

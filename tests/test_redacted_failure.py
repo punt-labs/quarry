@@ -65,33 +65,73 @@ def test_the_root_failure_survives_a_cleanup_that_raised_another() -> None:
     assert "cleanup detail" not in rendered
 
 
-def test_a_context_without_a_cause_is_chained_too() -> None:
-    try:
-        try:
-            raise KeyError("first")
-        except KeyError:
-            raise RuntimeError("second") from None
-    except RuntimeError as exc:
-        # ``from None`` suppresses the display, but the context is still there
-        assert exc.__context__ is not None
-        stand_in = RedactedFailure.of(exc)
-
-    assert stand_in.__cause__ is not None
-    assert type(stand_in.__cause__).__name__ == "ReportedError"
-    assert str(stand_in.__cause__) == "KeyError"
-
-
-def test_a_long_chain_is_cut_at_the_limit() -> None:
-    exc: BaseException = ValueError("0")
-    for depth in range(1, RedactedFailure.MAX_CHAIN + 5):
-        new = ValueError(str(depth))
-        new.__cause__ = exc
+def _chained(*names: str, via: str = "__context__") -> BaseException:
+    """Return an exception whose *via* chain runs through *names*, newest first."""
+    exc: BaseException | None = None
+    for name in reversed(names):
+        new = type(name, (Exception,), {})(name)
+        if exc is not None:
+            setattr(new, via, exc)
         exc = new
+    assert exc is not None
+    return exc
 
-    stand_in: BaseException | None = RedactedFailure.of(exc)
-    length = 0
-    while stand_in is not None:
-        length += 1
-        stand_in = stand_in.__cause__
 
-    assert length == RedactedFailure.MAX_CHAIN + 1
+def _stand_ins(stand_in: BaseException) -> list[str]:
+    """Return the messages along a stand-in's cause chain."""
+    found: list[str] = []
+    link: BaseException | None = stand_in
+    while link is not None:
+        found.append(str(link))
+        link = link.__cause__
+    return found
+
+
+def test_an_implicit_context_is_chained_too() -> None:
+    stand_in = RedactedFailure.of(_chained("Second", "First"))
+
+    assert _stand_ins(stand_in) == ["Second", "First"]
+
+
+def test_a_suppressed_context_is_not_chained() -> None:
+    exc = _chained("Second", "First")
+    exc.__suppress_context__ = True
+
+    assert _stand_ins(RedactedFailure.of(exc)) == ["Second"]
+
+
+def test_a_cause_wins_over_the_context_and_is_chained_even_if_suppressing() -> None:
+    exc = _chained("Outer", "Cause", via="__cause__")
+    exc.__context__ = _chained("Other")
+    exc.__suppress_context__ = True
+
+    assert _stand_ins(RedactedFailure.of(exc)) == ["Outer", "Cause"]
+
+
+def test_a_long_chain_ends_with_a_stand_in_that_says_it_was_cut() -> None:
+    names = [f"E{n}" for n in range(RedactedFailure.MAX_CHAIN + 4)]
+
+    chain = _stand_ins(RedactedFailure.of(_chained(*names)))
+
+    assert chain[:-1] == names[: RedactedFailure.MAX_CHAIN + 1]
+    assert chain[-1] == f"chain truncated after {RedactedFailure.MAX_CHAIN + 1} links"
+
+
+def test_a_cyclic_context_ends_with_the_truncation_stand_in() -> None:
+    first = _chained("First")
+    second = _chained("Second")
+    first.__context__ = second
+    second.__context__ = first
+
+    chain = _stand_ins(RedactedFailure.of(first))
+
+    assert chain == ["First", "Second", "chain truncated after 2 links"]
+
+
+def test_an_exception_can_be_marked_logged_once_and_only_then() -> None:
+    exc = ValueError("x")
+
+    assert not RedactedFailure.is_logged(exc)
+    RedactedFailure.mark_logged(exc)
+    assert RedactedFailure.is_logged(exc)
+    assert not RedactedFailure.is_logged(ValueError("x"))
