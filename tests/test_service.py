@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import errno
+import logging
+import os
 import platform
 import plistlib
 import stat
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -897,28 +901,6 @@ class TestLaunchdPlistAtomicWrite:
         assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
 
     @patch("quarry.service.subprocess.run")
-    def test_the_plist_is_written_through_private_write(
-        self, mock_run: MagicMock, tmp_path: Path
-    ) -> None:
-        """The write goes through PrivateWrite; its own tests own the file I/O."""
-        plist_path = tmp_path / "com.punt-labs.quarry.plist"
-        mock_run.side_effect = [MagicMock(returncode=113), MagicMock(returncode=0)]
-        with (
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
-            patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
-            patch("quarry.service.PrivateWrite.commit") as commit,
-        ):
-            _launchd_install()
-
-        [call] = commit.call_args_list
-        tmp, final, text = call.args
-        assert final == plist_path
-        assert tmp.parent == tmp_path
-        assert tmp != final
-        assert "com.punt-labs.quarry" in text
-
-    @patch("quarry.service.subprocess.run")
     def test_a_leftover_plist_temp_does_not_block_the_install(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
@@ -934,6 +916,81 @@ class TestLaunchdPlistAtomicWrite:
             _launchd_install()
 
         assert plist_path.exists()
+
+
+class TestLaunchdPlistSweep:
+    """A crashed install can leave a plist temp holding the API key."""
+
+    _HEX = "0123456789ab"
+
+    @staticmethod
+    def _install(plist_path: Path) -> None:
+        with (
+            patch("quarry.service.subprocess.run") as run,
+            patch("quarry.service._LAUNCHD_DIR", plist_path.parent),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
+        ):
+            run.side_effect = [MagicMock(returncode=113), MagicMock(returncode=0)]
+            _launchd_install()
+
+    @staticmethod
+    def _aged(path: Path, age_s: float) -> None:
+        then = time.time() - age_s
+        os.utime(path, (then, then))
+
+    def test_a_stale_leftover_is_removed_before_the_write(self, tmp_path: Path) -> None:
+        plist = tmp_path / "com.punt-labs.quarry.plist"
+        leftover = tmp_path / f"{plist.name}.{self._HEX}.tmp"
+        leftover.write_text("QUARRY_API_KEY=old")
+        self._aged(leftover, 7200)
+
+        self._install(plist)
+
+        assert not leftover.exists()
+        assert plist.exists()
+
+    def test_a_young_leftover_is_kept(self, tmp_path: Path) -> None:
+        plist = tmp_path / "com.punt-labs.quarry.plist"
+        young = tmp_path / f"{plist.name}.{self._HEX}.tmp"
+        young.write_text("being written")
+
+        self._install(plist)
+
+        assert young.exists()
+
+    def test_a_foreign_owned_leftover_is_refused(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        plist = tmp_path / "com.punt-labs.quarry.plist"
+        theirs = tmp_path / f"{plist.name}.{self._HEX}.tmp"
+        theirs.write_text("not ours")
+        self._aged(theirs, 7200)
+
+        with (
+            patch("quarry.temp_sweep.os.getuid", return_value=os.getuid() + 1),
+            caplog.at_level(logging.WARNING, logger="quarry.temp_sweep"),
+        ):
+            self._install(plist)
+
+        assert theirs.exists()
+        assert "launchd plist: leftover temp files" in caplog.text
+        assert "foreign-owned, left (1)" in caplog.text
+
+    def test_the_plist_is_0600_and_a_failed_rename_leaves_no_temp(
+        self, tmp_path: Path
+    ) -> None:
+        plist = tmp_path / "com.punt-labs.quarry.plist"
+        self._install(plist)
+        assert stat.S_IMODE(plist.stat().st_mode) == 0o600
+
+        with (
+            patch("os.replace", side_effect=OSError(errno.EIO, "injected")),
+            pytest.raises(OSError, match="injected"),
+        ):
+            self._install(plist)
+
+        assert not list(tmp_path.glob("*.tmp"))
 
 
 class TestWriteEnvFileBackslash:

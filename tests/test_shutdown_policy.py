@@ -124,3 +124,7 @@ def test_the_bounds_are_the_named_constants_the_setting_uses() -> None:
     )
     low, high = ShutdownPolicy.total_bounds()
     assert 0 < low < high
+
+
+def test_the_in_flight_spool_wait_ends_inside_the_abort_wait() -> None:
+    assert 0 < ShutdownPolicy.SPOOL_WAIT_S < ShutdownPolicy.ABORT_WAIT_S

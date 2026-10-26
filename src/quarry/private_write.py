@@ -55,7 +55,7 @@ class PrivateWrite:
         except BaseException:
             self._discard(tmp)
             raise
-        self.sync_directory(final_path.parent)
+        self.sync_directory(final_path.parent, f"{self._label} written")
 
     def _discard(self, tmp: Path) -> None:
         """Remove *tmp*; a failure to is a warning, never the error that surfaces.
@@ -67,13 +67,31 @@ class PrivateWrite:
             tmp.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
-                "%s: could not remove its temp file (%s)",
+                "%s: could not remove its temp file %s (%s)",
                 self._label,
+                tmp,
                 FailureReason.os_name(exc),
             )
 
-    def sync_directory(self, directory: Path) -> None:
-        """Sync *directory*; a failure is a warning, the file is already in place."""
+    @classmethod
+    def ensure_directory(cls, directory: Path, what: str) -> None:
+        """Create *directory* ``0o700`` (tightening one that exists looser).
+
+        Every level this call creates is synced into its parent, top-down, or
+        files written into it could outlive the directory's own name in a crash;
+        *what* names the directory in a warning when a sync fails.
+        """
+        created = [
+            d for d in (*reversed(directory.parents), directory) if not d.exists()
+        ]
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        directory.chmod(0o700)
+        for level in created:
+            cls.sync_directory(level.parent, f"{what} {level.name} created")
+
+    @staticmethod
+    def sync_directory(directory: Path, what: str) -> None:
+        """Sync *directory*; a failure is a warning, *what* is already in place."""
         try:
             handle = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
             try:
@@ -82,7 +100,7 @@ class PrivateWrite:
                 os.close(handle)
         except OSError as exc:
             logger.warning(
-                "%s written; directory sync failed (%s); durability not guaranteed",
-                self._label,
+                "%s; directory sync failed (%s); durability not guaranteed",
+                what,
                 FailureReason.os_name(exc),
             )

@@ -95,7 +95,9 @@ def test_a_temp_that_cannot_be_removed_is_a_warning_and_the_real_error_surfaces(
         PrivateWrite("the thing").commit(tmp_path / "f.tmp", tmp_path / "f", "x")
 
     [record] = caplog.records
-    assert "the thing: could not remove its temp file (EACCES)" in record.getMessage()
+    assert "the thing: could not remove its temp file" in record.getMessage()
+    assert str(tmp_path / "f.tmp") in record.getMessage()
+    assert "(EACCES)" in record.getMessage()
 
 
 def test_when_fdopen_raises_the_fd_is_closed_and_the_temp_removed(

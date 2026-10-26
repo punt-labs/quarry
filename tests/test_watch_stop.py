@@ -22,6 +22,9 @@ if TYPE_CHECKING:
     from quarry.daemon.watch_submit import WatchSubmitter
 
 
+_GRACE_S = 0.2
+
+
 def _roster(events: list[str]) -> WatchRoster:
     return cast(
         "WatchRoster",
@@ -37,7 +40,7 @@ async def test_the_steps_run_in_order_and_the_observer_is_joined_last() -> None:
     source = SimpleNamespace(stop=lambda: events.append("join"))
 
     await WatchStop.for_loop(
-        _roster(events), cast("FsEventSource", source), None, None, None
+        _roster(events), cast("FsEventSource", source), None, None, None, _GRACE_S
     ).run()
 
     assert events == ["unwatch", "close", "join"]
@@ -110,9 +113,10 @@ async def test_a_cancel_during_the_safety_retire_still_cancels_timers_and_closes
             safety,
             cast("WatchSubmitter", timers),
             cast("DebouncedDispatcher", timers),
+            _GRACE_S,
         ).run()
     )
-    await asyncio.sleep(0.1)  # in _retire_safety
+    await asyncio.sleep(0.1)  # in the safety retire
     stopping.cancel()
 
     with pytest.raises(asyncio.CancelledError):
@@ -145,7 +149,12 @@ async def test_a_step_failing_during_a_cancel_is_logged_and_the_cancel_still_win
     safety = asyncio.ensure_future(slow_to_retire())
     stopping = asyncio.create_task(
         WatchStop.for_loop(
-            _roster(events), None, safety, cast("WatchSubmitter", _Broken()), None
+            _roster(events),
+            None,
+            safety,
+            cast("WatchSubmitter", _Broken()),
+            None,
+            _GRACE_S,
         ).run()
     )
     await asyncio.sleep(0.1)  # in _retire_safety
@@ -176,7 +185,7 @@ async def test_every_cleanup_runs_even_when_an_earlier_one_fails(
         pytest.raises(RuntimeError),
     ):
         await WatchStop.for_loop(
-            roster, None, None, cast("WatchSubmitter", _Broken()), None
+            roster, None, None, cast("WatchSubmitter", _Broken()), None, _GRACE_S
         ).run()
 
     assert events == ["unwatch", "close"]  # the later steps still ran
@@ -193,7 +202,12 @@ async def test_a_logged_failure_is_marked_so_the_boundary_does_not_log_it_again(
 
     try:
         await WatchStop.for_loop(
-            _roster([]), None, None, cast("WatchSubmitter", _Broken()), None
+            _roster([]),
+            None,
+            None,
+            cast("WatchSubmitter", _Broken()),
+            None,
+            _GRACE_S,
         ).run()
     except RuntimeError as exc:
         assert RedactedFailure.is_logged(exc)
@@ -214,7 +228,7 @@ async def test_an_abandoned_join_that_fails_later_is_logged_not_left_unread(
     source = cast("FsEventSource", SimpleNamespace(stop=stop_that_fails))
     with caplog.at_level(logging.INFO):
         stopping = asyncio.create_task(
-            WatchStop.for_loop(_roster([]), source, None, None, None).run()
+            WatchStop.for_loop(_roster([]), source, None, None, None, _GRACE_S).run()
         )
         await asyncio.sleep(0.1)
         stopping.cancel()
@@ -224,7 +238,7 @@ async def test_an_abandoned_join_that_fails_later_is_logged_not_left_unread(
         await asyncio.sleep(0.3)
         gc.collect()
 
-    assert "joining the observer failed after the stop was cancelled" in caplog.text
+    assert "joining the observer failed after the stop gave up on it" in caplog.text
     assert "late failure detail" not in caplog.text
     assert "never retrieved" not in caplog.text
 
@@ -236,7 +250,7 @@ async def test_an_abandoned_join_that_succeeds_later_says_it_joined_after_all(
     source = cast("FsEventSource", SimpleNamespace(stop=lambda: release.wait(10)))
     with caplog.at_level(logging.INFO, logger="quarry.daemon.watch_stop"):
         stopping = asyncio.create_task(
-            WatchStop.for_loop(_roster([]), source, None, None, None).run()
+            WatchStop.for_loop(_roster([]), source, None, None, None, _GRACE_S).run()
         )
         await asyncio.sleep(0.1)
         stopping.cancel()
@@ -245,7 +259,7 @@ async def test_an_abandoned_join_that_succeeds_later_says_it_joined_after_all(
         release.set()
         await asyncio.sleep(0.3)
 
-    assert "joining the observer finished after the stop was cancelled" in caplog.text
+    assert "joining the observer finished after the stop gave up on it" in caplog.text
 
 
 async def test_an_unexpected_exception_from_the_safety_retire_still_runs_every_step(
@@ -255,21 +269,22 @@ async def test_an_unexpected_exception_from_the_safety_retire_still_runs_every_s
     safety = asyncio.ensure_future(asyncio.sleep(60))
     timers = _Timers()
 
-    async def exploding_wait(*_args: object, **_kwargs: object) -> None:
-        msg = "wait exploded"
+    async def exploding(_task: asyncio.Task[None]) -> None:
+        msg = "retire exploded"
         raise ValueError(msg)
 
-    stop = WatchStop.for_loop(
-        _roster(events),
-        None,
-        safety,
-        cast("WatchSubmitter", timers),
-        cast("DebouncedDispatcher", timers),
-    )
+    with patch.object(WatchStop, "retire", exploding):
+        stop = WatchStop.for_loop(
+            _roster(events),
+            None,
+            safety,
+            cast("WatchSubmitter", timers),
+            cast("DebouncedDispatcher", timers),
+            _GRACE_S,
+        )
     with (
-        patch("quarry.daemon.watch_stop.asyncio.wait", exploding_wait),
         caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"),
-        pytest.raises(ValueError, match="wait exploded"),
+        pytest.raises(ValueError, match="retire exploded"),
     ):
         await stop.run()
 
@@ -286,14 +301,16 @@ async def test_a_step_that_raises_while_a_cancel_is_pending_never_replaces_it() 
     async def slow() -> None:
         await release.wait()
 
-    stop = WatchStop(
-        [
-            ("slow", slow),
-            ("raises", lambda: (_ for _ in ()).throw(RuntimeError("boom"))),
-            ("last", lambda: events.append("last")),
-        ]
+    async def raises() -> None:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    async def last() -> None:
+        events.append("last")
+
+    running = asyncio.create_task(
+        WatchStop([("slow", slow), ("raises", raises), ("last", last)], _GRACE_S).run()
     )
-    running = asyncio.create_task(stop.run())
     await asyncio.sleep(0.05)
     running.cancel()
 
@@ -302,3 +319,57 @@ async def test_a_step_that_raises_while_a_cancel_is_pending_never_replaces_it() 
 
     assert events == ["last"]
     release.set()
+
+
+async def test_after_a_cancel_each_step_waits_only_within_the_grace_and_in_order(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+    release = asyncio.Event()
+
+    async def hangs() -> None:
+        await release.wait()
+
+    async def hangs_too() -> None:
+        await release.wait()
+
+    async def quick() -> None:
+        events.append("quick")
+
+    stop = WatchStop(
+        [("first", hangs), ("second", hangs_too), ("third", quick)], grace_s=0.2
+    )
+    running = asyncio.create_task(stop.run())
+    await asyncio.sleep(0.05)
+    started = asyncio.get_running_loop().time()
+    with caplog.at_level(logging.INFO, logger="quarry.daemon.watch_stop"):
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        elapsed = asyncio.get_running_loop().time() - started
+        release.set()
+        await asyncio.sleep(0.05)
+
+    assert elapsed < 0.2 + 0.15  # the grace, with scheduling slack, not unbounded
+    assert events == ["quick"]  # the later step still ran
+    assert "stopped while second was in progress" in caplog.text
+    assert "second finished after the stop gave up on it" in caplog.text
+
+
+class _Fatal(BaseException):
+    """A BaseException that is not a cancel and does not end the loop."""
+
+
+async def test_a_base_exception_from_a_step_lets_the_rest_run_then_is_raised() -> None:
+    events: list[str] = []
+
+    async def fatal() -> None:
+        raise _Fatal
+
+    async def last() -> None:
+        events.append("last")
+
+    with pytest.raises(_Fatal):
+        await WatchStop([("fatal", fatal), ("last", last)], _GRACE_S).run()
+
+    assert events == ["last"]

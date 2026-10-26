@@ -105,7 +105,7 @@ class JobSpool:
         earlier one.
         """
         try:
-            self._ensure_private_dir()
+            PrivateWrite.ensure_directory(self._dir, "spool directory")
             self._atomic_write(self._dir / record.filename(), record.as_json())
         except Exception as exc:
             logger.error(
@@ -116,20 +116,6 @@ class JobSpool:
             )
             return False
         return True
-
-    def _ensure_private_dir(self) -> None:
-        """Create the spool dir ``0o700``, tightening it if it exists looser.
-
-        ``<quarry_root>`` itself is not created restrictively, so an existing
-        spool dir left world-readable by an earlier run is re-tightened here.  A
-        directory this call creates is synced into its parent, or the records
-        written into it could outlive the directory's own name in a crash.
-        """
-        created = not self._dir.exists()
-        self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._dir.chmod(0o700)
-        if created:
-            PrivateWrite("spool directory").sync_directory(self._dir.parent)
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:

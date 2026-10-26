@@ -132,9 +132,8 @@ holds the resident engine, every Claude Code tab shares one warm model
 rather than spawning a Python process that loads $\sim$200\,MB of its
 own.  Installed services use TLS with TOFU certificate pinning (DES-020)
 --- even on localhost.  (\texttt{mcp-proxy} is an MCP stdio$\leftrightarrow$daemon
-transport, not a REST-API client; \texttt{quarry install} still fetches it
-because it remains a supported transport for other MCP clients, but it is
-no longer on quarry's own MCP path --- the plugin runs \texttt{quarry mcp}
+transport, not a REST-API client; \texttt{quarry install} does not fetch it,
+and it is not on quarry's own MCP path --- the plugin runs \texttt{quarry mcp}
 directly.)
 
 When a remote server is configured (DES-021), the CLI routes
@@ -723,9 +722,6 @@ Enable     & \modpath{enable.py}     & Project activation and
 TLS        & \modpath{tls.py}        & TLS certificate generation:
              self-signed EC\,P-256 CA and server cert with
              atomic file writes and TOFU-safe CA reuse. \\
-Proxy      & \modpath{proxy.py}      & \texttt{mcp-proxy} binary
-             download, SHA256 verification, and
-             platform-specific installation. \\
 Logging    & \modpath{logging\_config.py} & Structured logging
              configuration: rotating file handler + stderr,
              \texttt{QUARRY\_LOG\_LEVEL} override. \\
@@ -1736,7 +1732,7 @@ scrubber (DES-057).
 curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh
 \end{lstlisting}
 
-Installs quarry, embedding model, mcp-proxy, Claude Code plugin, and
+Installs quarry, the embedding model, and the Claude Code plugin, and
 registers a daemon with TLS on localhost.
 
 \subsection{Network Mode (Remote GPU)}
@@ -2077,7 +2073,7 @@ Tier 3: Surface wiring & Fully mocked / hermetic in-process ASGI
   \texttt{test\_retrieval\_equivalence},
   \texttt{test\_daemon\_launcher}, \texttt{test\_watch\_loop},
   \texttt{test\_watch\_reconcile}, \texttt{test\_fs\_watchdog},
-  \texttt{test\_proxy}, \texttt{test\_service} \\
+  \texttt{test\_service} \\
 Invariants & Long-lived-process leak guards; suite hermeticity
   (DES-047) & \texttt{test\_resource\_invariants},
   \texttt{test\_hermeticity} \\

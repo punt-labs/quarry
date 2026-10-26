@@ -463,6 +463,7 @@ def test_the_wait_after_an_abort_is_bounded(
 ) -> None:
     class _Stubborn:
         tally = AbortTally()
+        pending_jobs = 0
 
         def __init__(self) -> None:
             self.task: asyncio.Task[None] | None = None
@@ -869,6 +870,7 @@ def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
 ) -> None:
     class _Dying:
         tally = AbortTally()
+        pending_jobs = 0
 
         def abort_off_loop(self) -> asyncio.Task[None]:
             async def dies() -> None:
@@ -893,6 +895,8 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     class _Counted:
+        pending_jobs = 0
+
         def __init__(self, outcomes: list[Aborted]) -> None:
             self.tally = AbortTally()
             for outcome in outcomes:
@@ -923,3 +927,42 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
         "aborted 8 job(s): 2 spooled for recovery, 1 spooled but not recoverable, "
         "4 lost (spool write failed), 1 needed no spool"
     ) in caplog.text
+
+
+def test_the_abort_summary_counts_jobs_not_yet_accounted_for_and_names_late_ends(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A slow spool and a short wait: the terms still add up and nothing leaks."""
+
+    class _Slow:
+        tally = AbortTally()
+        pending_jobs = 2
+
+        def __init__(self) -> None:
+            self.release = asyncio.Event()
+
+        def abort_off_loop(self) -> asyncio.Task[None]:
+            async def slow() -> None:
+                await self.release.wait()
+                msg = "late failure detail"
+                raise RuntimeError(msg)
+
+            return asyncio.ensure_future(slow())
+
+    async def _run() -> None:
+        queue = _make_queue(concurrency=1)
+        slow = _Slow()
+        with (
+            patch.object(IngestQueue, "ABORT_WAIT_S", 0.05),
+            caplog.at_level(logging.INFO, logger="quarry.daemon.ingest_queue"),
+        ):
+            await queue._abort([cast("CollectionWorker", slow)], 0.1)
+        slow.release.set()
+        await asyncio.sleep(0.05)  # the late failure lands
+
+    asyncio.run(_run())
+
+    assert "2 job(s) not yet accounted for" in caplog.text
+    assert "1 worker(s) did not stop within" in caplog.text
+    assert "a worker that outlived the abort wait failed" in caplog.text
+    assert "late failure detail" not in caplog.text

@@ -1,4 +1,4 @@
-"""The temp files a crashed env-file write left behind: find them, remove the stale."""
+"""The temp files a crashed private write left behind: find them, remove the stale."""
 
 from __future__ import annotations
 
@@ -29,10 +29,10 @@ class Leftover(Enum):
 
 
 @final
-class EnvSweep:
-    """Remove the stale temps beside an env file, and say what it left and why.
+class TempSweep:
+    """Remove the stale temps beside a private file, and say what it left and why.
 
-    Only names ``EnvFile`` itself creates are looked at: ``<name>.<12 hex>.tmp``
+    Only names a private write itself creates are looked at: ``<name>.<12 hex>.tmp``
     and the legacy ``<name>.tmp``.  Of those, a symlink or a directory is never
     touched (and is reported on its own, as it should not be there), neither is a
     file another user owns, and a regular file this user owns is removed once it
@@ -47,13 +47,15 @@ class EnvSweep:
     # a clock that was stepped back, or a shared filesystem a little ahead of us.
     CLOCK_SKEW_S: ClassVar[float] = 3600.0
 
-    __slots__ = ("_directory", "_name")
+    __slots__ = ("_directory", "_label", "_name")
 
     _directory: Path
+    _label: str
     _name: re.Pattern[str]
 
-    def __new__(cls, path: Path) -> Self:
+    def __new__(cls, path: Path, label: str) -> Self:
         self = super().__new__(cls)
+        self._label = label
         self._directory = path.parent
         self._name = re.compile(re.escape(path.name) + r"(?:\.[0-9a-f]{12})?\.tmp")
         return self
@@ -75,7 +77,8 @@ class EnvSweep:
                 found = [e.name for e in entries if self._name.fullmatch(e.name)]
         except OSError as exc:
             logger.warning(
-                "env file: could not list %s for leftover temp files (%s)",
+                "%s: could not list %s for leftover temp files (%s)",
+                self._label,
                 self._directory,
                 FailureReason.os_name(exc),
             )
@@ -105,30 +108,18 @@ class EnvSweep:
         """Return whether *mtime* is recent enough to belong to a live writer."""
         return -cls.CLOCK_SKEW_S <= time.time() - mtime < cls.STALE_AFTER_S
 
-    @staticmethod
-    def _report(outcome: dict[Leftover, list[str]]) -> None:
-        """Warn once per kind of thing found, with the names and the counts."""
-        if not outcome:
-            return
-        if non_regular := outcome.get(Leftover.NON_REGULAR):
-            logger.warning(
-                "env file: %d non-regular leftover(s) named like a temp file were "
-                "not touched (a symlink or directory is not ours to remove): %s",
-                len(non_regular),
-                ", ".join(non_regular),
-            )
-        rest = {
-            kind: names
-            for kind, names in outcome.items()
-            if kind is not Leftover.NON_REGULAR
+    def _report(self, outcome: dict[Leftover, list[str]]) -> None:
+        """Warn once, with one labelled list of names per kind found."""
+        titles = {
+            Leftover.REMOVED: "removed",
+            Leftover.FOREIGN: "foreign-owned, left",
+            Leftover.NON_REGULAR: "non-regular (a symlink or directory), left",
+            Leftover.FAILED: "failed",
         }
-        if not rest:
-            return
-        logger.warning(
-            "env file: swept %d stale temp file(s), left %d foreign-owned and "
-            "%d failed: %s",
-            len(rest.get(Leftover.REMOVED, ())),
-            len(rest.get(Leftover.FOREIGN, ())),
-            len(rest.get(Leftover.FAILED, ())),
-            ", ".join(name for names in rest.values() for name in names),
-        )
+        found = [
+            f"{title} ({len(outcome[kind])}): {', '.join(outcome[kind])}"
+            for kind, title in titles.items()
+            if outcome.get(kind)
+        ]
+        if found:
+            logger.warning("%s: leftover temp files: %s", self._label, "; ".join(found))

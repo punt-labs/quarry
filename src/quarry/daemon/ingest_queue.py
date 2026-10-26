@@ -141,7 +141,12 @@ class IngestQueue:
             await self._abort(workers, drain_timeout)
 
     async def _abort(self, workers: list[CollectionWorker], window_s: float) -> None:
-        """Abort *workers* after a drain outran its window; say what that cost."""
+        """Abort *workers* after a drain outran its window; say what that cost.
+
+        The summary's terms always add up: jobs whose spool write has not ended
+        are counted as "not yet accounted for", and every worker that outlives
+        the wait reports how it ended when it does.
+        """
         tasks = [worker.abort_off_loop() for worker in workers]
         done, pending = await asyncio.wait(tasks, timeout=self.ABORT_WAIT_S)
         for task in done:
@@ -152,14 +157,38 @@ class IngestQueue:
                     "ingest queue: a worker task failed while aborting",
                     exc_info=RedactedFailure.of(failure),
                 )
+        for task in pending:
+            task.add_done_callback(self._ended_after_abort)
         logger.warning(
-            "ingest queue: drain did not finish within %.1fs; aborted %s%s",
+            "ingest queue: drain did not finish within %.1fs; aborted %s",
             window_s,
-            AbortTally.total(worker.tally for worker in workers).summary(),
-            f"; {len(pending)} worker(s) did not stop within {self.ABORT_WAIT_S:g}s"
-            if pending
-            else "",
+            self._summary(workers, len(pending)),
         )
+
+    @classmethod
+    def _summary(cls, workers: list[CollectionWorker], stragglers: int) -> str:
+        """Return the abort's cost in words; its terms add up to the job count."""
+        parts = [AbortTally.total(worker.tally for worker in workers).summary()]
+        if unaccounted := sum(worker.pending_jobs for worker in workers):
+            parts.append(f"{unaccounted} job(s) not yet accounted for")
+        if stragglers:
+            parts.append(
+                f"{stragglers} worker(s) did not stop within {cls.ABORT_WAIT_S:g}s"
+            )
+        return "; ".join(parts)
+
+    @staticmethod
+    def _ended_after_abort(task: asyncio.Task[None]) -> None:
+        """Done callback: say how a worker the abort stopped waiting for ended."""
+        if task.cancelled():
+            logger.info("ingest queue: a worker that outlived the abort wait ended")
+        elif (failure := task.exception()) is not None:
+            logger.error(
+                "ingest queue: a worker that outlived the abort wait failed",
+                exc_info=RedactedFailure.of(failure),
+            )
+        else:
+            logger.info("ingest queue: a worker that outlived the abort wait ended")
 
     def cancel_workers(self) -> None:
         """Synchronously stop every worker (test-harness teardown, no await).

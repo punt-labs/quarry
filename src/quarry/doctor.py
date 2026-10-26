@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Generator
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from quarry.config import (
@@ -19,6 +19,7 @@ from quarry.config import (
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_ethos import EthosExtDiagnostics
+from quarry.doctor_failure import CheckFailure
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
 from quarry.doctor_memory import MemoryDiagnostics
@@ -26,11 +27,18 @@ from quarry.doctor_recall import RecallDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_runtime import GpuRuntime
 from quarry.opencv_headless import HeadlessOpenCv
+from quarry.redacted_failure import RedactedFailure
 from quarry.results import CheckResult
+
+logger = logging.getLogger(__name__)
 
 
 def _quarry_version() -> str:
-    return version("punt-quarry")
+    """Return the installed version, or ``unknown`` when there is no metadata."""
+    try:
+        return version("punt-quarry")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 # The third-party loggers whose output the checks drown the report in, by the
@@ -99,46 +107,46 @@ def _check_data_directory() -> CheckResult:
     )
 
 
-def _import_failure(module: str, exc: ImportError | OSError) -> str:
-    """Say which module could not be loaded and why (the class, not a path)."""
-    name = getattr(exc, "name", None) or module
-    return f"cannot load {name} ({type(exc).__name__}); reinstall quarry"
-
-
 def _check_embedding_model() -> CheckResult:
     # Imported here, inside a try: a broken install is a failed check, not an
     # import error that takes the whole report down.
     try:
         from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
-    except (ImportError, OSError) as exc:
+    except CheckFailure.BROKEN_STACK as exc:
         return CheckResult(
             name="Embedding model",
             passed=False,
-            message=_import_failure("huggingface_hub", exc),
+            message=CheckFailure.import_message("huggingface_hub", exc),
         )
-
-    model_cached = try_to_load_from_cache(
-        ONNX_MODEL_REPO,
-        "onnx/model_int8.onnx",
-        revision=ONNX_MODEL_REVISION,
-    )
-    tokenizer_cached = try_to_load_from_cache(
-        ONNX_MODEL_REPO, ONNX_TOKENIZER_FILE, revision=ONNX_MODEL_REVISION
-    )
-    if (
-        isinstance(model_cached, str)
-        and Path(model_cached).exists()
-        and isinstance(tokenizer_cached, str)
-        and Path(tokenizer_cached).exists()
-    ):
-        model_size = Path(model_cached).stat().st_size
+    try:
+        model_cached = try_to_load_from_cache(
+            ONNX_MODEL_REPO,
+            "onnx/model_int8.onnx",
+            revision=ONNX_MODEL_REVISION,
+        )
+        tokenizer_cached = try_to_load_from_cache(
+            ONNX_MODEL_REPO, ONNX_TOKENIZER_FILE, revision=ONNX_MODEL_REVISION
+        )
+        if (
+            isinstance(model_cached, str)
+            and Path(model_cached).exists()
+            and isinstance(tokenizer_cached, str)
+            and Path(tokenizer_cached).exists()
+        ):
+            model_size = Path(model_cached).stat().st_size
+            return CheckResult(
+                name="Embedding model",
+                passed=True,
+                message=(
+                    "snowflake-arctic-embed-m-v1.5 (ONNX INT8) cached"
+                    f" ({_human_size(model_size)})"
+                ),
+            )
+    except CheckFailure.BROKEN_STACK as exc:
         return CheckResult(
             name="Embedding model",
-            passed=True,
-            message=(
-                "snowflake-arctic-embed-m-v1.5 (ONNX INT8) cached"
-                f" ({_human_size(model_size)})"
-            ),
+            passed=False,
+            message=f"cannot read the model cache ({CheckFailure.detail(exc)})",
         )
     return CheckResult(
         name="Embedding model",
@@ -164,7 +172,7 @@ def _check_imports() -> CheckResult:
     for mod in modules:
         try:
             __import__(mod)
-        except ImportError:
+        except CheckFailure.BROKEN_STACK:
             failed.append(mod)
     if not failed:
         return CheckResult(
@@ -195,11 +203,11 @@ def _check_fts_health(db_path: Path) -> CheckResult:
     try:
         from quarry.db.facade import Database  # noqa: PLC0415
         from quarry.db.schema import TABLE_NAME  # noqa: PLC0415
-    except (ImportError, OSError) as exc:
+    except CheckFailure.BROKEN_STACK as exc:
         return CheckResult(
             name="FTS index",
             passed=False,
-            message=_import_failure("lancedb", exc),
+            message=CheckFailure.import_message("quarry.db", exc),
             required=False,
         )
 
@@ -227,25 +235,36 @@ def _check_fts_health(db_path: Path) -> CheckResult:
             message="healthy",
             required=False,
         )
-    except RuntimeError:
+    except RuntimeError as exc:
         return CheckResult(
             name="FTS index",
             passed=False,
-            message="stale — run 'quarry sync' to rebuild",
+            message=(
+                f"stale — run 'quarry sync' to rebuild ({CheckFailure.detail(exc)})"
+            ),
             required=False,
         )
-    except (OSError, ValueError):
+    except (FileNotFoundError, ValueError) as exc:
         return CheckResult(
             name="FTS index",
             passed=False,
-            message="missing — will be created on next sync",
+            message=(
+                f"missing — will be created on next sync ({CheckFailure.detail(exc)})"
+            ),
+            required=False,
+        )
+    except OSError as exc:
+        return CheckResult(
+            name="FTS index",
+            passed=False,
+            message=f"cannot read the index ({CheckFailure.detail(exc)})",
             required=False,
         )
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
             name="FTS index",
             passed=False,
-            message=f"error: {exc}",
+            message=f"error: {CheckFailure.detail(exc)}",
             required=False,
         )
 
@@ -283,7 +302,7 @@ def _install_gpu_runtime() -> bool:
 def _run_optional_step(step: Callable[[], str], skip_note: str) -> None:
     """Run a best-effort install step, printing its result or a skip note.
 
-    The daemon registration step is optional: quarry works without it.
+    Optional steps are ones quarry works without.
     ``step`` is a zero-arg callable that performs BOTH the module import AND
     the install, returning a status message. It runs entirely inside the try so
     an import-time failure (``ImportError``, or any error raised while the
@@ -438,33 +457,90 @@ def run_install() -> int:
     return 1 if failed else exit_code
 
 
+def _attempt(name: str, check: Callable[[], CheckResult | None]) -> CheckResult | None:
+    """Run one check; whatever it raises becomes a failed result naming it.
+
+    The report must always complete, so no single check, whatever it hits, may
+    stop the others from running.  The failure is also logged with its frames.
+    """
+    try:
+        return check()
+    except Exception as exc:
+        logger.warning(
+            "doctor: check %s failed", name, exc_info=RedactedFailure.of(exc)
+        )
+        return CheckResult(
+            name=name,
+            passed=False,
+            message=f"check could not run ({CheckFailure.detail(exc)})",
+            required=False,
+        )
+
+
+def _settings_checks(cwd: str) -> list[tuple[str, Callable[[], CheckResult | None]]]:
+    """Return the checks that need the settings, or one failed check without them."""
+    try:
+        settings = Settings()
+    except Exception as exc:
+        logger.warning("doctor: settings are invalid", exc_info=RedactedFailure.of(exc))
+        failed = CheckResult(
+            name="Settings",
+            passed=False,
+            message=f"invalid settings ({CheckFailure.detail(exc)})",
+        )
+        return [("Settings", lambda: failed)]
+    return [
+        ("FTS index", lambda: _check_fts_health(settings.lancedb_path)),
+        (
+            "Sync directories",
+            lambda: SyncDiagnostics.directories(settings.registry_path),
+        ),
+        (
+            "Sync enable",
+            lambda: SyncDiagnostics.enable_status(settings.registry_path, cwd),
+        ),
+        (
+            "Unlinked captures",
+            lambda: CaptureDiagnostics.unlinked(
+                settings.registry_path, settings.lancedb_path
+            ),
+        ),
+        ("Shadow repo", lambda: CaptureDiagnostics.shadow_repo(cwd)),
+        ("Memory corpus", lambda: MemoryDiagnostics.corpus(settings.lancedb_path)),
+        (
+            "Memory identity",
+            lambda: MemoryDiagnostics.identity_active(cwd, settings.lancedb_path),
+        ),
+        (
+            "Recall activity",
+            lambda: RecallDiagnostics.recent_activity(
+                settings.telemetry_path,
+                telemetry_enabled=settings.telemetry_enabled,
+            ),
+        ),
+    ]
+
+
 def _run_checks() -> list[CheckResult]:
     """Run every environment check with third-party logging quieted."""
-    settings = Settings()
     cwd = str(Path.cwd())
+    independent: list[tuple[str, Callable[[], CheckResult | None]]] = [
+        ("Python", _check_python_version),
+        ("Data directory", _check_data_directory),
+        ("Embedding model", _check_embedding_model),
+        ("ONNX provider", InferenceDiagnostics.onnx_provider),
+        ("Core imports", _check_imports),
+        ("Claude Code MCP", ClaudeCodeMcp().check),
+        ("Claude Desktop MCP", ClaudeDesktopMcp().check),
+        ("Daemon", DaemonDiagnostics.reachability),
+        ("Serve token", DaemonDiagnostics.serve_token),
+        ("Fd headroom", DaemonDiagnostics.fd_headroom),
+        ("Stop timeout", DaemonDiagnostics.stop_timeout),
+    ]
     with _quiet_logging():
-        results: list[CheckResult | None] = [
-            _check_python_version(),
-            _check_data_directory(),
-            _check_embedding_model(),
-            InferenceDiagnostics.onnx_provider(),
-            _check_imports(),
-            ClaudeCodeMcp().check(),
-            ClaudeDesktopMcp().check(),
-            DaemonDiagnostics.reachability(),
-            DaemonDiagnostics.serve_token(),
-            DaemonDiagnostics.fd_headroom(),
-            DaemonDiagnostics.stop_timeout(),
-            _check_fts_health(settings.lancedb_path),
-            SyncDiagnostics.directories(settings.registry_path),
-            SyncDiagnostics.enable_status(settings.registry_path, cwd),
-            CaptureDiagnostics.unlinked(settings.registry_path, settings.lancedb_path),
-            CaptureDiagnostics.shadow_repo(cwd),
-            MemoryDiagnostics.corpus(settings.lancedb_path),
-            MemoryDiagnostics.identity_active(cwd, settings.lancedb_path),
-            RecallDiagnostics.recent_activity(
-                settings.telemetry_path, telemetry_enabled=settings.telemetry_enabled
-            ),
+        results = [
+            _attempt(name, check)
+            for name, check in [*independent, *_settings_checks(cwd)]
         ]
     return [result for result in results if result is not None]
 

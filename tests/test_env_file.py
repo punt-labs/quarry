@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from quarry.env_file import EnvFile
-from quarry.env_sweep import EnvSweep
+from quarry.temp_sweep import TempSweep
 
 
 def _leftover(directory: Path, name: str, *, age_s: float) -> Path:
@@ -40,7 +40,7 @@ _HEX = "0123456789ab"  # a name EnvFile itself would have made
 
 
 def _stale(directory: Path, name: str) -> Path:
-    return _leftover(directory, name, age_s=EnvSweep.STALE_AFTER_S + 60)
+    return _leftover(directory, name, age_s=TempSweep.STALE_AFTER_S + 60)
 
 
 def test_planted_stale_leftovers_are_removed_and_named(
@@ -56,7 +56,7 @@ def test_planted_stale_leftovers_are_removed_and_named(
 
     assert not any(path.exists() for path in stale)
     [record] = caplog.records
-    assert "swept 2 stale temp file(s)" in record.getMessage()
+    assert "removed (2)" in record.getMessage()
     assert f"quarry.env.{_HEX}.tmp" in record.getMessage()
 
 
@@ -72,7 +72,7 @@ def test_a_young_temp_file_is_kept_so_a_live_writer_is_not_hit(
 
 def test_a_temp_dated_far_ahead_of_the_clock_counts_as_stale(tmp_path: Path) -> None:
     future = _leftover(
-        tmp_path, f"quarry.env.{_HEX}.tmp", age_s=-(EnvSweep.CLOCK_SKEW_S + 600)
+        tmp_path, f"quarry.env.{_HEX}.tmp", age_s=-(TempSweep.CLOCK_SKEW_S + 600)
     )
 
     _write(tmp_path / "quarry.env")
@@ -82,7 +82,7 @@ def test_a_temp_dated_far_ahead_of_the_clock_counts_as_stale(tmp_path: Path) -> 
 
 def test_a_temp_a_little_ahead_of_the_clock_is_a_live_writers(tmp_path: Path) -> None:
     ahead = _leftover(
-        tmp_path, f"quarry.env.{_HEX}.tmp", age_s=-(EnvSweep.CLOCK_SKEW_S - 600)
+        tmp_path, f"quarry.env.{_HEX}.tmp", age_s=-(TempSweep.CLOCK_SKEW_S - 600)
     )
 
     _write(tmp_path / "quarry.env")
@@ -93,10 +93,10 @@ def test_a_temp_a_little_ahead_of_the_clock_is_a_live_writers(tmp_path: Path) ->
 @pytest.mark.parametrize(
     ("age_s", "is_removed"),
     [
-        (EnvSweep.STALE_AFTER_S - 1, False),
-        (EnvSweep.STALE_AFTER_S, True),
-        (-EnvSweep.CLOCK_SKEW_S, False),
-        (-EnvSweep.CLOCK_SKEW_S - 1, True),
+        (TempSweep.STALE_AFTER_S - 1, False),
+        (TempSweep.STALE_AFTER_S, True),
+        (-TempSweep.CLOCK_SKEW_S, False),
+        (-TempSweep.CLOCK_SKEW_S - 1, True),
     ],
 )
 def test_the_staleness_boundaries_on_both_sides(
@@ -107,8 +107,8 @@ def test_the_staleness_boundaries_on_both_sides(
     leftover.write_text("k")
     os.utime(leftover, (now - age_s, now - age_s))
 
-    with patch("quarry.env_sweep.time.time", return_value=now):
-        EnvSweep(tmp_path / "quarry.env").run()
+    with patch("quarry.temp_sweep.time.time", return_value=now):
+        TempSweep(tmp_path / "quarry.env", "env file").run()
 
     assert leftover.exists() is not is_removed
 
@@ -151,13 +151,13 @@ def test_a_leftover_owned_by_another_user_is_kept_and_counted(
     theirs = _stale(tmp_path, f"quarry.env.{_HEX}.tmp")
 
     with (
-        patch("quarry.env_sweep.os.getuid", return_value=os.getuid() + 1),
+        patch("quarry.temp_sweep.os.getuid", return_value=os.getuid() + 1),
         caplog.at_level(logging.WARNING, logger="quarry"),
     ):
         _write(tmp_path / "quarry.env")
 
     assert theirs.exists()
-    assert "1 foreign-owned" in caplog.text
+    assert "foreign-owned, left (1)" in caplog.text
     assert theirs.name in caplog.text
 
 
@@ -180,7 +180,7 @@ def test_a_leftover_the_filesystem_refuses_is_counted_with_its_errno(
         _write(tmp_path / "quarry.env")
 
     assert stuck.exists()
-    assert "1 failed" in caplog.text
+    assert "failed (1)" in caplog.text
     assert "EACCES" in caplog.text
     assert (tmp_path / "quarry.env").read_text() == "A=1\n"  # the write went on
 
@@ -211,7 +211,7 @@ def test_a_directory_that_cannot_be_listed_is_a_warning_with_its_errno(
 ) -> None:
     with (
         patch(
-            "quarry.env_sweep.os.scandir",
+            "quarry.temp_sweep.os.scandir",
             side_effect=PermissionError(errno.EACCES, "injected"),
         ),
         caplog.at_level(logging.WARNING, logger="quarry"),

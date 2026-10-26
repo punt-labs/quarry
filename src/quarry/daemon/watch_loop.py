@@ -174,6 +174,7 @@ class WatchLoop:
             self._safety_task,
             self._submitter,
             self._dispatcher,
+            self._ctx.settings.ingest_drain_timeout_s,
         )
         # A joined watchdog observer cannot be restarted (reusing it watches
         # nothing): a fresh start() reconstructs source + roster.  The teardown

@@ -28,6 +28,7 @@ from quarry.fd_config import FdServiceLimits
 from quarry.net import LoopbackPolicy
 from quarry.private_write import PrivateWrite
 from quarry.shutdown_policy import ShutdownPolicy
+from quarry.temp_sweep import TempSweep
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
 
@@ -242,7 +243,9 @@ def _launchd_install() -> None:
                 result.returncode,
             )
 
-    # A name of its own, so a leftover from a crashed install never blocks this one.
+    # A crashed install can leave a temp holding the API key: sweep before writing.
+    TempSweep(_LAUNCHD_PLIST, "launchd plist").run()
+    # A name of its own, so a leftover never blocks this install.
     tmp_path = _LAUNCHD_PLIST.with_name(
         f"{_LAUNCHD_PLIST.name}.{secrets.token_hex(6)}.tmp"
     )

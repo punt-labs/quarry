@@ -276,3 +276,48 @@ def test_an_existing_spool_directory_is_not_resynced_into_its_parent(
         JobSpool(tmp_path / "spool").write(SpoolRecord("remember", "c", "n", "p"))
 
     assert tmp_path.stat().st_ino not in synced
+
+
+def test_every_directory_level_the_write_creates_is_synced_top_down(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "a" / "b" / "spool"
+    synced: list[int] = []
+    real_fsync = os.fsync
+
+    def fsync(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            synced.append(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    inodes_before = {tmp_path.stat().st_ino}
+    with patch("quarry.private_write.os.fsync", fsync):
+        JobSpool(spool).write(SpoolRecord("remember", "c", "n", "p"))
+
+    parents = [tmp_path, tmp_path / "a", tmp_path / "a" / "b"]
+    order = [synced.index(p.stat().st_ino) for p in parents]
+    assert order == sorted(order)  # top-down
+    assert inodes_before <= set(synced)
+
+
+def test_a_failed_mkdir_sync_does_not_say_the_spool_was_written(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    real_fsync = os.fsync
+    calls = {"n": 0}
+
+    def fsync(fd: int) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:  # the parent of the new spool directory
+            raise OSError(errno.EIO, "injected")
+        real_fsync(fd)
+
+    with (
+        patch("quarry.private_write.os.fsync", fsync),
+        caplog.at_level(logging.WARNING, logger="quarry.private_write"),
+    ):
+        JobSpool(tmp_path / "spool").write(SpoolRecord("remember", "c", "n", "p"))
+
+    [record] = caplog.records
+    assert "spool directory spool created; directory sync failed" in record.getMessage()
+    assert "written" not in record.getMessage()

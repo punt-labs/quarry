@@ -15,7 +15,8 @@ class ShutdownPolicy:
     The *total* is ``Settings.ingest_drain_timeout_s``.  The teardown spends it in
     steps, each with a stated share:
 
-    - the watch-loop stop gets at most :attr:`WATCH_SHARE` of it;
+    - the watch-loop stop gets at most :attr:`WATCH_SHARE` of it, and once that
+      runs out its remaining cleanups get :attr:`WATCH_GRACE_SHARE` of that more;
     - the queue drain is guaranteed at least :attr:`QUEUE_MIN_SHARE` of it;
     - a backfill's scan thread is given up on :attr:`SCAN_SHARE` of it after the
       stop (never longer than :attr:`SCAN_CAP_S`), so a stuck scan normally ends
@@ -36,6 +37,9 @@ class ShutdownPolicy:
     MARGIN_S: ClassVar[float] = 12.0
     # The most an aborted queue waits for its workers to unwind, beyond the budget.
     ABORT_WAIT_S: ClassVar[float] = 5.0
+    # The most an in-flight job's spool write is waited for while its worker
+    # unwinds: inside the abort wait, so the worker always ends within it.
+    SPOOL_WAIT_S: ClassVar[float] = ABORT_WAIT_S * 0.8
     # The least the task drain waits, even with the budget spent, so a task that
     # finishes just after the queue abort is not cancelled.  Taken from the margin.
     TASK_FLOOR_S: ClassVar[float] = 1.0
@@ -45,6 +49,9 @@ class ShutdownPolicy:
     # timeout, never at it.
     HEADROOM_S: ClassVar[float] = 2.0
     WATCH_SHARE: ClassVar[float] = 0.2
+    # How long a watch stop that was cancelled (its share ran out) may still finish
+    # its remaining cleanups, as a share of the watch share.
+    WATCH_GRACE_SHARE: ClassVar[float] = 0.25
     QUEUE_MIN_SHARE: ClassVar[float] = 0.5
     SCAN_SHARE: ClassVar[float] = 0.4
     SCAN_CAP_S: ClassVar[float] = 30.0
@@ -97,6 +104,11 @@ class ShutdownPolicy:
     def watch_s(self) -> float:
         """Return the most the watch-loop stop may take."""
         return self._total_s * self.WATCH_SHARE
+
+    @property
+    def watch_grace_s(self) -> float:
+        """Return how long a cancelled watch stop may keep cleaning up, in all."""
+        return self.watch_s * self.WATCH_GRACE_SHARE
 
     @property
     def queue_min_s(self) -> float:

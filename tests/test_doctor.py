@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import builtins
+import errno
 import importlib
 import io
 import json
 import logging
+import os
+import stat
+import subprocess
 import sys
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Self
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,11 +37,16 @@ from quarry.doctor import (
     run_install,
 )
 from quarry.doctor_captures import CaptureDiagnostics
+from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp, McpCommand
+from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
 from quarry.results import CheckResult
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+    from types import ModuleType
 
 MP = pytest.MonkeyPatch
 
@@ -199,7 +210,7 @@ class TestCheckClaudeCodeMcp:
         }
         plugin_json.write_text(json.dumps(manifest), encoding="utf-8")
 
-    def test_quarry_configured(self, tmp_path: Path, monkeypatch: MP):
+    def test_quarry_configured(self, tmp_path: Path):
         install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
         self._make_plugin_dir(install_path)
         plugins_path = self._write_plugins(
@@ -214,7 +225,7 @@ class TestCheckClaudeCodeMcp:
         assert result.passed is True
         assert "configured" in result.message
 
-    def test_quarry_not_configured(self, tmp_path: Path, monkeypatch: MP):
+    def test_quarry_not_configured(self, tmp_path: Path):
         plugins_path = self._write_plugins(
             tmp_path,
             {
@@ -225,14 +236,14 @@ class TestCheckClaudeCodeMcp:
         assert result.passed is False
         assert "not configured" in result.message
 
-    def test_no_plugin_registry(self, tmp_path: Path, monkeypatch: MP):
+    def test_no_plugin_registry(self, tmp_path: Path):
         missing = tmp_path / "nonexistent" / "installed_plugins.json"
         result = ClaudeCodeMcp(missing).check()
         assert result.passed is False
         assert result.required is False
         assert "no plugin registry" in result.message
 
-    def test_invalid_json(self, tmp_path: Path, monkeypatch: MP):
+    def test_invalid_json(self, tmp_path: Path):
         plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         plugins_path.parent.mkdir(parents=True, exist_ok=True)
         plugins_path.write_text("{invalid json", encoding="utf-8")
@@ -240,7 +251,7 @@ class TestCheckClaudeCodeMcp:
         assert result.passed is False
         assert "config error" in result.message
 
-    def test_install_path_missing(self, tmp_path: Path, monkeypatch: MP):
+    def test_install_path_missing(self, tmp_path: Path):
         """Registry lists quarry but the installPath directory doesn't exist."""
         plugins_path = self._write_plugins(
             tmp_path,
@@ -254,16 +265,14 @@ class TestCheckClaudeCodeMcp:
         assert result.passed is False
         assert "plugin files missing" in result.message
 
-    def test_empty_entries_list(self, tmp_path: Path, monkeypatch: MP):
+    def test_empty_entries_list(self, tmp_path: Path):
         """Registry has the key but an empty list of entries."""
         plugins_path = self._write_plugins(tmp_path, {"quarry@punt-labs": []})
         result = ClaudeCodeMcp(plugins_path).check()
         assert result.passed is False
         assert "not configured" in result.message
 
-    def test_unexpected_schema_list_returns_error(
-        self, tmp_path: Path, monkeypatch: MP
-    ):
+    def test_unexpected_schema_list_returns_error(self, tmp_path: Path):
         """Registry with unexpected shape (list not dict) degrades."""
         plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         plugins_path.parent.mkdir(parents=True, exist_ok=True)
@@ -273,7 +282,7 @@ class TestCheckClaudeCodeMcp:
         assert result.required is False
         assert "config error" in result.message
 
-    def test_unexpected_schema_plugins_not_list(self, tmp_path: Path, monkeypatch: MP):
+    def test_unexpected_schema_plugins_not_list(self, tmp_path: Path):
         """Plugin entry is a string instead of list of dicts."""
         plugins_path = self._write_plugins(
             tmp_path,
@@ -284,7 +293,7 @@ class TestCheckClaudeCodeMcp:
         assert result.required is False
         assert "config error" in result.message
 
-    def test_empty_install_path_returns_error(self, tmp_path: Path, monkeypatch: MP):
+    def test_empty_install_path_returns_error(self, tmp_path: Path):
         """Entry with empty installPath is caught before Path('') becomes '.'."""
         plugins_path = self._write_plugins(
             tmp_path,
@@ -295,9 +304,7 @@ class TestCheckClaudeCodeMcp:
         assert result.required is False
         assert "empty installPath" in result.message
 
-    def test_missing_install_path_key_returns_error(
-        self, tmp_path: Path, monkeypatch: MP
-    ):
+    def test_missing_install_path_key_returns_error(self, tmp_path: Path):
         """Entry with no installPath key at all is caught."""
         plugins_path = self._write_plugins(
             tmp_path,
@@ -308,7 +315,7 @@ class TestCheckClaudeCodeMcp:
         assert result.required is False
         assert "empty installPath" in result.message
 
-    def test_manifest_missing_mcp_server(self, tmp_path: Path, monkeypatch: MP):
+    def test_manifest_missing_mcp_server(self, tmp_path: Path):
         """plugin.json exists but has no quarry MCP server entry."""
         install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
         plugin_json = install_path / ".claude-plugin" / "plugin.json"
@@ -329,12 +336,12 @@ class TestCheckClaudeCodeMcp:
 
 
 class TestCheckClaudeDesktopMcp:
-    def test_desktop_not_installed(self, tmp_path: Path, monkeypatch: MP):
+    def test_desktop_not_installed(self, tmp_path: Path):
         result = ClaudeDesktopMcp(tmp_path / "nonexistent" / "config.json").check()
         assert result.passed is False
         assert "not installed" in result.message
 
-    def test_quarry_configured(self, tmp_path: Path, monkeypatch: MP):
+    def test_quarry_configured(self, tmp_path: Path):
         config_path = tmp_path / "claude_desktop_config.json"
         config = {"mcpServers": {"quarry": {"command": "uvx", "args": []}}}
         config_path.write_text(json.dumps(config))
@@ -342,7 +349,7 @@ class TestCheckClaudeDesktopMcp:
         assert result.passed is True
         assert "configured" in result.message
 
-    def test_quarry_not_configured(self, tmp_path: Path, monkeypatch: MP):
+    def test_quarry_not_configured(self, tmp_path: Path):
         config_path = tmp_path / "claude_desktop_config.json"
         config = {"mcpServers": {"other": {"command": "npx", "args": []}}}
         config_path.write_text(json.dumps(config))
@@ -350,7 +357,7 @@ class TestCheckClaudeDesktopMcp:
         assert result.passed is False
         assert "not configured" in result.message
 
-    def test_no_config_file(self, tmp_path: Path, monkeypatch: MP):
+    def test_no_config_file(self, tmp_path: Path):
         config_path = tmp_path / "claude_desktop_config.json"
         result = ClaudeDesktopMcp(config_path).check()
         assert result.passed is False
@@ -786,40 +793,6 @@ def _mock_install_deps(monkeypatch: MP) -> None:
     )
 
 
-class TestMcpCommand:
-    """The MCP command runs ``quarry mcp`` directly — no mcp-proxy shim."""
-
-    def test_direct_quarry_mcp(self) -> None:
-        """No proxy, no sh -c wrapper: the command is ``quarry`` with ``["mcp"]``."""
-        command, args = McpCommand.of()
-        assert command == "quarry"
-        assert args == ["mcp"]
-
-    def test_no_proxy_shim(self) -> None:
-        """The command must not reference mcp-proxy, its TOML, or a shell shim."""
-        command, args = McpCommand.of()
-        joined = command + " " + " ".join(args)
-        assert "mcp-proxy" not in joined
-        assert "quarry.toml" not in joined
-        assert "-c" not in args
-
-    def test_resolve_paths_uses_absolute_quarry(self, monkeypatch: MP) -> None:
-        """When resolve_paths=True (Desktop), quarry resolves to an absolute path."""
-        monkeypatch.setattr(
-            "quarry.doctor_mcp.shutil.which",
-            lambda name: f"/usr/local/bin/{name}",
-        )
-        command, args = McpCommand.of(resolve_paths=True)
-        assert command == "/usr/local/bin/quarry"
-        assert args == ["mcp"]
-
-    def test_default_uses_bare_name(self) -> None:
-        """Default (resolve_paths=False) uses the bare ``quarry`` name."""
-        command, _args = McpCommand.of()
-        assert command == "quarry"
-        assert not command.startswith("/")
-
-
 class _ScriptedClaude:
     """A mock ``claude`` binary: record each argv, return scripted results.
 
@@ -964,12 +937,12 @@ class TestConfigureClaudeCode:
 
 
 class TestConfigureClaudeDesktop:
-    def test_desktop_not_installed(self, tmp_path: Path, monkeypatch: MP):
+    def test_desktop_not_installed(self, tmp_path: Path):
         result = ClaudeDesktopMcp(tmp_path / "nonexistent" / "config.json").configure()
         assert result.passed is False
         assert "not installed" in result.message
 
-    def test_creates_new_config(self, tmp_path: Path, monkeypatch: MP):
+    def test_creates_new_config(self, tmp_path: Path):
         config_path = tmp_path / "claude_desktop_config.json"
         result = ClaudeDesktopMcp(config_path).configure()
         assert result.passed is True
@@ -979,7 +952,7 @@ class TestConfigureClaudeDesktop:
         assert server["args"] == ["mcp"]
         assert "mcp-proxy" not in json.dumps(server)
 
-    def test_preserves_existing_servers(self, tmp_path: Path, monkeypatch: MP):
+    def test_preserves_existing_servers(self, tmp_path: Path):
         config_path = tmp_path / "claude_desktop_config.json"
         existing = {"mcpServers": {"other": {"command": "npx", "args": ["other"]}}}
         config_path.write_text(json.dumps(existing))
@@ -1470,7 +1443,7 @@ class TestImportIsolation:
         assert result.required is False
         assert module in result.message
 
-    def test_check_environment_completes_with_every_dependency_broken(
+    def test_check_environment_completes_with_the_embedding_and_database_imports_broken(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1507,15 +1480,17 @@ class TestConfigureClaudeDesktopRobustness:
 
         assert result.passed is False
 
-    def test_the_config_is_written_atomically_through_atomic_file(
+    def test_a_failed_write_leaves_the_original_text_and_no_temp_file(
         self, tmp_path: Path
     ) -> None:
         config_path = tmp_path / "claude_desktop_config.json"
-        config_path.write_text("{}")
-        with patch("quarry.doctor_mcp.AtomicFile.replace") as replace:
-            ClaudeDesktopMcp(config_path).configure()
+        config_path.write_text('{"mcpServers": {}}')
+        with patch("os.replace", side_effect=OSError(errno.EIO, "injected")):
+            result = ClaudeDesktopMcp(config_path).configure()
 
-        replace.assert_called_once()
+        assert result.passed is False
+        assert config_path.read_text() == '{"mcpServers": {}}'
+        assert not list(tmp_path.glob("*.tmp"))
 
     def test_install_goes_on_to_daemon_registration_after_a_malformed_config(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
@@ -1540,3 +1515,303 @@ class TestConfigureClaudeDesktopRobustness:
 
         assert registered == [True]
         assert "Claude Desktop MCP" in capsys.readouterr().out
+
+
+def _importer_that_raises(module: str, exc: BaseException) -> object:
+    """Return an ``__import__`` that raises *exc* for *module* and defers otherwise."""
+    real = builtins.__import__
+
+    def fake(
+        name: str,
+        globals_: Mapping[str, object] | None = None,
+        locals_: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] = (),
+        level: int = 0,
+    ) -> ModuleType:
+        if name == module:
+            raise exc
+        return real(name, globals_, locals_, fromlist, level)
+
+    return fake
+
+
+class TestDoctorNeverCrashes:
+    """Every way a damaged install can fail an import is a failed check."""
+
+    def test_core_imports_survives_an_oserror_and_every_check_still_prints(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(
+            builtins, "__import__", _importer_that_raises("lancedb", OSError("dlopen"))
+        )
+
+        result = _check_imports()
+        code = check_environment()
+
+        assert result.passed is False
+        assert "lancedb" in result.message
+        assert code == 1
+        out = capsys.readouterr().out
+        for name in ("Python", "Data directory", "Core imports", "FTS index"):
+            assert name in out
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            OSError("libfoo.so: cannot open"),
+            AttributeError("module has no attribute"),
+            ValueError("bad abi"),
+            RuntimeError("init failed"),
+            ImportError("broken", name="libfoo"),
+        ],
+    )
+    def test_a_native_import_failure_of_any_kind_is_a_failed_embedding_check(
+        self, exc: Exception, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            builtins, "__import__", _importer_that_raises("huggingface_hub", exc)
+        )
+
+        result = _check_embedding_model()
+
+        assert result.passed is False
+        assert type(exc).__name__ in result.message
+        assert "reinstall" not in result.message  # not simply missing
+
+    def test_the_message_names_the_module_that_actually_failed(
+        self, monkeypatch: MP
+    ) -> None:
+        exc = ModuleNotFoundError("No module named 'libfoo'", name="libfoo")
+        monkeypatch.setattr(
+            builtins, "__import__", _importer_that_raises("huggingface_hub", exc)
+        )
+
+        result = _check_embedding_model()
+
+        assert "libfoo" in result.message
+        assert "reinstall quarry" in result.message
+
+    @pytest.mark.parametrize("exc", [ValueError("x"), RuntimeError("y"), OSError("z")])
+    def test_a_native_import_failure_is_a_failed_fts_check(
+        self, exc: Exception, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        for name in [m for m in sys.modules if m.startswith("quarry.db")]:
+            monkeypatch.delitem(sys.modules, name)
+        monkeypatch.setattr(
+            builtins, "__import__", _importer_that_raises("quarry.db.facade", exc)
+        )
+
+        result = _check_fts_health(tmp_path / "lancedb")
+
+        assert result.passed is False
+        assert result.required is False
+        assert "quarry.db" in result.message
+
+    def test_a_cache_lookup_that_raises_is_a_failed_check(
+        self, monkeypatch: MP
+    ) -> None:
+        def boom(*_a: object, **_k: object) -> str:
+            raise OSError(errno.EIO, "disk\nsecond line")
+
+        monkeypatch.setattr("huggingface_hub.try_to_load_from_cache", boom)
+
+        result = _check_embedding_model()
+
+        assert result.passed is False
+        assert "cannot read the model cache" in result.message
+        assert "second line" not in result.message  # first line only
+
+    def test_a_permission_error_is_not_reported_as_a_missing_index(
+        self, tmp_path: Path
+    ) -> None:
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+        with patch(
+            "quarry.db.facade.Database.connect",
+            side_effect=PermissionError(errno.EACCES, "denied"),
+        ):
+            result = _check_fts_health(db_path)
+
+        assert result.passed is False
+        assert "missing" not in result.message
+        assert "PermissionError" in result.message
+
+    def test_a_missing_file_is_still_reported_as_missing(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+        with patch(
+            "quarry.db.facade.Database.connect",
+            side_effect=FileNotFoundError(errno.ENOENT, "gone"),
+        ):
+            result = _check_fts_health(db_path)
+
+        assert "missing" in result.message
+        assert "FileNotFoundError" in result.message
+
+
+class TestMcpConfigRobustness:
+    def test_latin_1_bytes_in_the_desktop_config_say_not_utf_8(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = tmp_path / "claude_desktop_config.json"
+        config_path.write_bytes(b'{"mcpServers": {"x": "\xff"}}')
+
+        configured = ClaudeDesktopMcp(config_path).configure()
+        checked = ClaudeDesktopMcp(config_path).check()
+
+        assert "not UTF-8" in configured.message
+        assert "not UTF-8" in checked.message
+        assert config_path.read_bytes() == b'{"mcpServers": {"x": "\xff"}}'
+
+    def test_a_fifo_is_refused_and_left_untouched(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "claude_desktop_config.json"
+        os.mkfifo(config_path)
+
+        configured = ClaudeDesktopMcp(config_path).configure()
+        checked = ClaudeDesktopMcp(config_path).check()
+
+        assert configured.passed is False
+        assert "not a regular file" in configured.message
+        assert "not a regular file" in checked.message
+        assert stat.S_ISFIFO(config_path.stat().st_mode)
+
+    def test_a_string_mcp_servers_does_not_match_by_substring(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = tmp_path / "claude_desktop_config.json"
+        config_path.write_text('{"mcpServers": "xquarryx"}')
+
+        result = ClaudeDesktopMcp(config_path).check()
+
+        assert result.passed is False
+
+    def test_a_latin_1_plugin_registry_is_a_failed_check(self, tmp_path: Path) -> None:
+        registry = tmp_path / "installed_plugins.json"
+        registry.write_bytes(b'{"plugins": {"\xff": []}}')
+
+        result = ClaudeCodeMcp(registry).check()
+
+        assert result.passed is False
+        assert "not UTF-8" in result.message
+
+
+class TestConfigureClaudeCodeNeverRaises:
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            subprocess.TimeoutExpired(cmd="claude", timeout=1),
+            FileNotFoundError(errno.ENOENT, "gone"),
+            PermissionError(errno.EACCES, "denied"),
+        ],
+    )
+    def test_a_claude_that_cannot_run_is_a_failed_result(
+        self, exc: Exception, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+
+        def run(*_a: object, **_k: object) -> object:
+            raise exc
+
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", run)
+
+        result = ClaudeCodeMcp().configure()
+
+        assert result.passed is False
+        assert type(exc).__name__ in result.message
+
+    def test_every_claude_call_has_a_timeout(self, monkeypatch: MP) -> None:
+        seen: list[object] = []
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+
+        def run(argv: list[str], **kw: object) -> object:
+            seen.append(kw.get("timeout"))
+            return type("CP", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", run)
+
+        ClaudeCodeMcp().configure()
+
+        assert seen
+        assert all(isinstance(t, float) and t > 0 for t in seen)
+
+
+class TestMcpCommands:
+    """Each client registers ``quarry mcp`` directly, with no shim."""
+
+    def test_claude_code_registers_the_bare_command(self, monkeypatch: MP) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        claude = _ScriptedClaude([(0, "")])
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", claude.run)
+
+        ClaudeCodeMcp().configure()
+
+        assert claude.calls[-1][-3:] == ["--", "quarry", "mcp"]
+        assert "mcp-proxy" not in " ".join(claude.calls[-1])
+
+    def test_desktop_registers_the_resolved_command(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda name: f"/usr/local/bin/{name}"
+        )
+        config_path = tmp_path / "claude_desktop_config.json"
+
+        ClaudeDesktopMcp(config_path).configure()
+
+        server = json.loads(config_path.read_text())["mcpServers"]["quarry"]
+        assert server == {"command": "/usr/local/bin/quarry", "args": ["mcp"]}
+
+
+class TestEveryCheckRuns:
+    def test_a_check_that_raises_is_a_failed_result_and_the_rest_still_run(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        def boom() -> CheckResult:
+            msg = "daemon probe exploded"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(DaemonDiagnostics, "reachability", boom)
+
+        check_environment()
+
+        out = capsys.readouterr().out
+        assert "Daemon" in out
+        assert "RuntimeError" in out
+        assert "Core imports" in out  # a later check still ran
+
+    def test_invalid_settings_fail_one_check_and_the_independent_ones_run(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        with monkeypatch.context() as bad:
+            bad.setenv("INGEST_DRAIN_TIMEOUT_S", "not-a-number")
+            code = check_environment()
+
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "invalid settings" in out
+        assert "Core imports" in out
+
+
+def test_a_missing_package_version_is_unknown_not_a_crash(
+    tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def missing(_name: str) -> str:
+        raise PackageNotFoundError
+
+    monkeypatch.setattr("quarry.doctor.version", missing)
+
+    check_environment()
+
+    assert "punt-quarry unknown" in capsys.readouterr().out

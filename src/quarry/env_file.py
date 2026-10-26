@@ -6,9 +6,9 @@ import logging
 import secrets
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.env_sweep import EnvSweep
 from quarry.failure_reason import FailureReason
 from quarry.private_write import PrivateWrite
+from quarry.temp_sweep import TempSweep
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -28,7 +28,7 @@ class EnvFile:
     since the file is already in place.
 
     A crash leaves a temp behind, and it holds the key, so every write first
-    sweeps them (see :class:`EnvSweep`).  The config directory is tightened to
+    sweeps them (see :class:`TempSweep`).  The config directory is tightened to
     0700 whether or not it already existed.
     """
 
@@ -46,7 +46,7 @@ class EnvFile:
         directory = self._path.parent
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._tighten(directory)
-        EnvSweep(self._path).run()
+        TempSweep(self._path, "env file").run()
         tmp_path = self._path.with_name(f"{self._path.name}.{secrets.token_hex(6)}.tmp")
         PrivateWrite("env file").commit(
             tmp_path, self._path, "".join(f"{line}\n" for line in lines)

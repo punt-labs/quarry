@@ -162,6 +162,11 @@ class CollectionWorker:
                 self._release_admit()
 
     @property
+    def pending_jobs(self) -> int:
+        """Return how many aborted jobs have no recorded outcome yet."""
+        return self._jobs.pending
+
+    @property
     def tally(self) -> AbortTally:
         """Return how this worker's aborted jobs ended."""
         return self._tally
