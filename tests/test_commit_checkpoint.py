@@ -28,7 +28,8 @@ if TYPE_CHECKING:
 
 def _running() -> tuple[TaskState, Callable[[str], None]]:
     state = TaskState(task_id="j", kind="backfill", status="queued")
-    assert JobLifecycle(state).start()
+    moved = JobLifecycle(state).start()
+    assert moved
     queued = cast("QueuedIngest", SimpleNamespace(new_state=lambda: state))
     return state, QueuedJob(cast("ThreadCall", None), queued).checkpoint
 

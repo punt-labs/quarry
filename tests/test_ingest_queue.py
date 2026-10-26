@@ -27,11 +27,11 @@ from quarry.daemon.abort_tally import AbortTally, AbortTerm
 from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
-from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskRegistry, TaskState
-from tests.job_states import job_in
+from quarry.daemon.terminal import Terminal
+from tests.job_states import JobStates
 
 if TYPE_CHECKING:
     import pytest
@@ -61,6 +61,10 @@ class _IdleWorker:
 
     @staticmethod
     def unobserved_stores() -> tuple[object, ...]:
+        return ()
+
+    @staticmethod
+    def straggling_stores() -> tuple[object, ...]:
         return ()
 
     @staticmethod
@@ -122,7 +126,7 @@ class _StubUnit:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Record entry, wait as configured, then record a terminal status."""
         del ctx  # the stub ignores the daemon context; the queue passes it through
-        with JobTerminal.recording(state):
+        with Terminal.for_job(state).recording():
             self.ledger.enter(self.collection)
             try:
                 if self.gate is not None:
@@ -293,7 +297,7 @@ def test_a_job_withdrawn_before_it_is_queued_gives_its_slot_back() -> None:
     async def _run() -> None:
         ledger = _Ledger()
         queue = _make_queue(depth=1, concurrency=1)
-        withdrawn = job_in("withdrawn")
+        withdrawn = JobStates.reaching("withdrawn")
         assert queue.try_submit(_rk("c"), _StubUnit("c", "gone", ledger), withdrawn)
         await asyncio.sleep(0.02)
         assert queue.try_submit(

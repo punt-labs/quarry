@@ -16,7 +16,8 @@ def test_a_task_completes_with_its_results_and_no_reason() -> None:
     state = _task()
     state.error = "an earlier reason"
 
-    assert TaskLifecycle(state).settle_stored({"count": 3})
+    moved = TaskLifecycle(state).settle_stored({"count": 3})
+    assert moved
 
     assert (state.status, state.error, state.results) == ("completed", "", {"count": 3})
 
@@ -24,7 +25,8 @@ def test_a_task_completes_with_its_results_and_no_reason() -> None:
 def test_a_task_fails_with_its_reason() -> None:
     state = _task()
 
-    assert TaskLifecycle(state).settle_failed("disk gone")
+    moved = TaskLifecycle(state).settle_failed("disk gone")
+    assert moved
 
     assert (state.status, state.error) == ("failed", "disk gone")
 

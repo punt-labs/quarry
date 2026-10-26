@@ -42,17 +42,29 @@ class LoopClose:
 
     async def run(self, deadline: float) -> None:
         """Wait until nothing is running or the loop clock reaches *deadline*."""
-        loop = asyncio.get_running_loop()
         stores = [s for w in self._workers for s in w.unobserved_stores()]
+        await self._wait_for(stores, deadline)
+        removing = await self._drain(deadline)
+        stragglers = [s for w in self._workers for s in w.straggling_stores()]
+        self._report([s for s in stores if s.is_unobserved] + stragglers, removing)
+
+    @staticmethod
+    async def _wait_for(stores: list[StoreRun], deadline: float) -> None:
+        """Wait, up to *deadline*, for each store's end to be read; cancel no store."""
         waits = [asyncio.ensure_future(store.observed()) for store in stores]
         if waits:
-            await asyncio.wait(waits, timeout=max(deadline - loop.time(), 0.0))
+            remaining = max(deadline - asyncio.get_running_loop().time(), 0.0)
+            await asyncio.wait(waits, timeout=remaining)
         for wait in waits:
             wait.cancel()  # the wait, never the store
+
+    async def _drain(self, deadline: float) -> list[Path]:
+        """Drain every worker's spool removals; return those still running."""
+        loop = asyncio.get_running_loop()
         removing: list[Path] = []
         for worker in self._workers:
             removing += await worker.drain_removals(max(deadline - loop.time(), 0.0))
-        self._report([s for s in stores if s.is_unobserved], removing)
+        return removing
 
     def _report(self, stores: list[StoreRun], removing: list[Path]) -> None:
         """Log the corrected tally, then every store and removal still running."""

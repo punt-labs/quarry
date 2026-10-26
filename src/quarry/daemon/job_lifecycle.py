@@ -193,9 +193,12 @@ class JobLifecycle:
         later.
         """
         store = self._state.store
-        settlement = store.outcome() if store is not None else None
         with self._state.claim:
-            self._settle_cancelled(settlement, default)
+            # Read under the claim: a status the store's own end settles cannot
+            # move between the read and the write.
+            self._settle_cancelled(
+                store.outcome() if store is not None else None, default
+            )
         if store is not None:
             store.detach()
 

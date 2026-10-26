@@ -265,7 +265,8 @@ class World:
         entry = Entry(name, job, state, store)
         self._entries[name] = entry
         key = RouteKey("db", collection)
-        assert self._ctx.ingest_queue.try_submit(key, job, state)
+        admitted = self._ctx.ingest_queue.try_submit(key, job, state)
+        assert admitted
         return entry
 
     def break_spool(self, blocker: Path) -> None:
@@ -290,7 +291,8 @@ class World:
             entry = Entry(name, job, state, store)
             self._entries[name] = entry
             key = RouteKey("db", collection)
-            assert self._ctx.ingest_queue.try_submit(key, job, state)
+            admitted = self._ctx.ingest_queue.try_submit(key, job, state)
+            assert admitted
             entries.append(entry)
         return entries
 

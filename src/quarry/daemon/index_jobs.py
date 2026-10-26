@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from quarry.daemon.job_lifecycle import JobLifecycle
-from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.store_run import StoreRun
+from quarry.daemon.terminal import Terminal
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync import sync_collection
 from quarry.sync_registry import SyncRegistry
@@ -57,9 +57,9 @@ class FileIndexJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Index the file off-thread, recording per-file success or a soft error."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        # JobTerminal so an UNEXPECTED failure records ``failed`` and never
+        # Terminal so an UNEXPECTED failure records ``failed`` and never
         # escapes to crash the queue worker (the queue's per-job contract).
-        with JobTerminal.recording(state):
+        with Terminal.for_job(state).recording():
             store = StoreRun.start(self, state, self._index, self._settlement)
             JobLifecycle(state).settle(await store.wait())
 
@@ -114,7 +114,7 @@ class DocumentDeleteJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete every document's chunks + registry rows off-thread."""
         del ctx
-        with JobTerminal.recording(state):
+        with Terminal.for_job(state).recording():
             store = StoreRun.start(self, state, self._delete, self._settlement)
             JobLifecycle(state).settle(await store.wait())
 
@@ -163,7 +163,7 @@ class CollectionSyncJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the bulk collection sync off-thread, recording its counts."""
         del ctx
-        with JobTerminal.recording(state):
+        with Terminal.for_job(state).recording():
             store = StoreRun.start(self, state, self._sync, self._settlement)
             JobLifecycle(state).settle(await store.wait())
 

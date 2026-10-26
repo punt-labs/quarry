@@ -23,7 +23,7 @@ from quarry.backfill_writer import BackfillWriteError, WriteOutcome
 from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.backfill_task import BackfillTask
 from quarry.daemon.content_jobs import ScrubbedIngestJob
-from quarry.daemon.task_terminal import TaskTerminal
+from quarry.daemon.terminal import Terminal
 from tests.queue_fixtures import BlockingUnit, admit_like_a_hook, ctx_with_queue
 
 if TYPE_CHECKING:
@@ -139,7 +139,7 @@ async def _replay(
         state.status = "completed"
 
     async def as_the_route_runs_it() -> None:
-        with TaskTerminal.recording(world.state):
+        with Terminal.for_task(world.state).recording():
             await BackfillTask(ctx, bound_s=bound_s).run(world.state, _ARGS)
 
     with (
@@ -167,7 +167,7 @@ async def test_a_double_cancel_still_waits_for_the_thread_and_keeps_the_reason(
     world = _World(ctx, state, tmp_path, release, asyncio.Event(), [])
 
     async def as_the_route_runs_it() -> None:
-        with TaskTerminal.recording(state):
+        with Terminal.for_task(state).recording():
             await BackfillTask(ctx).run(state, _ARGS)
 
     with patch("quarry.backfill.Backfill.sessions", _scan_that_hangs_in_a_step(world)):
@@ -235,7 +235,7 @@ async def test_a_thread_hung_in_a_step_is_given_up_on_but_still_holds_the_guard(
     world = _World(ctx, state, tmp_path, threading.Event(), asyncio.Event(), [])
 
     async def as_the_route_runs_it() -> None:
-        with TaskTerminal.recording(state):
+        with Terminal.for_task(state).recording():
             await BackfillTask(ctx, bound_s=0.3).run(state, _ARGS)
 
     with patch("quarry.backfill.Backfill.sessions", _scan_that_hangs_in_a_step(world)):

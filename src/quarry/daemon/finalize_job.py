@@ -23,9 +23,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from quarry.daemon.job_lifecycle import JobLifecycle
-from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.store_run import StoreRun
+from quarry.daemon.terminal import Terminal
 from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
 
@@ -60,7 +60,7 @@ class CollectionFinalizeJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the coalesced FTS rebuild + optimize off-thread."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        with JobTerminal.recording(state):
+        with Terminal.for_job(state).recording():
             store = StoreRun.start(
                 self, state, self._finalize, lambda _: Settlement.done({})
             )
@@ -104,7 +104,7 @@ class CollectionPurgeJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete the collection's chunks off-thread, recording the count."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        with JobTerminal.recording(state):
+        with Terminal.for_job(state).recording():
             store = StoreRun.start(
                 self,
                 state,

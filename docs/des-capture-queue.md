@@ -192,7 +192,7 @@ async def _run(self) -> None:
                 return
             item.state.status = "running"  # queued -> running here
             async with self._embed_gate:  # global concurrency bound
-                await item.job.run(self._ctx, item.state)  # TaskTerminal inside
+                await item.job.run(self._ctx, item.state)  # Terminal inside
         finally:
             self._admit_release()  # free one queue-depth slot
             self._queue.task_done()
@@ -292,7 +292,7 @@ I-NOBLOCK and stalls the hook (the exact regression DES-041 removed).
   DES-026 guard, which filters on `"running"`; scoping the value to the queued
   path avoids that.)
 - The worker sets `status = "running"` when it dequeues the job (§3.2), before
-  `job.run`. `TaskTerminal.recording` (`task_terminal.py`) then records
+  `job.run`. `Terminal.recording` (`terminal.py`) then records
   `completed`/`failed`/`cancelled→failed` exactly as today.
 
 This is a new status **value**, not a schema change. The client's `await_task`
@@ -325,7 +325,7 @@ step is needed. The ASGI **lifespan** owns only the bounded shutdown drain:
   after each collection's pending jobs, and `await`s each queue's `join()` under
   a bounded `DRAIN_TIMEOUT` so queued captures are not silently
   lost on a clean shutdown. On timeout, remaining workers are cancelled;
-  `TaskTerminal.recording` records `cancelled → failed` and the durable artifact is
+  `Terminal.recording` records `cancelled → failed` and the durable artifact is
   recoverable via backfill. Drain is bounded so shutdown never hangs.
 
 **Resource-invariant interaction** (`tests/test_resource_invariants.py`): the

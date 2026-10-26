@@ -13,7 +13,7 @@ from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.tasks import TaskState
 from quarry.db.row_budget import RowBudgetError
-from tests.job_states import job_in
+from tests.job_states import JobStates
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -30,7 +30,7 @@ def _terminal(
 ) -> tuple[TaskState, RefusalAwareTerminal]:
     """Return a running state of *kind* and the terminal bound to it."""
     if kind == "job":
-        state = job_in("running")
+        state = JobStates.reaching("running")
         return state, RefusalAwareTerminal.for_job(state, subject)
     state = TaskState(task_id="remember-t", kind="remember")
     return state, RefusalAwareTerminal.for_task(state, subject)
@@ -206,7 +206,7 @@ def test_a_row_budget_violation_is_a_refusal_not_a_fault(
 def test_a_refusal_the_status_would_not_take_is_not_logged_as_a_rejection(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    state = job_in("running")
+    state = JobStates.reaching("running")
     terminal = RefusalAwareTerminal.for_job(state)
     JobLifecycle(state).withdraw()  # the producer gave up: the job is aborted
     with caplog.at_level(logging.WARNING), terminal.record():

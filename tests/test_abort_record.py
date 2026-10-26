@@ -18,7 +18,7 @@ from quarry.daemon.queued_unit import QueuedUnit
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.spool_discard import SpoolDiscard
 from quarry.daemon.store_run import StoreRun
-from tests.job_states import job_in
+from tests.job_states import JobStates
 
 if TYPE_CHECKING:
     import pytest
@@ -77,7 +77,7 @@ def _record() -> tuple[AbortRecord, AbortTally, list[QueuedUnit]]:
 
 
 def _unit(status: TaskStatus, *, durable: bool = True) -> QueuedUnit:
-    return QueuedUnit(_Durable() if durable else _Fragile(), job_in(status))
+    return QueuedUnit(_Durable() if durable else _Fragile(), JobStates.reaching(status))
 
 
 def test_take_fails_what_it_may_and_counts_the_rest_where_they_belong() -> None:

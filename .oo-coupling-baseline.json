@@ -626,8 +626,8 @@
     "efferent_coupling": 4.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.544,
-    "avg_lcom": 0.544
+    "max_lcom": 0.582,
+    "avg_lcom": 0.582
   },
   "src/quarry/daemon/content_jobs.py": {
     "efferent_coupling": 4.0,
@@ -738,8 +738,8 @@
     "efferent_coupling": 7.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.67,
-    "avg_lcom": 0.67
+    "max_lcom": 0.695,
+    "avg_lcom": 0.695
   },
   "src/quarry/daemon/job_admission.py": {
     "efferent_coupling": 1.0,
@@ -786,6 +786,13 @@
   "src/quarry/daemon/launcher.py": {
     "efferent_coupling": 10.0,
     "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/quarry/daemon/lifecycle.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -854,7 +861,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/daemon/refusal_aware_terminal.py": {
-    "efferent_coupling": 7.0,
+    "efferent_coupling": 4.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1058,7 +1065,7 @@
   },
   "src/quarry/daemon/task_lifecycle.py": {
     "efferent_coupling": 0.0,
-    "public_names": 2.0,
+    "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -1090,6 +1097,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/quarry/daemon/terminal.py": {
+    "efferent_coupling": 4.0,
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.267,
+    "avg_lcom": 0.267
   },
   "src/quarry/daemon/thread_call.py": {
     "efferent_coupling": 1.0,

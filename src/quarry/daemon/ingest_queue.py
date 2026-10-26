@@ -149,8 +149,8 @@ class IngestQueue:
         """Abort *workers* after a drain outran its window; say what that cost.
 
         The abort's wait and the drain that follows share one allowance,
-        :attr:`ABORT_WAIT_S`, so a shutdown is no longer than it was: the drain
-        gets what the abort left, and reports whatever it could not wait out.
+        :attr:`ABORT_WAIT_S`: the drain gets what the abort left, and reports
+        whatever it could not wait out.
         """
         started = asyncio.get_running_loop().time()
         await QueueAbort(workers, self.ABORT_WAIT_S).run(window_s)

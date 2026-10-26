@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING, cast, final
 
 from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.job_lifecycle import JobLifecycle
-from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY, QueuePolicy
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskRegistry, TaskState
+from quarry.daemon.terminal import Terminal
 from quarry.daemon.thread_call import ThreadCall
 from quarry.stop_signal import StopSignal
 
@@ -55,7 +55,7 @@ class BlockingUnit:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Wait for the gate, then complete."""
         del ctx
-        with JobTerminal.recording(state):
+        with Terminal.for_job(state).recording():
             await self.gate.wait()
             JobLifecycle(state).settle_stored({})
 
@@ -68,7 +68,8 @@ def admit_like_a_hook(ctx: DaemonContext, unit: BlockingUnit) -> None:
     """Admit *unit* the way a hook's capture route does: no reserve, no waiting."""
     state = TaskState(task_id="hook", kind="capture")
     key = RouteKey("db", unit.collection)
-    assert ctx.ingest_queue.try_submit(key, unit, state)
+    admitted = ctx.ingest_queue.try_submit(key, unit, state)
+    assert admitted
 
 
 def writer_for(

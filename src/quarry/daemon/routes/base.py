@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.task_terminal import TaskTerminal
+from quarry.daemon.terminal import Terminal
 from quarry.http_guards import RequestGuards
 from quarry.memory_types import MemoryType
 
@@ -193,7 +193,7 @@ class RouteGroup:
         Shared by document and collection deletion, which differ only in the
         store method invoked and the ``type`` label reported to the client.
         """
-        with TaskTerminal.recording(state):
+        with Terminal.for_task(state).recording():
             count = await run_in_threadpool(delete_call)
             state.status = "completed"
             state.results = {"deleted": count, "name": name, "type": kind_label}

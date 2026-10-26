@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Self, cast, final
 
 import pytest
 
@@ -13,11 +13,12 @@ from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.owner_lock import ClaimNotHeldError
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.tasks import TaskState
-from tests.job_states import job_in
+from tests.job_states import JobStates
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
+    from quarry.daemon.owner_lock import Claim
     from quarry.daemon.store_run import StoreRun
     from quarry.daemon.tasks import TaskStatus
 
@@ -29,35 +30,52 @@ def _state(status: TaskStatus) -> TaskState:
     return TaskState(task_id="j", kind="backfill", status=status)
 
 
+@final
 class _Job:
-    def __init__(self) -> None:
-        self.ran = 0
+    """A job that settles itself and counts how often it ran."""
+
+    __slots__ = ("_ran",)
+
+    _ran: int
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self._ran = 0
+        return self
+
+    @property
+    def ran(self) -> int:
+        return self._ran
 
     async def run(self, ctx: object, state: TaskState) -> None:
         del ctx
-        self.ran += 1
+        self._ran += 1
         JobLifecycle(state).settle_stored({})
 
 
 def _queued() -> TaskState:
     state = _state("new")
-    assert JobLifecycle(state).enqueue()
+    moved = JobLifecycle(state).enqueue()
+    assert moved
     return state
 
 
 def test_a_queued_job_starts_once() -> None:
     state = _state("queued")
 
-    assert JobLifecycle(state).start()
+    moved = JobLifecycle(state).start()
+    assert moved
     assert state.status == "running"
-    assert not JobLifecycle(state).start()
+    moved = JobLifecycle(state).start()
+    assert not moved
 
 
 def test_a_job_withdrawn_before_it_was_queued_stays_withdrawn() -> None:
     state = _state("new")
     JobLifecycle(state).withdraw()
 
-    assert not JobLifecycle(state).enqueue()
+    moved = JobLifecycle(state).enqueue()
+    assert not moved
     assert state.status == "withdrawn"
 
 
@@ -66,7 +84,8 @@ def test_starting_a_job_in_any_other_status_is_logged_at_warning(
     status: TaskStatus, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="quarry.daemon.job_lifecycle"):
-        assert not JobLifecycle(_state(status)).start()
+        moved = JobLifecycle(_state(status)).start()
+        assert not moved
 
     assert status in caplog.text
 
@@ -76,7 +95,8 @@ def test_starting_a_withdrawn_job_is_silent(caplog: pytest.LogCaptureFixture) ->
     JobLifecycle(state).withdraw()
 
     with caplog.at_level(logging.WARNING, logger="quarry.daemon.job_lifecycle"):
-        assert not JobLifecycle(state).start()
+        moved = JobLifecycle(state).start()
+        assert not moved
 
     assert caplog.text == ""
 
@@ -84,30 +104,41 @@ def test_starting_a_withdrawn_job_is_silent(caplog: pytest.LogCaptureFixture) ->
 def test_a_job_withdrawn_before_it_runs_never_starts_and_says_so() -> None:
     state = _state("queued")
 
-    assert JobLifecycle(state).withdraw() is _Withdrawn.NEVER_STARTED
-    assert JobLifecycle(state).withdraw() is _Withdrawn.NEVER_STARTED  # still
-    assert not JobLifecycle(state).start()
+    verdict = JobLifecycle(state).withdraw()
+    assert verdict is _Withdrawn.NEVER_STARTED
+    verdict = JobLifecycle(state).withdraw()
+    assert verdict is _Withdrawn.NEVER_STARTED  # still
+    moved = JobLifecycle(state).start()
+    assert not moved
 
 
 def test_a_job_that_was_never_queued_is_withdrawn_too() -> None:
-    assert JobLifecycle(_state("new")).withdraw() is _Withdrawn.NEVER_STARTED
+    verdict = JobLifecycle(_state("new")).withdraw()
+    assert verdict is _Withdrawn.NEVER_STARTED
 
 
 def test_a_job_withdrawn_while_running_stops_at_its_commit() -> None:
     state = _state("queued")
-    assert JobLifecycle(state).start()
+    moved = JobLifecycle(state).start()
+    assert moved
 
-    assert JobLifecycle(state).withdraw() is _Withdrawn.STARTED
-    assert not JobLifecycle(state).commit()  # it writes nothing
-    assert JobLifecycle(state).withdraw() is _Withdrawn.STARTED  # and still says it ran
+    verdict = JobLifecycle(state).withdraw()
+    assert verdict is _Withdrawn.STARTED
+    moved = JobLifecycle(state).commit()
+    assert not moved  # it writes nothing
+    verdict = JobLifecycle(state).withdraw()
+    assert verdict is _Withdrawn.STARTED  # and still says it ran
 
 
 def test_a_job_past_its_commit_cannot_be_withdrawn() -> None:
     state = _state("queued")
-    assert JobLifecycle(state).start()
+    moved = JobLifecycle(state).start()
+    assert moved
 
-    assert JobLifecycle(state).commit()
-    assert JobLifecycle(state).withdraw() is _Withdrawn.COMMITTING
+    moved = JobLifecycle(state).commit()
+    assert moved
+    verdict = JobLifecycle(state).withdraw()
+    assert verdict is _Withdrawn.COMMITTING
     assert state.status == "committing"
 
 
@@ -120,7 +151,8 @@ def test_a_finished_job_is_reported_as_it_finished(
 ) -> None:
     state = _state(status)
 
-    assert JobLifecycle(state).withdraw() is verdict
+    verdict = JobLifecycle(state).withdraw()
+    assert verdict is verdict
     assert state.status == status
 
 
@@ -164,7 +196,8 @@ async def test_a_job_withdrawn_while_it_waits_for_the_gate_is_skipped_at_the_gat
 
 async def test_a_job_that_is_not_queued_is_not_run_twice() -> None:
     state, job = _queued(), _Job()
-    assert JobLifecycle(state).start()  # already dispatched once
+    moved = JobLifecycle(state).start()
+    assert moved  # already dispatched once
 
     await JobLifecycle(state).run(cast("IngestUnit", job), _CTX, asyncio.Semaphore(1))
 
@@ -175,7 +208,8 @@ async def test_a_job_that_is_not_queued_warns_when_it_is_skipped(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     state, job = _queued(), _Job()
-    assert JobLifecycle(state).start()
+    moved = JobLifecycle(state).start()
+    assert moved
 
     with caplog.at_level(logging.WARNING, logger="quarry.daemon.job_lifecycle"):
         await JobLifecycle(state).run(
@@ -186,7 +220,7 @@ async def test_a_job_that_is_not_queued_warns_when_it_is_skipped(
 
 
 def _job(status: TaskStatus) -> TaskState:
-    return job_in(status, kind="backfill")
+    return JobStates.reaching(status, kind="backfill")
 
 
 def _snapshot(state: TaskState) -> tuple[str, str, dict[str, object]]:
@@ -201,7 +235,8 @@ def test_settle_stored_completes_a_job_the_worker_owns_and_clears_its_reason(
     state = _job(status)
     state.error = "daemon shut down before ingest"
 
-    assert JobLifecycle(state).settle_stored({"chunks": 2})
+    moved = JobLifecycle(state).settle_stored({"chunks": 2})
+    assert moved
 
     assert (state.status, state.error, state.results) == (
         "completed",
@@ -217,8 +252,10 @@ def test_settle_never_overwrites_a_status_somebody_else_settled(
     state = _job(status)
     before = _snapshot(state)
 
-    assert not JobLifecycle(state).settle_stored({"chunks": 2})
-    assert not JobLifecycle(state).settle_failed("late")
+    moved = JobLifecycle(state).settle_stored({"chunks": 2})
+    assert not moved
+    moved = JobLifecycle(state).settle_failed("late")
+    assert not moved
 
     assert _snapshot(state) == before
 
@@ -227,7 +264,8 @@ def test_settle_never_overwrites_a_status_somebody_else_settled(
 def test_settle_failed_fails_a_job_the_worker_owns(status: TaskStatus) -> None:
     state = _job(status)
 
-    assert JobLifecycle(state).settle_failed("refused")
+    moved = JobLifecycle(state).settle_failed("refused")
+    assert moved
 
     assert (state.status, state.error) == ("failed", "refused")
 
@@ -270,7 +308,8 @@ def test_the_abort_fails_only_what_it_owns(
 ) -> None:
     state = _job(status)
 
-    assert JobLifecycle(state).fail_aborted("shut down") is disposition
+    moved = JobLifecycle(state).fail_aborted("shut down")
+    assert moved is disposition
 
     failed = disposition is JobLifecycle.Disposition.FAILED
     assert (state.status == "failed") is failed
@@ -327,25 +366,49 @@ def test_observing_a_failed_store_leaves_a_failed_job_and_its_reason() -> None:
     assert state.error == "kept"
 
 
+@final
 class _Store:
-    """A store double: it has ended with *outcome* or still runs; it is observed."""
+    """A store double: it has ended with *outcome* or still runs; it is observed.
 
-    def __init__(self, outcome: Settlement | None) -> None:
+    It records whether its reader held the job's claim when it read the outcome.
+    """
+
+    __slots__ = ("_claim", "_detached", "_outcome", "_reads")
+
+    _claim: Claim
+    _detached: bool
+    _outcome: Settlement | None  # None: the store still runs
+    _reads: list[bool]
+
+    def __new__(cls, outcome: Settlement | None, claim: Claim) -> Self:
+        self = super().__new__(cls)
+        self._claim = claim
+        self._detached = False
         self._outcome = outcome
-        self.detached = False
+        self._reads = []
+        return self
+
+    @property
+    def detached(self) -> bool:
+        return self._detached
+
+    @property
+    def reads_under_the_claim(self) -> list[bool]:
+        return list(self._reads)
 
     def outcome(self) -> Settlement | None:
+        self._reads.append(self._claim.owned())
         return self._outcome
 
     def detach(self) -> None:
-        self.detached = True
+        self._detached = True
 
 
 def _cancelled(
     status: TaskStatus, outcome: Settlement | None
 ) -> tuple[TaskState, _Store]:
     state = _job(status)
-    store = _Store(outcome)
+    store = _Store(outcome, state.claim)
     state.store = cast("StoreRun", store)
     JobLifecycle(state).cancelled("task was cancelled")
     return state, store
@@ -401,9 +464,11 @@ def test_a_job_its_own_store_refused_keeps_the_refusal_when_the_abort_takes_it()
     assert (state.status, state.error) == ("failed", "blank")
 
 
-def test_a_job_the_abort_failed_itself_is_not_taken_as_settled() -> None:
+def test_a_job_the_abort_failed_is_taken_again_as_settled_when_its_store_refused() -> (
+    None
+):
     state = _job("running")
-    store = _Store(Settlement.failed("blank"))
+    store = _Store(Settlement.failed("blank"), state.claim)
     state.store = cast("StoreRun", store)
     JobLifecycle(state).fail_aborted("shut down")  # the abort's own provisional
 
@@ -421,13 +486,39 @@ def test_a_failed_job_with_no_store_is_the_aborts_to_fail() -> None:
     assert state.error == "shut down"
 
 
+@final
+class _UnheldClaim:
+    """A claim whose holder is never the caller: a write that took it is a bug."""
+
+    __slots__ = ()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def owned(self) -> bool:
+        return False
+
+
 def test_a_write_without_the_claim_raises_and_changes_nothing() -> None:
     state = _job("running")
+    state.claim = _UnheldClaim()
 
     with pytest.raises(ClaimNotHeldError):
-        JobLifecycle(state)._set("failed", error="sneaked")
+        JobLifecycle(state).settle_failed("sneaked")
 
     assert (state.status, state.error) == ("running", "")
+
+
+@pytest.mark.parametrize("status", ["running", "committing"])
+def test_a_cancel_reads_the_stores_outcome_under_the_claim(
+    status: TaskStatus,
+) -> None:
+    _state, store = _cancelled(status, Settlement.failed("no"))
+
+    assert store.reads_under_the_claim == [True]
 
 
 def test_a_settle_the_status_refused_is_logged_at_debug(
@@ -436,8 +527,10 @@ def test_a_settle_the_status_refused_is_logged_at_debug(
     state = _job("aborted")
 
     with caplog.at_level(logging.DEBUG, logger="quarry.daemon.job_lifecycle"):
-        assert not JobLifecycle(state).settle_failed("late")
-        assert not JobLifecycle(state).settle_stored({})
+        moved = JobLifecycle(state).settle_failed("late")
+        assert not moved
+        moved = JobLifecycle(state).settle_stored({})
+        assert not moved
 
     assert "not failed, its status is aborted" in caplog.text
     assert "not completed, its status is aborted" in caplog.text

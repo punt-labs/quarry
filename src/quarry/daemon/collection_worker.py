@@ -44,6 +44,7 @@ class CollectionWorker:
 
     __slots__ = (
         "_ctx",
+        "_current",
         "_embed_gate",
         "_jobs",
         "_last_active",
@@ -54,6 +55,7 @@ class CollectionWorker:
     )
 
     _ctx: DaemonContext
+    _current: QueuedUnit | None  # None: no job is in flight
     _embed_gate: asyncio.Semaphore
     _jobs: JobAbort
     _last_active: float
@@ -70,6 +72,7 @@ class CollectionWorker:
     ) -> Self:
         self = super().__new__(cls)
         self._ctx = ctx
+        self._current = None
         self._embed_gate = embed_gate
         self._queue = asyncio.Queue()
         self._release_admit = release_admit
@@ -183,6 +186,18 @@ class CollectionWorker:
         stores = (unit.state.store for unit in self._jobs.taken)
         return tuple(s for s in stores if s is not None and s.is_unobserved)
 
+    def straggling_stores(self) -> tuple[StoreRun, ...]:
+        """Return the in-flight job's store if its worker has not yet let it go.
+
+        A worker that outlives the abort's wait still holds its job: the job is
+        not yet taken or detached, so :meth:`unobserved_stores` cannot name it.
+        """
+        unit = self._current
+        store = unit.state.store if unit is not None else None
+        if store is None or store.outcome() is not None or store.is_unobserved:
+            return ()
+        return (store,)
+
     async def drain_removals(self, timeout: float) -> tuple[Path, ...]:
         """Wait up to *timeout* seconds for spool-record removals; name what is left."""
         return await self._jobs.discard.drain(timeout)
@@ -200,6 +215,7 @@ class CollectionWorker:
                 self._queue.task_done()
                 return
             self._running = True
+            self._current = item
             try:
                 # No coroutine-level timeout: job.run offloads the ingest to a
                 # non-cancellable threadpool thread, so asyncio.wait_for could
@@ -212,16 +228,17 @@ class CollectionWorker:
                 )
             except asyncio.CancelledError:
                 # The drain-timeout abort cancels this task through the await
-                # chain, so the in-flight job is aborted HERE — not in abort(),
-                # which by now sees it already gone from the queue.  Spool it (a
-                # capture returns None; its .md survives) so an admitted
-                # remember/ingest is never silently lost, then let the
-                # cancellation propagate.  This also covers a job cancelled while
-                # still awaiting the embed gate (its TaskTerminal never ran).
+                # chain, so the in-flight job reaches the abort HERE — abort()
+                # sees it already gone from the queue.  The job is taken, failed
+                # and, if nothing else holds its content, spooled, so an admitted
+                # remember/ingest is never silently lost; then the cancellation
+                # propagates.  This also covers a job cancelled while still
+                # awaiting the embed gate, whose Terminal never ran.
                 await self._jobs.fail_in_flight(item)
                 raise
             finally:
                 self._running = False
+                self._current = None
                 self._last_active = monotonic()
                 self._release_admit()
                 self._queue.task_done()

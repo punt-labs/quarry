@@ -24,16 +24,18 @@ import pytest
 
 from quarry.daemon.daemon_threads import DaemonThreads
 from quarry.daemon.ingest_queue import IngestQueue
+from quarry.daemon.job_abort import JobAbort
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.queued_job import JobWithdrawnError
 from quarry.daemon.store_run import StoreRun
-from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskState
+from quarry.daemon.terminal import Terminal
 from quarry.ingestion.file_indexer import FileIndexOutcome
 from quarry.refusal import RefusalError
 from tests.job_abort_world import SETTLED, World, terms, until
 
 if TYPE_CHECKING:
+    from quarry.daemon.queued_unit import QueuedUnit
     from tests.job_abort_world import Entry
 
 
@@ -358,13 +360,16 @@ def _break() -> None:
 @pytest.mark.parametrize("kind", ["delete", "sync", "umbrella", "register"])
 async def test_callers_outside_the_queue_end_as_before(kind: str) -> None:
     done = TaskState(task_id="a", kind=kind)
-    with TaskTerminal.recording(done):
+    with Terminal.for_task(done).recording():
         done.status = "completed"
     failed = TaskState(task_id="b", kind=kind)
-    with TaskTerminal.recording(failed):
+    with Terminal.for_task(failed).recording():
         _break()
     cancelled = TaskState(task_id="c", kind=kind)
-    with pytest.raises(asyncio.CancelledError), TaskTerminal.recording(cancelled):
+    with (
+        pytest.raises(asyncio.CancelledError),
+        Terminal.for_task(cancelled).recording(),
+    ):
         _cancel()
 
     assert done.status == "completed"
@@ -519,3 +524,44 @@ async def test_a_job_whose_store_ended_unstored_keeps_its_reason_and_needs_no_sp
     found = world.terms()
     assert (found["no_spool"], found["kept"], found["spooled"]) == (1, 0, 0)
     assert world.spool_files() == []
+
+
+async def _decide_fails(self: JobAbort, item: QueuedUnit) -> None:
+    del self, item
+    msg = "respool exploded"
+    raise RuntimeError(msg)
+
+
+async def test_a_respool_that_dies_is_retrieved_and_named_with_its_job(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    fragile = world.admit("fragile", commits=True)
+    await world.running("fragile")
+    await world.abort()
+
+    with (
+        patch.object(JobAbort, "_decide", _decide_fails),
+        caplog.at_level(logging.ERROR, logger="quarry.daemon"),
+    ):
+        fragile.store.land(RefusalError("insert failed"))
+        await world.landed(fragile)
+        await asyncio.sleep(0.1)
+
+    assert "abort: respooling a ScrubbedIngestJob job for c1 failed" in caplog.text
+    assert "respool exploded" not in caplog.text  # the cause is redacted
+
+
+async def test_a_worker_names_the_store_of_the_job_it_has_not_let_go(
+    world: World,
+) -> None:
+    entry = world.admit("held", collection="c4")
+    await world.running("held")
+
+    held = world.worker("c4").straggling_stores()
+    entry.store.land()
+    await world.landed(entry)
+    await until(lambda: world.worker("c4").straggling_stores() == ())
+
+    assert [store.describe() for store in held] == [
+        "remember ScrubbedIngestJob for c4 (task held)"
+    ]

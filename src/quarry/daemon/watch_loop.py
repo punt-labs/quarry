@@ -22,8 +22,8 @@ from quarry.daemon.debounce import DebouncedDispatcher
 from quarry.daemon.fs_events import NullFsEventSource
 from quarry.daemon.fs_watchdog import WatchdogSource
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TERMINAL_STATUSES
+from quarry.daemon.terminal import Terminal
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
 from quarry.daemon.watch_stop import WatchStop
@@ -251,7 +251,7 @@ class WatchLoop:
         when all reach ``completed``, and fails (with a count) if any child was
         shed/failed or the poll deadline hit — no silent success.
         """
-        with TaskTerminal.recording(umbrella):
+        with Terminal.for_task(umbrella).recording():
             sweep = self._sweep_all_scans()
             children = sweep.finish() if sweep is not None else []
             scanned = sweep.collections if sweep is not None else 0

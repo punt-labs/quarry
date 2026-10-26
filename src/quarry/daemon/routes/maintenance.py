@@ -16,8 +16,8 @@ from starlette.responses import JSONResponse
 
 from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskState
+from quarry.daemon.terminal import Terminal
 from quarry.http_guards import RequestGuards
 
 # Both bodies carry only small option dicts.
@@ -90,7 +90,7 @@ class MaintenanceRoutes(RouteGroup):
         skip is ``False`` with a ``reason``, never a false success — and reads
         the fragment count from the outcome so the table is scanned only once.
         """
-        with TaskTerminal.recording(state):
+        with Terminal.for_task(state).recording():
             opt = self.ctx.database.optimizer
             outcome = await run_in_threadpool(lambda: opt.optimize(force=force))
             state.status = "completed"
@@ -107,7 +107,7 @@ class MaintenanceRoutes(RouteGroup):
         """Run the transcript backfill in a worker thread and record its stats."""
         from quarry.daemon.backfill_task import BackfillTask  # noqa: PLC0415
 
-        with TaskTerminal.recording(state):
+        with Terminal.for_task(state).recording():
             await BackfillTask(self.ctx).run(state, args)
 
     async def _body_flag(

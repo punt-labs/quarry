@@ -36,7 +36,7 @@ class JobAbort:
     - every job is in exactly one term of the tally, once its outcome is known,
       and :attr:`pending` says how many are not;
     - one job's failure to decide its outcome costs only that job, recorded as
-      lost.
+      not written.
 
     Deciding an outcome can spool the job, and spooling syncs files, so there are
     two ways in: :meth:`fail` runs the syncs in the caller, and the ``async``
@@ -108,7 +108,7 @@ class JobAbort:
         the spool thread ends or :attr:`ShutdownPolicy.SPOOL_WAIT_S` passes.  A
         spool that overruns is recorded as unfinished and left to end on its own;
         if it then succeeds, the record is corrected.  One that raises is
-        recorded as lost.  Never raises, so the cancel the caller is handling
+        recorded as not written.  Never raises, so the cancel the caller is handling
         still propagates.
         """
         if self._record.take([item]):
@@ -126,7 +126,13 @@ class JobAbort:
         """Spool *item* again, on the loop in the background, once its store failed."""
         respooling = asyncio.ensure_future(self._decide(item))
         self._respooling.add(respooling)
-        respooling.add_done_callback(self._respooling.discard)
+        respooling.add_done_callback(partial(self._respooled, item))
+
+    def _respooled(self, item: QueuedUnit, respooling: asyncio.Future[None]) -> None:
+        """Done callback: forget the respool, and say so if it died of anything."""
+        self._respooling.discard(respooling)
+        if not respooling.cancelled() and (failure := respooling.exception()):
+            item.log_failure("respooling", failure)
 
     async def await_spool(
         self, spooling: asyncio.Future[Aborted], item: QueuedUnit
@@ -181,7 +187,7 @@ class JobAbort:
         """Return how *item* ends, spooling it if it needs it (blocking, total).
 
         Never raises: whatever goes wrong deciding this one job is logged with the
-        job's kind and collection and becomes a lost outcome, so no other job is
+        job's kind and collection and becomes a not-written outcome, so no other job is
         affected.
         """
         try:

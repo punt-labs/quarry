@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, Self, final
+from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from quarry.daemon.tasks import TaskState
-
-
-class Settles(Protocol):
-    """The moves a terminal makes when its body says how it ended."""
-
-    def settle_stored(self, results: Mapping[str, object]) -> bool:
-        """Complete the task with *results*; return whether it was."""
-        ...
-
-    def settle_failed(self, reason: str) -> bool:
-        """Fail the task with *reason*; return whether it was."""
-        ...
 
 
 @final

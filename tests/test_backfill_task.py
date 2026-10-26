@@ -12,8 +12,8 @@ from quarry.backfill_stats import BackfillStats
 from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.backfill_task import BackfillTask
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
-from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskState
+from quarry.daemon.terminal import Terminal
 from tests.queue_fixtures import ctx_with_queue
 
 if TYPE_CHECKING:
@@ -278,7 +278,7 @@ async def test_a_thread_that_will_not_stop_keeps_the_guard_shut_after_the_bound(
     with patch("quarry.backfill.Backfill.sessions", blocked):
 
         async def as_the_route_runs_it() -> None:
-            with TaskTerminal.recording(state):
+            with Terminal.for_task(state).recording():
                 await BackfillTask(ctx, bound_s=0.3).run(state, _ARGS)
 
         task = asyncio.create_task(as_the_route_runs_it())

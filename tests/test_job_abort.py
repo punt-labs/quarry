@@ -23,7 +23,7 @@ from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.queued_unit import QueuedUnit
 from quarry.daemon.tasks import TaskState
 from quarry.shutdown_policy import ShutdownPolicy
-from tests.job_states import job_in
+from tests.job_states import JobStates
 
 if TYPE_CHECKING:
     from quarry.config import Settings
@@ -339,7 +339,9 @@ def test_a_withdrawn_stored_or_committing_job_keeps_its_status_and_is_not_spoole
     tmp_path: Path, status: TaskStatus, term: AbortTerm, label: str
 ) -> None:
     abort, tally = _abort(tmp_path)
-    job = QueuedUnit(_Unit(SpoolRecord("remember", "c", "a", "p")), job_in(status))
+    job = QueuedUnit(
+        _Unit(SpoolRecord("remember", "c", "a", "p")), JobStates.reaching(status)
+    )
 
     abort.fail([job])
 

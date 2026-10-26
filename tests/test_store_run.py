@@ -16,7 +16,7 @@ from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.store_run import StoreRun
 from quarry.refusal import RefusalError
-from tests.job_states import job_in
+from tests.job_states import JobStates
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -40,7 +40,7 @@ class _Job:
 
 
 def _job() -> TaskState:
-    return job_in("running")
+    return JobStates.reaching("running")
 
 
 def _start(state: TaskState, call: Callable[[], dict[str, object]]) -> StoreRun:
