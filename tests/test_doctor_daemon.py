@@ -30,6 +30,15 @@ def _run_dir_at(tmp_path: Path) -> Generator[None]:
         yield
 
 
+@contextmanager
+def _ca_at(tmp_path: Path, content: bytes) -> Generator[None]:
+    """Make ``tmp_path/ca.crt`` (holding *content*) the daemon's installed CA."""
+    ca = tmp_path / "ca.crt"
+    ca.write_bytes(content)
+    with patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca):
+        yield
+
+
 class TestReachability:
     def test_no_port_file_reports_not_reachable(self, tmp_path: Path) -> None:
         with _run_dir_at(tmp_path):
@@ -86,6 +95,57 @@ class TestReachability:
             result = DaemonDiagnostics.reachability()
         assert captured["host"] == "127.0.0.1"
         assert result.passed is True
+
+
+class TestPinnedCa:
+    """An installed CA that cannot be used is a failed check, never CERT_NONE."""
+
+    def test_a_corrupt_ca_fails_reachability_naming_the_file(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with _run_dir_at(tmp_path), _ca_at(tmp_path, b"not a certificate"):
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is False
+        assert "ca.crt" in result.message
+        assert "not reachable" not in result.message
+
+    def test_an_unreadable_ca_fails_reachability_with_the_errno(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        ca = tmp_path / "ca.crt"
+        ca.write_bytes(b"x")
+        denied = PermissionError(13, "Permission denied")
+        with (
+            _run_dir_at(tmp_path),
+            patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
+            patch(
+                "quarry.doctor_daemon.ssl.SSLContext.load_verify_locations",
+                side_effect=denied,
+            ),
+        ):
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is False
+        assert "ca.crt" in result.message
+        assert "EACCES" in result.message
+
+    def test_a_corrupt_ca_fails_the_fd_check_too(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with _run_dir_at(tmp_path), _ca_at(tmp_path, b"junk"):
+            result = DaemonDiagnostics.fd_headroom()
+
+        assert result.passed is False
+        assert "ca.crt" in result.message
+
+    def test_no_ca_at_all_still_probes_unverified(self, tmp_path: Path) -> None:
+        missing = tmp_path / "ca.crt"
+        with patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=missing):
+            context = DaemonDiagnostics._ssl_context()
+
+        assert context.verify_mode == ssl.CERT_NONE
 
 
 class TestServeToken:

@@ -26,8 +26,10 @@ from pydantic import ValidationError
 
 from quarry.api.meta import FdHealth
 from quarry.config import Settings
+from quarry.daemon_ca_error import DaemonCaError
 from quarry.db_pointer import SELECTION
 from quarry.doctor_stop_timeout import StopTimeoutDiagnostic
+from quarry.failure_reason import FailureReason
 from quarry.fd_headroom import FdHeadroom
 from quarry.home_paths import QuarryHome
 from quarry.results import CheckResult
@@ -38,8 +40,6 @@ from quarry.run_dir import RunDir
 _HEALTH_HOST = "127.0.0.1"
 _PROBE_TIMEOUT_SECONDS = 5.0
 _TOKEN_MODE = 0o600
-# The daemon's pinned CA, written by ``quarry install`` (mirrors tls_dir);
-# defined locally so this diagnostic never imports cryptography via quarry.tls.
 # Reported when the daemon's fd headroom cannot be read: fd headroom is a
 # property of the resident daemon, so with no daemon there is nothing to sample
 # (never a local CLI fallback — that fallback is the observability bug itself).
@@ -69,7 +69,11 @@ class DaemonDiagnostics:
                 passed=False,
                 message="not reachable — start the service (quarryd not running)",
             )
-        if cls._probe_health(port):
+        try:
+            is_ready = cls._probe_health(port)
+        except DaemonCaError as exc:
+            return result(passed=False, message=f"{exc}; run 'quarry install'")
+        if is_ready:
             return result(
                 passed=True, message=f"running and ready on {_HEALTH_HOST}:{port}"
             )
@@ -139,7 +143,10 @@ class DaemonDiagnostics:
             port = cls._run_dir().port_file.read()
         except (OSError, ValueError):
             return result(passed=False, message=_FD_UNAVAILABLE)
-        body = cls._fetch_health(port)
+        try:
+            body = cls._fetch_health(port)
+        except DaemonCaError as exc:
+            return result(passed=False, message=f"{exc}; run 'quarry install'")
         if body is None:
             return result(passed=False, message=_FD_UNAVAILABLE)
         headroom = cls._fd_from_health(body)
@@ -249,13 +256,19 @@ class DaemonDiagnostics:
         the liveness probe still connects.
         """
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        if QuarryHome.daemon_ca().exists():
+        ca = QuarryHome.daemon_ca()
+        if ca.exists():
             try:
-                ctx.load_verify_locations(str(QuarryHome.daemon_ca()))
-            except (OSError, ssl.SSLError):
-                pass
-            else:
-                return ctx
+                ctx.load_verify_locations(str(ca))
+            except ssl.SSLError as exc:
+                # A CA that is there but cannot be used is a fault to report: a
+                # silent fallback to no verification would pass a spoofed daemon.
+                msg = f"{ca.name} is not a usable certificate (SSLError)"
+                raise DaemonCaError(msg) from exc
+            except OSError as exc:
+                msg = f"{ca.name} cannot be read ({FailureReason.os_name(exc)})"
+                raise DaemonCaError(msg) from exc
+            return ctx
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         return ctx

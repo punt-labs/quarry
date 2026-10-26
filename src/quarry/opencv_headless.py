@@ -57,7 +57,11 @@ class HeadlessOpenCv:
             timeout=self._TIMEOUT_S,
         )
         if done.returncode != 0:
-            why = CheckFailure.because(done.stderr or "")
+            # uv and pip both explain on stderr, but a missing interpreter or a
+            # refused argument is sometimes said on stdout alone.
+            why = CheckFailure.because(
+                done.stderr if done.stderr.strip() else done.stdout
+            )
             msg = f"the reinstall exited {done.returncode}{why}"
             raise RuntimeError(msg)
         return f"{_PACKAGE} is the cv2 provider"

@@ -40,6 +40,9 @@ class CheckFailure:
         RuntimeError,
     )
     _MAX_LINE: ClassVar[int] = 100
+    # pip's closing line for any failed build: true of every failure, so it says
+    # the least about this one.
+    _GENERIC_ERROR: ClassVar[str] = "subprocess-exited-with-error"
     _CONTROL: ClassVar[re.Pattern[str]] = re.compile(r"[^\x20-\x7e]")
 
     __slots__ = ()
@@ -103,13 +106,20 @@ class CheckFailure:
     def cause(cls, output: str) -> str:
         """Pick the line of a process's *output* that says what went wrong.
 
-        The last ``ERROR:`` or ``error:`` line if there is one, else the last line
-        that is not a ``[notice]`` line (pip ends with advice about itself), else
-        the last line; sanitized and bounded.  Empty output has no cause.
+        The last ``ERROR:`` or ``error:`` line if there is one, preferring a
+        specific one to pip's generic ``subprocess-exited-with-error`` that closes
+        a failed build; else the last line that is not a ``[notice]`` line (pip
+        ends with advice about itself), else the last line; sanitized and
+        bounded.  Empty output has no cause.
         """
         lines = [line for line in output.strip().splitlines() if line.strip()]
+
+        def is_error(line: str) -> bool:
+            return "ERROR:" in line or "error:" in line
+
         chosen = (
-            cls._last(lines, lambda ln: "ERROR:" in ln or "error:" in ln)
+            cls._last(lines, lambda ln: is_error(ln) and cls._GENERIC_ERROR not in ln)
+            or cls._last(lines, is_error)
             or cls._last(lines, lambda ln: not ln.lstrip().startswith("[notice]"))
             or cls._last(lines, lambda _ln: True)
         )

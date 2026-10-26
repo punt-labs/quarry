@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from quarry.doctor_failure import CheckFailure
 from quarry.opencv_headless import HeadlessOpenCv
 
 
@@ -108,6 +109,35 @@ def test_without_an_error_line_the_last_non_notice_line_is_the_cause(
 
     with pytest.raises(RuntimeError, match="exited 1: disk full"):
         HeadlessOpenCv("/venv/bin/python").enforce()
+
+
+def test_a_reinstall_that_says_nothing_on_stderr_is_explained_by_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(cmd: list[str], **_kwargs: object) -> object:
+        return subprocess.CompletedProcess(cmd, 2, "uv: no such interpreter\n", "  \n")
+
+    monkeypatch.setattr("quarry.opencv_headless.shutil.which", lambda _: "/bin/uv")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="exited 2: uv: no such interpreter"):
+        HeadlessOpenCv("/venv/bin/python").enforce()
+
+
+def test_the_specific_error_beats_pips_generic_one() -> None:
+    pip = (
+        "ERROR: Could not find a version that satisfies opencv-python-headless\n"
+        "error: subprocess-exited-with-error\n"
+        "[notice] A new release of pip is available\n"
+    )
+
+    assert CheckFailure.cause(pip).startswith("ERROR: Could not find a version")
+
+
+def test_pips_generic_error_is_still_the_cause_when_it_is_all_there_is() -> None:
+    assert CheckFailure.cause("error: subprocess-exited-with-error\n") == (
+        "error: subprocess-exited-with-error"
+    )
 
 
 def test_a_reinstall_that_times_out_is_a_timeout_not_a_hang(

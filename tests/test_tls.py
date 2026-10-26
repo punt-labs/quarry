@@ -302,6 +302,46 @@ class TestWriteTlsFiles:
             mode = stat.S_IMODE((tls_dir / name).stat().st_mode)
             assert mode == 0o600, f"{name} should be 0600, got {oct(mode)}"
 
+    def test_the_directory_is_private(self, tmp_path: Path) -> None:
+        tls_dir = tmp_path / "tls"
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
+            write_tls_files("myhost.local")
+        assert stat.S_IMODE(tls_dir.stat().st_mode) == 0o700
+
+    def test_a_directory_that_was_created_open_is_made_private(
+        self, tmp_path: Path
+    ) -> None:
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir(mode=0o755)
+        tls_dir.chmod(0o755)
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
+            write_tls_files("myhost.local")
+        assert stat.S_IMODE(tls_dir.stat().st_mode) == 0o700
+
+    def test_the_directory_is_never_open_even_for_an_instant(
+        self, tmp_path: Path
+    ) -> None:
+        tls_dir = tmp_path / "tls"
+        modes: list[int] = []
+        real_mkdir = Path.mkdir
+
+        def spy(
+            self: Path,
+            mode: int = 0o777,
+            *,
+            parents: bool = False,
+            exist_ok: bool = False,
+        ) -> None:
+            modes.append(mode)
+            real_mkdir(self, mode, parents=parents, exist_ok=exist_ok)
+
+        with (
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir),
+            patch.object(Path, "mkdir", spy),
+        ):
+            write_tls_files("myhost.local")
+        assert modes == [0o700]
+
     def test_idempotent(self, tmp_path: Path) -> None:
         tls_dir = tmp_path / "tls"
         with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):

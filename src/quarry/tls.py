@@ -313,7 +313,10 @@ def write_tls_files(hostname: str) -> bool:
         logger.debug("TLS files already exist at %s — skipping generation", tls_dir)
         return False
 
-    tls_dir.mkdir(parents=True, exist_ok=True)
+    # Private from the start, and made so if it already existed open: the keys
+    # inside are 0600, but nobody else has any business listing the directory.
+    tls_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tls_dir.chmod(0o700)
 
     # Reuse existing CA if present; only generate a new one if neither file exists.
     # Regenerating the CA would break all clients that pinned the old CA cert.
