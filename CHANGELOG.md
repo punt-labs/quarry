@@ -14,6 +14,54 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-10-25
+
+### Changed
+
+- tool: plugin session start no longer adds allow rules to your user-global
+  `~/.claude/settings.json` without asking. `quarry enable` now grants
+  `mcp__quarry__*` and quarry's `Skill()` rules in that project's
+  `.claude/settings.json` only, prints each rule it added, and keeps every
+  other setting. `quarry disable` removes exactly those rules. Rules earlier
+  versions added globally stay until you delete them (#552, DES-058).
+- tool: edits to `CLAUDE.md` and `.claude/settings.json` now lock the
+  standard cross-tool sibling `.<file>.punt-import.lock` (was `.<file>.lock`),
+  so quarry serializes with other punt tools editing the same file. A
+  symlinked `.claude/` is refused before any lock file is created (#552).
+
+### Fixed
+
+- connector: `quarry backfill` no longer files one project's Claude transcripts
+  into another's collection. Claude Code's lossy directory encoding maps
+  `/w/my.notes` and `/w/my_notes` to the same `-w-my-notes` folder; when two
+  registrations share a folder, each now gets only the transcripts whose
+  recorded `cwd` is its own directory, and the collision is logged (#557).
+
+- docs: the README HTTP API section no longer says loopback needs no auth.
+  Every `/v1` endpoint requires a Bearer token; local installs get one minted
+  automatically in `serve.token`, and the `curl` example now sends it (#551).
+
+- `/ingest <file>` now indexes the file's parent directory. The daemon
+  rejected an existing file with the same `directory not found` error as a
+  nonexistent path, and the command waited for a `FileNotFoundError` that
+  never arrived, so it never retried. `POST /v1/registrations` now answers
+  `not a directory (it is a file)` for a file, the command retries only on
+  that, and a nonexistent path is reported instead of widened (#561).
+
+- Session backfill no longer skips a transcript that grew while it was being
+  ingested (#556). Each stored session now records the transcript's size and
+  mtime as read (a new `source_version` column, migrated in place), and
+  backfill re-ingests any session whose transcript no longer matches it.
+  Sessions stored before this change carry no version and are re-ingested once.
+
+## [3.5.0] - 2026-10-25
+
+### Security
+
+- Clear 43 open Dependabot alerts (6 critical, 23 high) by bumping `uv.lock`:
+  Pillow 12.3.0 → 13.0.0, certifi 2026.1.4 → 2026.10.23, opentelemetry-api
+  1.45.0 → 1.45.1.
+
 ### Added
 
 - infra: `--relax-category` on the suppression ratchet

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 from quarry.home_paths import QuarryHome
+from quarry.shared_project_dirs import SharedProjectDirs
 
 if TYPE_CHECKING:
     from quarry.sync_registry import DirectoryRegistration
@@ -21,6 +22,7 @@ class ProjectMapping:
     encoded_dir: str
     project_path: str
     collection: str
+    shared: bool = False  # another registration encodes to the same dir (#557)
 
     @property
     def captures_collection(self) -> str:
@@ -28,11 +30,18 @@ class ProjectMapping:
         return f"{self.collection}-captures"
 
     def transcript_files(self) -> list[Path]:
-        """Return all JSONL transcript files for this project, sorted."""
+        """Return this project's JSONL transcript files, sorted.
+
+        A ``shared`` dir holds other projects' sessions too, so only the
+        transcripts that record this project as their ``cwd`` are its own.
+        """
         project_dir = QuarryHome.claude_projects() / self.encoded_dir
         if not project_dir.is_dir():
             return []
-        return sorted(project_dir.glob("*.jsonl"))
+        files = sorted(project_dir.glob("*.jsonl"))
+        return (
+            SharedProjectDirs.ran_in(files, self.project_path) if self.shared else files
+        )
 
 
 @final
@@ -59,16 +68,18 @@ class ProjectMappingResolver:
         the ambiguous reverse-decode problem (hyphens in directory names).
         """
         existing_dirs = ProjectMappingResolver._project_dir_names()
-        return [
-            ProjectMapping(
-                encoded_dir=encoded,
-                project_path=reg.directory,
-                collection=reg.collection,
-            )
-            for reg in registrations
-            if (encoded := ProjectMappingResolver.encode(reg.directory))
-            in existing_dirs
-        ]
+        return SharedProjectDirs.mark(
+            [
+                ProjectMapping(
+                    encoded_dir=encoded,
+                    project_path=reg.directory,
+                    collection=reg.collection,
+                )
+                for reg in registrations
+                if (encoded := ProjectMappingResolver.encode(reg.directory))
+                in existing_dirs
+            ]
+        )
 
     @staticmethod
     def filter_by_project(

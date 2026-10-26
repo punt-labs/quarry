@@ -12,6 +12,7 @@ from quarry.ingestion.legacy_twins import LegacyTwins
 
 if TYPE_CHECKING:
     from quarry.db.facade import Database
+    from quarry.ingestion.ingest_context import IngestContext
 
 logger = logging.getLogger(__name__)
 
@@ -149,18 +150,31 @@ class LegacyUrlNames:
         legacy = self.aliases(name, collection)
         return legacy[0] if legacy else None
 
-    def replace_prior(self, name: str, collection: str, *, overwrite: bool) -> None:
-        """Delete *name* from *collection* when *overwrite*, before the insert."""
-        if overwrite:
-            self._database.store.delete_document(
-                name, collection=collection, count=False
-            )
+    def exists(self, name: str, collection: str) -> bool:
+        """Return whether *name*, or a legacy spelling of it, is stored."""
+        return self.stored_as(name, collection) is not None
 
-    def drop_twins(self, name: str, collection: str) -> None:
-        """Delete the legacy spellings of *name* once *name* is stored.
+    def replace_prior(self, name: str, context: IngestContext) -> list[str]:
+        """Delete *name* when *context* overwrites; return the twins it replaces.
 
-        Called only for a page fetched from a URL, overwriting or not.  It runs
-        after the insert, so a failed embed or write leaves the old copy in place.
-        A document someone named with a URL is a label and is never touched.
+        A legacy spelling of a URL is replaced whenever the page being stored was
+        fetched from a URL (``context.url_sourced``), overwriting or not: it is the same
+        page under a name this build no longer writes, and the new document must
+        not sit beside it.  The twins are only returned here; the caller drops
+        them with :meth:`drop_legacy` once *name* is stored, so a store that
+        fails leaves the old copy in place.  A document that someone named with a
+        URL is a label and is never touched.
         """
-        LegacyTwins(self, self._database).drop(name, collection)
+        twins = self.aliases(name, context.collection) if context.url_sourced else []
+        if context.overwrite:
+            self._database.store.delete_document(
+                name, collection=context.collection, count=False
+            )
+        return twins
+
+    def drop_legacy(self, name: str, twins: list[str], collection: str) -> None:
+        """Delete the legacy *twins* of *name*, now that *name* is stored.
+
+        A fault in a delete never fails the ingest: see :class:`LegacyTwins`.
+        """
+        LegacyTwins(self, self._database).drop(name, twins, collection)

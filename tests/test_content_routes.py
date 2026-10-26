@@ -431,6 +431,17 @@ class TestOversizedLabels:
         )
         self._assert_refused(resp.status_code, resp.json(), "summary", daemon)
 
+    def test_remember_refuses_an_oversized_non_string_label(
+        self, http: TestClient, daemon: InProcessDaemon
+    ) -> None:
+        resp = http.post(
+            "/v1/remember",
+            json={"name": "n.md", "content": _CLEAN, "summary": [self._BIG]},
+        )
+        assert resp.status_code == 400
+        assert "row budget exceeded: summary" in resp.json()["error"]
+        assert len(daemon.ctx.tasks) == 0
+
     def test_remember_refuses_an_oversized_name(
         self, http: TestClient, daemon: InProcessDaemon
     ) -> None:
@@ -764,21 +775,6 @@ class TestTheRoutesCheckTheNamesThatAreStored:
         # Percent-encoding makes the stored name longer than the URL as sent.
         source = "https://example.com/" + "\u00e9" * 2_000
         assert self._submitted(http, "/v1/ingest", {"source": source}) == 400
-
-    @pytest.mark.parametrize(
-        ("path", "body"),
-        [
-            ("/v1/remember", {"name": "n", "content": _CLEAN, "summary": ["a"]}),
-            ("/v1/remember", {"name": "n", "content": _CLEAN, "agent_handle": 5}),
-            ("/v1/learn", {"lesson": "short", "topic": {"a": 1}}),
-            ("/v1/ingest", {"source": "https://example.com/p", "summary": ["a"]}),
-            ("/v1/ingest", {"source": "https://example.com/p", "collection": 7}),
-        ],
-    )
-    def test_a_non_string_label_is_a_400(
-        self, http: TestClient, path: str, body: dict[str, object]
-    ) -> None:
-        assert self._submitted(http, path, body) == 400
 
     def test_a_captures_name_over_the_cap_only_after_its_suffix_is_refused(
         self, http: TestClient, tmp_path: Path

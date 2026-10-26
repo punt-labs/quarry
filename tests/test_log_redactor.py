@@ -280,6 +280,10 @@ _URL_CORPUS = {
     "quote in password": f'GET https://{_USER}:p"{_PW}@h.example/{_PATH}?x=1',
     "apostrophe in password": f"GET https://{_USER}:p'{_PW}@h.example/{_PATH}",
     "angle in password": f"GET https://{_USER}:p<{_PW}@h.example/{_PATH}",
+    "apostrophe in path": f"see https://h.example/o'brien/cb#{_FRAG} end",
+    "quote in path": f'see https://h.example/a"b/cb#{_FRAG} end',
+    "backtick in path": f"see https://h.example/a`b/cb#{_FRAG} end",
+    "apostrophe then query": f"see https://h.example/o'brien?k={_QUERY} end",
 }
 
 

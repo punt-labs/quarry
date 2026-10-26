@@ -24,6 +24,12 @@ class TestInlinePages:
         )
         assert "<p>" not in pages[0].text
 
-    def test_a_text_hint_records_no_source_path(self) -> None:
-        pages = InlinePages.of("a plain note", "a-note", "plain", url_sourced=True)
+    def test_a_fetched_text_page_keeps_the_name_as_the_source_path(self) -> None:
+        pages = InlinePages.of("a plain body", "https://h/p", "plain", url_sourced=True)
+        assert {page.document_path for page in pages} == {"https://h/p"}
+
+    def test_a_text_label_records_no_source_path(self) -> None:
+        pages = InlinePages.of(
+            "a plain note", "https://h/p", "plain", url_sourced=False
+        )
         assert {page.document_path for page in pages} == {""}

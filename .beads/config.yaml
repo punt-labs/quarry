@@ -13,6 +13,9 @@
 # no-auto-flush, no-auto-import, sync-branch) were removed in bd 1.0+
 # and reading them would be misleading.
 
+issue-prefix: quarry
+linear.pull_label: repo:quarry
+
 directory:
   labels:
     quarry: repo:quarry

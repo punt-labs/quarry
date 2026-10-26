@@ -8,7 +8,6 @@ written after that read is newer than its document and backfill ingests it again
 from __future__ import annotations
 
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -20,7 +19,6 @@ from quarry.config import Settings
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.daemon.ingest_labels import IngestLabels
 from quarry.db.facade import Database
-from quarry.stored_sessions import StoredSessions
 from tests.fakes import FakeEmbeddingBackend, patched_embedder
 
 if TYPE_CHECKING:
@@ -123,42 +121,3 @@ class TestTheStoredTimestamp:
         _store(db, None)
         [doc] = db.catalog.list_documents(collection_filter="r-captures")
         assert datetime.fromisoformat(doc["ingestion_timestamp"]) >= before
-
-
-class TestTheRace:
-    """The transcript is written after the snapshot read but before the job runs."""
-
-    @staticmethod
-    def _transcript(tmp_path: Path, mtime: datetime) -> Path:
-        path = tmp_path / "abcd1234-0000-0000-0000-000000000000.jsonl"
-        path.write_text("{}\n")
-        os.utime(path, (mtime.timestamp(), mtime.timestamp()))
-        return path
-
-    def test_a_write_after_the_snapshot_is_seen_as_grown(
-        self, db: Database, tmp_path: Path
-    ) -> None:
-        snapshot = datetime.now(UTC) - timedelta(minutes=5)
-        # The job runs now, long after; the transcript grew 1 minute after the read.
-        transcript = self._transcript(tmp_path, snapshot + timedelta(minutes=1))
-        _store(db, snapshot)
-        stored = StoredSessions(db.catalog.list_documents("r-captures"))
-        assert not stored.is_current(transcript)
-
-    def test_without_a_snapshot_the_same_write_hides_behind_the_queue_time(
-        self, db: Database, tmp_path: Path
-    ) -> None:
-        snapshot = datetime.now(UTC) - timedelta(minutes=5)
-        transcript = self._transcript(tmp_path, snapshot + timedelta(minutes=1))
-        _store(db, None)
-        stored = StoredSessions(db.catalog.list_documents("r-captures"))
-        assert stored.is_current(transcript)  # the race this change closes
-
-    def test_a_transcript_untouched_since_the_snapshot_is_current(
-        self, db: Database, tmp_path: Path
-    ) -> None:
-        snapshot = datetime.now(UTC) - timedelta(minutes=5)
-        transcript = self._transcript(tmp_path, snapshot - timedelta(minutes=1))
-        _store(db, snapshot)
-        stored = StoredSessions(db.catalog.list_documents("r-captures"))
-        assert stored.is_current(transcript)

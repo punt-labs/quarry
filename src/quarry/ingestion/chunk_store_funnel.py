@@ -103,35 +103,36 @@ class ChunkStoreFunnel:
         )
         return chunks
 
-    def _replace_prior(self, chunks: list[Chunk]) -> None:
-        """Delete what the document replaces: its earlier chunks, if overwriting.
+    def _replace_prior(self, chunks: list[Chunk]) -> list[str]:
+        """Delete the document's earlier chunks, if overwriting; return its twins.
 
-        Every chunk of a document carries its name.
+        A copy an older build stored under a former spelling of the same URL is
+        replaced too, overwriting or not, when this document was fetched from a
+        URL, so a re-ingest leaves one document, not two.  That copy is returned,
+        not deleted: it goes only once the new document is stored.
+
+        Every chunk of a document carries its name.  Whether it was fetched from a
+        URL is the caller's fact, carried on the context, not read back from the
+        document's path: a label that merely looks like a URL is not a page.
         """
-        RunContext.legacy_names_of(self._context).replace_prior(
-            chunks[0].document_name,
-            self._context.collection,
-            overwrite=self._context.overwrite,
+        return RunContext.legacy_names_of(self._context).replace_prior(
+            chunks[0].document_name, self._context
         )
 
     def _embed_and_store(self, chunks: list[Chunk]) -> int:
         """Delete the prior document (if overwriting), store, then drop legacy twins.
 
-        A copy an older build stored under a former spelling of the same URL is
-        dropped once the new document is stored, so a failed embed or write leaves
-        it in place.  Whether the document was fetched from a URL is the caller's
-        fact, carried on the context, not read back from the document's path: a
-        label that merely looks like a URL is not a page and has no twins.
+        A legacy-named copy the stored document replaces goes only once the new
+        document is stored, so a failed embed or write leaves it in place.
         """
         self._progress("Embedding + storing in bounded windows")
-        self._replace_prior(chunks)
+        twins = self._replace_prior(chunks)
         t0 = time.perf_counter()
         inserted = OwnedInsert(self._name, self._context).run(chunks)
         RunContext.note_stored(self._context, self._name)
-        if self._context.url_sourced:
-            RunContext.legacy_names_of(self._context).drop_twins(
-                self._name, self._context.collection
-            )
+        RunContext.legacy_names_of(self._context).drop_legacy(
+            chunks[0].document_name, twins, self._context.collection
+        )
         logger.info(
             "pipeline: embedded + stored %d chunks in %.2fs",
             inserted,

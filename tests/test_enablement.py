@@ -72,9 +72,9 @@ def test_enable_gitignore_survives_disable(tmp_path: Path) -> None:
 
 
 def test_enable_excludes_the_claude_md_lock_file(tmp_path: Path) -> None:
-    """enable() must not leave .CLAUDE.md.lock unignored (Bugbot MEDIUM finding).
+    """enable() must not leave .CLAUDE.md.punt-import.lock unignored (Bugbot MEDIUM).
 
-    FileLock creates .CLAUDE.md.lock and never removes it (see FileLock's
+    FileLock creates .CLAUDE.md.punt-import.lock and never removes it (see FileLock's
     docstring); without a matching .gitignore entry, every enable() leaves a
     machine-local artifact a bare ``git add -A`` could commit.
     """
@@ -82,7 +82,7 @@ def test_enable_excludes_the_claude_md_lock_file(tmp_path: Path) -> None:
 
     Enablement(tmp_path).enable()
 
-    assert (tmp_path / ".CLAUDE.md.lock").exists()
+    assert (tmp_path / ".CLAUDE.md.punt-import.lock").exists()
     ignore_lines = (tmp_path / ".gitignore").read_text().splitlines()
     assert FILE_LOCK_GITIGNORE_GLOB in ignore_lines
 
@@ -454,7 +454,7 @@ def _sample_invariant(
     for _ in range(samples):
         # Sample marker and import together UNDER the lock, so no enable/disable
         # is mid-flight: the snapshot is a committed state, never a torn one.
-        with FileLock(claude):
+        with FileLock.shared(claude):
             marker_present = marker.is_present()
             text = claude.read_text() if claude.exists() else ""
         if marker_present and REPO_IMPORT_LINE not in text:

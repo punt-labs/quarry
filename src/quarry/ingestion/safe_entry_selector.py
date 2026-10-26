@@ -40,33 +40,42 @@ class SafeEntrySelector:
         """Split filtered entries into ``(to_ingest, skipped_count)`` via dedup.
 
         Dedup compares each entry's ``<lastmod>`` against the stored ingestion
-        timestamp of the same document in *context*'s collection.  Only a document
-        fetched from a URL (one with a source path) counts: a label named like a page
-        is not that page.  Entries that store as one name keep the first.
+        timestamp of the same document in *context*'s collection.  Only a
+        document fetched from a URL counts: a label that merely looks like one
+        (``remember``) has no URL ``document_path`` and never suppresses a fetch.
+        Entries that store as one name keep the first.
         """
-        existing = context.database.catalog.list_documents(
-            collection_filter=context.collection
-        )
-        existing_timestamps = {
-            LegacyUrlNames.canonical(doc["document_name"]): doc["ingestion_timestamp"]
-            for doc in existing
-            if doc["document_path"]  # a label has no source; only a fetched page counts
-        }
+        stored = self._stored_timestamps(context)
         by_name: dict[str, tuple[HttpUrl, str | None]] = {}
         skipped = 0
         for entry in filtered:
             url = HttpUrl(entry.loc)
-            existing_ts = existing_timestamps.get(url.document_name)
-            if (
-                existing_ts
-                and not context.overwrite
-                and entry.lastmod is not None
-                and self._entry_is_current(existing_ts, entry.lastmod)
-            ):
+            if self._is_current(entry, stored.get(url.document_name), context):
                 skipped += 1
-                continue
-            by_name.setdefault(url.document_name, (url, None))
+            else:
+                by_name.setdefault(url.document_name, (url, None))
         return list(by_name.values()), skipped
+
+    @staticmethod
+    def _stored_timestamps(context: IngestContext) -> dict[str, str]:
+        """Return each URL-fetched document's stored ingestion time, by its name."""
+        existing = context.database.catalog.list_documents(
+            collection_filter=context.collection
+        )
+        return {
+            LegacyUrlNames.canonical(doc["document_name"]): doc["ingestion_timestamp"]
+            for doc in existing
+            if str(doc["document_path"]).lower().startswith(("http://", "https://"))
+        }
+
+    @classmethod
+    def _is_current(
+        cls, entry: SitemapEntry, stored_ts: str | None, context: IngestContext
+    ) -> bool:
+        """Return whether *entry* is stored and no newer than its stored copy."""
+        if not stored_ts or context.overwrite or entry.lastmod is None:
+            return False
+        return cls._entry_is_current(stored_ts, entry.lastmod)
 
     @staticmethod
     def _entry_is_current(existing_ts: str, lastmod: datetime) -> bool:

@@ -56,13 +56,20 @@ class TextExtractor:
             return self._extract_docx(path, document_name=resolved_name)
 
         text = read_text_with_fallback(path)
-        return self._split_by_format(text, fmt, resolved_name, str(path.resolve()))
+        return sections_to_pages(
+            self._sections(text, fmt),
+            resolved_name,
+            str(path.resolve()),
+            PageType.SECTION,
+        )
 
     def extract_raw(
         self,
         text: str,
         document_name: str,
         format_hint: str = "auto",
+        *,
+        document_path: str = "",
     ) -> list[PageContent]:
         """Process raw text string into sections.
 
@@ -70,6 +77,7 @@ class TextExtractor:
             text: Raw text content.
             document_name: Name for the document.
             format_hint: One of 'auto', 'plain', 'markdown', 'latex'.
+            document_path: The text's source location; none for a label.
 
         Returns:
             List of PageContent objects, one per section.
@@ -78,7 +86,12 @@ class TextExtractor:
             format_hint = self._detect_format(text)
             logger.debug("Auto-detected format: %s", format_hint)
 
-        return self._split_by_format(text, format_hint, document_name, "")
+        return sections_to_pages(
+            self._sections(text, format_hint),
+            document_name,
+            document_path,
+            PageType.SECTION,
+        )
 
     @staticmethod
     def _detect_format(text: str) -> str:
@@ -90,12 +103,7 @@ class TextExtractor:
         return "plain"
 
     @staticmethod
-    def _split_by_format(
-        text: str,
-        fmt: str,
-        document_name: str,
-        document_path: str,
-    ) -> list[PageContent]:
+    def _sections(text: str, fmt: str) -> list[str]:
         """Split text into sections based on format."""
         splitters = {
             "markdown": SectionSplitter.markdown,
@@ -104,9 +112,7 @@ class TextExtractor:
         sections = splitters.get(fmt, SectionSplitter.plain)().split(text)
 
         logger.debug("Split text into %d sections (%s)", len(sections), fmt)
-        return sections_to_pages(
-            sections, document_name, document_path, PageType.SECTION
-        )
+        return sections
 
     @staticmethod
     def _extract_docx(

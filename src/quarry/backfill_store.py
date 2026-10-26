@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from quarry.loaded_transcript import LoadedTranscript
     from quarry.stored_sessions import StoredSessions
     from quarry.transcript_read import TranscriptRead
+    from quarry.transcript_snapshot import TranscriptSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +70,20 @@ class TranscriptStore:
         """
         CaptureReaper(CaptureDirectory(Path(self._project_path))).reap()
 
-    def store(self, loaded: LoadedTranscript) -> None:
-        """Write the capture file, then file the transcript through the writer."""
+    def store(self, loaded: LoadedTranscript, snapshot: TranscriptSnapshot) -> None:
+        """Write the capture file, then file the transcript through the writer.
+
+        *snapshot* is the transcript's version taken before it was read: the
+        stored row carries it, and a landed store is remembered at it.
+        """
         read = loaded.read
         session = BackfillSession(read.transcript, self._project_path, loaded.text)
         if self._stopped() or not self._captured(session, read) or self._stopped():
             return
         try:
-            self._run.runtime.writer.write(self._collection, session, read.snapshot)
+            self._run.runtime.writer.write(
+                self._collection, session, read.snapshot, snapshot.version
+            )
         except RefusalError as exc:
             self._run.outcomes.refused(read, exc)
         except Exception as exc:
@@ -88,7 +95,7 @@ class TranscriptStore:
             )
             self._run.outcomes.failed(read.transcript, exc)
         else:
-            self._stored.record(read.transcript, read.snapshot)
+            self._stored.record(snapshot)
             self._ingested += 1
             self._run.outcomes.stored()
 

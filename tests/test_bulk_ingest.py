@@ -617,49 +617,24 @@ def test_dedup_treats_a_legacy_named_document_as_the_existing_one() -> None:
     assert (to_ingest, skipped) == ([], 1)
 
 
-class TestDedupConsidersOnlyFetchedPages:
-    def test_a_label_named_like_a_page_does_not_hide_the_page(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A remembered label has no source path; it is not the page it is named for.
-        _existing_docs(
-            monkeypatch,
-            [
-                {
-                    "document_name": "https://example.com/p",
-                    "document_path": "",
-                    "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
-                }
-            ],
-        )
-        entries = [
-            SitemapEntry(
-                loc="https://example.com/p", lastmod=datetime(2025, 1, 1, tzinfo=UTC)
-            )
-        ]
+def test_dedup_ignores_a_label_that_only_looks_like_the_page() -> None:
+    from datetime import UTC, datetime
+    from unittest.mock import patch
 
-        to_ingest, skipped = SafeEntrySelector().partition(entries, _context())
+    from quarry.sitemap import SitemapEntry
 
-        assert [url for url, _ in to_ingest] == [HttpUrl("https://example.com/p")]
-        assert skipped == 0
-
-    def test_a_fetched_page_still_dedups(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _existing_docs(
-            monkeypatch,
-            [
-                {
-                    "document_name": "https://example.com/p",
-                    "document_path": "https://example.com/p",
-                    "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
-                }
-            ],
-        )
-        entries = [
-            SitemapEntry(
-                loc="https://example.com/p", lastmod=datetime(2025, 1, 1, tzinfo=UTC)
-            )
-        ]
-
-        _, skipped = SafeEntrySelector().partition(entries, _context())
-
-        assert skipped == 1
+    entry = SitemapEntry(
+        loc="https://example.com/p", lastmod=datetime(2025, 1, 1, tzinfo=UTC)
+    )
+    label = [
+        {
+            "document_name": "https://example.com/p",
+            "document_path": "",
+            "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
+        }
+    ]
+    with patch(
+        "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=label
+    ):
+        to_ingest, skipped = SafeEntrySelector().partition([entry], _context())
+    assert (to_ingest, skipped) == ([(HttpUrl("https://example.com/p"), None)], 0)

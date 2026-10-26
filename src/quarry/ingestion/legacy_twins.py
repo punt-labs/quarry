@@ -21,8 +21,8 @@ class LegacyTwins:
 
     A legacy spelling is the same page under a name this build no longer writes,
     and the new document must not sit beside it.  The page is already stored when
-    this runs, so no fault in the lookup or the delete, whatever its class, may
-    fail the ingest: a twin that stays is a duplicate, not a loss.  Each fault is
+    this runs, so no fault in a delete, whatever its class, may fail the ingest: a
+    twin that stays is a duplicate, not a loss.  Each fault is
     logged as its class and frames, never its message, which can quote a name.
     """
 
@@ -37,18 +37,8 @@ class LegacyTwins:
         self._database = database
         return self
 
-    def drop(self, name: str, collection: str) -> None:
-        """Delete the legacy spellings of *name* from *collection*."""
-        try:
-            twins = self._names.aliases(name, collection)
-        except Exception as exc:  # a cleanup boundary: see the class docstring
-            logger.error(
-                "stored %s but could not look up its legacy-named twins; "
-                "re-ingest with overwrite to replace them",
-                DisplayName(name).redacted(),
-                exc_info=RedactedFailure.of(exc),
-            )
-            return
+    def drop(self, name: str, twins: list[str], collection: str) -> None:
+        """Delete the legacy *twins* of *name* from *collection*."""
         for legacy in twins:
             logger.warning(
                 "replacing legacy-named document %s with %s",

@@ -88,7 +88,7 @@ class Enablement:
         """
         gitignore_ensured = self._gitignore.ensure()
         self._guidance.deposit()
-        with FileLock(self._import.path):
+        with FileLock.shared(self._import.path):
             import_registered = self._import.register(REPO_IMPORT_LINE)
             enabled_marker_written = self._marker.write()
         return EnablementResult(
@@ -135,7 +135,7 @@ class Enablement:
         unlink error still propagates, leaving the recoverable marker-present +
         import-present enabled state, never marker-present + import-absent.
         """
-        with FileLock(self._import.path):
+        with FileLock.shared(self._import.path):
             try:
                 enabled_marker_removed = self._marker.remove()
             except ValueError:

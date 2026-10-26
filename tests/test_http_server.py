@@ -3563,6 +3563,26 @@ class TestRegistrations:
         assert resp.status_code == 400
         assert "not found" in resp.json()["error"].lower()
 
+    def test_post_names_an_existing_file_as_not_a_directory(
+        self,
+        home_client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir(exist_ok=True)
+        monkeypatch.setenv("HOME", str(home))
+        file = home / "notes.md"
+        file.write_text("x")
+        resp = home_client.post(
+            "/v1/registrations",
+            json={"directory": str(file), "collection": "c"},
+        )
+        assert resp.status_code == 400
+        error = resp.json()["error"]
+        assert "it is a file" in error
+        assert "not found" not in error
+
     def test_delete_returns_202(
         self,
         tmp_path: Path,

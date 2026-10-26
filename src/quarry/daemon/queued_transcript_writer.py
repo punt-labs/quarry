@@ -51,7 +51,10 @@ class QueuedTranscriptWriter:
 
     @staticmethod
     def job_for(
-        collection: str, session: BackfillSession, snapshot: datetime
+        collection: str,
+        session: BackfillSession,
+        snapshot: datetime,
+        version: str = "",
     ) -> BackfillTranscriptJob:
         """Return the job that stores *session* over any earlier copy of it."""
         return BackfillTranscriptJob(
@@ -68,12 +71,19 @@ class QueuedTranscriptWriter:
                 format_hint="plain",
                 scrub_label="backfill",
                 captured_at=snapshot,
+                source_version=version,
             )
         )
 
     def write(
-        self, collection: str, session: BackfillSession, snapshot: datetime
+        self,
+        collection: str,
+        session: BackfillSession,
+        snapshot: datetime,
+        version: str = "",
     ) -> None:
         """Store *session* in *collection*; raise if the worker did not store it."""
         queued = QueuedIngest(self._ctx, "backfill", self._policy)
-        QueuedJob(self._call, queued).store(self.job_for(collection, session, snapshot))
+        QueuedJob(self._call, queued).store(
+            self.job_for(collection, session, snapshot, version)
+        )

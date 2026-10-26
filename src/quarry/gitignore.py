@@ -20,7 +20,7 @@ CAPTURES_GITIGNORE_ENTRY = ".punt-labs/quarry/captures/"
 
 # Every .gitignore line quarry's own file-writing needs, in write order.
 # FILE_LOCK_GITIGNORE_GLOB excludes FileLock's own lock files (e.g.
-# ".CLAUDE.md.lock", "..gitignore.lock") -- see its docstring for why they
+# ".CLAUDE.md.punt-import.lock", "..gitignore.lock") -- see its docstring for why they
 # are permanent, unignored artifacts without this.
 _ENTRIES = (CAPTURES_GITIGNORE_ENTRY, FILE_LOCK_GITIGNORE_GLOB)
 

@@ -75,8 +75,9 @@ class LogRedactor:
         r"(?<![^\s/@:'\"<>])[^\s/@:'\"<>]{0,2048}:[^\s/@'\"<>]{0,2048}@"
     )
     _QUERY: ClassVar[re.Pattern[str]] = re.compile(r"\?\S{1,2048}")
+    _FRAGMENT: ClassVar[re.Pattern[str]] = re.compile(r"#\S{1,2048}")
     _CONTROL: ClassVar[re.Pattern[str]] = re.compile(
-        r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f\u2028\u2029]"
+        r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]"
     )
     # Line breaks and the bidi marks that reorder or hide what follows.
     _MARKS = r"\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069"
@@ -167,6 +168,9 @@ class LogRedactor:
             return "[…]"
         if "://" in token:
             token = cls._SCHEME_URL.sub(cls._bare_url, token)
+            # A character the path stops at (a quote, say) leaves a later
+            # fragment outside the URL match, and a fragment can carry a token.
+            token = cls._FRAGMENT.sub("#[fragment]", token)
         elif cls._is_host_query(token):
             # ``host:port?...``: the query starts here, so an ``@`` inside it is no
             # userinfo boundary and none of it may show.  If one follows, the text

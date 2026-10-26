@@ -67,6 +67,7 @@ class IngestContext:
     agent_handle: str = ""
     memory_type: MemoryType = ""
     summary: str = ""
+    source_version: str = ""  # what the source was when read; see StoredSessions
     url_sourced: bool = False  # a fetched URL's page, not a label or a file
     # The instant to record as ingestion time; ``None`` is the time of chunking.
     ingested_at: datetime | None = None

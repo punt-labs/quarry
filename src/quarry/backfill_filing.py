@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     from quarry.backfill_run import BackfillRun
     from quarry.stored_sessions import StoredSessions
+    from quarry.transcript_snapshot import TranscriptSnapshot
 
 
 @final
@@ -83,8 +84,14 @@ class TranscriptFiler:
             self._store.begin()
 
     def file(self, transcript: Path) -> None:
-        """Classify one transcript and file it if it has anything to file."""
-        if self._settle(transcript):
+        """Classify one transcript and file it if it has anything to file.
+
+        The transcript is versioned before it is read, so growth during the read
+        or the store leaves the stored row behind it and the next run files it
+        again.
+        """
+        snapshot = self._stored.snapshot(transcript)
+        if self._settle(snapshot):
             return
         try:
             loaded = TranscriptLoader.load(transcript)
@@ -101,15 +108,17 @@ class TranscriptFiler:
         elif self._run.config.dry_run:
             self._run.outcomes.would_store()
         else:
-            self._store.store(loaded)
+            self._store.store(loaded, snapshot)
 
     def _pending(self, transcripts: list[Path]) -> int:
         """Return how many of *transcripts* still need work."""
-        return sum(1 for t in transcripts if not self._settled_by(t))
+        return sum(
+            1 for t in transcripts if not self._settled_by(self._stored.snapshot(t))
+        )
 
-    def _settle(self, transcript: Path) -> bool:
-        """Count and return whether *transcript* needs no work."""
-        match self._settled_by(transcript):
+    def _settle(self, snapshot: TranscriptSnapshot) -> bool:
+        """Count and return whether the transcript *snapshot* names needs no work."""
+        match self._settled_by(snapshot):
             case "current":
                 self._skipped += 1
                 self._run.tally.skip_existing()
@@ -119,10 +128,10 @@ class TranscriptFiler:
                 return False
         return True
 
-    def _settled_by(self, transcript: Path) -> str:
-        """Return why *transcript* needs no work, or ``""`` if it does."""
-        if self._stored.is_current(transcript):
+    def _settled_by(self, snapshot: TranscriptSnapshot) -> str:
+        """Return why the transcript *snapshot* names needs no work, or ``""``."""
+        if self._stored.is_current(snapshot):
             return "current"
-        if self._run.unindexable.knows(transcript):
+        if self._run.unindexable.knows(snapshot.path):
             return "unindexable"
         return ""

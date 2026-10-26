@@ -30,6 +30,7 @@ class Written:
     name: str
     body: str
     snapshot: datetime
+    version: str = ""
 
 
 @final
@@ -43,10 +44,16 @@ class RecordingWriter:
     calls: list[Written] = field(default_factory=list)
 
     def write(
-        self, collection: str, session: BackfillSession, snapshot: datetime
+        self,
+        collection: str,
+        session: BackfillSession,
+        snapshot: datetime,
+        version: str = "",
     ) -> None:
         """Record the write, run the hook, then fail it if this writer was built to."""
-        self.calls.append(Written(collection, session.name, session.body, snapshot))
+        self.calls.append(
+            Written(collection, session.name, session.body, snapshot, version)
+        )
         error = self.errors_by_name.get(session.name, self.error)
         if self.after_write is not None:
             self.after_write()
@@ -63,14 +70,18 @@ class DirectWriter:
     settings: Settings
 
     def write(
-        self, collection: str, session: BackfillSession, snapshot: datetime
+        self,
+        collection: str,
+        session: BackfillSession,
+        snapshot: datetime,
+        version: str = "",
     ) -> None:
         """Store *session* through the same job the daemon queues."""
         ctx = cast(
             "DaemonContext",
             SimpleNamespace(database=self.database, settings=self.settings),
         )
-        job = QueuedTranscriptWriter.job_for(collection, session, snapshot)
+        job = QueuedTranscriptWriter.job_for(collection, session, snapshot, version)
         job.inner.scrub_and_ingest(ctx)
 
 

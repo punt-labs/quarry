@@ -17,7 +17,7 @@ Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (sn
 Install the CLI, the daemon, the MCP server, and the Claude Code plugin:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/5530609/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fcce6d1/install.sh | sh
 ```
 
 Restart Claude Code. Your current project is auto-indexed at session start, so you can search it by meaning right away — see [What It Looks Like](#what-it-looks-like).
@@ -74,13 +74,13 @@ Use one distribution channel per machine — mixing Homebrew with the `curl | sh
 For non-Claude harnesses (Codex, Cursor, a plain terminal) or Claude Code users whose org policy blocks marketplace/plugin installs, `--no-plugin` installs everything except the marketplace-register and plugin-install steps:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/5530609/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fcce6d1/install.sh | sh -s -- --no-plugin
 ```
 
 Where a flag cannot be passed (CI templating a bare `curl … | sh`), set `QUARRY_NO_PLUGIN=1` — honored only when exactly `1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/5530609/install.sh | QUARRY_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fcce6d1/install.sh | QUARRY_NO_PLUGIN=1 sh
 ```
 
 Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server directly; both talk to the resident `quarryd`. Re-run the installer without `--no-plugin` to add the plugin later.
@@ -93,7 +93,7 @@ Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server di
 Download the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/5530609/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fcce6d1/install.sh -o install.sh
 ```
 
 Check its digest (`shasum -a 256 install.sh` on macOS):
@@ -253,6 +253,17 @@ knowledge automatically, with no action from you:
 Every hook fails open — a hook failure never blocks Claude Code — and each is
 independently toggleable in `.punt-labs/quarry/config.md`.
 
+**Permissions.** The plugin never edits a Claude settings file on its own.
+Running `quarry enable` is your consent: it adds quarry's allow rules
+(`mcp__quarry__*` plus `Skill(find)`, `Skill(ingest)`, and the other quarry
+commands) to that project's `.claude/settings.json`, so Claude calls quarry
+without a prompt in that project only, and prints each rule it added. Every
+other setting and rule in the file is kept. `quarry disable` removes exactly
+those rules. To be asked before each quarry call, delete them from
+`permissions.allow` after enabling. Earlier versions added the same rules to
+your user-global `~/.claude/settings.json` at session start; those entries
+stay until you delete them.
+
 Captures are scrubbed at write time (secrets, paths, emails, hostnames)
 through a single choke point before they ever reach disk. The scrub is
 pattern-based and best-effort, not a formal guarantee of catching every
@@ -303,12 +314,27 @@ daemon directly. `quarry install` generates a self-signed CA for the managed
 daemon, local or remote, so it's TLS even on loopback:
 
 ```bash
-curl --cacert ~/.punt-labs/quarry/tls/ca.crt "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
+{ printf 'Authorization: Bearer '
+  tr -d '\n' < ~/.punt-labs/quarry/data/default/serve.token
+  echo; } |
+  curl --cacert ~/.punt-labs/quarry/tls/ca.crt -H @- \
+    "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
 ```
 
-Local installs bind loopback-only with no auth required; a `--network`
-install additionally requires a Bearer token (`QUARRY_API_KEY`) — see
-[ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
+The header is built on the pipe and read from stdin (`-H @-`), so the token is
+never a command-line argument of any process (`curl`, `printf`, or `tr`):
+other local users can read argv from the process table. Avoid
+`"$(cat serve.token)"` and `-H "Authorization: Bearer $TOKEN"` for that reason.
+
+Every `/v1` endpoint requires a Bearer token, loopback included. A local
+install binds loopback-only and needs no key configured: `quarryd` mints a
+fresh token at each start and writes it to `serve.token` (mode 0600) in its
+data directory, where the CLI, MCP server, and hooks read it. Scripts read
+the same file; a `401` after a daemon restart means the token rotated, so
+re-read it. Only `/health` and `/ca.crt` are unauthenticated, so a client can
+probe liveness and bootstrap TLS trust. A `--network` install refuses to
+start without an operator key (`QUARRY_API_KEY`), which remote clients
+present instead — see [ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
 is generated at [`docs/openapi.json`](docs/openapi.json) (`make openapi`
 regenerates it).
 

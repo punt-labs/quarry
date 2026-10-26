@@ -179,6 +179,21 @@ class TestOverwriteReplacesTheLegacyName:
         _store(db, "https://example.com/page", overwrite=False)
         assert _names(db) == {"https://example.com/page"}
 
+    def test_a_failed_store_keeps_the_legacy_twin(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(*_args: object, **_kwargs: object) -> int:
+            msg = "disk full"
+            raise OSError(msg)
+
+        store_as_an_older_build_did(db, "https://example.com/café")
+        monkeypatch.setattr(
+            "quarry.ingestion.chunk_store_funnel.DocumentStreamer.insert", fail
+        )
+        with pytest.raises(OSError, match="disk full"):
+            _store(db, "https://example.com/caf%C3%A9", overwrite=True)
+        assert _names(db) == {"https://example.com/café"}
+
     def test_a_label_that_looks_like_a_url_is_never_replaced(
         self, db: Database
     ) -> None:
@@ -679,27 +694,11 @@ class TestAScrubbedWebFetchNameIsStoredAsDerived:
             job.scrub_and_ingest(ctx)
         return name
 
-    @pytest.mark.parametrize(
-        "url",
-        [
-            "https://example.com/u/jdoe@example.com/profile",
-            f"https://{_PAT}.example.com/page",
-        ],
-        ids=["scrubbed-path", "scrubbed-host"],
-    )
-    def test_a_capture_is_found_by_the_name_lookup_derives(
-        self, db: Database, url: str
-    ) -> None:
-        name = self._capture(db, url)
+    def test_a_capture_is_found_by_the_name_lookup_derives(self, db: Database) -> None:
+        name = self._capture(db, "https://example.com/u/jdoe@example.com/profile")
         assert "REDACTED" in name
         assert _names(db) == {name}
         assert LegacyUrlNames(db).stored_as(name, _COLLECTION) == name
-
-    def test_distinct_scrubbed_hosts_do_not_collide(self, db: Database) -> None:
-        first = self._capture(db, f"https://{self._PAT}.example.com/a")
-        second = self._capture(db, f"https://{self._PAT}.example.com/b")
-        assert first != second
-        assert _names(db) == {first, second}
 
     def test_a_second_capture_of_the_same_page_is_still_one_document(
         self, db: Database
@@ -750,8 +749,10 @@ class TestTwinCleanupNeverFailsAStoredPage:
                 raise OSError(msg)
             return real(self, name, *a, **k)
 
+        stored = "https://example.com/caf%C3%A9"
+        twins = names.aliases(stored, _COLLECTION)
         with patch.object(ChunkStore, "delete_document", flaky):
-            names.drop_twins("https://example.com/caf%C3%A9", _COLLECTION)
+            names.drop_legacy(stored, twins, _COLLECTION)
         # The twin is still stored, so the cache must still list it.
         assert names.aliases("https://example.com/caf%C3%A9", _COLLECTION) == [
             "https://example.com/café"
@@ -878,23 +879,6 @@ class TestCleanupFailuresNeverReplaceTheRealOutcome:
                 IngestContext(db, Settings(), overwrite=False, collection=_COLLECTION),
             )
 
-    @pytest.mark.parametrize("error", _CLEANUP_ERRORS)
-    def test_a_failed_twin_lookup_after_the_store_still_reports_the_page_stored(
-        self, db: Database, error: Exception, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        def broken(*_a: object, **_k: object) -> list[str]:
-            raise error
-
-        with (
-            patch.object(NamePrefix, "names", broken),
-            caplog.at_level(logging.ERROR),
-        ):
-            _store(db, "https://example.com/p", overwrite=True)
-        assert "https://example.com/p" in _names(db)
-        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-        assert errors
-        assert "re-ingest with overwrite" in errors[0].getMessage()
-
 
 class TestACleanupFailureNeverLogsTheStoredName:
     """A store's message quotes the delete predicate, i.e. the stored name."""
@@ -914,20 +898,6 @@ class TestACleanupFailureNeverLogsTheStoredName:
         ):
             _store(db, "https://example.com/caf%C3%A9", overwrite=True)
         assert "re-ingest with overwrite" in caplog.text
-        assert "KeyError" in caplog.text
-        assert self._LEAK not in caplog.text
-
-    def test_a_failed_twin_lookup_logs_no_message(
-        self, db: Database, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        def broken(*_a: object, **_k: object) -> list[str]:
-            raise self._quoting()
-
-        with (
-            patch.object(NamePrefix, "names", broken),
-            caplog.at_level(logging.DEBUG),
-        ):
-            _store(db, "https://example.com/p", overwrite=True)
         assert "KeyError" in caplog.text
         assert self._LEAK not in caplog.text
 

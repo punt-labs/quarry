@@ -18,9 +18,17 @@ class TranscriptWriter(Protocol):
     """
 
     def write(
-        self, collection: str, session: BackfillSession, snapshot: datetime
+        self,
+        collection: str,
+        session: BackfillSession,
+        snapshot: datetime,
+        version: str = "",
     ) -> None:
-        """Store *session* in *collection* as it read at *snapshot*.
+        """Store *session* in *collection* as it read at *snapshot*, at *version*.
+
+        *version* is what the transcript was before it was read; the stored row
+        carries it, so a later run can tell a session that grew from one that did
+        not.
 
         Raises:
             BackfillWriteError: The transcript was not stored; the message says why

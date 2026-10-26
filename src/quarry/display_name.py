@@ -30,19 +30,18 @@ class DisplayName:
 
     _LEADING: ClassVar[str] = "".join(chr(code) for code in range(0x21))
 
-    def stored(self) -> str:
-        """Return the storage form of a label that names a URL.
+    def stored(self, *, url_sourced: bool) -> str:
+        """Return the storage form of a URL: no userinfo or fragment, and the query
+        only as the digest :class:`HttpUrl` keeps.
 
-        No userinfo or fragment, and the query only as the digest :class:`HttpUrl`
-        keeps.  The label is cleaned like any URL, but its query is never read as a
-        digest already, so typing the marker cannot name another page.  A page's own
-        name is derived once, by its caller, and is not passed through here.
-        """
+        A *url_sourced* name is a page's, so a name this build wrote reads back as
+        itself.  A label is not: it is cleaned like any URL, but its query is never
+        read as a digest already, so typing the marker cannot name another page."""
         text = self.name.lstrip(self._LEADING)
         if not text.lower().startswith(("http://", "https://")):
             return self.name
         try:
-            return HttpUrl(text).document_name
+            return HttpUrl.stored(text) if url_sourced else HttpUrl(text).document_name
         except ValueError:
             return CaptureUrl.display(text)  # tolerant of userinfo; never shows it
 

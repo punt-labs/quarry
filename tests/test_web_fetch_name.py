@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from quarry.display_name import DisplayName
 from quarry.web_fetch_name import WebFetchName
 from tests.url_names import with_query
 
@@ -41,7 +42,12 @@ def test_a_trailing_slash_stays_a_distinct_document() -> None:
 
 def test_an_email_in_the_path_is_scrubbed() -> None:
     name = WebFetchName.of("https://x.test/u/user@example.com/profile")
-    assert name == "https://x.test/u/[REDACTED:email]/profile"
+    assert name == "https://x.test/u/%5BREDACTED:email%5D/profile"
+
+
+def test_a_scrubbed_name_is_already_in_its_stored_form() -> None:
+    name = WebFetchName.of("https://x.test/u/user@example.com/profile")
+    assert DisplayName(name).stored(url_sourced=True) == name
 
 
 @pytest.mark.parametrize(

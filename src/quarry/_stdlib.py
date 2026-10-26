@@ -190,19 +190,21 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
 # Commands removed or renamed — add old filenames here to auto-retire.
 _RETIRED_COMMANDS: tuple[str, ...] = ("use", "use-dev")
 
-# Plugin names flow into ``settings.json`` as ``mcp__<name>__*`` wildcard
-# permission grants; any character outside a conservative slug alphabet could
-# broaden the grant (``*`` in the name), inject a rule separator, or malform
-# the entry so it never matches.  RFC-3986 unreserved minus ``.`` and ``~``.
+# A plugin name outside a conservative slug alphabet marks a manifest this
+# setup does not trust; ``open`` fails open on it.  RFC-3986 unreserved minus
+# ``.`` and ``~``.
 _PLUGIN_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
 @final
 class _SessionSetup:
-    """Deploy plugin commands and allow-list its MCP + Skill permissions.
+    """Deploy the plugin's slash commands into ``~/.claude/commands``.
 
+    Grants no permissions: plugin startup never edits a Claude settings file.
+    The allow rules are the operator's to grant, via ``quarry enable`` (#552).
     Owns the vocabulary the former free helpers shared as parameters
-    (``plugin_root``, ``plugin_name``, ``commands_dir``, ``settings_path``).
+    (``plugin_root``, ``commands_dir``); the plugin name only selects the
+    command variant (``_is_dev``).
     Constructed by :meth:`open` after a successful plugin-name read; call
     :meth:`dispatch` to run the bootstrap and collect human-readable actions.
     """
@@ -210,24 +212,18 @@ class _SessionSetup:
     __slots__ = (
         "_commands_dir",
         "_is_dev",
-        "_plugin_name",
         "_plugin_root",
-        "_settings_path",
     )
 
     _commands_dir: Path
     _is_dev: bool
-    _plugin_name: str
     _plugin_root: Path
-    _settings_path: Path
 
     def __new__(cls, plugin_root: Path, plugin_name: str) -> Self:
         self = super().__new__(cls)
         self._plugin_root = plugin_root
-        self._plugin_name = plugin_name
         self._is_dev = plugin_name.endswith("-dev")
         self._commands_dir = QuarryHome.home() / ".claude" / "commands"
-        self._settings_path = QuarryHome.home() / ".claude" / "settings.json"
         return self
 
     @classmethod
@@ -240,13 +236,8 @@ class _SessionSetup:
         return cls(plugin_root, plugin_name)
 
     def dispatch(self) -> list[str]:
-        """Deploy commands and allow-list permissions; return action lines."""
-        actions = self._deploy_commands()
-        if action := self._allow_mcp_tools():
-            actions.append(action)
-        if action := self._allow_skill_permissions():
-            actions.append(action)
-        return actions
+        """Deploy commands; return action lines."""
+        return self._deploy_commands()
 
     def _deploy_commands(self) -> list[str]:
         """Deploy or update slash commands from the plugin's ``commands/``."""
@@ -296,81 +287,6 @@ class _SessionSetup:
             return name.endswith("-dev.md")
         return not name.endswith("-dev.md")
 
-    def _list_deployable_commands(self) -> list[str]:
-        """Return command stems from ``commands/*.md`` for this variant."""
-        source_dir = self._plugin_root / "commands"
-        if not source_dir.is_dir():
-            return []
-        return [
-            cmd_file.stem
-            for cmd_file in sorted(source_dir.glob("*.md"))
-            if self._should_deploy(cmd_file.name)
-        ]
-
-    def _allow_mcp_tools(self) -> str | None:
-        """Add this plugin's MCP tool pattern to ``permissions.allow``.
-
-        The native quarry MCP server exposes tools under ``mcp__quarry__*``
-        (and ``mcp__quarry-dev__*`` for the dev twin).  The former
-        ``mcp__plugin_quarry_quarry__*`` proxy namespace was retired when the
-        native server shipped (quarry-ydym); allow-listing it grants no real
-        permission and leaves every native tool call subject to a prompt.
-        """
-        settings = self._load_settings()
-        if settings is None:
-            return None
-        wildcard = f"mcp__{self._plugin_name}__*"
-        allow_list = self._ensure_allow_list(settings)
-        if wildcard in allow_list:
-            return None
-        allow_list.append(wildcard)
-        if not self._write_settings(settings):
-            return None
-        return f"Auto-allowed {self._plugin_name} MCP tools in permissions"
-
-    def _allow_skill_permissions(self) -> str | None:
-        """Add ``Skill(<cmd>)`` rules for each deployable command."""
-        command_names = self._list_deployable_commands()
-        if not command_names:
-            return None
-        settings = self._load_settings()
-        if settings is None:
-            return None
-        allow_list = self._ensure_allow_list(settings)
-        existing = {
-            entry
-            for entry in allow_list
-            if isinstance(entry, str) and entry.startswith("Skill(")
-        }
-        added = [name for name in command_names if f"Skill({name})" not in existing]
-        if not added:
-            return None
-        allow_list.extend(f"Skill({name})" for name in added)
-        if not self._write_settings(settings):
-            return None
-        return f"Auto-allowed Skill() permissions for: {', '.join(added)}"
-
-    def _load_settings(self) -> dict[str, object] | None:
-        """Return parsed ``settings.json``, or ``None`` when unavailable."""
-        if not self._settings_path.is_file():
-            return None
-        try:
-            data: object = json.loads(self._settings_path.read_text())
-        except (OSError, ValueError):
-            return None
-        return data if isinstance(data, dict) else None
-
-    def _write_settings(self, settings: dict[str, object]) -> bool:
-        """Atomically write settings back; return whether the write succeeded."""
-        tmp_path = self._settings_path.with_suffix(".json.tmp")
-        try:
-            tmp_path.write_text(json.dumps(settings, indent=2) + "\n")
-            tmp_path.replace(self._settings_path)
-        except OSError:
-            tmp_path.unlink(missing_ok=True)
-            return False
-        return True
-
     @staticmethod
     def _read_plugin_name(plugin_root: Path) -> str:
         """Read the plugin name from ``.claude-plugin/plugin.json``.
@@ -378,10 +294,9 @@ class _SessionSetup:
         Raise ``ValueError`` on any structural violation (top-level not a
         dict, ``name`` missing/non-string, or name outside the safe-slug
         alphabet) so :meth:`open` can catch and return ``None`` cleanly,
-        honoring the fail-open contract.  The slug check bounds the name
-        before it is spliced into an ``mcp__<name>__*`` wildcard: a ``*``
-        or whitespace or path separator in a hostile manifest could
-        broaden the permission grant beyond the plugin's own tools.
+        honoring the fail-open contract.  The slug check refuses a hostile
+        manifest name (``*``, whitespace, a path separator) outright rather
+        than letting it select which command variant is deployed.
         """
         plugin_json = plugin_root / ".claude-plugin" / "plugin.json"
         with plugin_json.open() as f:
@@ -398,22 +313,9 @@ class _SessionSetup:
             raise ValueError(msg)
         return name
 
-    @staticmethod
-    def _ensure_allow_list(settings: dict[str, object]) -> list[object]:
-        """Return ``permissions.allow``, creating the nested containers if absent."""
-        permissions = settings.get("permissions")
-        if not isinstance(permissions, dict):
-            permissions = {}
-            settings["permissions"] = permissions
-        allow_list = permissions.get("allow")
-        if not isinstance(allow_list, list):
-            allow_list = []
-            permissions["allow"] = allow_list
-        return allow_list
-
 
 def handle_session_setup(payload: dict[str, object]) -> dict[str, object]:
-    """Handle session-setup hook: deploy commands and allow MCP tools.
+    """Handle session-setup hook: deploy commands; grant no permissions.
 
     Emits one INFO breadcrumb (``quarry.hooks: session-setup: entered ...``)
     on every path — no-plugin-root, unreadable manifest, nothing-to-do, or a

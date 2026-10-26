@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import logging
-import os
-from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from quarry.stored_sessions import StoredSessions
+from quarry.transcript_snapshot import TranscriptSnapshot
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -17,134 +16,118 @@ if TYPE_CHECKING:
 _NAME = "1e7aa08d-c485-45d1-8228-54d1a375c812"
 
 
-def _transcript(tmp_path: Path, *, modified: datetime) -> Path:
+def _transcript(tmp_path: Path, text: str = "{}") -> Path:
     path = tmp_path / f"{_NAME}.jsonl"
-    path.write_text("{}")
-    stamp = modified.timestamp()
-    os.utime(path, (stamp, stamp))
+    path.write_text(text)
     return path
 
 
-def _docs(name: str = "session-1e7aa08d", *, stored: str) -> list[dict[str, object]]:
-    return [{"document_name": name, "ingestion_timestamp": stored}]
+def _version(transcript: Path) -> str:
+    return TranscriptSnapshot.taken(transcript).version
 
 
-_NOON = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+def _at(transcript: Path, version: str) -> TranscriptSnapshot:
+    return TranscriptSnapshot(transcript, version)
 
 
-class TestIsCurrent:
-    def test_a_session_stored_after_its_last_write_is_current(
-        self, tmp_path: Path
-    ) -> None:
-        transcript = _transcript(tmp_path, modified=_NOON)
-        stored = (_NOON + timedelta(minutes=1)).isoformat()
-        assert StoredSessions(_docs(stored=stored)).is_current(transcript)
-
-    def test_a_session_stored_at_its_last_write_is_current(
-        self, tmp_path: Path
-    ) -> None:
-        transcript = _transcript(tmp_path, modified=_NOON)
-        assert StoredSessions(_docs(stored=_NOON.isoformat())).is_current(transcript)
-
-    def test_a_transcript_written_after_its_document_has_grown(
-        self, tmp_path: Path
-    ) -> None:
-        transcript = _transcript(tmp_path, modified=_NOON + timedelta(minutes=5))
-        assert not StoredSessions(_docs(stored=_NOON.isoformat())).is_current(
-            transcript
-        )
-
-    def test_a_session_nothing_is_stored_for_is_not_current(
-        self, tmp_path: Path
-    ) -> None:
-        transcript = _transcript(tmp_path, modified=_NOON)
-        assert not StoredSessions([]).is_current(transcript)
-
-    def test_a_different_session_sharing_a_prefix_is_not_a_match(
-        self, tmp_path: Path
-    ) -> None:
-        transcript = _transcript(tmp_path, modified=_NOON)
-        docs = _docs("session-1e7aa08dXY", stored=_NOON.isoformat())
-        assert not StoredSessions(docs).is_current(transcript)
-
-    def test_a_timestamp_without_an_offset_is_read_as_utc(self, tmp_path: Path) -> None:
-        transcript = _transcript(tmp_path, modified=_NOON)
-        stored = (_NOON + timedelta(minutes=1)).replace(tzinfo=None).isoformat()
-        assert StoredSessions(_docs(stored=stored)).is_current(transcript)
-
-    def test_a_z_suffixed_timestamp_is_read(self, tmp_path: Path) -> None:
-        transcript = _transcript(tmp_path, modified=_NOON)
-        assert StoredSessions(_docs(stored="2026-01-01T12:01:00Z")).is_current(
-            transcript
-        )
-
-    def test_an_unreadable_timestamp_is_not_current_and_says_so(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        transcript = _transcript(tmp_path, modified=_NOON)
-        with caplog.at_level(logging.WARNING):
-            sessions = StoredSessions(_docs(stored="yesterday"))
-        assert not sessions.is_current(transcript)
-        assert "ValueError" in caplog.text
-        assert "session-1e7aa08d" in caplog.text
-
-    def test_a_transcript_that_cannot_be_examined_is_not_current(
-        self, tmp_path: Path
-    ) -> None:
-        missing = tmp_path / f"{_NAME}.jsonl"
-        assert not StoredSessions(_docs(stored=_NOON.isoformat())).is_current(missing)
+def _docs(
+    name: str = "session-1e7aa08d", *, version: object
+) -> list[dict[str, object]]:
+    return [{"document_name": name, "source_version": version}]
 
 
-class TestRecord:
-    def test_a_session_just_stored_is_current(self, tmp_path: Path) -> None:
-        now = datetime.now(tz=UTC)
-        transcript = _transcript(tmp_path, modified=now - timedelta(seconds=1))
-        sessions = StoredSessions([])
-        assert not sessions.is_current(transcript)
-        sessions.record(transcript, now)
-        assert sessions.is_current(transcript)
+class TestTranscriptSnapshot:
+    def test_it_names_the_size_and_the_nanosecond_mtime(self, tmp_path: Path) -> None:
+        transcript = _transcript(tmp_path, "{}\n")
+        stat = transcript.stat()
+        version = _version(transcript)
+        assert version == f"{stat.st_size}:{stat.st_mtime_ns}"
 
+    def test_growth_changes_it(self, tmp_path: Path) -> None:
+        transcript = _transcript(tmp_path)
+        before = _version(transcript)
+        with transcript.open("a") as fh:
+            fh.write("{}\n")
+        assert _version(transcript) != before
 
-class TestOnlySessionsAreRead:
-    def test_another_documents_timestamp_is_not_parsed_or_complained_about(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        docs = [{"document_name": "notes.md", "ingestion_timestamp": "garbage"}]
-        with caplog.at_level(logging.WARNING):
-            StoredSessions(docs)
-        assert caplog.text == ""
-
-
-class TestAnUnexaminableTranscript:
-    def test_it_logs_one_warning_with_the_class_and_the_name(
+    def test_an_unexaminable_transcript_logs_the_class_and_the_name(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         missing = tmp_path / f"{_NAME}.jsonl"
-        sessions = StoredSessions(_docs(stored=_NOON.isoformat()))
         with caplog.at_level(logging.WARNING):
-            assert not sessions.is_current(missing)
+            assert _version(missing) == ""
         [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert "FileNotFoundError" in record.getMessage()
         assert "session-1e7aa08d" in record.getMessage()
         assert str(tmp_path) not in caplog.text
 
 
-class TestRecordStoresTheSnapshot:
-    def test_a_transcript_written_after_the_snapshot_is_not_current(
+class TestIsCurrent:
+    def test_a_session_stored_at_the_transcripts_version_is_current(
         self, tmp_path: Path
     ) -> None:
-        snapshot = datetime.now(UTC) - timedelta(minutes=5)
-        # Written after the read but before the store was recorded.
-        transcript = _transcript(tmp_path, modified=snapshot + timedelta(minutes=1))
-        stored = StoredSessions([])
-        stored.record(transcript, snapshot)
-        assert not stored.is_current(transcript)
+        version = _version(_transcript(tmp_path))
+        transcript = tmp_path / f"{_NAME}.jsonl"
+        assert StoredSessions(_docs(version=version)).is_current(
+            _at(transcript, version)
+        )
 
-    def test_a_transcript_untouched_since_the_snapshot_is_current(
+    def test_a_transcript_that_grew_after_its_read_is_not_current(
         self, tmp_path: Path
     ) -> None:
-        snapshot = datetime.now(UTC)
-        transcript = _transcript(tmp_path, modified=snapshot - timedelta(minutes=1))
-        stored = StoredSessions([])
-        stored.record(transcript, snapshot)
-        assert stored.is_current(transcript)
+        """The #556 race: the row is stamped with the version read, the transcript
+        grows before the row is written, so a later ingestion time proves nothing."""
+        transcript = _transcript(tmp_path)
+        read_at = _version(transcript)
+        with transcript.open("a") as fh:
+            fh.write("{}\n")
+        now = _version(transcript)
+        assert not StoredSessions(_docs(version=read_at)).is_current(
+            _at(transcript, now)
+        )
+
+    def test_a_row_without_a_version_is_not_current(self, tmp_path: Path) -> None:
+        transcript = _transcript(tmp_path)
+        version = _version(transcript)
+        for stored in ("", None):
+            sessions = StoredSessions(_docs(version=stored))
+            assert not sessions.is_current(_at(transcript, version))
+        legacy = [{"document_name": "session-1e7aa08d", "ingestion_timestamp": "x"}]
+        assert not StoredSessions(legacy).is_current(_at(transcript, version))
+
+    def test_an_unexaminable_transcript_is_not_current(self, tmp_path: Path) -> None:
+        transcript = tmp_path / f"{_NAME}.jsonl"
+        assert not StoredSessions(_docs(version="")).is_current(_at(transcript, ""))
+
+    def test_a_session_nothing_is_stored_for_is_not_current(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = _transcript(tmp_path)
+        version = _version(transcript)
+        assert not StoredSessions([]).is_current(_at(transcript, version))
+
+    def test_a_different_session_sharing_a_prefix_is_not_a_match(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = _transcript(tmp_path)
+        version = _version(transcript)
+        docs = _docs("session-1e7aa08dXY", version=version)
+        assert not StoredSessions(docs).is_current(_at(transcript, version))
+
+
+class TestRecord:
+    def test_a_session_just_stored_is_current_at_that_version(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = _transcript(tmp_path)
+        version = _version(transcript)
+        sessions = StoredSessions([])
+        sessions.record(_at(transcript, version))
+        assert sessions.is_current(_at(transcript, version))
+        assert not sessions.is_current(_at(transcript, "0:0"))
+
+
+class TestOnlySessionsAreRead:
+    def test_another_document_is_ignored(self) -> None:
+        docs = [{"document_name": "notes.md", "source_version": "1:1"}]
+        assert StoredSessions(docs)._stored == {}

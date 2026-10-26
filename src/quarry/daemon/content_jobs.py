@@ -67,6 +67,8 @@ class ScrubbedIngestJob:
     url_sourced: bool = False
     # When the hook read the snapshot this stores; ``None`` is the queue's own time.
     captured_at: datetime | None = None
+    # What the source was when it was read (a transcript's version); ``""`` is unset.
+    source_version: str = ""
     # Hears each progress line of the ingest; ``None`` hears none (the default).
     checkpoint: Callable[[str], None] | None = None
 
@@ -135,7 +137,11 @@ class ScrubbedIngestJob:
                 inline,
                 self.name,
                 Progress(self.checkpoint),
-                replace(self.labels.context(ctx), ingested_at=self.captured_at),
+                replace(
+                    self.labels.context(ctx),
+                    ingested_at=self.captured_at,
+                    source_version=self.source_version,
+                ),
             )
         )
 

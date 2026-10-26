@@ -15,7 +15,9 @@ class WebFetchName:
     read path (``CaptureRoutes.lookup``) call it, so a URL always maps to the
     same document name regardless of which side computes it: the storage form of
     the admitted URL, ``scheme://host[:port]/path[?q[sha256]=<digest>]``, run
-    through the scrubber.
+    through the scrubber and taken in the form the store keeps it in: a scrub
+    placeholder in the path is percent-encoded there, so the lookup must compare
+    that form, and one in the host leaves no storable name at all.
     The scrub-log label is stamped on both sides for the same reason: one
     constant keeps the two derivations from drifting into different names for
     what should be the same stored capture.
@@ -35,7 +37,12 @@ class WebFetchName:
         """
         from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
-        return scrub_and_log(HttpUrl(url).document_name, cls._LABEL)
+        scrubbed = scrub_and_log(HttpUrl(url).document_name, cls._LABEL)
+        try:
+            return HttpUrl.stored(scrubbed)
+        except ValueError:
+            msg = "malformed URL"
+            raise ValueError(msg) from None
 
     @staticmethod
     def shown(url: str) -> str:

@@ -77,17 +77,12 @@ class ContentRouteGroup(RouteGroup):
         scan batch.  The reason names the field and the sizes, never the value, and
         the refusal is logged once with the route *kind*, like a binary one.
         """
-        for key in cls._LABEL_FIELDS:
-            value = body.get(key)
-            if value is not None and not isinstance(value, str):
-                return JSONResponse(
-                    {"error": f"{key} must be a string"}, status_code=400
-                )
         try:
             for key in cls._LABEL_FIELDS:
-                value = body.get(key)
-                if isinstance(value, str):
-                    cls._BUDGET.require_label(key, value)
+                # Checked as the job will read it: ``_str_field`` stringifies a
+                # non-string value, so a list-valued label is held to the cap too.
+                if value := body.get(key):
+                    cls._BUDGET.require_label(key, str(value))
         except RowBudgetError as exc:
             logger.warning("%s refused: %s", kind, exc)
             return JSONResponse({"error": str(exc)}, status_code=400)

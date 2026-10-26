@@ -67,15 +67,24 @@ def test_the_pipeline_reports_the_commit_point_before_it_deletes_anything() -> N
     chunks = cast("list[Chunk]", [SimpleNamespace(document_name="doc")])
     extracted = SimpleNamespace(pages=[], stats=SimpleNamespace(as_result_fields=dict))
 
+    def replace_prior(_self: ChunkStoreFunnel, _chunks: list[Chunk]) -> list[str]:
+        events.append("delete")
+        return []
+
     with (
         patch.object(ChunkStoreFunnel, "_chunk", lambda _self, _extracted: chunks),
         patch.object(
             ChunkStoreFunnel,
             "_replace_prior",
-            lambda _self, _chunks: events.append("delete"),
+            replace_prior,
         ),
         patch.object(OwnedInsert, "run", lambda _self, _chunks: 1),
         patch.object(RunContext, "note_stored"),
+        patch.object(
+            RunContext,
+            "legacy_names_of",
+            lambda _context: SimpleNamespace(drop_legacy=lambda *_args: None),
+        ),
     ):
         funnel.run(cast("ExtractedDocument", extracted))
 
