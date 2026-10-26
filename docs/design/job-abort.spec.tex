@@ -77,7 +77,7 @@ that the code makes \emph{without} the claim is an operation that latches
 What the model cannot show is a check-then-write race inside such an unclaimed
 write, because the model makes each write atomic whether or not the code does.
 
-\subsection{Two builds, four seeded faults, one switch}
+\subsection{Two builds, seven seeded faults, two switches}
 
 \field{fixed}~$=1$ is the lifecycle this design requires. \field{fixed}~$=0$ is
 the code at the commit the design starts from (eaa5118): the terminals write
@@ -85,11 +85,14 @@ without the claim and over any status, the abort's kept set lacks
 \field{aborted}, the abort ignores what \field{fail\_aborted} answered and
 spools and counts a kept job anyway, a store that lands after the cancel is never
 observed, and a spool future that is cancelled while its thread runs is reported
-as a failed write. \field{abl}$\,\in 1\upto4$ seeds one fault into the fixed
-build: the observer moves a term and not the counter (I2), the late correction
-moves a term and not the reason (I5), the observer writes without the claim (I6),
-and the abort's kept set lacks \field{aborted} (I7). The old build never breaks
-I2 or I5, so the first two prove the witnesses can fire. The same witnesses are
+as a failed write; a cancel of the abort's gather escapes the queued path's
+record. \field{abl}$\,\in 1\upto7$ seeds one fault into the fixed build: the
+observer moves a term and not the counter (1, I2), the late correction moves a
+term and not the reason (2, I5), the observer writes without the claim (3, I6), the
+abort's kept set lacks \field{aborted} (4, I7), the observer leaves the spool file
+(5, I11), a failed committing store leaves the term \emph{unconfirmed} (6, I9), and
+the observer leaves the failure reason on a completed job (7, I10). The old build
+never breaks I2 or I5, so faults 1 and 2 prove those witnesses can fire. The same witnesses are
 checked against every build: the fixed build, with \field{abl}$=0$, must reach
 none.
 
@@ -130,6 +133,12 @@ I7 & \field{wOver} & a withdrawn, aborted or completed status was overwritten,
 I8 & \field{wDisk} & a failed job's reason says what reached disk wrongly:
   spooled with no file, lost though the write may yet land or has, or no spool
   needed though a file exists \\
+I9 & \field{wMatch} & a term does not match the status: \emph{unconfirmed}
+  without \field{committing}; \emph{pending}, \emph{unfinished}, \emph{spooled},
+  \emph{not written}, \emph{unbuilt} or \emph{needs no spool} without
+  \field{failed}; \emph{kept} without withdrawn, aborted or completed \\
+I10 & \field{wCompl} & a \field{completed} job still carries a failure reason \\
+I11 & \field{wGhost} & a \field{completed} job has a spool file on disk \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -138,11 +147,23 @@ I2 is also nearly structural: \field{tl} is a function from jobs to terms, so
 every job is in exactly one term. The counters \field{cnt} are what the code
 keeps, and \field{wCount} checks them against \field{tl}.
 
-A late store after a spool record was written leaves the record on disk: a
-\emph{ghost}. The model allows it (the job is \field{completed} and counted
-\emph{kept}; the file is no longer evidence of a failure) and I3 does not count
-it, because the implementation can remove the file but cannot make the removal
-atomic with a store thread's completion.
+A late store after a spool record was written would leave the record on disk: a
+\emph{ghost}. The fixed build forbids it (I11). When the observer completes a
+job it removes the job's spool file, and a spool thread that ends after the job
+has stored removes the file it wrote (\field{SpoolEndsRemoved}). The model makes
+each removal atomic with the step that causes it; the code cannot, so a crash
+between the store and the removal can still leave a file, which the daemon's
+start-up sweep does not touch (it removes temps, not records). Whether replaying
+such a record is harmless is not modelled, and no replay code exists to check it.
+
+\subsection{Assumption: the store has its own executor}
+
+The store thread and the spool thread never wait for each other. The code must
+make that true: the spool writes run on the shared \field{DaemonThreads} pool of
+four threads, so stores must run on a separate executor, or four busy
+collections would starve every spool write and the abort's wait would expire on
+all of them. The model has no thread pool; this is the assumption that lets it
+treat the two kinds of thread as independent.
 
 \subsection{Non-goals}
 
@@ -151,7 +172,8 @@ atomic with a store thread's completion.
     after \field{SPOOL\_WAIT\_S} is not modelled. So the budget is a claim about
     structure (an in-flight job's term can leave \emph{pending}), not about
     seconds.
-  \item A queued job's spool has no deadline: its term stays \emph{pending}
+  \item A queued job's spool has no deadline, though a cancel of the abort's
+    gather does end its wait (\field{QueueCancel}): its term stays \emph{pending}
     until the spool ends, which the summary reports as not yet accounted for.
     Whether to bound it is a design question, not a model result.
   \item More than two jobs, more than one collection worker, and the embed gate
@@ -254,13 +276,14 @@ PHASE ::= pre | started
 
 \begin{zed}
 WIT ::= wTerm | wCount | wKept | wLost | wLate | wClaim | wOver | wDisk
+      | wMatch | wCompl | wGhost
 \end{zed}
 
 \begin{axdef}
 fixed, abl : \nat
 \where
 fixed \in 0 \upto 1 \\
-abl \in 0 \upto 4 \\
+abl \in 0 \upto 7 \\
 abl > 0 \implies fixed = 1 \\
 fixed = 1 \\
 abl = 0
@@ -366,7 +389,14 @@ wit' = wit \cup \{ w : WIT |
       (rs'~j = rnospool \land sp'~j = sok)))) \lor
   (w = wOver \land (\exists j : JOB @
      (st~j \in \{ swithdrawn, saborted, scompleted \} \land st'~j \neq st~j) \lor
-     (st~j = scommitting \land st'~j = sfailed \land ts'~j = tcommit))) \}
+     (st~j = scommitting \land st'~j = sfailed \land ts'~j = tcommit))) \lor
+  (w = wMatch \land (\exists j : JOB @
+     (tl'~j = tunconf \land st'~j \neq scommitting) \lor
+     (tl'~j \in \{ tpend, tunfin, tspooled, tnotw, tunb, tnospool \} \land
+        st'~j \neq sfailed) \lor
+     (tl'~j = tkept \land st'~j \notin \{ swithdrawn, saborted, scompleted \}))) \lor
+  (w = wCompl \land (\exists j : JOB @ st'~j = scompleted \land rs'~j \neq rnone)) \lor
+  (w = wGhost \land (\exists j : JOB @ st'~j = scompleted \land sp'~j = sok)) \}
 \end{schema}
 
 \begin{schema}{LatchClaim}
@@ -391,7 +421,14 @@ wit' = wit \cup \{ w : WIT |
       (rs'~j = rnospool \land sp'~j = sok)))) \lor
   (w = wOver \land (\exists j : JOB @
      (st~j \in \{ swithdrawn, saborted, scompleted \} \land st'~j \neq st~j) \lor
-     (st~j = scommitting \land st'~j = sfailed \land ts'~j = tcommit))) \lor w = wClaim \}
+     (st~j = scommitting \land st'~j = sfailed \land ts'~j = tcommit))) \lor
+  (w = wMatch \land (\exists j : JOB @
+     (tl'~j = tunconf \land st'~j \neq scommitting) \lor
+     (tl'~j \in \{ tpend, tunfin, tspooled, tnotw, tunb, tnospool \} \land
+        st'~j \neq sfailed) \lor
+     (tl'~j = tkept \land st'~j \notin \{ swithdrawn, saborted, scompleted \}))) \lor
+  (w = wCompl \land (\exists j : JOB @ st'~j = scompleted \land rs'~j \neq rnone)) \lor
+  (w = wGhost \land (\exists j : JOB @ st'~j = scompleted \land sp'~j = sok)) \lor w = wClaim \}
 \end{schema}
 
 % ===================================================================
@@ -704,6 +741,7 @@ done-callback on the future the job keeps): its rows are stored, so the job is
 fixed = 1 \\
 abl \neq 1 \\
 abl \neq 3 \\
+abl \neq 5 \\
 ((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
 loc~j? = out \\
 st~j? \in \{ sfailed, scommitting \} \\
@@ -712,7 +750,7 @@ st' = st \oplus \{ j? \mapsto scompleted \} \\
 loc' = loc \\
 ts' = ts \oplus \{ j? \mapsto tstored \} \\
 ab' = ab \oplus \{ j? \mapsto arec \} \\
-sp' = sp \\
+(sp~j? = sok \implies sp' = sp \oplus \{ j? \mapsto s0 \}) \land (sp~j? \neq sok \implies sp' = sp) \\
 tl' = tl \oplus \{ j? \mapsto tkept \} \\
 rs' = rs \oplus \{ j? \mapsto rnone \} \\
 fl' = fl \\
@@ -740,7 +778,7 @@ st' = st \oplus \{ j? \mapsto scompleted \} \\
 loc' = loc \\
 ts' = ts \oplus \{ j? \mapsto tstored \} \\
 ab' = ab \oplus \{ j? \mapsto arec \} \\
-sp' = sp \\
+(sp~j? = sok \implies sp' = sp \oplus \{ j? \mapsto s0 \}) \land (sp~j? \neq sok \implies sp' = sp) \\
 tl' = tl \oplus \{ j? \mapsto tkept \} \\
 rs' = rs \oplus \{ j? \mapsto rnone \} \\
 fl' = fl \\
@@ -768,7 +806,7 @@ st' = st \oplus \{ j? \mapsto scompleted \} \\
 loc' = loc \\
 ts' = ts \oplus \{ j? \mapsto tstored \} \\
 ab' = ab \oplus \{ j? \mapsto arec \} \\
-sp' = sp \\
+(sp~j? = sok \implies sp' = sp \oplus \{ j? \mapsto s0 \}) \land (sp~j? \neq sok \implies sp' = sp) \\
 tl' = tl \oplus \{ j? \mapsto tkept \} \\
 rs' = rs \oplus \{ j? \mapsto rnone \} \\
 fl' = fl \\
@@ -782,12 +820,14 @@ StoreEndsObservedUnclaimed \defs StoreEndsObservedUnclaimedCore \land LatchClaim
 \end{zed}
 
 \emph{Fixed build.} The store lands after the cancel and before the abort has
-begun the job: the status is corrected now, and \field{Begin} will find it kept.
+begun the job: the status is corrected now, its reason is cleared, and
+\field{Begin} will find it kept.
 
 \begin{schema}{StoreEndsObservedUnbegunCore}
 \Delta Run \\ j? : JOB
 \where
 fixed = 1 \\
+abl \neq 7 \\
 ((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
 loc~j? = out \\
 st~j? \in \{ sfailed, scommitting \} \\
@@ -807,6 +847,117 @@ ph' = ph
 
 \begin{zed}
 StoreEndsObservedUnbegun \defs StoreEndsObservedUnbegunCore \land Latch
+\end{zed}
+
+\emph{Seeded fault 7.} The same, and the failure reason is left on the job.
+
+\begin{schema}{StoreEndsObservedUnbegunKeepsReasonCore}
+\Delta Run \\ j? : JOB
+\where
+abl = 7 \\
+((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
+loc~j? = out \\
+st~j? \in \{ sfailed, scommitting \} \\
+tl~j? = tnone \\
+st' = st \oplus \{ j? \mapsto scompleted \} \\
+loc' = loc \\
+ts' = ts \oplus \{ j? \mapsto tstored \} \\
+ab' = ab \\
+sp' = sp \\
+tl' = tl \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+cnt' = cnt \\
+ph' = ph
+\end{schema}
+
+\begin{zed}
+StoreEndsObservedUnbegunKeepsReason \defs StoreEndsObservedUnbegunKeepsReasonCore \land Latch
+\end{zed}
+
+\emph{Seeded fault 5.} The observer leaves the job's spool file on disk.
+
+\begin{schema}{StoreEndsObservedGhostCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 1 \\
+abl = 5 \\
+((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
+loc~j? = out \\
+st~j? \in \{ sfailed, scommitting \} \\
+tl~j? \in \{ tpend, tspooled, tnospool, tnotw, tunb, tunfin, tunconf \} \\
+st' = st \oplus \{ j? \mapsto scompleted \} \\
+loc' = loc \\
+ts' = ts \oplus \{ j? \mapsto tstored \} \\
+ab' = ab \oplus \{ j? \mapsto arec \} \\
+sp' = sp \\
+tl' = tl \oplus \{ j? \mapsto tkept \} \\
+rs' = rs \oplus \{ j? \mapsto rnone \} \\
+fl' = fl \\
+fc' = fc \\
+cnt' = cnt \oplus \{ tl~j? \mapsto cnt~(tl~j?) - 1, tkept \mapsto cnt~tkept + 1 \} \\
+ph' = ph
+\end{schema}
+
+\begin{zed}
+StoreEndsObservedGhost \defs StoreEndsObservedGhostCore \land Latch
+\end{zed}
+
+\emph{Fixed build.} The spool thread ends after the job has stored: its done
+callback sees \field{completed} and removes the file it wrote (the write returns
+the path), so no ghost record survives.
+
+\begin{schema}{SpoolEndsRemovedCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 1 \\
+abl \neq 5 \\
+sp~j? = srun \\
+st~j? = scompleted \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \\
+sp' = sp \oplus \{ j? \mapsto s0 \} \\
+tl' = tl \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+cnt' = cnt \\
+ph' = ph
+\end{schema}
+
+\begin{zed}
+SpoolEndsRemoved \defs SpoolEndsRemovedCore \land Latch
+\end{zed}
+
+\emph{Seeded fault 6.} The same, and the term stays \emph{unconfirmed}.
+
+\begin{schema}{StoreFailsObservedCommittingStaleCore}
+\Delta Run \\ j? : JOB
+\where
+abl = 6 \\
+fixed = 1 \\
+((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
+loc~j? = out \\
+st~j? = scommitting \\
+tl~j? = tunconf \\
+st' = st \oplus \{ j? \mapsto sfailed \} \\
+loc' = loc \\
+ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ab' = ab \\
+sp' = sp \\
+tl' = tl \\
+rs' = rs \oplus \{ j? \mapsto rnospool \} \\
+fl' = fl \\
+fc' = fc \\
+cnt' = cnt \\
+ph' = ph
+\end{schema}
+
+\begin{zed}
+StoreFailsObservedCommittingStale \defs StoreFailsObservedCommittingStaleCore \land Latch
 \end{zed}
 
 \emph{Fixed build.} The detached store lands on a status the producer or an
@@ -844,6 +995,7 @@ transcript, so its term is \emph{needs no spool}.
 \Delta Run \\ j? : JOB
 \where
 fixed = 1 \\
+abl \neq 6 \\
 ((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
 loc~j? = out \\
 st~j? = scommitting \\
@@ -1440,6 +1592,7 @@ abort is still waiting is a separate matter.
 \where
 sp~j? = srun \\
 o? \in \{ sok, sfail, sunb \} \\
+(fixed = 0 \lor abl = 5 \lor st~j? \neq scompleted) \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -1625,6 +1778,90 @@ ph' = ph
 
 \begin{zed}
 SpoolCancel \defs SpoolCancelCore \land Latch
+\end{zed}
+
+\emph{Old build.} The abort's gather is cancelled while a queued job's spool
+thread runs. \field{\_one\_off\_loop} catches only \field{Exception}, so the
+cancel escapes it, \field{\_record} never runs, and the job stays pending for good.
+
+\begin{schema}{QueueCancelOldCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 0 \\
+ab~j? = aspool \\
+fl~j? = zfalse \\
+sp~j? = srun \\
+fc~j? = zfalse \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \\
+sp' = sp \\
+tl' = tl \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \oplus \{ j? \mapsto ztrue \} \\
+cnt' = cnt \\
+ph' = ph
+\end{schema}
+
+\begin{zed}
+QueueCancelOld \defs QueueCancelOldCore \land Latch
+\end{zed}
+
+\emph{Fixed build.} The same cancel records the job \emph{unfinished} and arms the
+late callback. The spool thread's future is shielded, so the cancel does not
+cancel it and \field{Late} can still correct the record.
+
+\begin{schema}{QueueCancelCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 1 \\
+ab~j? = aspool \\
+fl~j? = zfalse \\
+sp~j? = srun \\
+fc~j? = zfalse \\
+tl~j? = tpend \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \oplus \{ j? \mapsto arec \} \\
+sp' = sp \\
+tl' = tl \oplus \{ j? \mapsto tunfin \} \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+cnt' = cnt \oplus \{ tpend \mapsto cnt~tpend - 1, tunfin \mapsto cnt~tunfin + 1 \} \\
+ph' = ph
+\end{schema}
+
+\begin{zed}
+QueueCancel \defs QueueCancelCore \land Latch
+\end{zed}
+
+Every job is settled: nothing is left to do. The self-loop keeps the settled
+state from being a deadlock, so that a deadlock anywhere else is a finding.
+
+\begin{schema}{QuiesceCore}
+\Delta Run
+\where
+ph = started \\
+\forall j : JOB @ (ab~j = arec \lor (ab~j = an \land loc~j = out)) \land ts~j \in \{ t0, tstored, tstop \} \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \\
+sp' = sp \\
+tl' = tl \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+cnt' = cnt \\
+ph' = ph
+\end{schema}
+
+\begin{zed}
+Quiesce \defs QuiesceCore \land Latch
 \end{zed}
 
 

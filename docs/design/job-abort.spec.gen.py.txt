@@ -1,0 +1,954 @@
+"""Generate docs/design/job-abort.spec.tex, the Z model of the job abort lifecycle.
+
+Usage:  python3 job-abort.spec.gen.py.txt OUTPUT.tex [FIXED [ABL]]
+
+The file is named .txt so that the repository's Python lint, which has no business
+with a generator of LaTeX, does not take it for project code.  The committed spec
+is exactly ``job-abort.spec.gen.py.txt job-abort.spec.tex 1 0``; edit the generator,
+regenerate, and run ``z-spec check`` on the result.
+
+FIXED  1 (default): the lifecycle the design requires.
+       0: the code at eaa5118.  The old build's operations are guarded by fixed = 0.
+ABL    0 (default): no seeded fault.  1..7 seed one fault into the fixed build,
+       each aimed at one witness (see the spec's section on builds).  A seeded
+       fault is a mutant: ProB must reach the witness it is aimed at.
+
+The two switches become the axioms of the spec's ``fixed`` and ``abl``; every
+other byte of the output is the same.  Model-check a variant by generating it to
+a scratch path and running probcli on that file.
+"""
+
+import sys
+
+VARS = ["st", "loc", "ts", "ab", "sp", "tl", "rs", "fl", "fc", "cnt", "ph", "wit"]
+FUN = {"st", "loc", "ts", "ab", "sp", "tl", "rs", "fl", "fc"}
+
+K0 = r"\{ swithdrawn, scommitting, scompleted \}"
+KEPT = r"\{ swithdrawn, saborted, scompleted \}"
+DONE = r"\{ sok, sfail, sunb \}"
+TERMB = r"\{ tpend, tspooled, tnospool, tnotw, tunb, tunfin, tunconf \}"
+LIVE = r"\{ gate, body \}"
+
+
+def upd(var, *pairs):
+    body = ", ".join(f"{k} \\mapsto {v}" for k, v in pairs)
+    return f"{var}' = {var} \\oplus \\{{ {body} \\}}"
+
+
+def move(old, new, key="j?"):
+    """tl and cnt move together: the one place the tally is written."""
+    o = old if " " not in old and "~" not in old else f"({old})"
+    n = new if " " not in new and "~" not in new else f"({new})"
+    return {
+        "tl": upd("tl", (key, new)),
+        "cnt": (
+            f"cnt' = cnt \\oplus \\{{ {old} \\mapsto cnt~{o} - 1, "
+            f"{new} \\mapsto cnt~{n} + 1 \\}}"
+        ),
+    }
+
+
+WIT = r"""wit' = wit \cup \{ w : WIT |
+  (w = wTerm \land (\exists j : JOB @ ab'~j = arec \land
+     ts'~j \in \{ t0, tstored, tstop \} \land
+     \lnot ((st'~j = scompleted \land ts'~j = tstored) \lor
+            (st'~j = sfailed \land ts'~j \neq tstored) \lor
+            st'~j \in \{ swithdrawn, saborted \}))) \lor
+  (w = wCount \land (\exists t : TERM @
+     (\# \{ j : JOB | tl'~j = t \}) \neq cnt'~t)) \lor
+  (w = wKept \land (\exists j : JOB @ st'~j \in KEPT \land
+     tl'~j \notin \{ tnone, tkept \})) \lor
+  (w = wLost \land (\exists j : JOB @ ts'~j = tstored \land st'~j = sfailed)) \lor
+  (w = wLate \land (\exists j : JOB @ st'~j = sfailed \land
+     tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j))) \lor
+  (w = wDisk \land (\exists j : JOB @ st'~j = sfailed \land
+     ((rs'~j = rspooled \land sp'~j \neq sok) \lor
+      (rs'~j \in \{ rnotw, runb \} \land sp'~j \in \{ srun, sok \}) \lor
+      (rs'~j = rnospool \land sp'~j = sok)))) \lor
+  (w = wOver \land (\exists j : JOB @
+     (st~j \in KEPT \land st'~j \neq st~j) \lor
+     (st~j = scommitting \land st'~j = sfailed \land ts'~j = tcommit))) \lor
+  (w = wMatch \land (\exists j : JOB @
+     (tl'~j = tunconf \land st'~j \neq scommitting) \lor
+     (tl'~j \in \{ tpend, tunfin, tspooled, tnotw, tunb, tnospool \} \land
+        st'~j \neq sfailed) \lor
+     (tl'~j = tkept \land st'~j \notin KEPT))) \lor
+  (w = wCompl \land (\exists j : JOB @ st'~j = scompleted \land rs'~j \neq rnone)) \lor
+  (w = wGhost \land (\exists j : JOB @ st'~j = scompleted \land sp'~j = sok))UNC \}"""
+WIT = WIT.replace("KEPT", KEPT)
+
+
+class Op:
+    def __init__(self, name, doc, pre, post=None, decls="j? : JOB", unclaimed=False):
+        self.name, self.doc, self.pre = name, doc, pre
+        self.post = post or {}
+        self.decls = decls
+        self.unclaimed = unclaimed
+
+    def tex(self):
+        lines = [f"\\Delta Run \\\\ {self.decls}" if self.decls else "\\Delta Run"]
+        body = []
+        for p in self.pre:
+            body.append(p)
+        for v in VARS:
+            if v == "wit":
+                continue
+            if v in self.post:
+                body.append(self.post[v])
+            else:
+                body.append(f"{v}' = {v}")
+        latch = "LatchClaim" if self.unclaimed else "Latch"
+        text = "\\begin{schema}{" + self.name + "Core}\n"
+        text += lines[0] + "\n\\where\n"
+        text += " \\\\\n".join(body) + "\n"
+        text += "\\end{schema}\n\n"
+        text += ("\\begin{zed}\n" + self.name + " \\defs " + self.name
+                 + "Core \\land " + latch + "\n\\end{zed}\n")
+        return (self.doc.strip() + "\n\n" if self.doc else "") + text
+
+
+def merge(*dicts):
+    out = {}
+    for d in dicts:
+        out.update(d)
+    return out
+
+
+def ops():
+    O = []
+    J = "j?"
+
+    # ---------------- producer, worker, thread (both builds) ----------------
+    O.append(Op("WithdrawQueued", r"""
+The producer withdraws a job that has not started (\field{JobLifecycle.withdraw},
+under the claim).""",
+        [f"st~{J} = squeued"], {"st": upd("st", (J, "swithdrawn"))}))
+    O.append(Op("WithdrawRunning", r"""
+The producer gives up on a job that has started: it is \field{aborted}, and a
+job with a commit checkpoint will stop at it.""",
+        [f"st~{J} = srunning"], {"st": upd("st", (J, "saborted"))}))
+    O.append(Op("Dequeue", r"""
+The worker takes the next queued job. It holds at most one.""",
+        ["ph = pre", f"loc~{J} = inq", f"\\forall k : JOB @ loc~k \\notin {LIVE}"],
+        {"loc": upd("loc", (J, "gate"))}))
+    O.append(Op("Start", r"""
+\field{JobLifecycle.start}: a queued job becomes running and its store thread
+begins.""",
+        ["ph = pre", f"loc~{J} = gate", f"st~{J} = squeued"],
+        {"st": upd("st", (J, "srunning")), "loc": upd("loc", (J, "body")),
+         "ts": upd("ts", (J, "tpre"))}))
+    O.append(Op("Skip", r"""
+A job withdrawn while it waited is never started; the worker lets it go.""",
+        ["ph = pre", f"loc~{J} = gate", f"st~{J} \\neq squeued"],
+        {"loc": upd("loc", (J, "out"))}))
+    O.append(Op("Commit", r"""
+The commit checkpoint, reported by the store thread: \field{JobLifecycle.commit}
+claims it only while the job is still running.""",
+        [f"ck~{J} = ztrue", f"ts~{J} = tpre", f"st~{J} = srunning"],
+        {"st": upd("st", (J, "scommitting")), "ts": upd("ts", (J, "tcommit"))}))
+    O.append(Op("CommitRefused", r"""
+A job whose status is no longer running refuses the commit (the checkpoint
+raises), so the thread stops before it deletes or inserts anything.""",
+        [f"ck~{J} = ztrue", f"ts~{J} = tpre", f"st~{J} \\neq srunning"],
+        {"ts": upd("ts", (J, "tstop"))}))
+
+    storing = [f"((ck~{J} = zfalse \\land ts~{J} = tpre) \\lor "
+               f"(ck~{J} = ztrue \\land ts~{J} = tcommit))"]
+    O.append(Op("StoreEnds", r"""
+The store thread finishes and the rows are in the table, while the worker still
+awaits it (its status write is the worker's), or whatever the build.""",
+        storing + [f"loc~{J} = body"], {"ts": upd("ts", (J, "tstored"))}))
+    O.append(Op("StoreFails", r"""
+The store thread ends without rows (a refusal, an insert that failed after the
+delete), while the worker still awaits it.""",
+        storing + [f"loc~{J} = body"], {"ts": upd("ts", (J, "tstop"))}))
+    O.append(Op("StoreEndsOld", r"""
+\emph{Old build.} The worker is gone (a cancel detached it) and nothing watches
+the store thread: the rows land and the status stays what the abort left.""",
+        ["fixed = 0"] + storing + [f"loc~{J} = out"],
+        {"ts": upd("ts", (J, "tstored"))}))
+    O.append(Op("StoreFailsOld", r"""
+\emph{Old build.} The detached thread ends without rows; nobody observes it.""",
+        ["fixed = 0"] + storing + [f"loc~{J} = out"],
+        {"ts": upd("ts", (J, "tstop"))}))
+
+    # fixed build: the detached store is observed
+    def settle_begun(name, doc, pre_extra, no_count=False, unclaimed=False,
+                     remove=True):
+        mv = move(f"tl~{J}", "tkept")
+        if no_count:
+            mv = {"tl": mv["tl"]}
+        if remove:
+            mv["sp"] = (f"(sp~{J} = sok \\implies {upd('sp', (J, 's0'))}) \\land "
+                        f"(sp~{J} \\neq sok \\implies sp' = sp)")
+        return Op(name, doc,
+            ["fixed = 1"] + pre_extra + storing + [f"loc~{J} = out",
+             f"st~{J} \\in \\{{ sfailed, scommitting \\}}",
+             f"tl~{J} \\in {TERMB}"],
+            merge({"ts": upd("ts", (J, "tstored")),
+                   "st": upd("st", (J, "scompleted")),
+                   "rs": upd("rs", (J, "rnone")),
+                   "ab": upd("ab", (J, "arec"))}, mv),
+            unclaimed=unclaimed)
+
+    O.append(settle_begun("StoreEndsObserved", r"""
+\emph{Fixed build.} The detached store thread's own completion is observed (a
+done-callback on the future the job keeps): its rows are stored, so the job is
+\field{completed}, its reason is cleared, and its tally term moves to
+\emph{kept}, in one critical section under the claim.""", ["abl \\neq 1", "abl \\neq 3", "abl \\neq 5"]))
+    O.append(settle_begun("StoreEndsObservedGhost", r"""
+\emph{Seeded fault 5.} The observer leaves the job's spool file on disk.""",
+        ["abl = 5"], remove=False))
+    O.append(settle_begun("StoreEndsObservedNoCount", r"""
+\emph{Seeded fault 1.} The observer moves the job's term but not the counter.""",
+        ["abl = 1"], no_count=True))
+    O.append(settle_begun("StoreEndsObservedUnclaimed", r"""
+\emph{Seeded fault 3.} The observer writes the status without the claim.""",
+        ["abl = 3"], unclaimed=True))
+    O.append(Op("StoreEndsObservedUnbegun", r"""
+\emph{Fixed build.} The store lands after the cancel and before the abort has
+begun the job: the status is corrected now, its reason is cleared, and
+\field{Begin} will find it kept.""",
+        ["fixed = 1", "abl \\neq 7"] + storing + [f"loc~{J} = out",
+         f"st~{J} \\in \\{{ sfailed, scommitting \\}}", f"tl~{J} = tnone"],
+        {"ts": upd("ts", (J, "tstored")), "st": upd("st", (J, "scompleted")),
+         "rs": upd("rs", (J, "rnone"))}))
+    O.append(Op("StoreEndsObservedUnbegunKeepsReason", r"""
+\emph{Seeded fault 7.} The same, and the failure reason is left on the job.""",
+        ["abl = 7"] + storing + [f"loc~{J} = out",
+         f"st~{J} \\in \\{{ sfailed, scommitting \\}}", f"tl~{J} = tnone"],
+        {"ts": upd("ts", (J, "tstored")), "st": upd("st", (J, "scompleted"))}))
+    O.append(Op("StoreEndsKept", r"""
+\emph{Fixed build.} The detached store lands on a status the producer or an
+earlier correction already settled; the status is left alone.""",
+        ["fixed = 1"] + storing + [f"loc~{J} = out",
+         f"st~{J} \\in {KEPT}"],
+        {"ts": upd("ts", (J, "tstored"))}))
+    O.append(Op("StoreFailsObservedCommittingStale", r"""
+\emph{Seeded fault 6.} The same, and the term stays \emph{unconfirmed}.""",
+        ["abl = 6", "fixed = 1"] + storing + [f"loc~{J} = out",
+         f"st~{J} = scommitting", f"tl~{J} = tunconf"],
+        {"ts": upd("ts", (J, "tstop")), "st": upd("st", (J, "sfailed")),
+         "rs": upd("rs", (J, "rnospool"))}))
+    O.append(Op("StoreFailsObservedCommitting", r"""
+\emph{Fixed build.} The detached store of a committing job fails: its rows are
+not stored, so the job is \field{failed}; a backfill job is run again from its
+transcript, so its term is \emph{needs no spool}.""",
+        ["fixed = 1", "abl \\neq 6"] + storing + [f"loc~{J} = out",
+         f"st~{J} = scommitting", f"tl~{J} = tunconf"],
+        merge({"ts": upd("ts", (J, "tstop")), "st": upd("st", (J, "sfailed")),
+               "rs": upd("rs", (J, "rnospool"))}, move("tunconf", "tnospool"))))
+    O.append(Op("StoreFailsObservedUnbegun", r"""
+\emph{Fixed build.} The same, before the abort has begun the job.""",
+        ["fixed = 1"] + storing + [f"loc~{J} = out", f"st~{J} = scommitting",
+         f"tl~{J} = tnone"],
+        {"ts": upd("ts", (J, "tstop")), "st": upd("st", (J, "sfailed")),
+         "rs": upd("rs", (J, "rterm"))}))
+    O.append(Op("StoreFailsDetachedOther", r"""
+\emph{Fixed build.} A detached store that fails on a job whose status already
+says it did not store (failed) or is the producer's: nothing to correct.""",
+        ["fixed = 1"] + storing + [f"loc~{J} = out",
+         f"st~{J} \\neq scommitting"],
+        {"ts": upd("ts", (J, "tstop"))}))
+
+    # worker finish
+    O.append(Op("FinishStoredOld", r"""
+\emph{Old build.} The worker's terminal records \field{completed}
+(\field{RefusalAwareTerminal.complete}) with no claim and over any status.""",
+        ["fixed = 0", "ph = pre", f"loc~{J} = body", f"ts~{J} = tstored"],
+        {"st": upd("st", (J, "scompleted")), "loc": upd("loc", (J, "out"))},
+        unclaimed=True))
+    O.append(Op("FinishStopOld", r"""
+\emph{Old build.} A store that ended without rows (a refusal, the checkpoint's
+\field{JobWithdrawnError}, an exception) records \field{failed} with no claim
+and over any status, a producer's \field{aborted} included.""",
+        ["fixed = 0", "ph = pre", f"loc~{J} = body", f"ts~{J} = tstop"],
+        {"st": upd("st", (J, "sfailed")), "rs": upd("rs", (J, "rterm")),
+         "loc": upd("loc", (J, "out"))}, unclaimed=True))
+    O.append(Op("FinishStored", r"""
+\emph{Fixed build.} The terminal records \field{completed} under the claim, and
+only over a job the worker still owns (running or committing).""",
+        ["fixed = 1", "ph = pre", f"loc~{J} = body", f"ts~{J} = tstored",
+         f"st~{J} \\in \\{{ srunning, scommitting \\}}"],
+        {"st": upd("st", (J, "scompleted")), "loc": upd("loc", (J, "out"))}))
+    O.append(Op("FinishStop", r"""
+\emph{Fixed build.} A store without rows records \field{failed} under the claim,
+over a running or committing job (the store is over, so the commit is settled).""",
+        ["fixed = 1", "ph = pre", f"loc~{J} = body", f"ts~{J} = tstop",
+         f"st~{J} \\in \\{{ srunning, scommitting \\}}"],
+        {"st": upd("st", (J, "sfailed")), "rs": upd("rs", (J, "rterm")),
+         "loc": upd("loc", (J, "out"))}))
+    O.append(Op("FinishKept", r"""
+\emph{Fixed build.} The producer withdrew the job (\field{aborted}); the body's
+exit leaves that status alone.""",
+        ["fixed = 1", "ph = pre", f"loc~{J} = body", f"ts~{J} \\in \\{{ tstored, tstop \\}}",
+         f"st~{J} = saborted"],
+        {"loc": upd("loc", (J, "out"))}))
+
+    # ---------------- the abort ----------------
+    O.append(Op("AbortStart", r"""
+\field{CollectionWorker.abort}: the worker task is cancelled and every job still
+waiting in its queue is taken, in one synchronous step.""",
+        ["ph = pre"],
+        {"ph": "ph' = started",
+         "loc": r"loc' = \{ j : JOB; v : LOC | (loc~j = inq \land v = qtaken) \lor "
+                r"(loc~j \neq inq \land v = loc~j) @ j \mapsto v \}",
+         "ab": r"ab' = \{ j : JOB; v : AB | (loc~j = inq \land v = atake) \lor "
+               r"(loc~j \neq inq \land v = ab~j) @ j \mapsto v \}"},
+        decls=""))
+    O.append(Op("CancelAtGate", r"""
+The cancel reaches the in-flight job while it waits for the embed gate: its
+terminal never ran, and the worker's handler takes the job.""",
+        ["ph = started", f"loc~{J} = gate"],
+        {"loc": upd("loc", (J, "out")), "ab": upd("ab", (J, "atake")),
+         "fl": upd("fl", (J, "ztrue"))}))
+    O.append(Op("CancelInBodyOld", r"""
+\emph{Old build.} The cancel reaches the job inside its terminal
+(\field{TaskTerminal.recording}), which records \field{failed} with no claim and
+over whatever the status is: a committing job, a producer's \field{aborted}, and
+a store that has in fact already landed.""",
+        ["fixed = 0", "ph = started", f"loc~{J} = body"],
+        {"st": upd("st", (J, "sfailed")), "rs": upd("rs", (J, "rterm")),
+         "loc": upd("loc", (J, "out")), "ab": upd("ab", (J, "atake")),
+         "fl": upd("fl", (J, "ztrue"))}, unclaimed=True))
+    O.append(Op("CancelInBodyFails", r"""
+\emph{Fixed build.} The cancel reaches the job inside its terminal. A running
+job whose store has not landed is \field{failed}, provisionally, under the
+claim.""",
+        ["fixed = 1", "ph = started", f"loc~{J} = body",
+         f"((st~{J} = srunning \\land ts~{J} \\neq tstored) \\lor "
+         f"(st~{J} = scommitting \\land ts~{J} = tstop))"],
+        {"st": upd("st", (J, "sfailed")), "rs": upd("rs", (J, "rterm")),
+         "loc": upd("loc", (J, "out")), "ab": upd("ab", (J, "atake")),
+         "fl": upd("fl", (J, "ztrue"))}))
+    O.append(Op("CancelInBodyStored", r"""
+\emph{Fixed build.} The store had landed before the cancel and the cancelled
+await discarded its result: the terminal reads the job's own future, sees the
+rows, and records \field{completed}.""",
+        ["fixed = 1", "ph = started", f"loc~{J} = body", f"ts~{J} = tstored",
+         f"st~{J} \\in \\{{ srunning, scommitting \\}}"],
+        {"st": upd("st", (J, "scompleted")), "loc": upd("loc", (J, "out")),
+         "ab": upd("ab", (J, "atake")), "fl": upd("fl", (J, "ztrue"))}))
+    O.append(Op("CancelInBodyKept", r"""
+\emph{Fixed build.} A committing job whose store is still running stays
+\field{committing} (it may yet store), and a producer's \field{aborted} stays.""",
+        ["fixed = 1", "ph = started", f"loc~{J} = body",
+         f"(st~{J} = saborted \\lor (st~{J} = scommitting \\land ts~{J} = tcommit))"],
+        {"loc": upd("loc", (J, "out")), "ab": upd("ab", (J, "atake")),
+         "fl": upd("fl", (J, "ztrue"))}))
+
+    # begin
+    O.append(Op("BeginOld", r"""
+\emph{Old build.} \field{JobAbort._begin}: every taken job is failed with the
+provisional reason, whatever \field{fail\_aborted} said, and counted pending. The
+kept set lacks \field{aborted}, so a producer's \field{aborted} is overwritten.""",
+        ["fixed = 0", f"ab~{J} = atake"],
+        merge({"ab": upd("ab", (J, "abegun"))}, move("tnone", "tpend"),
+              {"st": f"(st~{J} \\in {K0} \\implies st' = st) \\land "
+                     f"(st~{J} \\notin {K0} \\implies "
+                     f"{upd('st', (J, 'sfailed'))})",
+               "rs": f"(st~{J} \\in {K0} \\implies rs' = rs) \\land "
+                     f"(st~{J} \\notin {K0} \\implies "
+                     f"{upd('rs', (J, 'rprov'))})"})))
+    O.append(Op("BeginKept", r"""
+\emph{Fixed build.} A taken job the abort must keep (withdrawn, aborted by its
+producer, or stored) is counted \emph{kept} at once: it is neither failed nor
+spooled.""",
+        ["fixed = 1", f"ab~{J} = atake", f"st~{J} \\in {KEPT}"],
+        merge({"ab": upd("ab", (J, "arec"))}, move("tnone", "tkept"))))
+    O.append(Op("BeginUnconfirmed", r"""
+\emph{Fixed build.} A committing job may yet store; it keeps its status and is
+counted \emph{unconfirmed} until its store thread ends.""",
+        ["fixed = 1", f"ab~{J} = atake", f"st~{J} = scommitting"],
+        merge({"ab": upd("ab", (J, "arec"))}, move("tnone", "tunconf"))))
+    O.append(Op("BeginFail", r"""
+\emph{Fixed build.} Any other taken job is failed with the provisional reason,
+under the claim, and counted pending.""",
+        ["fixed = 1", f"ab~{J} = atake",
+         f"st~{J} \\in \\{{ squeued, srunning, sfailed \\}}"],
+        merge({"ab": upd("ab", (J, "abegun")),
+               "st": upd("st", (J, "sfailed")), "rs": upd("rs", (J, "rprov"))},
+              move("tnone", "tpend"))))
+    O.append(Op("BeginAbortedOverwritten", r"""
+\emph{Seeded fault 4.} The fixed build's kept set lacks \field{aborted}.""",
+        ["fixed = 1", "abl = 4", f"ab~{J} = atake", f"st~{J} = saborted"],
+        merge({"ab": upd("ab", (J, "abegun")),
+               "st": upd("st", (J, "sfailed")), "rs": upd("rs", (J, "rprov"))},
+              move("tnone", "tpend"))))
+
+    # decide
+    O.append(Op("DecideRerun", r"""
+\field{AbortReason.of} for a job whose source outlives it (a backfill transcript):
+no spool, its term is \emph{needs no spool}. The old build does this to a kept
+job too.""",
+        [f"ab~{J} = abegun", f"sk~{J} = skrerun"],
+        merge({"ab": upd("ab", (J, "arec")),
+               "st": f"(st~{J} \\in {K0} \\implies st' = st) \\land "
+                     f"(st~{J} \\notin {K0} \\implies {upd('st', (J, 'sfailed'))})",
+               "rs": f"(st~{J} \\in {K0} \\implies rs' = rs) \\land "
+                     f"(st~{J} \\notin {K0} \\implies {upd('rs', (J, 'rnospool'))})"},
+              move("tpend", "tnospool"))))
+    O.append(Op("DecideSpool", r"""
+A job that needs a spool record starts its write on a daemon thread. The old
+build starts it for a kept job too.""",
+        [f"ab~{J} = abegun", f"sk~{J} = skspool"],
+        {"ab": upd("ab", (J, "aspool")), "sp": upd("sp", (J, "srun"))}))
+    O.append(Op("SpoolEnds", r"""
+The spool thread ends: the file is on disk (\field{sok}), the write failed
+(\field{sfail}), or the record could not be built (\field{sunb}). Whether the
+abort is still waiting is a separate matter.""",
+        [f"sp~{J} = srun", "o? \\in " + DONE,
+         f"(fixed = 0 \\lor abl = 5 \\lor st~{J} \\neq scompleted)"],
+        {"sp": upd("sp", (J, "o?"))}, decls="j? : JOB \\\\ o? : SP"))
+    O.append(Op("SpoolEndsRemoved", r"""
+\emph{Fixed build.} The spool thread ends after the job has stored: its done
+callback sees \field{completed} and removes the file it wrote (the write returns
+the path), so no ghost record survives.""",
+        ["fixed = 1", "abl \\neq 5", f"sp~{J} = srun", f"st~{J} = scompleted"],
+        {"sp": upd("sp", (J, "s0"))}))
+    O.append(Op("Record", r"""
+The outcome reaches the loop within the wait (\field{JobAbort.\_record}): the
+job's reason and its term are written together. A status the abort does not own
+keeps its reason (\field{fail\_aborted} refuses); the old build counts it
+anyway.""",
+        [f"ab~{J} = aspool", f"sp~{J} \\in {DONE}", f"fc~{J} = zfalse",
+         f"tl~{J} = tpend"],
+        merge({"ab": upd("ab", (J, "arec")),
+               "st": f"(st~{J} \\in {K0} \\implies st' = st) \\land "
+                     f"(st~{J} \\notin {K0} \\implies {upd('st', (J, 'sfailed'))})",
+               "rs": f"(st~{J} \\in {K0} \\implies rs' = rs) \\land "
+                     f"(st~{J} \\notin {K0} \\implies "
+                     f"{upd('rs', (J, 'RsOf~(sp~j?)'))})"},
+              move("tpend", f"TermOf~(sp~{J})"))))
+    O.append(Op("Deadline", r"""
+\field{JobAbort.fail\_in\_flight}: the in-flight job's spool is still unfinished
+at \field{SPOOL\_WAIT\_S}; the job is counted \emph{unfinished} and the late
+callback is armed.""",
+        [f"ab~{J} = aspool", f"fl~{J} = ztrue", f"tl~{J} = tpend"],
+        merge({"ab": upd("ab", (J, "arec"))}, move("tpend", "tunfin"))))
+    O.append(Op("Late", r"""
+\field{JobAbort.\_ended\_late}: a spool the abort stopped waiting for ends. The
+job's reason and its term move together, once.""",
+        [f"ab~{J} = arec", f"tl~{J} = tunfin", f"sp~{J} \\in {DONE}",
+         f"fc~{J} = zfalse", "abl \\neq 2"],
+        merge({"st": f"(st~{J} \\in {K0} \\implies st' = st) \\land "
+                     f"(st~{J} \\notin {K0} \\implies {upd('st', (J, 'sfailed'))})",
+               "rs": f"(st~{J} \\in {K0} \\implies rs' = rs) \\land "
+                     f"(st~{J} \\notin {K0} \\implies "
+                     f"{upd('rs', (J, 'RsOf~(sp~j?)'))})"},
+              move("tunfin", f"TermOf~(sp~{J})"))))
+    O.append(Op("LateNoReason", r"""
+\emph{Seeded fault 2.} The late correction moves the term and not the reason.""",
+        [f"ab~{J} = arec", f"tl~{J} = tunfin", f"sp~{J} \\in {DONE}",
+         f"fc~{J} = zfalse", "abl = 2"],
+        move("tunfin", f"TermOf~(sp~{J})")))
+    O.append(Op("SpoolCancelOld", r"""
+\emph{Old build.} The spool's future is cancelled while its thread still runs
+(the loop is torn down): the wait reports \field{NOT\_WRITTEN} though the file may
+yet land, and nothing corrects it.""",
+        ["fixed = 0", f"ab~{J} = aspool", f"fl~{J} = ztrue", f"sp~{J} = srun",
+         f"fc~{J} = zfalse", f"tl~{J} = tpend"],
+        merge({"ab": upd("ab", (J, "arec")), "fc": upd("fc", (J, "ztrue")),
+               "rs": f"(st~{J} \\in {K0} \\implies rs' = rs) \\land "
+                     f"(st~{J} \\notin {K0} \\implies {upd('rs', (J, 'rnotw'))})"},
+              move("tpend", "tnotw"))))
+    O.append(Op("SpoolCancel", r"""
+\emph{Fixed build.} The same cancel is reported as \emph{unfinished}: the thread
+still runs, so what reaches disk is unknown, and no later callback can see it.""",
+        ["fixed = 1", f"ab~{J} = aspool", f"fl~{J} = ztrue", f"sp~{J} = srun",
+         f"fc~{J} = zfalse", f"tl~{J} = tpend"],
+        merge({"ab": upd("ab", (J, "arec")), "fc": upd("fc", (J, "ztrue"))},
+              move("tpend", "tunfin"))))
+    O.append(Op("QueueCancelOld", r"""
+\emph{Old build.} The abort's gather is cancelled while a queued job's spool
+thread runs. \field{\_one\_off\_loop} catches only \field{Exception}, so the
+cancel escapes it, \field{\_record} never runs, and the job stays pending for good.""",
+        ["fixed = 0", f"ab~{J} = aspool", f"fl~{J} = zfalse", f"sp~{J} = srun",
+         f"fc~{J} = zfalse"],
+        {"fc": upd("fc", (J, "ztrue"))}))
+    O.append(Op("QueueCancel", r"""
+\emph{Fixed build.} The same cancel records the job \emph{unfinished} and arms the
+late callback. The spool thread's future is shielded, so the cancel does not
+cancel it and \field{Late} can still correct the record.""",
+        ["fixed = 1", f"ab~{J} = aspool", f"fl~{J} = zfalse", f"sp~{J} = srun",
+         f"fc~{J} = zfalse", f"tl~{J} = tpend"],
+        merge({"ab": upd("ab", (J, "arec"))}, move("tpend", "tunfin"))))
+    O.append(Op("Quiesce", r"""
+Every job is settled: nothing is left to do. The self-loop keeps the settled
+state from being a deadlock, so that a deadlock anywhere else is a finding.""",
+        ["ph = started",
+         r"\forall j : JOB @ (ab~j = arec \lor (ab~j = an \land loc~j = out)) \land "
+         r"ts~j \in \{ t0, tstored, tstop \}"],
+        {}, decls=""))
+    return O
+
+
+HEADER = r"""%
+% job-abort.spec.tex
+%
+% Ingest job lifecycle under a shutdown abort: a Z specification of how a
+% queued job's status moves between the worker, the producer, the terminals,
+% the commit checkpoint and the abort, and of the tally the abort keeps
+% (quarry-70zm).
+% Companion to docs/design/job-abort.md, which cites the sections below by
+% number, maps each schema to the code, and records the tool runs.
+%
+% Check:        z-spec check docs/design/job-abort.spec.tex
+% Model-check:  probcli with -p MAX_INITIALISATIONS 100 -nodead (the command
+%               lines and the state counts are in docs/design/job-abort.md)
+%
+% Must be .tex, not .md: the z-spec tools glob for .tex.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage{booktabs}
+
+\newcommand{\field}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{Ingest Job Lifecycle Under Shutdown Abort: A Z Specification}
+\author{Guido R, for Punt Labs}
+\date{October 2026}
+\maketitle
+"""
+
+SCOPE = r"""
+% ===================================================================
+\section{Scope and modelling choices}
+\label{sec:scope}
+% ===================================================================
+
+The model has \emph{two jobs} (\field{ja}, \field{jb}) on \emph{one collection
+worker}, which holds at most one job at a time and runs it on a store thread.
+A job is one of three shapes, fixed when it is admitted. A \emph{backfill} job
+(\field{ck} true) reports a commit checkpoint, and is run again from its
+transcript, so it needs no spool. A \emph{rerunnable} job (\field{ck} false,
+\field{skrerun}) is the same without the checkpoint. A \emph{spooled} job
+(\field{skspool}: a \field{remember} or a URL ingest) has no durable client
+copy, so the abort writes it a spool record.
+
+Five actors write a job's status or its tally:
+
+\begin{itemize}
+  \item the \emph{worker}, which starts a job and, through its terminal
+    (\field{TaskTerminal}, \field{RefusalAwareTerminal}), records how the body
+    ended;
+  \item the \emph{producer}, which gives up on a job by withdrawing it
+    (\field{JobLifecycle.withdraw}), from another thread;
+  \item the \emph{store thread}, which reaches the commit checkpoint
+    (\field{JobLifecycle.commit}) and then stores or fails, and which no cancel
+    stops;
+  \item the \emph{shutdown abort}: \field{AbortStart} (cancel the worker, take
+    the queued jobs), then per job \field{Begin}, a decision, a spool thread, and
+    either \field{Record} (within the wait), \field{Deadline} (an in-flight job's
+    spool outlasts \field{SPOOL\_WAIT\_S}) or, later, \field{Late};
+  \item the \emph{observer} of a store that finishes after the cancel, which is
+    the one actor the old build lacks.
+\end{itemize}
+
+\subsection{Statuses, the lock, and the unit of atomicity}
+
+All seven statuses a job can hold appear: \field{squeued}, \field{srunning},
+\field{scommitting}, \field{scompleted}, \field{sfailed}, \field{swithdrawn},
+\field{saborted}. (\field{new}, a job not yet queued, is not modelled: a
+withdraw there behaves as at \field{squeued}.) Every status write in the fixed
+build is one operation, and an operation is one critical section under
+\field{state.claim}: no other operation interleaves with it. That is the
+single-writer rule (I6), and it is the modelling unit, not a variable. A write
+that the code makes \emph{without} the claim is an operation that latches
+\field{wClaim}; the old build has three, and the seeded faults add a fourth.
+What the model cannot show is a check-then-write race inside such an unclaimed
+write, because the model makes each write atomic whether or not the code does.
+
+\subsection{Two builds, seven seeded faults, two switches}
+
+\field{fixed}~$=1$ is the lifecycle this design requires. \field{fixed}~$=0$ is
+the code at the commit the design starts from (eaa5118): the terminals write
+without the claim and over any status, the abort's kept set lacks
+\field{aborted}, the abort ignores what \field{fail\_aborted} answered and
+spools and counts a kept job anyway, a store that lands after the cancel is never
+observed, and a spool future that is cancelled while its thread runs is reported
+as a failed write; a cancel of the abort's gather escapes the queued path's
+record. \field{abl}$\,\in 1\upto7$ seeds one fault into the fixed build: the
+observer moves a term and not the counter (1, I2), the late correction moves a
+term and not the reason (2, I5), the observer writes without the claim (3, I6), the
+abort's kept set lacks \field{aborted} (4, I7), the observer leaves the spool file
+(5, I11), a failed committing store leaves the term \emph{unconfirmed} (6, I9), and
+the observer leaves the failure reason on a completed job (7, I10). The old build
+never breaks I2 or I5, so faults 1 and 2 prove those witnesses can fire. The same witnesses are
+checked against every build: the fixed build, with \field{abl}$=0$, must reach
+none.
+
+\subsection{Witnesses, not invariants}
+
+A schema invariant that an operation can violate makes that operation
+unsatisfiable, so ProB would report nothing rather than a violation. Each
+property is a latched witness in the set \field{wit}, computed by every operation
+from the state before and after it, and checked by asking ProB whether any state
+with the witness in \field{wit} is reachable.
+
+\subsection{Properties}
+
+A job is \emph{taken} once \field{Begin} has run (\field{ab} is past
+\field{atake}): between \field{AbortStart}, or the worker's handler, and
+\field{Begin} the job is in no term, and the counter of \field{tnone} holds it.
+A taken job is \emph{quiet} when its outcome is recorded (\field{arec}) and its
+store thread has ended or never ran.
+
+\begin{center}
+\begin{tabular}{@{}cll@{}}
+\toprule
+ & Witness & Meaning \\
+\midrule
+I1 & \field{wTerm} & a quiet job has no terminal status that matches reality:
+  \field{completed} without rows, \field{failed} with rows, or still queued, running or
+  committing \\
+I2 & \field{wCount} & a term of the tally differs from the number of jobs in
+  it (so the terms do not sum to the jobs taken) \\
+I3 & \field{wKept} & a withdrawn, aborted or stored job is counted in a term
+  other than \emph{kept}: spooled, lost, unfinished, or needing no spool \\
+I4 & \field{wLost} & a job's rows are stored and its status is \field{failed} \\
+I5 & \field{wLate} & a failed job's reason and its term disagree (a late
+  correction moved one and not the other) \\
+I6 & \field{wClaim} & a status was written without the claim \\
+I7 & \field{wOver} & a withdrawn, aborted or completed status was overwritten,
+  or a committing job was failed while its store thread still runs \\
+I8 & \field{wDisk} & a failed job's reason says what reached disk wrongly:
+  spooled with no file, lost though the write may yet land or has, or no spool
+  needed though a file exists \\
+I9 & \field{wMatch} & a term does not match the status: \emph{unconfirmed}
+  without \field{committing}; \emph{pending}, \emph{unfinished}, \emph{spooled},
+  \emph{not written}, \emph{unbuilt} or \emph{needs no spool} without
+  \field{failed}; \emph{kept} without withdrawn, aborted or completed \\
+I10 & \field{wCompl} & a \field{completed} job still carries a failure reason \\
+I11 & \field{wGhost} & a \field{completed} job has a spool file on disk \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+I2 is also nearly structural: \field{tl} is a function from jobs to terms, so
+every job is in exactly one term. The counters \field{cnt} are what the code
+keeps, and \field{wCount} checks them against \field{tl}.
+
+A late store after a spool record was written would leave the record on disk: a
+\emph{ghost}. The fixed build forbids it (I11). When the observer completes a
+job it removes the job's spool file, and a spool thread that ends after the job
+has stored removes the file it wrote (\field{SpoolEndsRemoved}). The model makes
+each removal atomic with the step that causes it; the code cannot, so a crash
+between the store and the removal can still leave a file, which the daemon's
+start-up sweep does not touch (it removes temps, not records). Whether replaying
+such a record is harmless is not modelled, and no replay code exists to check it.
+
+\subsection{Assumption: the store has its own executor}
+
+The store thread and the spool thread never wait for each other. The code must
+make that true: the spool writes run on the shared \field{DaemonThreads} pool of
+four threads, so stores must run on a separate executor, or four busy
+collections would starve every spool write and the abort's wait would expire on
+all of them. The model has no thread pool; this is the assumption that lets it
+treat the two kinds of thread as independent.
+
+\subsection{Non-goals}
+
+\begin{itemize}
+  \item Time. \field{Deadline} fires whenever its guard holds; that it fires
+    after \field{SPOOL\_WAIT\_S} is not modelled. So the budget is a claim about
+    structure (an in-flight job's term can leave \emph{pending}), not about
+    seconds.
+  \item A queued job's spool has no deadline, though a cancel of the abort's
+    gather does end its wait (\field{QueueCancel}): its term stays \emph{pending}
+    until the spool ends, which the summary reports as not yet accounted for.
+    Whether to bound it is a design question, not a model result.
+  \item More than two jobs, more than one collection worker, and the embed gate
+    shared between workers (the gate is one place to wait, \field{gate}).
+  \item The order of the queue, and the producer's wait loop; the producer is the
+    \field{Withdraw} operations alone.
+  \item A second cancel during the in-flight wait: it only repeats the cancel,
+    which a spool-wait loop absorbs; it changes no state the model keeps.
+  \item The spool record's bytes, its recoverability flag (recoverable or
+    not), and the spool directory sweep. Both spooled outcomes are one term.
+  \item The summary's text, and the done-callback's logging.
+  \item A store thread that never ends. It is a state with the thread not quiet,
+    and a job in it stays \emph{unconfirmed} or \emph{pending} by design; the
+    liveness check below is \emph{possibility}, not inevitability.
+\end{itemize}
+
+% ===================================================================
+\section{Types and constants}
+\label{sec:types}
+% ===================================================================
+
+\begin{zed}
+ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+JOB ::= ja | jb
+\end{zed}
+
+The seven statuses of a job.
+
+\begin{zed}
+STATUS ::= squeued | srunning | scommitting | scompleted | sfailed
+         | swithdrawn | saborted
+\end{zed}
+
+Where the worker has the job: waiting in the collection's queue
+(\field{inq}); dequeued, waiting for the embed gate (\field{gate}); in its
+terminal, awaiting the store thread (\field{body}); taken out of the queue by the
+abort (\field{qtaken}); or no longer the worker's, because it finished, was
+skipped, or was cancelled (\field{out}). A job that is \field{out} while its store
+thread runs is \emph{detached}.
+
+\begin{zed}
+LOC ::= inq | gate | body | qtaken | out
+\end{zed}
+
+The store thread. \field{t0}: not started. \field{tpre}: running, before the
+commit checkpoint. \field{tcommit}: past the checkpoint (a backfill job only).
+\field{tstored}: the rows are in the table. \field{tstop}: ended with none (it
+stopped at the checkpoint, was refused, or failed after the delete).
+
+\begin{zed}
+TS ::= t0 | tpre | tcommit | tstored | tstop
+\end{zed}
+
+The abort's progress on a job. \field{an}: not taken. \field{atake}: taken out
+of the queue, or the worker's handler has it, and \field{Begin} has not run.
+\field{abegun}: failed provisionally and counted pending. \field{aspool}: its spool
+write has started. \field{arec}: its outcome is recorded.
+
+\begin{zed}
+AB ::= an | atake | abegun | aspool | arec
+\end{zed}
+
+The spool thread.
+
+\begin{zed}
+SP ::= s0 | srun | sok | sfail | sunb
+\end{zed}
+
+\begin{zed}
+SK ::= skrerun | skspool
+\end{zed}
+
+The tally's terms. \field{tnone}: not taken (the counter holds the jobs not yet
+counted, so the terms sum to two). \field{tpend}: taken, outcome not yet known.
+\field{tspooled}, \field{tnotw} (the write failed), \field{tunb} (the record
+could not be built), \field{tunfin} (the in-flight wait ended with the write still
+running), \field{tnospool} (it needs none). \field{tkept}: the abort left the job
+as it is: withdrawn, aborted by its producer, or stored. \field{tunconf}: a
+committing job, whose store has not ended.
+
+\begin{zed}
+TERM ::= tnone | tpend | tspooled | tnospool | tnotw | tunb | tunfin
+       | tkept | tunconf
+\end{zed}
+
+The reason a job's status carries. \field{rterm}: the terminal's own (cancelled,
+refused, failed). \field{rprov}: the abort's provisional ``spool unfinished at
+shutdown'', which is also the final reason of an unfinished job.
+
+\begin{zed}
+RS ::= rnone | rterm | rprov | rspooled | rnospool | rnotw | runb
+\end{zed}
+
+\begin{zed}
+PHASE ::= pre | started
+\end{zed}
+
+\begin{zed}
+WIT ::= wTerm | wCount | wKept | wLost | wLate | wClaim | wOver | wDisk
+      | wMatch | wCompl | wGhost
+\end{zed}
+
+\begin{axdef}
+fixed, abl : \nat
+\where
+fixed \in 0 \upto 1 \\
+abl \in 0 \upto 7 \\
+abl > 0 \implies fixed = 1 \\
+fixed = 1 \\
+abl = 0
+\end{axdef}
+
+\begin{axdef}
+ck : JOB \fun ZBOOL \\
+sk : JOB \fun SK
+\where
+\forall j : JOB @ ck~j = ztrue \implies sk~j = skrerun
+\end{axdef}
+
+The reason that goes with each term, and the term and reason a spool outcome
+gives. A kept or unconfirmed job carries no abort reason.
+
+\begin{axdef}
+ReasonOf : TERM \pfun RS \\
+TermOf : SP \pfun TERM \\
+RsOf : SP \pfun RS
+\where
+ReasonOf = \{ tpend \mapsto rprov, tunfin \mapsto rprov,
+  tspooled \mapsto rspooled, tnospool \mapsto rnospool,
+  tnotw \mapsto rnotw, tunb \mapsto runb \} \\
+TermOf = \{ sok \mapsto tspooled, sfail \mapsto tnotw, sunb \mapsto tunb \} \\
+RsOf = \{ sok \mapsto rspooled, sfail \mapsto rnotw, sunb \mapsto runb \}
+\end{axdef}
+"""
+
+STATE = r"""
+% ===================================================================
+\section{State}
+\label{sec:state}
+% ===================================================================
+
+\begin{schema}{Run}
+st : JOB \fun STATUS \\
+loc : JOB \fun LOC \\
+ts : JOB \fun TS \\
+ab : JOB \fun AB \\
+sp : JOB \fun SP \\
+tl : JOB \fun TERM \\
+rs : JOB \fun RS \\
+fl, fc : JOB \fun ZBOOL \\
+cnt : TERM \fun (0 \upto 2) \\
+ph : PHASE \\
+wit : \power WIT
+\end{schema}
+
+\begin{itemize}
+  \item \field{st}, \field{rs}: the job's status and the reason its \field{error}
+    carries.
+  \item \field{loc}, \field{ts}: the worker's hold on it and its store thread.
+  \item \field{ab}, \field{sp}: the abort's progress on it and its spool thread.
+    The spool file is on disk exactly when \field{sp}~$=$~\field{sok}.
+  \item \field{fl}: the job was in flight (the worker held it) when it was
+    taken. \field{fc}: its spool future was cancelled while the thread ran.
+  \item \field{tl}, \field{cnt}: the job's term and the counters the code keeps;
+    the code writes them together or the model reports it.
+  \item \field{ph}: the abort has started.
+\end{itemize}
+
+\begin{schema}{Init}
+Run'
+\where
+\forall j : JOB @ st'~j = squeued \land loc'~j = inq \land ts'~j = t0 \land
+  ab'~j = an \land sp'~j = s0 \land tl'~j = tnone \land rs'~j = rnone \land
+  fl'~j = zfalse \land fc'~j = zfalse \\
+cnt' = \{ tnone \mapsto 2, tpend \mapsto 0, tspooled \mapsto 0, tnospool \mapsto 0,
+  tnotw \mapsto 0, tunb \mapsto 0, tunfin \mapsto 0, tkept \mapsto 0,
+  tunconf \mapsto 0 \} \\
+ph' = pre \\
+wit' = \emptyset
+\end{schema}
+
+Both jobs start queued. \field{ck} and \field{sk} are free.
+"""
+
+PROPS = r"""
+% ===================================================================
+\section{Properties checked}
+\label{sec:props}
+% ===================================================================
+
+For \field{fixed}~$=1$, \field{abl}~$=0$: ProB finds no reachable state with any
+witness in \field{wit}, no deadlock, and from every state after the abort has
+started a state in which every job is settled is reachable. A job is
+\emph{settled} when it is out of the abort's hands (never taken and
+\field{out}, or \field{arec}) and no store thread is running
+(\field{AG(started} $\Rightarrow$ \field{EF(settled))}). For \field{fixed}~$=0$ and
+for each seeded fault, the witness aimed at it is reachable; the report records the
+shortest path ProB found for each.
+
+\end{document}
+"""
+
+
+def build(fixed=1, abl=0):
+    latch = (
+        "\n% " + "=" * 67 + "\n\\section{Latching the witnesses}\n\\label{sec:latch}\n% "
+        + "=" * 67 + "\n\n"
+        "Every operation below is its own core schema conjoined with \\field{Latch}, "
+        "which computes \\field{wit}$'$ from the state before and after the step "
+        "and from nothing else, so that no operation can forget to report a "
+        "violation. An operation that the code performs without holding "
+        "\\field{state.claim} is conjoined with \\field{LatchClaim}, which "
+        "adds \\field{wClaim}. Both are conjoined, never invoked on their own: "
+        "the operations are the schemas defined with $\\defs$.\n\n"
+        "\\begin{schema}{Latch}\n\\Delta Run\n\\where\n"
+        + WIT.replace("UNC", "") + "\n\\end{schema}\n\n"
+        "\\begin{schema}{LatchClaim}\n\\Delta Run\n\\where\n"
+        + WIT.replace("UNC", r" \lor w = wClaim") + "\n\\end{schema}\n"
+    )
+    parts = [HEADER, SCOPE.replace(
+        "fixed = 1 \\\\\nabl = 0", f"fixed = {fixed} \\\\\nabl = {abl}"), STATE, latch]
+    out = "\n".join(parts)
+    # sections for operations
+    O = ops()
+    names = [o.name for o in O]
+    groups = [
+        ("The producer, the worker and the store thread", "sec:worker",
+         r"""
+Operations in this section happen with or without a shutdown. The store thread
+runs on its own: the checkpoint and the end of the store are its steps, and
+whether the worker still awaits it (\field{loc}~$=$~\field{body}) or a cancel
+detached it (\field{loc}~$=$~\field{out}) decides who records the result.
+Every operation spells out what it leaves unchanged.""",
+         ["WithdrawQueued", "WithdrawRunning", "Dequeue", "Start", "Skip",
+          "Commit", "CommitRefused", "StoreEnds", "StoreFails"]),
+        ("The store thread after a cancel", "sec:detached",
+         r"""
+The old build never looks at a store thread again once its worker is cancelled.
+The fixed build keeps the thread's future with the job and observes its end: that
+observer is what makes a store that lands after the cancel report
+\field{completed} (I4) without a second writer.""",
+         ["StoreEndsOld", "StoreFailsOld", "StoreEndsObserved",
+          "StoreEndsObservedNoCount", "StoreEndsObservedUnclaimed",
+          "StoreEndsObservedUnbegun", "StoreEndsObservedUnbegunKeepsReason",
+          "StoreEndsObservedGhost", "SpoolEndsRemoved", "StoreFailsObservedCommittingStale",
+          "StoreEndsKept",
+          "StoreFailsObservedCommitting", "StoreFailsObservedUnbegun",
+          "StoreFailsDetachedOther"]),
+        ("The worker's terminal", "sec:terminal",
+         r"""
+\field{TaskTerminal.recording} and \field{RefusalAwareTerminal} record how the
+body ended. Before the abort the body's exit is \field{Finish}; the cancel
+reaches the body through the \field{CancelInBody} family.""",
+         ["FinishStoredOld", "FinishStopOld", "FinishStored", "FinishStop",
+          "FinishKept"]),
+        ("The abort: taking the jobs", "sec:take",
+         r"""
+\field{CollectionWorker.abort} cancels the worker task and takes the queued
+jobs; the in-flight job reaches the abort through the worker's handler.""",
+         ["AbortStart", "CancelAtGate", "CancelInBodyOld", "CancelInBodyFails",
+          "CancelInBodyStored", "CancelInBodyKept"]),
+        ("The abort: beginning, deciding, recording", "sec:record",
+         r"""
+\field{JobAbort} fails each taken job with a provisional reason and counts it
+pending (\field{Begin}), decides what it needs (\field{Decide}), and records the
+outcome when its spool thread ends (\field{Record}), when the in-flight wait
+expires (\field{Deadline}), or later (\field{Late}).""",
+         ["BeginOld", "BeginKept", "BeginUnconfirmed", "BeginFail",
+          "BeginAbortedOverwritten", "DecideRerun", "DecideSpool", "SpoolEnds",
+          "Record", "Deadline", "Late", "LateNoReason", "SpoolCancelOld",
+          "SpoolCancel", "QueueCancelOld", "QueueCancel", "Quiesce"]),
+    ]
+    byname = {o.name: o for o in O}
+    for title, label, intro, members in groups:
+        out += (f"\n% {'=' * 67}\n\\section{{{title}}}\n\\label{{{label}}}\n"
+                f"% {'=' * 67}\n\n{intro.strip()}\n\n")
+        for m in members:
+            out += byname[m].tex() + "\n"
+    assert set(sum((g[3] for g in groups), [])) == set(names), set(names) ^ set(
+        sum((g[3] for g in groups), []))
+    out += PROPS
+    return out
+
+
+if __name__ == "__main__":
+    fixed = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    abl = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    with open(sys.argv[1], "w") as handle:
+        handle.write(build(fixed, abl))
