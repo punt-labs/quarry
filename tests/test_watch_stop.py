@@ -6,7 +6,11 @@ import asyncio
 import gc
 import itertools
 import logging
+import subprocess
+import sys
+import textwrap
 import threading
+import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
@@ -508,3 +512,64 @@ async def test_a_cancelled_late_step_is_logged(
         await asyncio.sleep(0.3)
 
     assert "slow was cancelled after the stop gave up on it" in caplog.text
+
+
+def test_a_close_that_never_returns_does_not_keep_the_process_alive() -> None:
+    """anyio's worker threads are not daemon threads; these are."""
+    script = textwrap.dedent(
+        """
+        import asyncio, threading
+        from types import SimpleNamespace
+        from quarry.daemon.watch_stop import WatchStop
+
+        never = threading.Event()
+        roster = SimpleNamespace(unwatch_all=lambda: None, close=never.wait)
+
+        async def main():
+            stop = WatchStop.for_loop(roster, None, None, None, None, 5.0)
+            try:
+                await asyncio.wait_for(stop.run(), 0.3)
+            except (TimeoutError, asyncio.CancelledError):
+                pass
+
+        asyncio.run(main())
+        """
+    )
+    started = time.monotonic()
+
+    done = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, timeout=30, check=False
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert time.monotonic() - started < 15
+
+
+async def test_the_roster_steps_and_the_observer_join_never_run_at_once() -> None:
+    running = 0
+    peak = 0
+    lock = threading.Lock()
+    release = threading.Event()
+
+    def step() -> None:
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        release.wait(0.2)
+        with lock:
+            running -= 1
+
+    roster = cast("WatchRoster", SimpleNamespace(unwatch_all=step, close=step))
+    source = cast("FsEventSource", SimpleNamespace(stop=step))
+    stopping = asyncio.create_task(
+        WatchStop.for_loop(roster, source, None, None, None, _DRAIN_TIMEOUT_S).run()
+    )
+    await asyncio.sleep(0.05)
+    stopping.cancel()  # give up on the first step; the others still queue behind it
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+    release.set()
+    await asyncio.sleep(0.5)
+
+    assert peak == 1

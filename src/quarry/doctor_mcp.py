@@ -93,7 +93,9 @@ class ClaudeCodeMcp:
                 return self._failure("no plugin registry found")
             return self._read_registry()
         except (OSError, ValueError) as exc:
-            return self._failure(f"config error: {JsonFile.why(exc)}")
+            return self._failure(
+                f"config error: {JsonFile.why(exc, self._plugins_path)}"
+            )
 
     def _read_registry(self) -> CheckResult:
         """Return whether the registry lists a quarry plugin whose manifest says so."""
@@ -114,7 +116,9 @@ class ClaudeCodeMcp:
         install_path = Path(raw_path)
         plugin_json = install_path / ".claude-plugin" / "plugin.json"
         if not plugin_json.exists():
-            return self._failure(f"plugin files missing at {install_path.name}")
+            return self._failure(
+                f"plugin files missing at {CheckFailure.line(install_path.name)}"
+            )
         manifest = JsonFile.load(plugin_json)
         servers = JsonFile.object_at(manifest, "mcpServers", plugin_json)
         if _MCP_SERVER_NAME not in servers:
@@ -143,7 +147,15 @@ class ClaudeCodeMcp:
             return self._failure(f"claude mcp add failed: {self._said(result)}")
         # An entry already exists and blocks the direct add. Remove it and re-add;
         # only now — with the entry confirmed present — do we risk a removal.
-        remove = run("mcp", "remove", _MCP_SERVER_NAME, *_SCOPE_USER)
+        try:
+            remove = run("mcp", "remove", _MCP_SERVER_NAME, *_SCOPE_USER)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return self._failure(
+                "the remove of the stale quarry MCP entry did not finish "
+                f"({CheckFailure.detail(exc)}), so the entry may be gone: "
+                "re-run 'quarry install' or "
+                "'claude mcp add quarry --scope user -- quarry mcp'."
+            )
         if remove.returncode != 0:
             # The remove failed: the stale entry is likely still present, so do NOT
             # re-add blindly or claim a removal that did not happen.
@@ -173,8 +185,8 @@ class ClaudeCodeMcp:
 
     @staticmethod
     def _said(result: subprocess.CompletedProcess[str]) -> str:
-        """Return what ``claude`` said on stderr: one printable, bounded line."""
-        return CheckFailure.line(result.stderr)
+        """Return what ``claude`` said (stderr, else stdout) as one bounded line."""
+        return CheckFailure.line(result.stderr) or CheckFailure.line(result.stdout)
 
     @classmethod
     def _run(
@@ -185,9 +197,11 @@ class ClaudeCodeMcp:
         Its output is decoded as UTF-8 with replacement, so bytes that are not
         text cannot raise.
         """
-        timeout = min(cls._CLAUDE_TIMEOUT_S, deadline - time.monotonic())
-        if timeout <= 0:
-            raise subprocess.TimeoutExpired([claude_path, *argv], 0)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            elapsed = cls._TOTAL_TIMEOUT_S - remaining
+            raise subprocess.TimeoutExpired([claude_path, *argv], elapsed)
+        timeout = min(cls._CLAUDE_TIMEOUT_S, remaining)
         return subprocess.run(  # noqa: S603
             [claude_path, *argv],
             capture_output=True,
@@ -251,8 +265,8 @@ class ClaudeDesktopMcp:
             servers[_MCP_SERVER_NAME] = {"command": self._command(), "args": ["mcp"]}
             config["mcpServers"] = servers
             AtomicFile(path).replace(json.dumps(config, indent=2) + "\n")
-        except (OSError, ValueError) as exc:
-            return self._failure(f"{JsonFile.why(exc)}; left unchanged")
+        except (OSError, ValueError, RecursionError) as exc:
+            return self._failure(f"{JsonFile.why(exc, path)}; left unchanged")
         return CheckResult(
             name="Claude Desktop MCP",
             passed=True,
@@ -269,7 +283,7 @@ class ClaudeDesktopMcp:
                 return self._failure("no config file (run 'quarry install')")
             servers = JsonFile.object_at(JsonFile.load(path), "mcpServers", path)
         except (OSError, ValueError) as exc:
-            return self._failure(f"config error: {JsonFile.why(exc)}")
+            return self._failure(f"config error: {JsonFile.why(exc, path)}")
         if _MCP_SERVER_NAME in servers:
             return CheckResult(
                 name="Claude Desktop MCP", passed=True, message="configured"
@@ -287,6 +301,10 @@ class ClaudeDesktopMcp:
         if found is None:
             msg = "quarry is not on PATH, so Claude Desktop cannot be pointed at it"
             raise ConfigError(msg)
+        if not Path(found).is_absolute():
+            msg = "quarry resolved to a path that is not absolute"
+            raise ConfigError(msg)
+        # Symlinks are kept: a uv tool shim is a legitimate one.
         return found
 
     @staticmethod

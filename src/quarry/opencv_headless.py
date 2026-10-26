@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from typing import Self, final
 
+from quarry.doctor_failure import CheckFailure
+
 __all__ = ["HeadlessOpenCv"]
 
 _PACKAGE = "opencv-python-headless"
@@ -36,13 +38,22 @@ class HeadlessOpenCv:
     def enforce(self) -> str:
         """Reinstall the headless wheel so it provides ``cv2``; return a status line.
 
-        Raises ``subprocess.CalledProcessError`` if the reinstall fails; the
+        Raises ``RuntimeError`` (with pip's last line) if the reinstall fails; the
         caller (``quarry install``) treats that as a best-effort skip, and the
         runtime OCR guard still degrades cleanly.
         """
-        subprocess.run(  # noqa: S603  # fixed argv, no shell, no user input
-            self._reinstall_command(), check=True, capture_output=True
+        done = subprocess.run(  # noqa: S603  # fixed argv, no shell, no user input
+            self._reinstall_command(),
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
+        if done.returncode != 0:
+            why = CheckFailure.because(done.stderr)
+            msg = f"the reinstall exited {done.returncode}{why}"
+            raise RuntimeError(msg)
         return f"{_PACKAGE} is the cv2 provider"
 
     def remediation(self) -> str:

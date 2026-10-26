@@ -8,6 +8,7 @@ import sys
 import textwrap
 import threading
 import time
+from functools import partial
 
 import pytest
 
@@ -15,12 +16,12 @@ from quarry.daemon.daemon_threads import DaemonThreads
 
 
 async def test_a_call_runs_on_a_daemon_thread_off_the_default_executor() -> None:
-    threads = DaemonThreads()
+    threads = DaemonThreads(name="quarry-test")
 
     thread = await threads.run(threading.current_thread)
 
     assert thread.daemon
-    assert thread.name == "quarry-spool"
+    assert thread.name == "quarry-test"
     assert thread is not threading.current_thread()
 
 
@@ -51,16 +52,16 @@ async def test_no_more_than_the_bound_run_at_once() -> None:
 
     pending = [
         asyncio.ensure_future(threads.run(hold))
-        for _ in range(DaemonThreads.MAX_THREADS + 3)
+        for _ in range(DaemonThreads.SHARED_THREADS + 3)
     ]
     await asyncio.sleep(0.2)
     release.set()
     await asyncio.gather(*pending)
 
-    assert peak == DaemonThreads.MAX_THREADS
+    assert peak == DaemonThreads.SHARED_THREADS
 
 
-async def test_a_result_for_a_closed_loop_is_dropped_without_error() -> None:
+async def test_a_cancelled_caller_does_not_stop_the_work_or_the_pool() -> None:
     threads = DaemonThreads()
     started = threading.Event()
     release = threading.Event()
@@ -107,3 +108,92 @@ def test_a_call_that_never_returns_does_not_keep_the_process_alive() -> None:
 
     assert done.returncode == 0, done.stderr
     assert time.monotonic() - started < 15
+
+
+async def test_a_stalled_job_does_not_keep_a_burst_from_running() -> None:
+    threads = DaemonThreads(max_threads=3)
+    release = threading.Event()
+    done: list[int] = []
+
+    def stalls() -> None:
+        release.wait(5)
+
+    def quick(n: int) -> None:
+        done.append(n)
+
+    stalled = asyncio.ensure_future(threads.run(stalls))
+    await asyncio.sleep(0.05)
+    await asyncio.wait_for(
+        asyncio.gather(*(threads.run(partial(quick, n)) for n in range(5))), 2
+    )
+    release.set()
+    await stalled
+
+    assert sorted(done) == [0, 1, 2, 3, 4]
+
+
+async def test_a_burst_spawns_up_to_the_bound_not_one_thread() -> None:
+    threads = DaemonThreads(max_threads=3)
+    names: set[int] = set()
+    lock = threading.Lock()
+    gate = threading.Barrier(3, timeout=5)
+
+    def meet() -> None:
+        with lock:
+            names.add(threading.get_ident())
+        gate.wait()
+
+    await asyncio.gather(*(threads.run(meet) for _ in range(3)))
+
+    assert len(names) == 3
+
+
+class _Fatal(BaseException):
+    """A BaseException that is neither an Exception nor a cancel."""
+
+
+async def test_a_base_exception_completes_the_future_and_the_pool_survives() -> None:
+    threads = DaemonThreads(max_threads=1)
+
+    def fatal() -> None:
+        raise _Fatal
+
+    with pytest.raises(_Fatal):
+        await threads.run(fatal)
+
+    assert await asyncio.wait_for(threads.run(lambda: 7), 2) == 7  # same one thread
+
+
+async def test_a_pool_of_one_runs_in_submission_order() -> None:
+    threads = DaemonThreads(max_threads=1)
+    order: list[int] = []
+
+    await asyncio.gather(*(threads.run(partial(order.append, n)) for n in range(6)))
+
+    assert order == list(range(6))
+
+
+def test_a_result_for_a_loop_that_has_closed_is_dropped_without_error() -> None:
+    threads = DaemonThreads(max_threads=1)
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def work() -> int:
+        started.set()
+        release.wait(5)
+        finished.set()
+        return 1
+
+    loop = asyncio.new_event_loop()
+    task = loop.create_task(threads.run(work))
+    loop.run_until_complete(asyncio.sleep(0.05))
+    assert started.is_set()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        loop.run_until_complete(task)
+    loop.close()  # the loop is gone before the call returns
+    release.set()
+
+    assert finished.wait(2)
+    assert asyncio.run(threads.run(lambda: 3)) == 3  # the thread went on serving

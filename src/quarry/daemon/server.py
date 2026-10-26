@@ -26,6 +26,7 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.crash_logging import UncaughtExceptionLog
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.daemon.daemon_threads import DaemonThreads
 from quarry.daemon.job_spool import JobSpool
 from quarry.daemon.teardown import Teardown
 from quarry.fd_config import FdEnvelope
@@ -272,7 +273,8 @@ class DaemonServer:
         monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
         # Warm + queue are ready by now; start watching every roster database so
         # continuous indexing runs as a queue producer.
-        JobSpool.for_settings(ctx.settings).sweep()
+        # Off the loop and on a daemon thread: a stalled disk must not hold startup.
+        await DaemonThreads.shared().run(JobSpool.for_settings(ctx.settings).sweep)
         await ctx.start_watch_loop()
         try:
             yield

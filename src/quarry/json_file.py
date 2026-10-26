@@ -46,7 +46,11 @@ class JsonFile:
         except UnicodeDecodeError as exc:
             msg = f"{path.name}: not UTF-8"
             raise ConfigError(msg) from exc
-        except (json.JSONDecodeError, RecursionError, MemoryError) as exc:
+        except (
+            ValueError,
+            RecursionError,
+            MemoryError,
+        ) as exc:  # incl. JSONDecodeError
             msg = f"{path.name}: not JSON"
             raise ConfigError(msg) from exc
         if not isinstance(data, dict):
@@ -66,23 +70,43 @@ class JsonFile:
         return found
 
     @staticmethod
-    def why(exc: OSError | ValueError) -> str:
-        """Return the reason to report: ours as written, anything else by class."""
-        return str(exc) if isinstance(exc, ConfigError) else CheckFailure.detail(exc)
+    def why(exc: OSError | ValueError | RecursionError, path: Path) -> str:
+        """Return the reason to report, always naming *path*'s file.
+
+        Ours are written as they are; an ``OSError`` or any other failure is shown
+        by class and cause (never a path); a ``RecursionError`` writing the file
+        back is the same fault as reading it.
+        """
+        if isinstance(exc, ConfigError):
+            return str(exc)
+        if isinstance(exc, RecursionError):
+            return f"{path.name}: not JSON"
+        return f"{path.name}: {CheckFailure.detail(exc)}"
 
     @classmethod
     def _read(cls, path: Path) -> bytes:
-        """Return at most the cap's worth of bytes of a regular file."""
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        """Return a regular file's bytes, at most the cap's worth.
+
+        ``O_NOCTTY`` so a terminal device never becomes this process's controlling
+        terminal; the descriptor is closed on every path.
+        """
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode):
                 msg = f"{path.name}: not a regular file"
                 raise ConfigError(msg)
             if info.st_size > cls.MAX_BYTES:
-                msg = f"{path.name}: larger than {cls.MAX_BYTES} bytes"
-                raise ConfigError(msg)
+                raise cls._too_large(path)
             with os.fdopen(fd, "rb", closefd=False) as handle:
-                return handle.read(cls.MAX_BYTES + 1)
+                raw = handle.read(cls.MAX_BYTES + 1)
         finally:
             os.close(fd)
+        if len(raw) > cls.MAX_BYTES:  # grew after fstat
+            raise cls._too_large(path)
+        return raw
+
+    @classmethod
+    def _too_large(cls, path: Path) -> ConfigError:
+        """Return the error for a file past the cap."""
+        return ConfigError(f"{path.name}: larger than {cls.MAX_BYTES} bytes")

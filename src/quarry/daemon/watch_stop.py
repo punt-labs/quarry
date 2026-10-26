@@ -7,8 +7,7 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, Self, final
 
-from starlette.concurrency import run_in_threadpool
-
+from quarry.daemon.daemon_threads import DaemonThreads
 from quarry.daemon.watch_step_report import StepReport
 from quarry.redacted_failure import RedactedFailure
 from quarry.shutdown_policy import ShutdownPolicy
@@ -90,17 +89,16 @@ class WatchStop:
             steps.append(
                 ("cancelling the debounce timers", cls.inline(dispatcher.cancel_all))
             )
-        # Off the loop: unwatching and closing join threads and release native
-        # handles, and a stuck one must not freeze the loop or the grace bound.
-        steps.append(
-            ("unwatching the roster", partial(run_in_threadpool, roster.unwatch_all))
-        )
+        # Off the loop, on ONE daemon thread: unwatching, closing and joining the
+        # observer join threads and release native handles, so a stuck one must
+        # freeze neither the loop nor the process at exit, and they must never run
+        # at the same time, even after the stop has given up on one.
+        serial = DaemonThreads(max_threads=1, name="quarry-watch-stop")
+        steps.append(("unwatching the roster", partial(serial.run, roster.unwatch_all)))
         # drop sibling conns so a restart cannot leak them
-        steps.append(("closing the roster", partial(run_in_threadpool, roster.close)))
+        steps.append(("closing the roster", partial(serial.run, roster.close)))
         if source is not None:
-            steps.append(
-                ("joining the observer", partial(run_in_threadpool, source.stop))
-            )
+            steps.append(("joining the observer", partial(serial.run, source.stop)))
         return cls(steps, ShutdownPolicy(drain_timeout_s).watch_grace_s)
 
     @staticmethod

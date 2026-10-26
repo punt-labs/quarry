@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +18,8 @@ from quarry.doctor import check_environment, run_install
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_failure import CheckFailure
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.json_file import JsonFile
+from quarry.opencv_headless import HeadlessOpenCv
 from tests.test_doctor import _mock_install_deps
 
 MP = pytest.MonkeyPatch
@@ -68,7 +73,7 @@ class TestHomeAndCwdAreGuarded:
         check_environment()
 
         out = capsys.readouterr().out
-        assert "FileNotFoundError" in out
+        assert "the current directory no longer exists" in out
         assert "Recall telemetry" in out  # the checks after it still ran
 
     def test_a_home_that_cannot_be_resolved_does_not_crash_doctor_or_install(
@@ -319,3 +324,284 @@ class TestCheckFailureMessages:
 
         assert "reinstall quarry" in CheckFailure.import_message("x", missing)
         assert "reinstall" not in CheckFailure.import_message("x", OSError("y"))
+
+
+class TestDesktopCommand:
+    def test_a_path_that_is_not_absolute_is_refused(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr("quarry.doctor_mcp.shutil.which", lambda _n: "bin/quarry")
+        config = tmp_path / "claude_desktop_config.json"
+
+        result = ClaudeDesktopMcp(config).configure()
+
+        assert result.passed is False
+        assert "not absolute" in result.message
+        assert not config.exists()
+
+    def test_a_symlinked_shim_is_kept_as_it_is(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        target = tmp_path / "real-quarry"
+        target.write_text("#!/bin/sh\n")
+        shim = tmp_path / "quarry"
+        shim.symlink_to(target)
+        monkeypatch.setattr("quarry.doctor_mcp.shutil.which", lambda _n: str(shim))
+        config = tmp_path / "claude_desktop_config.json"
+
+        ClaudeDesktopMcp(config).configure()
+
+        server = json.loads(config.read_text())["mcpServers"]["quarry"]
+        assert server["command"] == str(shim)  # not resolved to the target
+
+
+class TestMessagesNameTheirFile:
+    def test_an_oserror_names_the_file_and_the_cause_never_the_path(
+        self, tmp_path: Path
+    ) -> None:
+        config = tmp_path / "claude_desktop_config.json"
+        config.write_text("{}")
+        config.chmod(0)
+        try:
+            result = ClaudeDesktopMcp(config).check()
+        finally:
+            config.chmod(0o600)
+
+        assert result.passed is False
+        assert "claude_desktop_config.json: PermissionError: EACCES" in result.message
+        assert str(tmp_path) not in result.message
+
+    def test_a_plain_value_error_from_the_parser_is_not_json(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "big-int.json"
+        path.write_text('{"n": ' + "9" * 6000 + "}")
+
+        with pytest.raises(ValueError, match=r"big-int\.json: not JSON"):
+            JsonFile.load(path)
+
+    def test_a_config_too_deep_to_write_back_is_reported_as_not_json(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        config = tmp_path / "claude_desktop_config.json"
+        config.write_text("{}")
+
+        def deep(*_a: object, **_k: object) -> str:
+            raise RecursionError
+
+        monkeypatch.setattr("quarry.doctor_mcp.json.dumps", deep)
+
+        result = ClaudeDesktopMcp(config).configure()
+
+        assert "claude_desktop_config.json: not JSON" in result.message
+        assert config.read_text() == "{}"
+
+
+class TestRemoveAndOutput:
+    @staticmethod
+    def _scripted(monkeypatch: MP, steps: list[object]) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        calls = iter(steps)
+
+        def run(_argv: list[str], **_kw: object) -> object:
+            step = next(calls)
+            if isinstance(step, BaseException):
+                raise step
+            return step
+
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", run)
+
+    @staticmethod
+    def _done(code: int, stderr: str = "", stdout: str = "") -> object:
+        return type(
+            "CP", (), {"returncode": code, "stdout": stdout, "stderr": stderr}
+        )()
+
+    def test_a_remove_that_times_out_says_the_entry_may_be_gone(
+        self, monkeypatch: MP
+    ) -> None:
+        self._scripted(
+            monkeypatch,
+            [
+                self._done(1, "already exists"),
+                subprocess.TimeoutExpired(["claude", "mcp", "remove"], 30),
+            ],
+        )
+
+        result = ClaudeCodeMcp().configure()
+
+        assert "may be gone" in result.message
+        assert "TimeoutExpired after 30s" in result.message
+        assert "claude" not in result.message.replace("claude mcp add", "")
+
+    def test_what_claude_says_falls_back_to_stdout(self, monkeypatch: MP) -> None:
+        self._scripted(monkeypatch, [self._done(1, "", "boom on stdout")])
+
+        result = ClaudeCodeMcp().configure()
+
+        assert "boom on stdout" in result.message
+
+    def test_the_synthetic_timeout_carries_the_real_elapsed_time(
+        self, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        clock = iter([0.0, 150.0, 150.0])
+        monkeypatch.setattr("quarry.doctor_mcp.time.monotonic", lambda: next(clock))
+        ran: list[object] = []
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.subprocess.run", lambda *a, **k: ran.append(a)
+        )
+
+        result = ClaudeCodeMcp().configure()
+
+        assert ran == []  # past the deadline: claude is not even started
+        assert "TimeoutExpired after 150s" in result.message
+
+    def test_each_call_gets_the_time_left_not_the_full_timeout(
+        self, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        timeouts: list[float] = []
+
+        def run(_argv: list[str], **kw: float) -> object:
+            timeouts.append(kw["timeout"])
+            return self._done(0 if len(timeouts) == 2 else 1, "already exists")
+
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", run)
+        clock = iter([0.0, 10.0, 100.0, 119.0])
+        monkeypatch.setattr("quarry.doctor_mcp.time.monotonic", lambda: next(clock))
+
+        ClaudeCodeMcp().configure()
+
+        assert timeouts[0] == 60.0  # 110 s left, capped at the per-call bound
+        assert timeouts[1] == 20.0  # 20 s left of the 120 s total
+        assert timeouts[2] == 1.0
+
+
+def test_registry_text_is_sanitized(tmp_path: Path) -> None:
+    registry = tmp_path / "installed_plugins.json"
+    hostile = "evil\x1b[31m\ndir"
+    registry.write_text(
+        json.dumps(
+            {"plugins": {"quarry@punt-labs": [{"installPath": f"/x/{hostile}"}]}}
+        )
+    )
+
+    result = ClaudeCodeMcp(registry).check()
+
+    assert "\x1b" not in result.message
+    assert "\n" not in result.message
+
+
+class TestFtsMissingVsFault:
+    def test_only_enoent_is_missing(self) -> None:
+        assert CheckFailure.is_missing(FileNotFoundError(errno.ENOENT, "gone"))
+        assert not CheckFailure.is_missing(OSError("bare, no errno"))
+        assert not CheckFailure.is_missing(ValueError("table not found"))
+        assert not CheckFailure.is_missing(PermissionError(errno.EACCES, "no"))
+
+    def test_a_bare_oserror_keeps_its_sanitized_first_line(self) -> None:
+        detail = CheckFailure.detail(OSError("index damaged\x1b[0m\nsecond"))
+
+        assert detail == "OSError: index damaged?[0m"
+
+
+def test_a_settings_failure_names_the_field_and_the_reason(
+    tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with monkeypatch.context() as bad:
+        bad.setenv("INGEST_DRAIN_TIMEOUT_S", "not-a-number")
+        check_environment()
+
+    out = capsys.readouterr().out
+    assert "invalid settings (ingest_drain_timeout_s:" in out
+
+
+class TestHeadlessOpenCvFailure:
+    def test_a_failed_reinstall_carries_pips_last_line_bounded(
+        self, monkeypatch: MP
+    ) -> None:
+        def run(_argv: list[str], **_kw: object) -> object:
+            err = "first\n" + "x" * 300 + "\x1b[31m ERROR: no matching distribution"
+            return type("CP", (), {"returncode": 1, "stdout": "", "stderr": err})()
+
+        monkeypatch.setattr("quarry.opencv_headless.subprocess.run", run)
+
+        with pytest.raises(RuntimeError, match="the reinstall exited 1: ") as raised:
+            HeadlessOpenCv("/usr/bin/python3").enforce()
+
+        assert "\x1b" not in str(raised.value)
+        assert len(str(raised.value)) < 200
+
+
+_NO_HOME_PRELUDE = """
+import pwd, sys
+def missing(_uid):
+    raise KeyError(_uid)
+pwd.getpwuid = missing
+"""
+
+
+def _run_without_a_home(body: str) -> subprocess.CompletedProcess[str]:
+    """Run *body* in a fresh interpreter with no HOME and no passwd entry."""
+    env = {k: v for k, v in os.environ.items() if k != "HOME"}
+    return subprocess.run(
+        [sys.executable, "-c", _NO_HOME_PRELUDE + textwrap.dedent(body)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("command", ["doctor", "install"])
+def test_the_console_script_answers_when_home_cannot_be_resolved(
+    command: str,
+) -> None:
+    done = _run_without_a_home(
+        f"""
+        sys.argv = ["quarry", "{command}"]
+        from quarry.__main__ import app
+        app()
+        """
+    )
+
+    assert done.returncode == 1
+    assert "✗ Home directory" in done.stdout
+    assert "Traceback" not in done.stderr
+
+
+def test_python_dash_m_quarry_answers_when_home_cannot_be_resolved() -> None:
+    done = _run_without_a_home(
+        """
+        import runpy
+        sys.argv = ["quarry", "doctor"]
+        runpy.run_module("quarry", run_name="__main__", alter_sys=True)
+        """
+    )
+
+    assert done.returncode == 1
+    assert "✗ Home directory" in done.stdout
+    assert "Traceback" not in done.stderr
+
+
+def test_another_command_gets_one_line_on_stderr_and_exit_one() -> None:
+    done = _run_without_a_home(
+        """
+        sys.argv = ["quarry", "find", "x"]
+        from quarry.__main__ import app
+        app()
+        """
+    )
+
+    assert done.returncode == 1
+    assert done.stdout == ""
+    assert done.stderr.startswith("quarry: Home directory")

@@ -5,7 +5,10 @@ from __future__ import annotations
 import errno
 import logging
 import re
+import subprocess
 from typing import ClassVar, final
+
+from pydantic import ValidationError
 
 from quarry.failure_reason import FailureReason
 from quarry.redacted_failure import RedactedFailure
@@ -42,9 +45,10 @@ class CheckFailure:
     def detail(cls, exc: BaseException) -> str:
         """Return ``Class: reason`` (just the class if there is no reason)."""
         name = type(exc).__name__
-        if isinstance(exc, OSError):
-            errno_name = FailureReason.os_name(exc)
-            return name if errno_name == name else f"{name}: {errno_name}"
+        if isinstance(exc, subprocess.TimeoutExpired):
+            return f"{name} after {exc.timeout:g}s"  # never its argv
+        if isinstance(exc, OSError) and exc.errno is not None:
+            return f"{name}: {FailureReason.os_name(exc)}"  # its message quotes paths
         text = cls.line(cls._text(exc))
         return f"{name}: {text}" if text else name
 
@@ -52,10 +56,19 @@ class CheckFailure:
     def is_missing(exc: OSError | ValueError) -> bool:
         """Return whether *exc* means "not there" rather than "cannot be read".
 
-        A ``ValueError``, or an ``OSError`` with no errno or ``ENOENT``, is a thing
-        that is not there; any other errno (denied, I/O) is a real fault.
+        Only ``ENOENT`` is a thing that is not there; anything else (denied, I/O,
+        a bare ``OSError`` or ``ValueError``) is a fault whose cause is named.
         """
-        return isinstance(exc, ValueError) or exc.errno in (None, errno.ENOENT)
+        return isinstance(exc, OSError) and exc.errno == errno.ENOENT
+
+    @classmethod
+    def settings_reason(cls, exc: Exception) -> str:
+        """Name the first invalid setting and why, for a settings failure."""
+        if isinstance(exc, ValidationError) and (errors := exc.errors()):
+            first = errors[0]
+            field = ".".join(str(part) for part in first["loc"])
+            return f"{cls.line(field)}: {cls.line(first['msg'])}"
+        return cls.detail(exc)
 
     @classmethod
     def line(cls, text: str) -> str:
@@ -65,7 +78,13 @@ class CheckFailure:
         return cls._CONTROL.sub("?", first)[: cls._MAX_LINE]
 
     @classmethod
-    def origin(cls, exc: BaseException) -> str | None:
+    def because(cls, output: str | None) -> str:  # None: the process wrote nothing
+        """Return ``: <last line of output>``, sanitized and bounded, or nothing."""
+        lines = (output or "").strip().splitlines()
+        return f": {cls.line(lines[-1])}" if lines else ""
+
+    @classmethod
+    def origin(cls, exc: BaseException) -> str | None:  # None: no frame names one
         """Return the module the exception was raised in, if its frames say."""
         tb = exc.__traceback__
         last = None

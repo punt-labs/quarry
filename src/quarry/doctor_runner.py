@@ -80,6 +80,15 @@ class SettingsChecks:
     __slots__ = ()
 
     @staticmethod
+    def cwd() -> str:
+        """Return the working directory, or say it no longer exists."""
+        try:
+            return str(Path.cwd())
+        except FileNotFoundError as exc:
+            msg = "the current directory no longer exists"
+            raise RuntimeError(msg) from exc
+
+    @staticmethod
     def entries(fts: Callable[[Path], CheckResult]) -> list[CheckEntry]:
         """Return the settings-dependent entries; *fts* is the index check."""
         try:
@@ -91,7 +100,7 @@ class SettingsChecks:
             failed = CheckResult(
                 name="Settings",
                 passed=False,
-                message=f"invalid settings ({CheckFailure.detail(exc)})",
+                message=f"invalid settings ({CheckFailure.settings_reason(exc)})",
             )
             return [CheckEntry("Settings", lambda: failed, required=True)]
         db, registry = settings.lancedb_path, settings.registry_path
@@ -102,7 +111,7 @@ class SettingsChecks:
             ),
             CheckEntry(
                 "Sync enable",
-                lambda: SyncDiagnostics.enable_status(registry, str(Path.cwd())),
+                lambda: SyncDiagnostics.enable_status(registry, SettingsChecks.cwd()),
             ),
             CheckEntry(
                 "Unlinked captures",
@@ -110,13 +119,13 @@ class SettingsChecks:
             ),
             CheckEntry(
                 "Shadow repo",
-                lambda: CaptureDiagnostics.shadow_repo(str(Path.cwd())),
+                lambda: CaptureDiagnostics.shadow_repo(SettingsChecks.cwd()),
                 required=True,  # an unverifiable public repo is not "no leak"
             ),
             CheckEntry("Memory corpus", lambda: MemoryDiagnostics.corpus(db)),
             CheckEntry(
                 "Memory identity",
-                lambda: MemoryDiagnostics.identity_active(str(Path.cwd()), db),
+                lambda: MemoryDiagnostics.identity_active(SettingsChecks.cwd(), db),
             ),
             CheckEntry(
                 "Recall activity",

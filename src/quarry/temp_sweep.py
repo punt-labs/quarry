@@ -49,14 +49,22 @@ class TempSweep:
     # a clock that was stepped back, or a shared filesystem a little ahead of us.
     CLOCK_SKEW_S: ClassVar[float] = 3600.0
 
-    __slots__ = ("_directory", "_label", "_name")
+    __slots__ = ("_directory", "_label", "_name", "_stale_after_s")
 
     _directory: Path
     _label: str
     _name: re.Pattern[str]
+    _stale_after_s: float
 
-    def __new__(cls, directory: Path, name: re.Pattern[str], label: str) -> Self:
+    def __new__(
+        cls,
+        directory: Path,
+        name: re.Pattern[str],
+        label: str,
+        stale_after_s: float = STALE_AFTER_S,
+    ) -> Self:
         self = super().__new__(cls)
+        self._stale_after_s = stale_after_s
         self._label = label
         self._directory = directory
         self._name = name
@@ -113,10 +121,16 @@ class TempSweep:
             return Leftover.FAILED, f"{name} ({FailureReason.os_name(exc)})"
         return Leftover.REMOVED, name
 
-    @classmethod
-    def _is_young(cls, mtime: float) -> bool:
-        """Return whether *mtime* is recent enough to belong to a live writer."""
-        return -cls.CLOCK_SKEW_S <= time.time() - mtime < cls.STALE_AFTER_S
+    def _is_young(self, mtime: float) -> bool:
+        """Return whether *mtime* is recent enough to belong to a live writer.
+
+        With a stale age of zero nothing is young: the caller knows no writer is
+        live, so every leftover is a crash's.
+        """
+        age = time.time() - mtime
+        return (
+            self._stale_after_s > 0 and -self.CLOCK_SKEW_S <= age < self._stale_after_s
+        )
 
     def _report(self, outcome: dict[Leftover, list[str]]) -> None:
         """Warn once, with one labelled list of names per kind found."""

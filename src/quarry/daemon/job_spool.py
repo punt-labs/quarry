@@ -73,8 +73,10 @@ class JobSpool:
     """Writes :class:`SpoolRecord`s atomically under the daemon's spool dir."""
 
     # ``<kind>-<32 hex>.json.tmp``: what ``SpoolRecord.filename`` plus the temp
-    # suffix make.
-    _LEFTOVER: ClassVar[re.Pattern[str]] = re.compile(r"[a-z]+-[0-9a-f]{32}\.json\.tmp")
+    # suffix make.  A kind is lower-case words joined by hyphens
+    _LEFTOVER: ClassVar[re.Pattern[str]] = re.compile(
+        r"[a-z]+(?:-[a-z]+)*-[0-9a-f]{32}\.json\.tmp"
+    )
 
     __slots__ = ("_dir",)
 
@@ -91,8 +93,12 @@ class JobSpool:
         return cls(settings.quarry_root / "spool")
 
     def sweep(self) -> None:
-        """Remove the temps a crashed write left in the spool (at daemon start)."""
-        TempSweep(self._dir, self._LEFTOVER, "spool").run()
+        """Remove every temp a crashed write left in the spool; blocking.
+
+        Called once at daemon start, when no spool writer is live, so every
+        matching temp is a crash's: none is young, whatever its age.
+        """
+        TempSweep(self._dir, self._LEFTOVER, "spool", stale_after_s=0.0).run()
 
     def write(self, record: SpoolRecord) -> bool:
         """Persist *record* atomically and privately; return whether it stuck.

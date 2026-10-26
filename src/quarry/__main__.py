@@ -11,6 +11,7 @@ import typer
 import typer.core
 from rich.console import Console
 
+from quarry._home_guard import HOME_RESOLVED
 from quarry.cli_captures import CapturesCli, CliPlumbing
 from quarry.cli_documents import DocumentsCli
 from quarry.cli_ingest import IngestCli
@@ -35,6 +36,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+# Imported first so a home directory that cannot be resolved is reported, not a
+# traceback from a module below; the name is kept so the import is not unused.
+_HOME_RESOLVED = HOME_RESOLVED
 
 # Appended after a LOOPBACK QuarryConnectionError so a down local daemon points at
 # the fix.  Never shown for a remote failure — starting quarryd would not help.

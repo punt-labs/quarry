@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import errno
 import json
 import logging
@@ -324,7 +325,7 @@ def test_a_failed_mkdir_sync_does_not_say_the_spool_was_written(
     assert "written" not in record.getMessage()
 
 
-def test_sweep_removes_stale_spool_temps_and_lists_young_ones(
+def test_the_startup_sweep_removes_every_temp_young_or_not(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     spool = tmp_path / "spool"
@@ -341,10 +342,47 @@ def test_sweep_removes_stale_spool_temps_and_lists_young_ones(
         JobSpool(spool).sweep()
 
     assert not stale.exists()
-    assert young.exists()
+    assert not young.exists()  # no writer is live at startup, so none is young
     assert record.exists()  # a real record is never a leftover
-    assert "removed (1)" in caplog.text
-    assert "kept (young) (1)" in caplog.text
+    assert "removed (2)" in caplog.text
+    assert "kept (young)" not in caplog.text
+
+
+def _emitted_kinds() -> set[str]:
+    """Return every spool kind the daemon's code can write, read from its source."""
+    kinds: set[str] = set()
+    for source in Path(__file__).parents[1].joinpath("src/quarry/daemon").rglob("*.py"):
+        for node in ast.walk(ast.parse(source.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            target = ast.unparse(node.func)
+            keywords = {k.arg: k.value for k in node.keywords}
+            candidates: list[ast.expr | None] = []
+            if target == "SpoolRecord":
+                candidates.append(keywords.get("kind"))
+            if target == "ScrubbedIngestJob":
+                candidates.append(keywords.get("scrub_label"))
+                candidates.append(node.args[-1] if node.args else None)
+            kinds.update(
+                str(c.value)
+                for c in candidates
+                if isinstance(c, ast.Constant) and isinstance(c.value, str)
+            )
+    return kinds
+
+
+def test_every_kind_the_code_emits_is_swept_at_startup(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    kinds = _emitted_kinds()
+    assert {"remember", "ingest", "ingest-unrecoverable"} <= kinds  # the parse works
+    temps = [spool / f"{kind}-{'d' * 32}.json.tmp" for kind in sorted(kinds)]
+    for path in temps:
+        path.write_text("{}")
+
+    JobSpool(spool).sweep()
+
+    assert [path.name for path in temps if path.exists()] == []
 
 
 def test_sweep_of_a_spool_that_does_not_exist_yet_says_nothing(
