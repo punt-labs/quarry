@@ -377,7 +377,7 @@ The model endpoint gets the remote-quarryd rule, with no opt-out:
 
 | Remote quarryd rule | Source | Model endpoint |
 |---|---|---|
-| Non-loopback means TLS | DES-020, `net.py:130-145` | non-loopback `base_url` must be `https`; `http` only when the connect address is a literal loopback IP (`LoopbackPolicy.is_literal_loopback`, `net.py:77`). A loopback name such as `localhost` is resolver-controlled, so it is rewritten to `canonical_host` (`127.0.0.1`, `net.py:99`) before connecting: the rule clients already follow before presenting `serve.token` (DES-031 v2.2). Anything else is `invalid`. Test: `http://localhost` performs no name lookup and dials `127.0.0.1` |
+| Non-loopback means TLS | DES-020, `net.py:130-145` | non-loopback `base_url` must be `https`; `http` only when the connect address is a literal loopback IP (`LoopbackPolicy.is_literal_loopback`, `net.py:77`). For `http` only, a loopback name such as `localhost` is resolver-controlled, so it is rewritten to `canonical_host` (`127.0.0.1`, `net.py:99`) before connecting: the rule clients already follow before presenting `serve.token` (DES-031 v2.2). An `https` URL is never rewritten: it connects by name, and certificate hostname verification authenticates the peer. Anything else is `invalid`. Tests: `http://localhost` performs no name lookup and dials `127.0.0.1`; `https://localhost` keeps `localhost` for SNI and verification |
 | Certificates verified, never skipped | DES-020; baseline 1.1 | the system trust store via `outbound_http.system_tls_context()`, the same context as fetch; no `verify=False`, no custom CA option |
 | Key 0600, never argv | `service.py:60-93` | in the 0600 file only |
 
