@@ -108,7 +108,7 @@ def test_the_staleness_boundaries_on_both_sides(
     os.utime(leftover, (now - age_s, now - age_s))
 
     with patch("quarry.temp_sweep.time.time", return_value=now):
-        TempSweep(tmp_path / "quarry.env", "env file").run()
+        TempSweep.beside(tmp_path / "quarry.env", "env file").run()
 
     assert leftover.exists() is not is_removed
 

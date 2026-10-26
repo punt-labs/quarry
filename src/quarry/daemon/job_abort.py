@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.daemon.abort_reason import Aborted, AbortReason
+from quarry.daemon.daemon_threads import DaemonThreads
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.redacted_failure import RedactedFailure
 from quarry.shutdown_policy import ShutdownPolicy
 
@@ -38,41 +41,51 @@ class JobAbort:
     Three things always hold, whatever the disk does:
 
     - every job reaches a terminal state the moment it is taken: ``failed``, with
-      a provisional reason, replaced by the true one when its spool write ends;
+      a provisional reason, replaced by the true one when its spool write ends
+      (a job that was withdrawn, is past its commit or already stored keeps what
+      it is, and one that stores after the abort is ``completed`` again, because
+      its content is stored whatever the abort said);
     - every job is counted in exactly one term of the tally, once its outcome is
       known, and :attr:`pending` says how many are not yet known, so a summary
       can still add up;
-    - one job's failure to decide its outcome (a spool record that cannot be
-      built, a write that raises) costs only that job, recorded as lost.
+    - one job's failure to decide its outcome costs only that job, recorded as
+      lost.
 
     Deciding an outcome can spool the job, and spooling syncs files, so there are
     two ways in: :meth:`fail` runs the syncs in the caller, and the ``async``
-    ones run each job's on a thread so one job's abort never stalls the event
-    loop or another job.  State and the tally are only touched on the caller's
-    thread (or the loop), after a job's syncs are done.
+    ones run each job's on a daemon thread (:class:`DaemonThreads`) so a stalled
+    disk can hold neither the event loop nor the process.  State and the tally
+    are only touched on the caller's thread (or the loop), after a job's syncs.
     """
 
     UNFINISHED: ClassVar[Aborted] = Aborted(
         "daemon shut down before ingest; spool unfinished at shutdown, "
-        "content may be lost",
+        "content may or may not be saved",
+        unfinished=True,
+    )
+    UNBUILT: ClassVar[Aborted] = Aborted(
+        "daemon shut down before ingest; spool record could not be built, "
+        "content not recovered",
         lost=True,
     )
-    UNDECIDED: ClassVar[Aborted] = Aborted(
+    NOT_WRITTEN: ClassVar[Aborted] = Aborted(
         "daemon shut down before ingest; spool write failed, content not recovered",
         lost=True,
     )
 
-    __slots__ = ("_pending", "_reason", "_tally")
+    __slots__ = ("_pending", "_reason", "_tally", "_threads")
 
     _pending: int
     _reason: AbortReason
     _tally: AbortTally
+    _threads: DaemonThreads
 
     def __new__(cls, settings: Settings, tally: AbortTally) -> Self:
         self = super().__new__(cls)
         self._pending = 0
         self._reason = AbortReason.for_settings(settings)
         self._tally = tally
+        self._threads = DaemonThreads.shared()
         return self
 
     @property
@@ -97,15 +110,23 @@ class JobAbort:
         The drain timeout cancels the worker, then the abort cancels it again
         while it is still spooling, so the wait is re-entered after a cancel until
         the spool thread ends or :attr:`ShutdownPolicy.SPOOL_WAIT_S` passes.  A
-        spool that overruns is recorded as unfinished, left to end on its own and
-        say so; one that raises or is cancelled is recorded as lost.  Never
-        raises, so the cancel the caller is handling still propagates.
+        spool that overruns is recorded as unfinished and left to end on its own;
+        if it then succeeds, the record is corrected (:meth:`_ended_late`).  One
+        that raises or is cancelled is recorded as lost.  Never raises, so the
+        cancel the caller is handling still propagates.
         """
         self._begin([item])
-        spooling = asyncio.ensure_future(asyncio.to_thread(self._outcome, item))
-        self._record(item, await self.await_spool(spooling))
+        spooling = asyncio.ensure_future(
+            self._threads.run(partial(self._outcome, item))
+        )
+        outcome = await self.await_spool(spooling, item)
+        self._record(item, outcome)
+        if outcome is self.UNFINISHED:
+            spooling.add_done_callback(partial(self._ended_late, item))
 
-    async def await_spool(self, spooling: asyncio.Future[Aborted]) -> Aborted:
+    async def await_spool(
+        self, spooling: asyncio.Future[Aborted], item: QueuedJob
+    ) -> Aborted:
         """Return the spool's outcome, or why there is none, within the deadline."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + ShutdownPolicy.SPOOL_WAIT_S
@@ -115,36 +136,52 @@ class JobAbort:
             except asyncio.CancelledError:
                 continue  # a repeated cancel never abandons the record
         if not spooling.done():
-            spooling.add_done_callback(self._ended_late)
             return self.UNFINISHED
         if spooling.cancelled():
-            return self.UNDECIDED
+            return self.NOT_WRITTEN
         if (failure := spooling.exception()) is not None:
             logger.error(
-                "abort: spooling the in-flight job failed",
+                "abort: spooling a %s job for %s failed",
+                type(item.job).__name__,
+                item.job.collection,
                 exc_info=RedactedFailure.of(failure),
             )
-            return self.UNDECIDED
+            return self.NOT_WRITTEN
         return spooling.result()
 
-    @staticmethod
-    def _ended_late(spooling: asyncio.Future[Aborted]) -> None:
-        """Done callback: say how a spool write the abort stopped waiting for ended."""
+    def _ended_late(self, item: QueuedJob, spooling: asyncio.Future[Aborted]) -> None:
+        """Done callback: a spool the abort stopped waiting for has ended.
+
+        On the loop.  A write that succeeded corrects the job's reason and moves it
+        from the unfinished term to the one it really belongs to; one that failed
+        or was cancelled is logged, and the job stays unfinished.
+        """
+        kind, collection = type(item.job).__name__, item.job.collection
         if spooling.cancelled():
-            return
-        failure = spooling.exception()  # retrieved, so asyncio never reports it unread
-        if failure is None:
-            logger.info("abort: a spool write finished after the abort stopped waiting")
-        else:
+            logger.warning(
+                "abort: a late spool of a %s job for %s was cancelled", kind, collection
+            )
+        elif (failure := spooling.exception()) is not None:
             logger.error(
-                "abort: a spool write failed after the abort stopped waiting",
+                "abort: a late spool of a %s job for %s failed",
+                kind,
+                collection,
                 exc_info=RedactedFailure.of(failure),
+            )
+        else:
+            outcome = spooling.result()
+            JobLifecycle(item.state).fail_aborted(f"{outcome.reason} (after the wait)")
+            self._tally.replace(self.UNFINISHED, outcome)
+            logger.info(
+                "abort: a %s job for %s finished spooling after the abort wait",
+                kind,
+                collection,
             )
 
     async def _one_off_loop(self, item: QueuedJob) -> None:
-        """Spool one job on a thread and record it on the loop when that ends."""
+        """Spool one job on a daemon thread and record it on the loop when it ends."""
         try:
-            outcome = await asyncio.to_thread(self._outcome, item)
+            outcome = await self._threads.run(partial(self._outcome, item))
         except Exception as exc:
             logger.error(
                 "abort: spooling a %s job for %s failed",
@@ -152,7 +189,7 @@ class JobAbort:
                 item.job.collection,
                 exc_info=RedactedFailure.of(exc),
             )
-            outcome = self.UNDECIDED
+            outcome = self.NOT_WRITTEN
         self._record(item, outcome)
 
     def _outcome(self, item: QueuedJob) -> Aborted:
@@ -171,18 +208,16 @@ class JobAbort:
                 item.job.collection,
                 exc_info=RedactedFailure.of(exc),
             )
-            return self.UNDECIDED
+            return self.UNBUILT
 
     def _begin(self, items: Sequence[QueuedJob]) -> None:
         """Take *items*: each is terminal now, and pending until its outcome is in."""
         for item in items:
-            item.state.status = "failed"
-            item.state.error = self.UNFINISHED.reason
+            JobLifecycle(item.state).fail_aborted(self.UNFINISHED.reason)
         self._pending += len(items)
 
     def _record(self, item: QueuedJob, aborted: Aborted) -> None:
         """Fail *item* with its true reason and count it."""
-        item.state.status = "failed"
-        item.state.error = aborted.reason
+        JobLifecycle(item.state).fail_aborted(aborted.reason)
         self._tally.record(aborted)
         self._pending -= 1

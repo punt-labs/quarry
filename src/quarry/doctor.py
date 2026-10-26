@@ -14,20 +14,15 @@ from quarry.config import (
     ONNX_MODEL_REPO,
     ONNX_MODEL_REVISION,
     ONNX_TOKENIZER_FILE,
-    Settings,
 )
-from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_failure import CheckFailure
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
-from quarry.doctor_memory import MemoryDiagnostics
-from quarry.doctor_recall import RecallDiagnostics
-from quarry.doctor_sync import SyncDiagnostics
+from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
 from quarry.gpu_runtime import GpuRuntime
 from quarry.opencv_headless import HeadlessOpenCv
-from quarry.redacted_failure import RedactedFailure
 from quarry.results import CheckResult
 
 logger = logging.getLogger(__name__)
@@ -172,8 +167,8 @@ def _check_imports() -> CheckResult:
     for mod in modules:
         try:
             __import__(mod)
-        except CheckFailure.BROKEN_STACK:
-            failed.append(mod)
+        except CheckFailure.BROKEN_STACK as exc:
+            failed.append(CheckFailure.import_message(mod, exc))
     if not failed:
         return CheckResult(
             name="Core imports",
@@ -183,7 +178,7 @@ def _check_imports() -> CheckResult:
     return CheckResult(
         name="Core imports",
         passed=False,
-        message=f"Failed: {', '.join(failed)}",
+        message=f"Failed: {'; '.join(failed)}",
     )
 
 
@@ -244,16 +239,17 @@ def _check_fts_health(db_path: Path) -> CheckResult:
             ),
             required=False,
         )
-    except (FileNotFoundError, ValueError) as exc:
-        return CheckResult(
-            name="FTS index",
-            passed=False,
-            message=(
-                f"missing — will be created on next sync ({CheckFailure.detail(exc)})"
-            ),
-            required=False,
-        )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
+        if CheckFailure.is_missing(exc):
+            return CheckResult(
+                name="FTS index",
+                passed=False,
+                message=(
+                    "missing — will be created on next sync "
+                    f"({CheckFailure.detail(exc)})"
+                ),
+                required=False,
+            )
         return CheckResult(
             name="FTS index",
             passed=False,
@@ -314,7 +310,7 @@ def _run_optional_step(step: Callable[[], str], skip_note: str) -> None:
     try:
         print(f"  ✓ {step()}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
-        print(f"  • Skipped: {exc}")  # noqa: T201
+        print(f"  • Skipped: {CheckFailure.detail(exc)}")  # noqa: T201
         print(f"    {skip_note}")  # noqa: T201
 
 
@@ -338,7 +334,7 @@ def _install_embedding_model() -> bool:
         OnnxEmbeddingBackend.download_model_files()
         print("  ✓ snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
-        print(f"  ✗ Model download failed: {exc}")  # noqa: T201
+        print(f"  ✗ Model download failed: {CheckFailure.detail(exc)}")  # noqa: T201
         return False
     try:
         # Optional dependency (onnxruntime): absent means no CUDA, not a failure.
@@ -347,20 +343,29 @@ def _install_embedding_model() -> bool:
         if "CUDAExecutionProvider" in ort.get_available_providers():
             OnnxEmbeddingBackend.download_model_files(model_file="onnx/model_fp16.onnx")
             print("  ✓ FP16 model cached (for CUDA)")  # noqa: T201
-    except Exception:  # noqa: BLE001, S110
-        pass  # FP16 download is optional -- first-use fallback works
+    except Exception as exc:  # noqa: BLE001
+        # Optional: first use falls back to INT8, so say why and go on.
+        _print_check(
+            CheckResult(
+                name="FP16 skipped",
+                passed=False,
+                message=CheckFailure.detail(exc),
+                required=False,
+            )
+        )
     return True
 
 
 def _create_directories() -> bool:
     """Create the data and logs directories; return whether both now exist."""
-    data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
-    logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
     try:
+        root = Path.home() / ".punt-labs" / "quarry"
+        data_dir = root / "data" / "default" / "lancedb"
+        logs_dir = root / "logs"
         data_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        print(f"  \u2717 Failed to create directories: {exc}")  # noqa: T201
+    except (OSError, RuntimeError) as exc:
+        print(f"  \u2717 Failed to create directories: {CheckFailure.detail(exc)}")  # noqa: T201
         return False
     print(f"  \u2713 {data_dir}")  # noqa: T201
     print(f"  \u2713 {logs_dir}")  # noqa: T201
@@ -377,7 +382,7 @@ def _gpu_runtime_is_usable() -> bool:
     try:
         return not _install_gpu_runtime()
     except Exception as exc:  # noqa: BLE001
-        print(f"  ✗ GPU runtime check failed: {exc}")  # noqa: T201
+        print(f"  ✗ GPU runtime check failed: {CheckFailure.detail(exc)}")  # noqa: T201
         return False
 
 
@@ -386,7 +391,7 @@ def _configure_ethos_extension() -> None:
     try:
         _print_check(EthosExtDiagnostics.configure())
     except Exception as exc:  # noqa: BLE001
-        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+        print(f"  \u2022 Skipped: {CheckFailure.detail(exc)}")  # noqa: T201
         print("    Ethos extension configuration is optional.")  # noqa: T201
 
 
@@ -427,8 +432,12 @@ def run_install() -> int:
 
     # Step 5: MCP clients
     print("[5/7] Configuring MCP clients...")  # noqa: T201
-    for check in [ClaudeCodeMcp().configure(), ClaudeDesktopMcp().configure()]:
-        _print_check(check)
+    for entry in (
+        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().configure()),
+        CheckEntry("Claude Desktop MCP", lambda: ClaudeDesktopMcp().configure()),
+    ):
+        if (check := CheckRunner.attempt(entry)) is not None:
+            _print_check(check)
 
     # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
     print("[6/7] Registering quarry daemon...")  # noqa: T201
@@ -457,92 +466,24 @@ def run_install() -> int:
     return 1 if failed else exit_code
 
 
-def _attempt(name: str, check: Callable[[], CheckResult | None]) -> CheckResult | None:
-    """Run one check; whatever it raises becomes a failed result naming it.
-
-    The report must always complete, so no single check, whatever it hits, may
-    stop the others from running.  The failure is also logged with its frames.
-    """
-    try:
-        return check()
-    except Exception as exc:
-        logger.warning(
-            "doctor: check %s failed", name, exc_info=RedactedFailure.of(exc)
-        )
-        return CheckResult(
-            name=name,
-            passed=False,
-            message=f"check could not run ({CheckFailure.detail(exc)})",
-            required=False,
-        )
-
-
-def _settings_checks(cwd: str) -> list[tuple[str, Callable[[], CheckResult | None]]]:
-    """Return the checks that need the settings, or one failed check without them."""
-    try:
-        settings = Settings()
-    except Exception as exc:
-        logger.warning("doctor: settings are invalid", exc_info=RedactedFailure.of(exc))
-        failed = CheckResult(
-            name="Settings",
-            passed=False,
-            message=f"invalid settings ({CheckFailure.detail(exc)})",
-        )
-        return [("Settings", lambda: failed)]
-    return [
-        ("FTS index", lambda: _check_fts_health(settings.lancedb_path)),
-        (
-            "Sync directories",
-            lambda: SyncDiagnostics.directories(settings.registry_path),
-        ),
-        (
-            "Sync enable",
-            lambda: SyncDiagnostics.enable_status(settings.registry_path, cwd),
-        ),
-        (
-            "Unlinked captures",
-            lambda: CaptureDiagnostics.unlinked(
-                settings.registry_path, settings.lancedb_path
-            ),
-        ),
-        ("Shadow repo", lambda: CaptureDiagnostics.shadow_repo(cwd)),
-        ("Memory corpus", lambda: MemoryDiagnostics.corpus(settings.lancedb_path)),
-        (
-            "Memory identity",
-            lambda: MemoryDiagnostics.identity_active(cwd, settings.lancedb_path),
-        ),
-        (
-            "Recall activity",
-            lambda: RecallDiagnostics.recent_activity(
-                settings.telemetry_path,
-                telemetry_enabled=settings.telemetry_enabled,
-            ),
-        ),
-    ]
-
-
 def _run_checks() -> list[CheckResult]:
     """Run every environment check with third-party logging quieted."""
-    cwd = str(Path.cwd())
-    independent: list[tuple[str, Callable[[], CheckResult | None]]] = [
-        ("Python", _check_python_version),
-        ("Data directory", _check_data_directory),
-        ("Embedding model", _check_embedding_model),
-        ("ONNX provider", InferenceDiagnostics.onnx_provider),
-        ("Core imports", _check_imports),
-        ("Claude Code MCP", ClaudeCodeMcp().check),
-        ("Claude Desktop MCP", ClaudeDesktopMcp().check),
-        ("Daemon", DaemonDiagnostics.reachability),
-        ("Serve token", DaemonDiagnostics.serve_token),
-        ("Fd headroom", DaemonDiagnostics.fd_headroom),
-        ("Stop timeout", DaemonDiagnostics.stop_timeout),
+    entries = [
+        CheckEntry("Python", _check_python_version, required=True),
+        CheckEntry("Data directory", _check_data_directory, required=True),
+        CheckEntry("Embedding model", _check_embedding_model, required=True),
+        CheckEntry("ONNX provider", InferenceDiagnostics.onnx_provider),
+        CheckEntry("Core imports", _check_imports, required=True),
+        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().check()),
+        CheckEntry("Claude Desktop MCP", lambda: ClaudeDesktopMcp().check()),
+        CheckEntry("Daemon", DaemonDiagnostics.reachability),
+        CheckEntry("Serve token", DaemonDiagnostics.serve_token),
+        CheckEntry("Fd headroom", DaemonDiagnostics.fd_headroom),
+        CheckEntry("Stop timeout", DaemonDiagnostics.stop_timeout),
+        *SettingsChecks.entries(_check_fts_health),
     ]
     with _quiet_logging():
-        results = [
-            _attempt(name, check)
-            for name, check in [*independent, *_settings_checks(cwd)]
-        ]
-    return [result for result in results if result is not None]
+        return CheckRunner.run(entries)
 
 
 def check_environment(*, _skip_header: bool = False) -> int:

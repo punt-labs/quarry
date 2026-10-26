@@ -15,9 +15,10 @@ quarry doctor       # all checks pass, including FTS index: healthy
 ```
 
 Expected: Python, data directory, embedding model, ONNX provider, core
-imports, Claude Code MCP, Claude Desktop MCP, the daemon checks (reachability,
-serve token, fd headroom, stop timeout), FTS index, and sync directories all
-pass. No timeouts.
+imports, Claude Code MCP, the daemon checks (reachability, serve token, fd
+headroom, stop timeout), FTS index, and sync directories all pass. Claude
+Desktop MCP is configured, or reports that Desktop is not installed. No
+timeouts.
 
 ## Phase 1: MCP Tools
 

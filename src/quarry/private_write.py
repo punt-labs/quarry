@@ -77,6 +77,9 @@ class PrivateWrite:
     def ensure_directory(cls, directory: Path, what: str) -> None:
         """Create *directory* ``0o700`` (tightening one that exists looser).
 
+        Only *directory* itself gets that mode: a parent this call has to create
+        gets the process's default, so a private tree needs its root made first.
+
         Every level this call creates is synced into its parent, top-down, or
         files written into it could outlive the directory's own name in a crash;
         *what* names the directory in a warning when a sync fails.

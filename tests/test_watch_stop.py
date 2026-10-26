@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import itertools
 import logging
 import threading
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.daemon.watch_stop import WatchStop
+from quarry.daemon.watch_stop import StepCancelledError, WatchStop
 from quarry.redacted_failure import RedactedFailure
 
 if TYPE_CHECKING:
@@ -22,7 +23,8 @@ if TYPE_CHECKING:
     from quarry.daemon.watch_submit import WatchSubmitter
 
 
-_GRACE_S = 0.2
+_GRACE_S = 0.2  # what a WatchStop built directly gets after a cancel
+_DRAIN_TIMEOUT_S = 30.0  # the teardown budget for_loop takes the grace from
 
 
 def _roster(events: list[str]) -> WatchRoster:
@@ -40,7 +42,12 @@ async def test_the_steps_run_in_order_and_the_observer_is_joined_last() -> None:
     source = SimpleNamespace(stop=lambda: events.append("join"))
 
     await WatchStop.for_loop(
-        _roster(events), cast("FsEventSource", source), None, None, None, _GRACE_S
+        _roster(events),
+        cast("FsEventSource", source),
+        None,
+        None,
+        None,
+        _DRAIN_TIMEOUT_S,
     ).run()
 
     assert events == ["unwatch", "close", "join"]
@@ -56,7 +63,7 @@ async def test_a_crashed_safety_task_is_named_when_it_ends(
     task = asyncio.ensure_future(crashes())
     task.add_done_callback(WatchStop.safety_ended)
 
-    with caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"):
+    with caplog.at_level(logging.ERROR, logger="quarry.daemon"):
         await asyncio.wait({task})
         await asyncio.sleep(0)
 
@@ -71,7 +78,7 @@ async def test_a_cancelled_safety_task_is_not_a_crash(
     task.add_done_callback(WatchStop.safety_ended)
     task.cancel()
 
-    with caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"):
+    with caplog.at_level(logging.ERROR, logger="quarry.daemon"):
         await asyncio.wait({task})
         await asyncio.sleep(0)
 
@@ -113,7 +120,7 @@ async def test_a_cancel_during_the_safety_retire_still_cancels_timers_and_closes
             safety,
             cast("WatchSubmitter", timers),
             cast("DebouncedDispatcher", timers),
-            _GRACE_S,
+            _DRAIN_TIMEOUT_S,
         ).run()
     )
     await asyncio.sleep(0.1)  # in the safety retire
@@ -154,11 +161,11 @@ async def test_a_step_failing_during_a_cancel_is_logged_and_the_cancel_still_win
             safety,
             cast("WatchSubmitter", _Broken()),
             None,
-            _GRACE_S,
+            _DRAIN_TIMEOUT_S,
         ).run()
     )
     await asyncio.sleep(0.1)  # in _retire_safety
-    with caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"):
+    with caplog.at_level(logging.ERROR, logger="quarry.daemon"):
         stopping.cancel()
         with pytest.raises(asyncio.CancelledError):
             await stopping
@@ -181,11 +188,16 @@ async def test_every_cleanup_runs_even_when_an_earlier_one_fails(
             raise RuntimeError(msg)
 
     with (
-        caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"),
+        caplog.at_level(logging.ERROR, logger="quarry.daemon"),
         pytest.raises(RuntimeError),
     ):
         await WatchStop.for_loop(
-            roster, None, None, cast("WatchSubmitter", _Broken()), None, _GRACE_S
+            roster,
+            None,
+            None,
+            cast("WatchSubmitter", _Broken()),
+            None,
+            _DRAIN_TIMEOUT_S,
         ).run()
 
     assert events == ["unwatch", "close"]  # the later steps still ran
@@ -207,7 +219,7 @@ async def test_a_logged_failure_is_marked_so_the_boundary_does_not_log_it_again(
             None,
             cast("WatchSubmitter", _Broken()),
             None,
-            _GRACE_S,
+            _DRAIN_TIMEOUT_S,
         ).run()
     except RuntimeError as exc:
         assert RedactedFailure.is_logged(exc)
@@ -228,7 +240,9 @@ async def test_an_abandoned_join_that_fails_later_is_logged_not_left_unread(
     source = cast("FsEventSource", SimpleNamespace(stop=stop_that_fails))
     with caplog.at_level(logging.INFO):
         stopping = asyncio.create_task(
-            WatchStop.for_loop(_roster([]), source, None, None, None, _GRACE_S).run()
+            WatchStop.for_loop(
+                _roster([]), source, None, None, None, _DRAIN_TIMEOUT_S
+            ).run()
         )
         await asyncio.sleep(0.1)
         stopping.cancel()
@@ -248,9 +262,11 @@ async def test_an_abandoned_join_that_succeeds_later_says_it_joined_after_all(
 ) -> None:
     release = threading.Event()
     source = cast("FsEventSource", SimpleNamespace(stop=lambda: release.wait(10)))
-    with caplog.at_level(logging.INFO, logger="quarry.daemon.watch_stop"):
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
         stopping = asyncio.create_task(
-            WatchStop.for_loop(_roster([]), source, None, None, None, _GRACE_S).run()
+            WatchStop.for_loop(
+                _roster([]), source, None, None, None, _DRAIN_TIMEOUT_S
+            ).run()
         )
         await asyncio.sleep(0.1)
         stopping.cancel()
@@ -280,10 +296,10 @@ async def test_an_unexpected_exception_from_the_safety_retire_still_runs_every_s
             safety,
             cast("WatchSubmitter", timers),
             cast("DebouncedDispatcher", timers),
-            _GRACE_S,
+            _DRAIN_TIMEOUT_S,
         )
     with (
-        caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"),
+        caplog.at_level(logging.ERROR, logger="quarry.daemon"),
         pytest.raises(ValueError, match="retire exploded"),
     ):
         await stop.run()
@@ -342,7 +358,7 @@ async def test_after_a_cancel_each_step_waits_only_within_the_grace_and_in_order
     running = asyncio.create_task(stop.run())
     await asyncio.sleep(0.05)
     started = asyncio.get_running_loop().time()
-    with caplog.at_level(logging.INFO, logger="quarry.daemon.watch_stop"):
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
         running.cancel()
         with pytest.raises(asyncio.CancelledError):
             await running
@@ -373,3 +389,122 @@ async def test_a_base_exception_from_a_step_lets_the_rest_run_then_is_raised() -
         await WatchStop([("fatal", fatal), ("last", last)], _GRACE_S).run()
 
     assert events == ["last"]
+
+
+async def test_a_blocking_roster_step_does_not_block_the_loop_past_the_grace() -> None:
+    ticks: list[float] = []
+    loop = asyncio.get_running_loop()
+    release = threading.Event()
+
+    def blocking_close() -> None:
+        release.wait(2)
+
+    roster = cast(
+        "WatchRoster",
+        SimpleNamespace(unwatch_all=lambda: None, close=blocking_close),
+    )
+
+    async def heartbeat() -> None:
+        while True:
+            ticks.append(loop.time())
+            await asyncio.sleep(0.02)
+
+    beat = asyncio.create_task(heartbeat())
+    stopping = asyncio.create_task(
+        WatchStop.for_loop(roster, None, None, None, None, _DRAIN_TIMEOUT_S).run()
+    )
+    await asyncio.sleep(0.3)
+    gaps = [b - a for a, b in itertools.pairwise(ticks)]
+    release.set()
+    await stopping
+    beat.cancel()
+
+    assert max(gaps) < 0.2  # the loop kept ticking while close blocked
+
+
+async def test_a_steps_own_cancel_is_a_failure_not_the_teardowns_cancel(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+
+    async def cancels_itself() -> None:
+        raise asyncio.CancelledError
+
+    async def last() -> None:
+        events.append("last")
+
+    with (
+        caplog.at_level(logging.ERROR, logger="quarry.daemon"),
+        pytest.raises(StepCancelledError),
+    ):
+        await WatchStop([("itself", cancels_itself), ("last", last)], _GRACE_S).run()
+
+    assert events == ["last"]
+    assert "itself failed" in caplog.text
+
+
+async def test_a_step_with_no_grace_left_is_reported_as_not_awaited(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+    release = asyncio.Event()
+
+    async def hangs() -> None:
+        await release.wait()
+
+    async def last() -> None:
+        await asyncio.sleep(0.05)
+        events.append("last")
+
+    running = asyncio.create_task(
+        WatchStop([("first", hangs), ("second", hangs), ("third", last)], 0.0).run()
+    )
+    await asyncio.sleep(0.05)
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        await asyncio.sleep(0.1)
+
+    assert "second was started after the grace ran out and is not awaited" in (
+        caplog.text
+    )
+    assert "second was in progress" not in caplog.text
+    release.set()
+
+
+async def test_a_step_that_finishes_in_the_cancel_tick_is_not_logged_as_both(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def finishes() -> None:
+        await asyncio.sleep(0)
+
+    running = asyncio.create_task(WatchStop([("quick", finishes)], _GRACE_S).run())
+    await asyncio.sleep(0)  # the stop starts the step
+    await asyncio.sleep(0)  # the step runs to its end; the stop has not woken yet
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        await asyncio.sleep(0.05)
+
+    assert "quick was in progress" not in caplog.text
+    assert "finished after the stop gave up" not in caplog.text
+
+
+async def test_a_cancelled_late_step_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def slow_then_cancelled() -> None:
+        await asyncio.sleep(0.15)
+        raise asyncio.CancelledError
+
+    running = asyncio.create_task(WatchStop([("slow", slow_then_cancelled)], 0.0).run())
+    await asyncio.sleep(0.02)
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        await asyncio.sleep(0.3)
+
+    assert "slow was cancelled after the stop gave up on it" in caplog.text

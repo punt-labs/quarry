@@ -444,7 +444,7 @@ def test_a_drain_that_times_out_says_the_window_and_what_it_aborted(
         await asyncio.sleep(0.02)
         assert queue.try_submit(_rk("cB"), _StubUnit("cB", "b", ledger), b)
         await asyncio.sleep(0.02)
-        with caplog.at_level(logging.WARNING, logger="quarry.daemon.ingest_queue"):
+        with caplog.at_level(logging.WARNING, logger="quarry.daemon"):
             await queue.aclose(drain_timeout=0.05)
 
     asyncio.run(_run())
@@ -486,7 +486,7 @@ def test_the_wait_after_an_abort_is_bounded(
         started = time.monotonic()
         with (
             patch.object(IngestQueue, "ABORT_WAIT_S", 0.2),
-            caplog.at_level(logging.WARNING, logger="quarry.daemon.ingest_queue"),
+            caplog.at_level(logging.WARNING, logger="quarry.daemon"),
         ):
             await queue._abort([cast("CollectionWorker", stubborn)], 0.05)
         elapsed = time.monotonic() - started
@@ -881,7 +881,7 @@ def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
 
     async def _run() -> None:
         queue = _make_queue(concurrency=1)
-        with caplog.at_level(logging.ERROR, logger="quarry.daemon.ingest_queue"):
+        with caplog.at_level(logging.ERROR, logger="quarry.daemon"):
             await queue._abort([cast("CollectionWorker", _Dying())], 0.05)
 
     asyncio.run(_run())
@@ -918,7 +918,7 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
             _Counted([recoverable, recoverable, unrecoverable, lost, none]),
             _Counted([lost, lost, lost]),
         ]
-        with caplog.at_level(logging.WARNING, logger="quarry.daemon.ingest_queue"):
+        with caplog.at_level(logging.WARNING, logger="quarry.daemon"):
             await queue._abort([cast("CollectionWorker", w) for w in workers], 1.0)
 
     asyncio.run(_run())
@@ -954,7 +954,7 @@ def test_the_abort_summary_counts_jobs_not_yet_accounted_for_and_names_late_ends
         slow = _Slow()
         with (
             patch.object(IngestQueue, "ABORT_WAIT_S", 0.05),
-            caplog.at_level(logging.INFO, logger="quarry.daemon.ingest_queue"),
+            caplog.at_level(logging.INFO, logger="quarry.daemon"),
         ):
             await queue._abort([cast("CollectionWorker", slow)], 0.1)
         slow.release.set()
@@ -964,5 +964,37 @@ def test_the_abort_summary_counts_jobs_not_yet_accounted_for_and_names_late_ends
 
     assert "2 job(s) not yet accounted for" in caplog.text
     assert "1 worker(s) did not stop within" in caplog.text
-    assert "a worker that outlived the abort wait failed" in caplog.text
+    assert "a worker that outlived the abort wait failed: 0 job(s)" in caplog.text
+    assert "2 job(s) pending" in caplog.text
     assert "late failure detail" not in caplog.text
+
+
+def test_a_worker_that_outlives_the_abort_wait_and_is_cancelled_says_so_at_info(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Late:
+        tally = AbortTally()
+        pending_jobs = 0
+
+        def abort_off_loop(self) -> asyncio.Task[None]:
+            async def waits() -> None:
+                await asyncio.sleep(60)
+
+            self.task = asyncio.ensure_future(waits())
+            return self.task
+
+    async def _run() -> None:
+        queue = _make_queue(concurrency=1)
+        late = _Late()
+        with (
+            patch.object(IngestQueue, "ABORT_WAIT_S", 0.05),
+            caplog.at_level(logging.INFO, logger="quarry.daemon"),
+        ):
+            await queue._abort([cast("CollectionWorker", late)], 0.1)
+            late.task.cancel()
+            await asyncio.sleep(0.05)
+
+    asyncio.run(_run())
+
+    [record] = [r for r in caplog.records if "was cancelled" in r.getMessage()]
+    assert record.levelno == logging.INFO

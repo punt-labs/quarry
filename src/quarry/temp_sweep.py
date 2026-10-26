@@ -23,6 +23,7 @@ class Leftover(Enum):
     """What became of a leftover the sweep looked at."""
 
     REMOVED = auto()
+    YOUNG = auto()  # too recent to be a crashed write's: a live writer may own it
     NON_REGULAR = auto()  # a symlink or directory: a sign of tampering
     FOREIGN = auto()  # owned by another user
     FAILED = auto()  # the filesystem refused; the entry carries the errno
@@ -32,12 +33,13 @@ class Leftover(Enum):
 class TempSweep:
     """Remove the stale temps beside a private file, and say what it left and why.
 
-    Only names a private write itself creates are looked at: ``<name>.<12 hex>.tmp``
-    and the legacy ``<name>.tmp``.  Of those, a symlink or a directory is never
-    touched (and is reported on its own, as it should not be there), neither is a
-    file another user owns, and a regular file this user owns is removed once it
-    is :attr:`STALE_AFTER_S` old or dated more than :attr:`CLOCK_SKEW_S` ahead.
-    A leftover that vanishes mid-sweep (a live writer renamed it) counts as
+    Only names the caller's pattern matches are looked at: for a private write,
+    ``<name>.<12 hex>.tmp`` and the legacy ``<name>.tmp``.  Of those, a symlink or
+    a directory is never touched (and is reported on its own, as it should not be
+    there), neither is a file another user owns, and a regular file this user owns
+    is removed once it is :attr:`STALE_AFTER_S` old or dated more than
+    :attr:`CLOCK_SKEW_S` ahead.  One younger than that is kept and listed as
+    young.  A leftover that vanishes mid-sweep (a live writer renamed it) counts as
     nothing.  The names are safe to log; an errno never quotes a path.
     """
 
@@ -53,12 +55,18 @@ class TempSweep:
     _label: str
     _name: re.Pattern[str]
 
-    def __new__(cls, path: Path, label: str) -> Self:
+    def __new__(cls, directory: Path, name: re.Pattern[str], label: str) -> Self:
         self = super().__new__(cls)
         self._label = label
-        self._directory = path.parent
-        self._name = re.compile(re.escape(path.name) + r"(?:\.[0-9a-f]{12})?\.tmp")
+        self._directory = directory
+        self._name = name
         return self
+
+    @classmethod
+    def beside(cls, path: Path, label: str) -> Self:
+        """Return the sweep of the temps ``PrivateWrite`` makes next to *path*."""
+        name = re.compile(re.escape(path.name) + r"(?:\.[0-9a-f]{12})?\.tmp")
+        return cls(path.parent, name, label)
 
     def run(self) -> None:
         """Sweep the directory once; never raise."""
@@ -75,6 +83,8 @@ class TempSweep:
         try:
             with os.scandir(self._directory) as entries:
                 found = [e.name for e in entries if self._name.fullmatch(e.name)]
+        except FileNotFoundError:
+            return []  # nothing has been written here yet, so nothing was left
         except OSError as exc:
             logger.warning(
                 "%s: could not list %s for leftover temp files (%s)",
@@ -95,7 +105,7 @@ class TempSweep:
             if info.st_uid != os.getuid():
                 return Leftover.FOREIGN, name
             if self._is_young(info.st_mtime):
-                return None
+                return Leftover.YOUNG, name
             leftover.unlink()
         except FileNotFoundError:
             return None  # lost a race with whoever renamed or removed it
@@ -115,11 +125,15 @@ class TempSweep:
             Leftover.FOREIGN: "foreign-owned, left",
             Leftover.NON_REGULAR: "non-regular (a symlink or directory), left",
             Leftover.FAILED: "failed",
+            Leftover.YOUNG: "kept (young)",
         }
         found = [
             f"{title} ({len(outcome[kind])}): {', '.join(outcome[kind])}"
             for kind, title in titles.items()
             if outcome.get(kind)
         ]
-        if found:
-            logger.warning("%s: leftover temp files: %s", self._label, "; ".join(found))
+        if not found:
+            return
+        # Young temps alone are a live writer's, so they are news, not a warning.
+        level = logging.WARNING if set(outcome) - {Leftover.YOUNG} else logging.INFO
+        logger.log(level, "%s: leftover temp files: %s", self._label, "; ".join(found))

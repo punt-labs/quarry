@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import stat
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -321,3 +322,35 @@ def test_a_failed_mkdir_sync_does_not_say_the_spool_was_written(
     [record] = caplog.records
     assert "spool directory spool created; directory sync failed" in record.getMessage()
     assert "written" not in record.getMessage()
+
+
+def test_sweep_removes_stale_spool_temps_and_lists_young_ones(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    stale = spool / ("remember-" + "a" * 32 + ".json.tmp")
+    young = spool / ("remember-" + "b" * 32 + ".json.tmp")
+    record = spool / ("remember-" + "c" * 32 + ".json")
+    for path in (stale, young, record):
+        path.write_text("{}")
+    old = time.time() - 7200
+    os.utime(stale, (old, old))
+
+    with caplog.at_level(logging.INFO, logger="quarry.temp_sweep"):
+        JobSpool(spool).sweep()
+
+    assert not stale.exists()
+    assert young.exists()
+    assert record.exists()  # a real record is never a leftover
+    assert "removed (1)" in caplog.text
+    assert "kept (young) (1)" in caplog.text
+
+
+def test_sweep_of_a_spool_that_does_not_exist_yet_says_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="quarry.temp_sweep"):
+        JobSpool(tmp_path / "spool").sweep()
+
+    assert caplog.records == []

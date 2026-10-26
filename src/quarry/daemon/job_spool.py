@@ -16,14 +16,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.private_write import PrivateWrite
 from quarry.redacted_failure import RedactedFailure
+from quarry.temp_sweep import TempSweep
 
 if TYPE_CHECKING:
     from quarry.config import Settings
@@ -70,6 +72,10 @@ class SpoolRecord:
 class JobSpool:
     """Writes :class:`SpoolRecord`s atomically under the daemon's spool dir."""
 
+    # ``<kind>-<32 hex>.json.tmp``: what ``SpoolRecord.filename`` plus the temp
+    # suffix make.
+    _LEFTOVER: ClassVar[re.Pattern[str]] = re.compile(r"[a-z]+-[0-9a-f]{32}\.json\.tmp")
+
     __slots__ = ("_dir",)
 
     _dir: Path
@@ -83,6 +89,10 @@ class JobSpool:
     def for_settings(cls, settings: Settings) -> Self:
         """Return the spool rooted at ``<quarry_root>/spool`` for *settings*."""
         return cls(settings.quarry_root / "spool")
+
+    def sweep(self) -> None:
+        """Remove the temps a crashed write left in the spool (at daemon start)."""
+        TempSweep(self._dir, self._LEFTOVER, "spool").run()
 
     def write(self, record: SpoolRecord) -> bool:
         """Persist *record* atomically and privately; return whether it stuck.

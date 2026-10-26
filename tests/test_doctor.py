@@ -1129,8 +1129,8 @@ class TestRunInstall:
         assert result == 1
         captured = capsys.readouterr()
         assert "✗ GPU runtime check failed" in captured.out
-        assert "uv binary vanished" in captured.out
-        assert "Skipped: uv binary vanished" not in captured.out
+        assert "OSError" in captured.out
+        assert "Skipped: OSError" not in captured.out
 
     def test_model_download_failure_returns_one(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1786,7 +1786,7 @@ class TestEveryCheckRuns:
         out = capsys.readouterr().out
         assert "Daemon" in out
         assert "RuntimeError" in out
-        assert "Core imports" in out  # a later check still ran
+        assert "Recall telemetry" in out  # a check that runs after Daemon still ran
 
     def test_invalid_settings_fail_one_check_and_the_independent_ones_run(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]

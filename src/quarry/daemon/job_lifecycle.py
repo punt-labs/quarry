@@ -47,6 +47,10 @@ class JobLifecycle:
         STORED = auto()
         FAILED = auto()
 
+    # A job in one of these is left as it is when a shutdown aborts the queue.
+    _KEPT_AT_ABORT: ClassVar[frozenset[TaskStatus]] = frozenset(
+        {"withdrawn", "committing", "completed"}
+    )
     # A job in one of these has not started: it may still be withdrawn.
     _WAITING: ClassVar[frozenset[TaskStatus]] = frozenset({"new", "queued"})
 
@@ -100,6 +104,21 @@ class JobLifecycle:
                 "completed": self.Withdrawn.STORED,
                 "failed": self.Withdrawn.FAILED,
             }.get(status, self.Withdrawn.STARTED)
+
+    def fail_aborted(self, reason: str) -> bool:
+        """Mark the job ``failed`` for a shutdown abort; return whether it was.
+
+        The producer's withdrawal, a job past its commit (it may still store) and
+        one that already stored are not overwritten: each stays what it truthfully
+        is.  A job that stores after the abort marked it failed is ``completed``
+        again, because its content is stored whatever the abort said.
+        """
+        with self._state.claim:
+            if self._state.status in self._KEPT_AT_ABORT:
+                return False
+            self._state.status = "failed"
+            self._state.error = reason
+            return True
 
     async def run(
         self, job: IngestUnit, ctx: DaemonContext, embed_gate: asyncio.Semaphore

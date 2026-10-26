@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
+from functools import partial
 from pathlib import Path
 from typing import ClassVar, Self, final
 
 from quarry.atomic_file import AtomicFile
 from quarry.doctor_failure import CheckFailure
+from quarry.json_file import ConfigError, JsonFile
 from quarry.results import CheckResult
 
 _MCP_SERVER_NAME = "quarry"
@@ -17,53 +20,13 @@ _SCOPE_USER = ("--scope", "user")
 
 
 @final
-class JsonFile:
-    """Read a JSON object from a file we do not own, refusing anything else.
-
-    Every way the file can be wrong is a ``ValueError`` whose message is the
-    reason: not a regular file (a FIFO would block a read, and a device is not a
-    config), not UTF-8, not JSON, or not a JSON object.
-    """
-
-    __slots__ = ()
-
-    @staticmethod
-    def load(path: Path) -> dict[str, object]:
-        """Return the object in *path*, or raise ``ValueError`` saying why not."""
-        if not path.is_file():
-            msg = "not a regular file"
-            raise ValueError(msg)
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            msg = "not UTF-8"
-            raise ValueError(msg) from exc
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            msg = "not JSON"
-            raise ValueError(msg) from exc
-        if not isinstance(data, dict):
-            msg = "not a JSON object"
-            raise ValueError(msg)
-        return data
-
-    @staticmethod
-    def object_at(parent: dict[str, object], key: str) -> dict[str, object]:
-        """Return ``parent[key]`` as an object (empty if absent), else raise."""
-        found = parent.get(key, {})
-        if not isinstance(found, dict):
-            msg = f"{key} is not an object"
-            raise ValueError(msg)
-        return found
-
-
-@final
 class ClaudeCodeMcp:
     """Claude Code's wiring of the quarry MCP server: write it, and check it."""
 
-    # Long enough for a slow machine, short enough that an install never hangs.
+    # Long enough for a slow machine, short enough that an install never hangs;
+    # the total bounds the up to three calls a stale-entry replace makes.
     _CLAUDE_TIMEOUT_S: ClassVar[float] = 60.0
+    _TOTAL_TIMEOUT_S: ClassVar[float] = 120.0
     _PLUGIN_KEY: ClassVar[str] = "quarry@punt-labs"
 
     __slots__ = ("_plugins_path",)
@@ -125,16 +88,17 @@ class ClaudeCodeMcp:
         report "not configured" even though the MCP server was added.  This is
         acceptable for a ``required=False`` diagnostic check.
         """
-        if not self._plugins_path.exists():
-            return self._failure("no plugin registry found")
         try:
+            if not self._plugins_path.exists():
+                return self._failure("no plugin registry found")
             return self._read_registry()
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            return self._failure(f"config error: {exc}")
+        except (OSError, ValueError) as exc:
+            return self._failure(f"config error: {JsonFile.why(exc)}")
 
     def _read_registry(self) -> CheckResult:
         """Return whether the registry lists a quarry plugin whose manifest says so."""
-        plugins = JsonFile.object_at(JsonFile.load(self._plugins_path), "plugins")
+        registry = self._plugins_path
+        plugins = JsonFile.object_at(JsonFile.load(registry), "plugins", registry)
         entries = plugins.get(self._PLUGIN_KEY)
         if not entries:
             return self._failure("not configured (run 'quarry install')")
@@ -142,16 +106,17 @@ class ClaudeCodeMcp:
         # mcpServers entry for quarry.  This catches stale registry entries where
         # the plugin directory was deleted or corrupted.
         if not isinstance(entries, list) or not isinstance(entries[0], dict):
-            msg = "the plugin registry entry is malformed"
-            raise ValueError(msg)
+            msg = f"{registry.name}: the quarry plugin entry is malformed"
+            raise ConfigError(msg)
         raw_path = entries[0].get("installPath", "")
         if not raw_path or not isinstance(raw_path, str):
             return self._failure("plugin registry has empty installPath")
         install_path = Path(raw_path)
         plugin_json = install_path / ".claude-plugin" / "plugin.json"
         if not plugin_json.exists():
-            return self._failure(f"plugin files missing at {install_path}")
-        servers = JsonFile.object_at(JsonFile.load(plugin_json), "mcpServers")
+            return self._failure(f"plugin files missing at {install_path.name}")
+        manifest = JsonFile.load(plugin_json)
+        servers = JsonFile.object_at(manifest, "mcpServers", plugin_json)
         if _MCP_SERVER_NAME not in servers:
             return self._failure("plugin manifest missing quarry MCP server entry")
         return CheckResult(name="Claude Code MCP", passed=True, message="configured")
@@ -161,43 +126,75 @@ class ClaudeCodeMcp:
         ok = CheckResult(
             name="Claude Code MCP", passed=True, message="configured (scope: user)"
         )
-        command = self._command()
-        add_argv = ["mcp", "add", _MCP_SERVER_NAME, *_SCOPE_USER, "--", *command]
-        result = self._run(claude_path, *add_argv)
+        deadline = time.monotonic() + self._TOTAL_TIMEOUT_S
+        run = partial(self._run, claude_path, deadline)
+        add_argv = [
+            "mcp",
+            "add",
+            _MCP_SERVER_NAME,
+            *_SCOPE_USER,
+            "--",
+            *self._command(),
+        ]
+        result = run(*add_argv)
         if result.returncode == 0:
             return ok
         if "already exists" not in result.stderr:
-            return self._failure(f"claude mcp add failed: {result.stderr.strip()}")
+            return self._failure(f"claude mcp add failed: {self._said(result)}")
         # An entry already exists and blocks the direct add. Remove it and re-add;
         # only now — with the entry confirmed present — do we risk a removal.
-        remove = self._run(claude_path, "mcp", "remove", _MCP_SERVER_NAME, *_SCOPE_USER)
+        remove = run("mcp", "remove", _MCP_SERVER_NAME, *_SCOPE_USER)
         if remove.returncode != 0:
             # The remove failed: the stale entry is likely still present, so do NOT
             # re-add blindly or claim a removal that did not happen.
             return self._failure(
                 "a stale quarry MCP entry blocks the add but could not be removed: "
-                f"{remove.stderr.strip()}. Inspect with 'claude mcp list' — a stale "
+                f"{self._said(remove)}. Inspect with 'claude mcp list' — a stale "
                 "'local'-scope entry can shadow the 'user'-scope one and cause this "
                 "exact failure; try 'claude mcp remove quarry --scope local' first, "
                 "then re-run 'quarry install'."
             )
-        retry = self._run(claude_path, *add_argv)
+        try:
+            retry = run(*add_argv)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return self._failure(self._readd_failed(CheckFailure.detail(exc)))
         if retry.returncode == 0:
             return ok
-        return self._failure(
-            "removed the stale quarry MCP entry but the re-add failed: "
-            f"{retry.stderr.strip()}. Re-run 'quarry install' or "
+        return self._failure(self._readd_failed(self._said(retry)))
+
+    @staticmethod
+    def _readd_failed(why: str) -> str:
+        """Say, loudly, that the stale entry is gone and the new one is not in."""
+        return (
+            f"removed the stale quarry MCP entry but the re-add failed: {why}. "
+            "Re-run 'quarry install' or "
             "'claude mcp add quarry --scope user -- quarry mcp'."
         )
 
+    @staticmethod
+    def _said(result: subprocess.CompletedProcess[str]) -> str:
+        """Return what ``claude`` said on stderr: one printable, bounded line."""
+        return CheckFailure.line(result.stderr)
+
     @classmethod
-    def _run(cls, claude_path: str, *argv: str) -> subprocess.CompletedProcess[str]:
-        """Run the ``claude`` CLI with *argv*, capturing output (the one S603 site)."""
+    def _run(
+        cls, claude_path: str, deadline: float, *argv: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the ``claude`` CLI with *argv* before *deadline* (the one S603 site).
+
+        Its output is decoded as UTF-8 with replacement, so bytes that are not
+        text cannot raise.
+        """
+        timeout = min(cls._CLAUDE_TIMEOUT_S, deadline - time.monotonic())
+        if timeout <= 0:
+            raise subprocess.TimeoutExpired([claude_path, *argv], 0)
         return subprocess.run(  # noqa: S603
             [claude_path, *argv],
             capture_output=True,
             text=True,
-            timeout=cls._CLAUDE_TIMEOUT_S,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
         )
 
     @staticmethod
@@ -246,16 +243,16 @@ class ClaudeDesktopMcp:
         on to its next step.
         """
         path = self._config_path
-        if not path.parent.exists():
-            return self._failure("Claude Desktop not installed")
         try:
+            if not path.parent.exists():
+                return self._failure("Claude Desktop not installed")
             config = JsonFile.load(path) if path.exists() else {}
-            servers = JsonFile.object_at(config, "mcpServers")
+            servers = JsonFile.object_at(config, "mcpServers", path)
             servers[_MCP_SERVER_NAME] = {"command": self._command(), "args": ["mcp"]}
             config["mcpServers"] = servers
             AtomicFile(path).replace(json.dumps(config, indent=2) + "\n")
         except (OSError, ValueError) as exc:
-            return self._failure(f"{path.name}: {exc}; left unchanged")
+            return self._failure(f"{JsonFile.why(exc)}; left unchanged")
         return CheckResult(
             name="Claude Desktop MCP",
             passed=True,
@@ -265,14 +262,14 @@ class ClaudeDesktopMcp:
     def check(self) -> CheckResult:
         """Check whether quarry MCP is configured in Claude Desktop (read-only)."""
         path = self._config_path
-        if not path.parent.exists():
-            return self._failure("Claude Desktop not installed")
-        if not path.exists():
-            return self._failure("no config file (run 'quarry install')")
         try:
-            servers = JsonFile.object_at(JsonFile.load(path), "mcpServers")
+            if not path.parent.exists():
+                return self._failure("Claude Desktop not installed")
+            if not path.exists():
+                return self._failure("no config file (run 'quarry install')")
+            servers = JsonFile.object_at(JsonFile.load(path), "mcpServers", path)
         except (OSError, ValueError) as exc:
-            return self._failure(f"config error: {exc}")
+            return self._failure(f"config error: {JsonFile.why(exc)}")
         if _MCP_SERVER_NAME in servers:
             return CheckResult(
                 name="Claude Desktop MCP", passed=True, message="configured"
@@ -281,8 +278,16 @@ class ClaudeDesktopMcp:
 
     @staticmethod
     def _command() -> str:
-        """Return the absolute path of ``quarry`` (Desktop runs with a minimal PATH)."""
-        return shutil.which("quarry") or "quarry"
+        """Return the absolute path of ``quarry`` (Desktop runs with a minimal PATH).
+
+        Desktop cannot find a bare ``quarry``, so one that does not resolve is an
+        error, never a registration that only looks configured.
+        """
+        found = shutil.which("quarry")
+        if found is None:
+            msg = "quarry is not on PATH, so Claude Desktop cannot be pointed at it"
+            raise ConfigError(msg)
+        return found
 
     @staticmethod
     def _failure(message: str) -> CheckResult:

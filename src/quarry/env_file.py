@@ -46,7 +46,7 @@ class EnvFile:
         directory = self._path.parent
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._tighten(directory)
-        TempSweep(self._path, "env file").run()
+        TempSweep.beside(self._path, "env file").run()
         tmp_path = self._path.with_name(f"{self._path.name}.{secrets.token_hex(6)}.tmp")
         PrivateWrite("env file").commit(
             tmp_path, self._path, "".join(f"{line}\n" for line in lines)

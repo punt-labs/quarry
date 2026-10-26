@@ -13,18 +13,20 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast, final
 from unittest.mock import patch
 
-from quarry.daemon.abort_reason import AbortTally
+import pytest
+
+from quarry.daemon.abort_reason import Aborted, AbortTally
+from quarry.daemon.daemon_threads import DaemonThreads
 from quarry.daemon.job_abort import JobAbort, QueuedJob
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.tasks import TaskState
 from quarry.shutdown_policy import ShutdownPolicy
 
 if TYPE_CHECKING:
-    import pytest
-
     from quarry.config import Settings
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
+    from quarry.daemon.tasks import TaskStatus
 
 
 @final
@@ -99,6 +101,7 @@ def test_one_job_that_cannot_decide_its_outcome_costs_only_itself(
     assert tally.summary().startswith("2 job(s): 1 spooled for recovery")
     assert "1 lost" in tally.summary()
     assert "_Exploding job for c" in caplog.text
+    assert "spool record could not be built" in jobs[0].state.error
 
 
 async def test_off_loop_one_bad_job_still_records_the_others(tmp_path: Path) -> None:
@@ -208,7 +211,8 @@ async def test_a_spool_that_blocks_past_the_deadline_is_recorded_unfinished(
     assert elapsed < 1.0
     assert job.state.status == "failed"
     assert "spool unfinished at shutdown" in job.state.error
-    assert "1 lost" in tally.summary()
+    assert "1 spool unfinished at shutdown" in tally.summary()
+    assert "0 lost" in tally.summary()
     assert abort.pending == 0
 
 
@@ -230,6 +234,115 @@ async def test_a_cancelled_spooling_task_is_recorded_lost(tmp_path: Path) -> Non
     spooling = asyncio.get_running_loop().create_future()
     spooling.cancel()
 
-    outcome = await abort.await_spool(spooling)
+    outcome = await abort.await_spool(spooling, _job("a"))
 
-    assert outcome is JobAbort.UNDECIDED
+    assert outcome is JobAbort.NOT_WRITTEN
+
+
+async def test_a_late_successful_write_corrects_the_reason_and_the_tally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(ShutdownPolicy, "SPOOL_WAIT_S", 0.05)
+    abort, tally = _abort(tmp_path)
+    job = _job("a")
+    release = threading.Event()
+    real_write = JobSpool.write
+
+    def late(self: JobSpool, record: SpoolRecord) -> bool:
+        release.wait(5)
+        return real_write(self, record)
+
+    with (
+        patch.object(JobSpool, "write", late),
+        caplog.at_level(logging.INFO, logger="quarry.daemon.job_abort"),
+    ):
+        await abort.fail_in_flight(job)
+        assert "1 spool unfinished at shutdown" in tally.summary()
+        release.set()
+        for _ in range(100):
+            if "1 spool unfinished" not in tally.summary():
+                break
+            await asyncio.sleep(0.01)
+
+    assert tally.summary().startswith("1 job(s): 1 spooled for recovery")
+    assert "unfinished" not in tally.summary()
+    assert "spooled for recovery" in job.state.error
+    assert "after the wait" in job.state.error
+    assert "_Unit job for c finished spooling after the abort wait" in caplog.text
+
+
+async def test_a_late_spool_that_raises_or_is_cancelled_is_logged_by_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(ShutdownPolicy, "SPOOL_WAIT_S", 0.05)
+    abort, tally = _abort(tmp_path)
+
+    async def raises(_self: DaemonThreads, _call: object) -> Aborted:
+        await asyncio.sleep(0.15)
+        msg = "late disk failure detail"
+        raise RuntimeError(msg)
+
+    async def cancelled(_self: DaemonThreads, _call: object) -> Aborted:
+        await asyncio.sleep(0.15)
+        raise asyncio.CancelledError
+
+    with caplog.at_level(logging.INFO, logger="quarry.daemon.job_abort"):
+        for fake in (raises, cancelled):
+            with patch.object(DaemonThreads, "run", fake):
+                await abort.fail_in_flight(_job("a"))
+            await asyncio.sleep(0.25)
+
+    assert "a late spool of a _Unit job for c failed" in caplog.text
+    assert "a late spool of a _Unit job for c was cancelled" in caplog.text
+    assert "late disk failure detail" not in caplog.text
+    assert "2 spool unfinished at shutdown" in tally.summary()
+
+
+async def test_the_summary_terms_add_up_with_every_kind_present(
+    tmp_path: Path,
+) -> None:
+    abort, tally = _abort(tmp_path)
+    abort.fail([_job("a"), _job("b", spooled=False), _exploding("c")])
+    tally.record(JobAbort.UNFINISHED)
+
+    summary = tally.summary()
+
+    assert summary.startswith("4 job(s)")
+    assert "1 spooled for recovery" in summary
+    assert "1 lost" in summary
+    assert "1 spool unfinished at shutdown" in summary
+    assert "1 needed no spool" in summary
+
+
+@pytest.mark.parametrize("status", ["withdrawn", "committing", "completed"])
+def test_a_job_that_is_withdrawn_committing_or_stored_keeps_its_status(
+    tmp_path: Path, status: str
+) -> None:
+    abort, tally = _abort(tmp_path)
+    job = _job("a")
+    job.state.status = cast("TaskStatus", status)
+
+    abort.fail([job])
+
+    assert job.state.status == status
+    assert job.state.error == ""
+    assert tally.summary().startswith("1 job(s)")
+
+
+async def test_spool_writes_run_on_daemon_threads_not_the_default_executor(
+    tmp_path: Path,
+) -> None:
+    abort, _tally = _abort(tmp_path)
+    seen: list[tuple[bool, str]] = []
+    real_write = JobSpool.write
+
+    def recording(self: JobSpool, record: SpoolRecord) -> bool:
+        thread = threading.current_thread()
+        seen.append((thread.daemon, thread.name))
+        return real_write(self, record)
+
+    with patch.object(JobSpool, "write", recording):
+        await abort.fail_off_loop([_job("a")])
+
+    assert seen
+    assert all(daemon and name == "quarry-spool" for daemon, name in seen)

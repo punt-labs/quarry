@@ -835,8 +835,7 @@ and relays the response to stdout.  It imports no engine, so
 zero LanceDB/ONNX.  Database selection is a per-request parameter carried
 in the wire call; the daemon holds no per-connection \texttt{ContextVar}
 because the in-daemon \texttt{/mcp} WebSocket route was removed (DES-031
-v2.2, PR-1).  \texttt{mcp-proxy} is no longer on this path (it remains a
-supported MCP stdio$\leftrightarrow$daemon transport for other MCP clients).
+v2.2, PR-1).  \texttt{mcp-proxy} is no longer on this path.
 
 \subsection{CLI and the Daemon}
 

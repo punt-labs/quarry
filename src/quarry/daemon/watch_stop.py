@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from starlette.concurrency import run_in_threadpool
 
+from quarry.daemon.watch_step_report import StepReport
 from quarry.redacted_failure import RedactedFailure
 from quarry.shutdown_policy import ShutdownPolicy
 
@@ -61,6 +62,7 @@ class WatchStop:
     def for_loop(
         cls,
         roster: WatchRoster,
+        # Each collaborator is None when the loop never built it or switched it off.
         source: FsEventSource | None,
         safety: asyncio.Task[None] | None,
         submitter: WatchSubmitter | None,
@@ -88,9 +90,13 @@ class WatchStop:
             steps.append(
                 ("cancelling the debounce timers", cls.inline(dispatcher.cancel_all))
             )
-        steps.append(("unwatching the roster", cls.inline(roster.unwatch_all)))
+        # Off the loop: unwatching and closing join threads and release native
+        # handles, and a stuck one must not freeze the loop or the grace bound.
+        steps.append(
+            ("unwatching the roster", partial(run_in_threadpool, roster.unwatch_all))
+        )
         # drop sibling conns so a restart cannot leak them
-        steps.append(("closing the roster", cls.inline(roster.close)))
+        steps.append(("closing the roster", partial(run_in_threadpool, roster.close)))
         if source is not None:
             steps.append(
                 ("joining the observer", partial(run_in_threadpool, source.stop))
@@ -110,7 +116,7 @@ class WatchStop:
         """Run every step, then raise what the strongest outcome calls for."""
         outcome = _Outcome()
         loop = asyncio.get_running_loop()
-        deadline: float | None = None
+        deadline: float | None = None  # None: no cancel seen yet, so no limit
         for name, step in self._steps:
             remaining = None if deadline is None else max(deadline - loop.time(), 0.0)
             try:
@@ -153,47 +159,37 @@ class WatchStop:
 
     @classmethod
     async def _attempt(
-        cls, name: str, step: Callable[[], Awaitable[None]], remaining: float | None
+        # remaining is None before any cancel: wait as long as the step takes.
+        cls,
+        name: str,
+        step: Callable[[], Awaitable[None]],
+        remaining: float | None,
     ) -> None:
         """Run one step for at most *remaining* seconds (``None``: as long as it takes).
 
         A step the cancel interrupts, or that outlives *remaining*, is left
         running with a callback that reports how it ends, and is named in a
-        warning; an interrupted one re-raises the cancel.
+        warning; an interrupted one re-raises the cancel.  A step that was started
+        with no time left to wait is started all the same (a cleanup must run) and
+        reported as not awaited.
         """
         running = asyncio.ensure_future(step())
         try:
             done, _ = await asyncio.wait({running}, timeout=remaining)
         except asyncio.CancelledError:
-            cls._abandon(name, running)
+            StepReport.abandon(name, running, remaining)
             raise
-        if running in done:
+        if running not in done:
+            StepReport.abandon(name, running, remaining)
+        elif running.cancelled():
+            msg = "the step was cancelled"
+            raise StepCancelledError(msg)
+        else:
             running.result()  # its failure, if any, propagates to be logged once
-        else:
-            cls._abandon(name, running)
 
-    @classmethod
-    def _abandon(cls, name: str, running: asyncio.Future[None]) -> None:
-        """Leave *running* to finish on its own, saying so now and when it ends."""
-        running.add_done_callback(partial(cls._ended_late, name))
-        logger.warning(
-            "watch: stopped while %s was in progress; it may still be running", name
-        )
 
-    @staticmethod
-    def _ended_late(name: str, running: asyncio.Future[None]) -> None:
-        """Done callback: say how a step the stop gave up on ended."""
-        if running.cancelled():
-            return
-        failure = running.exception()  # retrieved, so asyncio never reports it unread
-        if failure is None:
-            logger.info("watch: %s finished after the stop gave up on it", name)
-        else:
-            logger.error(
-                "watch: %s failed after the stop gave up on it",
-                name,
-                exc_info=RedactedFailure.of(failure),
-            )
+class StepCancelledError(Exception):
+    """A cleanup step was cancelled by something other than the teardown's cancel."""
 
 
 @final
@@ -206,6 +202,7 @@ class _Outcome:
 
     __slots__ = ("_cancel", "_failure", "_fatal")
 
+    # Each is None until a step ends that way; absence is the "nothing" state.
     _cancel: asyncio.CancelledError | None
     _failure: Exception | None
     _fatal: BaseException | None

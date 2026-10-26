@@ -1,0 +1,128 @@
+"""Run doctor's checks so that none of them can stop the report."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, final
+
+from quarry.config import Settings
+from quarry.doctor_captures import CaptureDiagnostics
+from quarry.doctor_failure import CheckFailure
+from quarry.doctor_memory import MemoryDiagnostics
+from quarry.doctor_recall import RecallDiagnostics
+from quarry.doctor_sync import SyncDiagnostics
+from quarry.redacted_failure import RedactedFailure
+from quarry.results import CheckResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
+logger = logging.getLogger(__name__)
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class CheckEntry:
+    """One check: its report name, what to run, and whether its failure is fatal.
+
+    ``required`` is what a check that *crashes* counts as: the same as the
+    result it would have returned, so a crash never downgrades a required check.
+    ``call`` returns ``None`` for a diagnostic that has nothing to say.
+    """
+
+    name: str
+    # None: the diagnostic has nothing to report
+    call: Callable[[], CheckResult | None]
+    required: bool = False
+
+
+@final
+class CheckRunner:
+    """Run checks (and install steps) so that whatever they raise is a result."""
+
+    __slots__ = ()
+
+    @staticmethod
+    # None: the entry's diagnostic had nothing to report.
+    def attempt(entry: CheckEntry) -> CheckResult | None:
+        """Run one entry; whatever it raises becomes a failed result naming it.
+
+        The report must always complete, so no single check, whatever it hits,
+        may stop the others.  The failure keeps the entry's ``required`` flag and
+        is also logged with its frames.
+        """
+        try:
+            return entry.call()
+        except Exception as exc:
+            logger.warning(
+                "doctor: check %s failed", entry.name, exc_info=RedactedFailure.of(exc)
+            )
+            return CheckResult(
+                name=entry.name,
+                passed=False,
+                message=f"check could not run ({CheckFailure.detail(exc)})",
+                required=entry.required,
+            )
+
+    @classmethod
+    def run(cls, entries: Iterable[CheckEntry]) -> list[CheckResult]:
+        """Run every entry in order; return the results that have something to say."""
+        results = [cls.attempt(entry) for entry in entries]
+        return [result for result in results if result is not None]
+
+
+@final
+class SettingsChecks:
+    """The checks that read the settings, or the one failed check that says why not."""
+
+    __slots__ = ()
+
+    @staticmethod
+    def entries(fts: Callable[[Path], CheckResult]) -> list[CheckEntry]:
+        """Return the settings-dependent entries; *fts* is the index check."""
+        try:
+            settings = Settings()
+        except Exception as exc:
+            logger.warning(
+                "doctor: settings are invalid", exc_info=RedactedFailure.of(exc)
+            )
+            failed = CheckResult(
+                name="Settings",
+                passed=False,
+                message=f"invalid settings ({CheckFailure.detail(exc)})",
+            )
+            return [CheckEntry("Settings", lambda: failed, required=True)]
+        db, registry = settings.lancedb_path, settings.registry_path
+        return [
+            CheckEntry("FTS index", lambda: fts(db)),
+            CheckEntry(
+                "Sync directories", lambda: SyncDiagnostics.directories(registry)
+            ),
+            CheckEntry(
+                "Sync enable",
+                lambda: SyncDiagnostics.enable_status(registry, str(Path.cwd())),
+            ),
+            CheckEntry(
+                "Unlinked captures",
+                lambda: CaptureDiagnostics.unlinked(registry, db),
+            ),
+            CheckEntry(
+                "Shadow repo",
+                lambda: CaptureDiagnostics.shadow_repo(str(Path.cwd())),
+                required=True,  # an unverifiable public repo is not "no leak"
+            ),
+            CheckEntry("Memory corpus", lambda: MemoryDiagnostics.corpus(db)),
+            CheckEntry(
+                "Memory identity",
+                lambda: MemoryDiagnostics.identity_active(str(Path.cwd()), db),
+            ),
+            CheckEntry(
+                "Recall activity",
+                lambda: RecallDiagnostics.recent_activity(
+                    settings.telemetry_path,
+                    telemetry_enabled=settings.telemetry_enabled,
+                ),
+            ),
+        ]

@@ -244,7 +244,7 @@ def _launchd_install() -> None:
             )
 
     # A crashed install can leave a temp holding the API key: sweep before writing.
-    TempSweep(_LAUNCHD_PLIST, "launchd plist").run()
+    TempSweep.beside(_LAUNCHD_PLIST, "launchd plist").run()
     # A name of its own, so a leftover never blocks this install.
     tmp_path = _LAUNCHD_PLIST.with_name(
         f"{_LAUNCHD_PLIST.name}.{secrets.token_hex(6)}.tmp"
