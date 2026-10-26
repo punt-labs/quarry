@@ -113,6 +113,8 @@ class SettingsChecks:
         try:
             settings = Settings()
         except Exception as exc:
+            if CheckRunner.home().passed is False:
+                return []  # the Home check reports it; the settings are not "invalid"
             logger.info(
                 "doctor: settings are invalid", exc_info=RedactedFailure.of(exc)
             )

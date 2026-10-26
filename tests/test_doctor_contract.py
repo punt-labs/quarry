@@ -145,7 +145,9 @@ class TestInstallAlwaysCompletes:
 
         assert code == 1
         out = capsys.readouterr().out
-        assert "Failed to create directories: HomeUnresolvedError" in out
+        assert (
+            "Failed to locate the data and logs directories: HomeUnresolvedError" in out
+        )
 
     def test_the_fp16_step_says_why_it_was_skipped(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
@@ -676,6 +678,21 @@ _ENTRY_POINTS: dict[str, str] = {
         from quarry.daemon.launcher import entrypoint
         entrypoint()
     """,
+    "quarry enable ~/proj": """
+        sys.argv = ["quarry", "enable", "~/proj"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry disable ~/proj": """
+        sys.argv = ["quarry", "disable", "~/proj"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry register ~/proj": """
+        sys.argv = ["quarry", "register", "~/proj"]
+        from quarry._cli_entry import main
+        main()
+    """,
     "quarry-hook": """
         sys.argv = ["quarry-hook", "session-setup"]
         from quarry._hook_entry import main
@@ -694,7 +711,17 @@ def test_a_hook_without_a_home_fails_open_and_never_prints_a_traceback() -> None
     assert "no home directory: logging to stderr only" in line
 
 
-@pytest.mark.parametrize("entry", ["quarry find", "quarry find doctor", "quarryd"])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "quarry find",
+        "quarry find doctor",
+        "quarryd",
+        "quarry enable ~/proj",
+        "quarry disable ~/proj",
+        "quarry register ~/proj",
+    ],
+)
 def test_every_other_entry_point_prints_one_clean_line_without_a_home(
     entry: str,
 ) -> None:
@@ -720,6 +747,7 @@ def test_doctor_runs_its_real_checks_without_a_home(
     assert "Python version" in done.stdout
     assert "✗ Home directory" in done.stdout
     assert "set HOME" in done.stdout
+    assert "invalid settings" not in done.stdout  # one fault, reported once
     assert "issue(s) found" in done.stdout
 
 
@@ -737,7 +765,7 @@ def test_install_runs_its_real_steps_without_a_home(
     if with_roots:
         assert (tmp_path / "data" / "default" / "lancedb").is_dir()
     else:
-        assert "Failed to create directories" in done.stdout
+        assert "Failed to locate the data and logs directories" in done.stdout
 
 
 def test_a_command_prints_one_clean_line_when_only_the_roots_are_set(

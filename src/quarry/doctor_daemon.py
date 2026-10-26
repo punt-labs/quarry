@@ -196,30 +196,42 @@ class DaemonDiagnostics:
 
     @classmethod
     def _fetch_health(cls, port: int) -> dict[str, object] | None:
-        """GET ``/health`` over HTTPS then HTTP; return the parsed object or None.
+        """GET ``/health`` over HTTPS, then HTTP only if no CA is installed.
 
         The single daemon-health read that both :meth:`reachability` and
         :meth:`fd_headroom` consume, so the two checks never drift into separate
-        probes. A managed daemon serves ``--tls``; a bare
-        ``quarryd`` (no ``--tls``) serves plaintext. Try HTTPS first (verify
-        against the pinned CA when present, else skip verification — a loopback
-        liveness check, not a security boundary; mirrors install.sh's ``--cacert``
-        gate and its ``-k`` fallback). On a TLS handshake failure (plaintext
-        behind https / wrong-version-number), fall back to plain HTTP so a
-        plaintext daemon still answers. Returns ``None`` — the documented
-        not-reachable signal — on a refused/broken connection, a non-200, or a
-        non-object body, so callers render one degraded state.
+        probes.  With the daemon CA installed the daemon is a managed ``--tls``
+        one, and the probe verifies against that CA: a certificate that does not
+        chain to it, or a listener that does not speak TLS at all, is a fault
+        (:class:`DaemonCaError`), never a reason to ask again in plaintext, which
+        would pass a spoofed daemon.  With no CA (a bare ``quarryd`` serves
+        plaintext, or nothing is installed yet) verification is off, as it is in
+        install.sh's ``-k`` fallback, and a TLS handshake failure retries over
+        plain HTTP.  Returns ``None`` — the documented not-reachable signal — on
+        a refused/broken connection, a non-200, or a non-object body, so callers
+        render one degraded state.
         """
+        pinned = cls._pinned_context()
         https = http.client.HTTPSConnection(
             _HEALTH_HOST,
             port,
-            context=cls._ssl_context(),
+            context=pinned or cls._unverified_context(),
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
         try:
             return cls._read_health(https)
-        except ssl.SSLError:
-            # Plaintext daemon behind an HTTPS probe — retry over HTTP.
+        except ssl.SSLCertVerificationError as exc:
+            msg = (
+                f"the daemon's certificate does not match ca.crt ({exc.verify_message})"
+            )
+            raise DaemonCaError(msg) from exc
+        except ssl.SSLError as exc:
+            if pinned is not None:
+                msg = (
+                    "the daemon does not answer TLS although ca.crt is "
+                    f"installed ({exc.reason})"
+                )
+                raise DaemonCaError(msg) from exc
             http_conn = http.client.HTTPConnection(
                 _HEALTH_HOST, port, timeout=_PROBE_TIMEOUT_SECONDS
             )
@@ -247,28 +259,32 @@ class DaemonDiagnostics:
         return cls._parse_object(body)
 
     @staticmethod
-    def _ssl_context() -> ssl.SSLContext:
-        """A client context pinned to the daemon CA, or verification-disabled.
+    def _pinned_context() -> ssl.SSLContext | None:  # None: no CA is installed
+        """Return a client context pinned to the daemon CA, or ``None`` if absent.
 
         The daemon serves a self-signed cert with a ``127.0.0.1`` IP SAN, so a
-        pinned-CA context verifies the literal-loopback probe. Absent the CA (a
-        plaintext or not-yet-installed daemon), fall back to no verification so
-        the liveness probe still connects.
+        pinned-CA context verifies the literal-loopback probe.  A CA that is
+        there but cannot be used is a fault to report: falling back to no
+        verification would pass a spoofed daemon.
         """
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ca = QuarryHome.daemon_ca()
-        if ca.exists():
-            try:
-                ctx.load_verify_locations(str(ca))
-            except ssl.SSLError as exc:
-                # A CA that is there but cannot be used is a fault to report: a
-                # silent fallback to no verification would pass a spoofed daemon.
-                msg = f"{ca.name} is not a usable certificate (SSLError)"
-                raise DaemonCaError(msg) from exc
-            except OSError as exc:
-                msg = f"{ca.name} cannot be read ({FailureReason.os_name(exc)})"
-                raise DaemonCaError(msg) from exc
-            return ctx
+        try:
+            if not ca.exists():
+                return None
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.load_verify_locations(str(ca))
+        except ssl.SSLError as exc:
+            msg = f"{ca.name} is not a usable certificate ({exc.reason})"
+            raise DaemonCaError(msg) from exc
+        except OSError as exc:
+            msg = f"{ca.name} cannot be read ({FailureReason.os_name(exc)})"
+            raise DaemonCaError(msg) from exc
+        return ctx
+
+    @staticmethod
+    def _unverified_context() -> ssl.SSLContext:
+        """Return a client context that skips verification: a liveness probe only."""
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         return ctx

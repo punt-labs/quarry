@@ -14,7 +14,6 @@ from quarry.config import (
     ONNX_MODEL_REPO,
     ONNX_MODEL_REVISION,
     ONNX_TOKENIZER_FILE,
-    Settings,
 )
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_ethos import EthosExtDiagnostics
@@ -23,7 +22,7 @@ from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
 from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
 from quarry.gpu_runtime import GpuRuntime
-from quarry.logging_config import LoggingConfig
+from quarry.install_directories import InstallDirectories
 from quarry.opencv_headless import HeadlessOpenCv
 from quarry.results import CheckResult
 
@@ -84,7 +83,7 @@ def _check_python_version() -> CheckResult:
 
 
 def _check_data_directory() -> CheckResult:
-    data_dir = Settings().resolve_db_paths().lancedb_path
+    data_dir = InstallDirectories.data_dir()
     is_usable = data_dir.exists() and os.access(data_dir, os.W_OK)
     if is_usable:
         message = str(data_dir)
@@ -330,21 +329,6 @@ def _install_embedding_model() -> bool:
     return True
 
 
-def _create_directories() -> bool:
-    """Create the data and logs directories; return whether both now exist."""
-    try:
-        data_dir = Settings().resolve_db_paths().lancedb_path
-        logs_dir = LoggingConfig.log_dir()
-        data_dir.mkdir(parents=True, exist_ok=True)
-        logs_dir.mkdir(parents=True, exist_ok=True)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"  \u2717 Failed to create directories: {CheckFailure.detail(exc)}")  # noqa: T201
-        return False
-    print(f"  \u2713 {data_dir}")  # noqa: T201
-    print(f"  \u2713 {logs_dir}")  # noqa: T201
-    return True
-
-
 def _gpu_runtime_is_usable() -> bool:
     """Run the GPU runtime step; return False when the install must fail.
 
@@ -378,7 +362,7 @@ def run_install() -> int:
 
     # Step 1: data + logs directories
     print("[1/7] Creating directories...")  # noqa: T201
-    failed = not _create_directories()
+    failed = not InstallDirectories.create()
 
     # Step 2: headless OpenCV (rapidocr hard-requires the GUI opencv-python;
     # force the headless wheel to own cv2 so OCR loads on a screenless box, the

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -74,3 +75,23 @@ def test_the_log_directory_follows_the_home_directory(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     assert QuarryHome.log_root() == tmp_path / ".punt-labs" / "quarry" / "logs"
+
+
+def test_a_tilde_path_expands_under_the_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert QuarryHome.expanded(Path("~/proj")) == tmp_path / "proj"
+
+
+def test_a_tilde_path_with_no_home_raises_the_typed_error() -> None:
+    with (
+        patch("pathlib.Path.expanduser", side_effect=RuntimeError("no home")),
+        pytest.raises(HomeUnresolvedError),
+    ):
+        QuarryHome.expanded(Path("~/proj"))
+
+
+def test_a_path_without_a_tilde_is_returned_as_it_is() -> None:
+    assert QuarryHome.expanded(Path("/srv/proj")) == Path("/srv/proj")

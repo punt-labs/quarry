@@ -10,14 +10,19 @@ from __future__ import annotations
 
 import resource
 import ssl
+import threading
 from collections.abc import Generator
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from quarry.api.meta import FdHealth
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.fd_headroom import FdHeadroom
+from quarry.tls import generate_ca, generate_server_cert
 
 
 @contextmanager
@@ -143,9 +148,26 @@ class TestPinnedCa:
     def test_no_ca_at_all_still_probes_unverified(self, tmp_path: Path) -> None:
         missing = tmp_path / "ca.crt"
         with patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=missing):
-            context = DaemonDiagnostics._ssl_context()
+            pinned = DaemonDiagnostics._pinned_context()
 
-        assert context.verify_mode == ssl.CERT_NONE
+        assert pinned is None
+        assert DaemonDiagnostics._unverified_context().verify_mode == ssl.CERT_NONE
+
+    def test_a_ca_that_cannot_even_be_looked_up_names_the_file(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        ca = MagicMock()
+        ca.name = "ca.crt"
+        ca.exists.side_effect = PermissionError(13, "Permission denied")
+        with (
+            _run_dir_at(tmp_path),
+            patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
+        ):
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is False
+        assert "ca.crt cannot be read (EACCES)" in result.message
 
 
 class TestServeToken:
@@ -397,3 +419,103 @@ class TestFdWireContract:
             {"fd": {"open_fds": -1, "soft_limit": 8192}}
         )
         assert result is None
+
+
+class _Health(BaseHTTPRequestHandler):
+    """Answer ``/health`` with a ready daemon, quietly."""
+
+    def do_GET(self) -> None:
+        body = b'{"state":"ready"}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+@contextmanager
+def _health_server(tls: tuple[bytes, bytes] | None, root: Path) -> Generator[int]:
+    """Serve ``/health`` on the loopback, over TLS with *tls* (cert, key) if given."""
+    server = HTTPServer(("127.0.0.1", 0), _Health)
+    if tls is not None:
+        cert, key = root / "server.crt", root / "server.key"
+        cert.write_bytes(tls[0])
+        key.write_bytes(tls[1])
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def _signed_by(ca: tuple[bytes, bytes]) -> tuple[bytes, bytes]:
+    return generate_server_cert(ca[0], ca[1], "127.0.0.1")
+
+
+@pytest.mark.network  # real loopback sockets: the fake resolver would break them
+class TestInstalledCaIsNeverBypassed:
+    """With the daemon CA installed, a probe that cannot verify it fails."""
+
+    def test_a_certificate_that_does_not_chain_to_the_ca_fails_the_check(
+        self, tmp_path: Path
+    ) -> None:
+        installed, impostor = generate_ca(), generate_ca()
+        with (
+            _health_server(_signed_by(impostor), tmp_path) as port,
+            _run_dir_at(tmp_path),
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is False
+        assert "does not match ca.crt" in result.message
+
+    def test_a_plaintext_listener_answering_ready_fails_the_check(
+        self, tmp_path: Path
+    ) -> None:
+        installed = generate_ca()
+        with (
+            _health_server(None, tmp_path) as port,
+            _run_dir_at(tmp_path),
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is False
+        assert "does not answer TLS although ca.crt is installed" in result.message
+
+    def test_a_certificate_signed_by_the_ca_passes(self, tmp_path: Path) -> None:
+        installed = generate_ca()
+        with (
+            _health_server(_signed_by(installed), tmp_path) as port,
+            _run_dir_at(tmp_path),
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is True
+
+    def test_without_a_ca_a_plaintext_daemon_still_passes(self, tmp_path: Path) -> None:
+        with (
+            _health_server(None, tmp_path) as port,
+            _run_dir_at(tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.daemon_ca",
+                return_value=tmp_path / "ca.crt",
+            ),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is True

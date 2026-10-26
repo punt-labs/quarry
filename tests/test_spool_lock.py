@@ -62,7 +62,7 @@ def test_a_waiter_says_it_is_waiting_before_it_blocks(
         thread = threading.Thread(target=sweep, daemon=True)
         thread.start()
         time.sleep(0.3)
-        assert "waiting for the spool lock" in caplog.text
+        assert f"waiting for the lock .lock in {tmp_path}" in caplog.text
         assert not done.is_set()
     thread.join(5)
 
@@ -76,7 +76,7 @@ def test_an_uncontended_lock_is_taken_without_saying_anything(
     ):
         pass
 
-    assert "waiting for the spool lock" not in caplog.text
+    assert "waiting for the lock" not in caplog.text
 
 
 def test_the_lock_is_tried_without_blocking_first(tmp_path: Path) -> None:

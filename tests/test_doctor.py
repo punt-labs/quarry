@@ -24,6 +24,7 @@ from quarry import (
     doctor_inference,
     doctor_sync,
 )
+from quarry.db_pointer import SELECTION
 from quarry.doctor import (
     _QUIETED_LOGGERS,
     _check_data_directory,
@@ -95,6 +96,16 @@ class TestCheckDataDirectory:
         data_dir.mkdir(parents=True)
 
         assert _check_data_directory().message == str(data_dir)
+
+    def test_the_check_reads_the_selected_database(
+        self, tmp_path: Path, monkeypatch: MP
+    ):
+        monkeypatch.setenv("QUARRY_ROOT", str(tmp_path / "data"))
+        selected = tmp_path / "data" / "work" / "lancedb"
+        selected.mkdir(parents=True)
+        SELECTION.override("work")
+
+        assert _check_data_directory().message == str(selected)
 
 
 class TestCheckEmbeddingModel:

@@ -76,7 +76,11 @@ class SpoolLock:
         try:
             fcntl.flock(fd, mode | fcntl.LOCK_NB)
         except BlockingIOError:
-            logger.info("spool: waiting for the spool lock (%s)", self._path.name)
+            logger.info(
+                "spool: waiting for the lock %s in %s",
+                self._path.name,
+                self._path.parent,
+            )
             self._block(fd, mode)
         except OSError as exc:
             self._tolerate(exc)

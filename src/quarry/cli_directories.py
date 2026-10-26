@@ -9,6 +9,7 @@ import typer
 
 from quarry.api import DeregisterRequest, RegisterRequest
 from quarry.collection_namer import CollectionNamer
+from quarry.home_paths import QuarryHome
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
@@ -45,7 +46,7 @@ class DirectoryCli:
         The path is resolved against $HOME and re-guarded by the daemon on its own
         filesystem (traversal + $HOME allowlist); the registry write is deferred.
         """
-        resolved_path = directory.expanduser().resolve()
+        resolved_path = QuarryHome.expanded(directory).resolve()
         resolved = str(resolved_path)
         # The leaf, sanitized as CollectionNamer does for every auto-picked name
         # (the daemon refuses any other); "root" for a leaf with nothing left.

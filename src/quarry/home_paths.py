@@ -50,6 +50,20 @@ class QuarryHome:
             raise HomeUnresolvedError(msg)
         return home
 
+    @staticmethod
+    def expanded(path: Path) -> Path:
+        """Return *path* with a leading ``~`` expanded, or raise on an unknown home.
+
+        ``Path.expanduser`` raises a bare ``RuntimeError`` for a ``~`` it cannot
+        resolve; user input goes through here so the entry points see the typed
+        error and print one line.
+        """
+        try:
+            return path.expanduser()
+        except RuntimeError as exc:
+            msg = "cannot determine the home directory"
+            raise HomeUnresolvedError(msg) from exc
+
     @classmethod
     def root(cls) -> Path:
         """Return quarry's per-user directory."""

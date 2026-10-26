@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 import sys
 import textwrap
@@ -202,9 +203,9 @@ async def test_a_thread_that_cannot_start_fails_the_caller_and_leaves_nothing() 
     assert ran == []  # and the failed call's work never runs later
 
 
-async def test_work_stranded_by_a_replacement_that_cannot_start_fails_in_order() -> (
-    None
-):
+async def test_work_stranded_by_a_replacement_that_cannot_start_fails_in_order(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     threads = DaemonThreads(max_threads=1)
     release = threading.Event()
     started = threading.Event()
@@ -228,6 +229,7 @@ async def test_work_stranded_by_a_replacement_that_cannot_start_fails_in_order()
     with (
         patch.object(threading.Thread, "start", start_once),
         patch.object(threading, "excepthook", died.append),
+        caplog.at_level(logging.WARNING, logger="quarry.daemon"),
     ):
         first = asyncio.ensure_future(threads.run(dies))
         while not started.is_set():  # not to_thread: it would start a thread too
@@ -246,6 +248,9 @@ async def test_work_stranded_by_a_replacement_that_cannot_start_fails_in_order()
         if died:
             break
         await asyncio.sleep(0.01)
+    assert "could not replace an ended thread (no thread for the replacement)" in (
+        caplog.text
+    )
     assert [args.exc_type for args in died] == [SystemExit]
     assert isinstance(results[0], DaemonThreadAbortedError)
     for stranded in results[1:]:

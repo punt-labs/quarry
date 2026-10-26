@@ -65,7 +65,8 @@ async def test_a_removal_that_fails_is_logged_and_never_raised(
         _discard().discard(record)
         await asyncio.sleep(0.1)
 
-    assert "could not remove the spool record" in caplog.text
+    assert "could not remove the spool record remember-2.json" in caplog.text
+    assert "may duplicate stored content" in caplog.text
     assert "secret path" not in caplog.text
     assert record.exists()
 

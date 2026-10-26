@@ -91,7 +91,9 @@ class SpoolDiscard:
             path.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
-                "abort: could not remove the spool record of a job that stored",
+                "abort: could not remove the spool record %s of a job that stored; "
+                "it will be replayed and may duplicate stored content",
+                path.name,
                 exc_info=RedactedFailure.of(exc),
             )
             return

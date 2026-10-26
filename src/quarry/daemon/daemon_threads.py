@@ -185,7 +185,9 @@ class DaemonThreads:
                 target=self._serve, args=(work,), name=self._name, daemon=True
             ).start()
         except RuntimeError as exc:
-            logger.warning("daemon threads: could not replace an ended thread")
+            logger.warning(
+                "daemon threads: could not replace an ended thread (%s)", exc
+            )
             work.abandon(exc)
             self._abandon_all_if_unserved(exc)
         else:

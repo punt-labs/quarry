@@ -59,7 +59,7 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 40
+      "noqa": 37
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
@@ -137,6 +137,9 @@
     "src/quarry/ingestion/web_fetch.py": {
       "noqa": 1
     },
+    "src/quarry/install_directories.py": {
+      "noqa": 3
+    },
     "src/quarry/lesson.py": {
       "noqa": 1
     },
@@ -181,5 +184,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-26T08:18:36Z"
+  "updated_at": "2026-10-26T09:19:20Z"
 }

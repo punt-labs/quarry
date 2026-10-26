@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, final
 
 from quarry.ethos_memory import EthosMemoryBootstrap, EthosMemoryResult
+from quarry.home_paths import QuarryHome
 from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
@@ -134,7 +135,7 @@ def enable_project(
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd
     # ("./~/proj"), targeting the wrong directory.
-    directory = directory.expanduser().resolve()
+    directory = QuarryHome.expanded(directory).resolve()
     if not directory.is_dir():
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
@@ -197,7 +198,7 @@ def disable_project(
     """
     from quarry.registrations import Registrations  # noqa: PLC0415
 
-    directory = directory.expanduser().resolve()
+    directory = QuarryHome.expanded(directory).resolve()
     view = Registrations.from_list(client.list_registrations())
     return _DisableOrchestrator(directory, client, view, keep_data=keep_data).run()
 
