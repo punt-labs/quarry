@@ -105,7 +105,7 @@ and the matching rule for the model endpoint:
 
 | Rule for remote quarryd today | Source | The same rule for the model endpoint |
 |---|---|---|
-| Non-loopback means TLS; loopback may be plaintext only for development (`quarryd` without `--tls`). The installed daemon always runs TLS. | DES-020, DES-022, `net.py:130-145` | Non-loopback endpoint means `https`. Plain `http` only to loopback (Ollama's default). No opt-out flag, matching DES-020's rejected `--insecure`. |
+| Non-loopback means TLS; loopback may be plaintext only for development (`quarryd` without `--tls`). The installed daemon always runs TLS. | DES-020, DES-022, `net.py:130-145` | Non-loopback endpoint means `https`. Plain `http` only to a literal loopback IP (Ollama's default, written as `127.0.0.1`); a loopback name is dialed as `canonical_host`, the rule clients follow before presenting `serve.token`. No opt-out flag, matching DES-020's rejected `--insecure`. |
 | Non-loopback means an operator key. | `net.py:117-128` | A key is needed whenever the endpoint requires one. quarry doesn't decide that; the endpoint returns 401. |
 | Certificates are verified, and nothing ever skips verification. | DES-020 | Certificates are verified, with no `verify=False`. |
 | The key is stored 0600 and never in argv. | `service.py:60-93` | Same. |
@@ -165,11 +165,13 @@ wait (`server.py:278-280`). launchd sends SIGKILL 20 s after SIGTERM (the plist 
 `ExitTimeOut`), and systemd after 90 s (the unit sets no `TimeoutStopSec`,
 `service.py:334-335`). Every route finishes in milliseconds today, so this has not shown
 up. A request held open across a restart would lose admitted captures. **Fix for all
-routes:** set `timeout_graceful_shutdown` below the smallest service-manager kill
-timeout (for example 10 s), so uvicorn cancels the remaining request tasks and the
-drain still runs. Test: send SIGTERM while a request hangs (fake upstream in `hang`
-mode) with one queued capture. The capture must be written and the process must exit
-within the window. The operator decides when this lands.
+routes:** one shutdown budget covering the request wait (`timeout_graceful_shutdown`),
+watch stop, the ingest drain (`ingest_drain_timeout_s`, 30 s today, `config.py:71`), and
+cleanup, whose sum fits under the service-manager deadline: shrink the parts, or set
+launchd `ExitTimeOut` and systemd `TimeoutStopSec` to cover the sum. A 10 s request wait
+alone is not enough, since the drain can take 30 s. Tests: SIGTERM with a hung request
+(fake upstream in `hang` mode) and, separately, a slow drain, each with one queued
+capture. The capture must be written and the process must exit within the deadline. The operator decides when this lands.
 
 Not gaps (checked):
 

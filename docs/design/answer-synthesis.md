@@ -30,7 +30,7 @@ on explicit request, the daemon writes a short, cited answer from the passages i
 |---|---|
 | S1 | `GET /v1/answer`, separate from `/v1/search`, which stays byte-identical on the wire. Reuses `SearchService`, auth, and filters. Non-streaming JSON. |
 | S2 | One OpenAI-compatible `POST {base_url}/chat/completions` per answer via `httpx`. No native provider APIs, no bundled model, no MCP synthesis, no multi-turn, no per-keystroke answers. |
-| S3 | Default model: Nemotron 3 Nano 4B via Ollama (`ollama pull nemotron-3-nano:4b`, `http://localhost:11434/v1`). Any endpoint may be configured; none is required. |
+| S3 | Default model: Nemotron 3 Nano 4B via Ollama (`ollama pull nemotron-3-nano:4b`, `http://127.0.0.1:11434/v1`). Any endpoint may be configured; none is required. |
 | S4 | Config and key live under `~/.punt-labs/quarry`, written by `quarry install` and read at daemon start. |
 | S5 | `quarry answer` CLI. Menu bar: Command-Return or a button, a card above the results, clickable `[n]`, the endpoint host shown, cancel on query change, no model settings in the app, local and remote daemons. Status tells clients whether synthesis is available. |
 | S6 | Every answer names the endpoint host. Citation numbers that match no result are stripped. The prompt says: answer only from the passages, and say when they don't cover the question. |
@@ -200,7 +200,14 @@ writes one `query_events` row plus one `query_hits` row per **sent** passage, wi
   idempotent schema path;
 - `surface`: from `?surface=`, coerced exactly as search does;
 - `latency_ms` (retrieval) and a new `model_latency_ms`;
-- new `covered` and `stripped_citations` columns.
+- new `covered` and `stripped_citations` columns;
+- new `outcome` (`ok`, or the error `code` of an expected failure response from
+  section 3) and `model_called` columns.
+
+The telemetry task is attached to expected error responses as well as to successes,
+so the model-call error rate (metric 5) counts 502 and 504 outcomes, and requests that
+never reached the model (404 setup help, 400 `question_too_long`) are told apart by
+`model_called`.
 
 Answer text, passage text, and the key are never stored. `telemetry_enabled = false`
 turns this off for both routes. `/v1/insights` gains a per-`kind` count. This covers
@@ -226,7 +233,7 @@ is accepted and ignored, so a client that sends one does not break (bug class 3 
 | `citations` | int[] | valid citation numbers left in `answer`, sorted and unique |
 | `stripped_citations` | int | invalid numbers removed |
 | `endpoint_host` | string | `host[:port]` of `base_url` (S6) |
-| `endpoint_is_loopback` | bool | the endpoint is loopback **on the daemon host**; a remote client renders `via localhost:11434 on <daemon host>` |
+| `endpoint_is_loopback` | bool | the endpoint is loopback **on the daemon host**; a remote client renders `via 127.0.0.1:11434 on <daemon host>` |
 | `model` | string | model id echoed by the endpoint, else the configured id |
 | `model_called` | bool | `false` only when retrieval found nothing |
 | `retrieval_ms`, `model_ms` | number | timings |
@@ -305,7 +312,7 @@ and the service cannot disagree. TOML because quarry already reads TOML with `to
 # Written by quarry install if absent. Read by quarryd at start; restart to apply.
 schema = 1
 enabled = true
-base_url = "http://localhost:11434/v1"
+base_url = "http://127.0.0.1:11434/v1"
 model = "nemotron-3-nano:4b"
 api_key = ""
 context_window_tokens = 8192
@@ -370,7 +377,7 @@ The model endpoint gets the remote-quarryd rule, with no opt-out:
 
 | Remote quarryd rule | Source | Model endpoint |
 |---|---|---|
-| Non-loopback means TLS | DES-020, `net.py:130-145` | non-loopback `base_url` must be `https`; `http` only for a loopback host (`LoopbackPolicy.is_loopback`, `net.py:61`); otherwise the config is `invalid` |
+| Non-loopback means TLS | DES-020, `net.py:130-145` | non-loopback `base_url` must be `https`; `http` only when the connect address is a literal loopback IP (`LoopbackPolicy.is_literal_loopback`, `net.py:77`). A loopback name such as `localhost` is resolver-controlled, so it is rewritten to `canonical_host` (`127.0.0.1`, `net.py:99`) before connecting: the rule clients already follow before presenting `serve.token` (DES-031 v2.2). Anything else is `invalid`. Test: `http://localhost` performs no name lookup and dials `127.0.0.1` |
 | Certificates verified, never skipped | DES-020; baseline 1.1 | the system trust store via `outbound_http.system_tls_context()`, the same context as fetch; no `verify=False`, no custom CA option |
 | Key 0600, never argv | `service.py:60-93` | in the 0600 file only |
 
@@ -430,8 +437,8 @@ not a similarity floor, decides inclusion. The code has no similarity floor toda
 `ContextBudget` works in tokens. It estimates 3.5 characters per token for prose and
 2.5 for code (a passage whose `source_format` is a code format, the set the loaders
 already tag). Code tokenizes denser, and a single prose ratio would overfill the window
-on a code-heavy collection: at 2.5, a 4,982-token budget filled at 3.5 is really about
-7,000 tokens. The D6 smoke test measures both ratios against Nemotron's tokenizer
+on a code-heavy collection: at 2.5, a 4,872-token budget filled at 3.5 is really about
+6,800 tokens. The D6 smoke test measures both ratios against Nemotron's tokenizer
 through `usage.prompt_tokens`, on a prose and a code collection.
 
 | Quantity | Default (nemotron-3-nano:4b) | Source |
@@ -440,28 +447,31 @@ through `usage.prompt_tokens`, on a prose and a code collection.
 | `R_think` reasoning reserve | 2,048 tokens | config; reasoning is on (5.3) |
 | `R_ans` answer reserve | 512 tokens | config |
 | `O_fixed` fixed overhead | 360 tokens: system prompt (about 300), framing (about 60) | measured from `prompt.py` text in D4b |
-| `cost(q)` question | `ceil(len(q) / 3.5)`, computed per request; 290 tokens for a 1,000-character question | there is no cap on `q`, as on `/v1/search` |
-| `B` passage budget | `W - R_think - R_ans - O_fixed - cost(q)` = 8,192 - 2,048 - 512 - 360 - 290 = **4,982 tokens** (about 17,400 prose chars) for a 1,000-character question | |
+| `cost(q)` question | `ceil(len(escape(q)) / 2.5)`, computed per request on the escaped text; the code ratio, because a question has no `source_format`; 400 tokens for a 1,000-character question | there is no cap on `q`, as on `/v1/search` |
+| `B` passage budget | `W - R_think - R_ans - O_fixed - cost(q)` = 8,192 - 2,048 - 512 - 360 - 400 = **4,872 tokens** (about 17,000 prose chars) for a 1,000-character question | |
 | `p` cost of a full passage | 1,800 / 3.5 + header = 514.3 + 20 = **535 tokens** (prose; code: 720 + 20 = 740) | `chunk_max_chars` 1,800, `config.py:55`; the header cost is computed from the actual name length: 20 for a short name, up to about 60 for a 200-character name |
-| full passages that fit | floor(4,982 / 535) = **9** | |
-| `F` fetch limit | ceil(1.10 x B / p) = ceil(10.24) = **11** hits = 5,885 tokens of full chunks, **118%** of `B` | over-fetch |
+| full passages that fit | floor(4,872 / 535) = **9** | |
+| `F` fetch limit | ceil(1.10 x B / p) = ceil(10.02) = **11** hits = 5,885 tokens of full chunks, **121%** of `B` | over-fetch |
 
 `max_tokens` sent to the endpoint is `R_think + R_ans` = 2,560.
 
-If `B` is zero or below (a question of roughly 18,000 characters at the defaults), the
+If `B` is zero or below (a question of roughly 13,000 characters at the defaults), the
 route returns 400 `question_too_long` with a fixed message, before any model call. A
 long question therefore shrinks the packed set first and is refused only when nothing
 fits. The fetch count `F` uses the prose `p`; packing uses each passage's own cost.
+Every cost is computed on the text as sent: the escaped question, the escaped passage
+text, and the sanitized header. The run-based delimiter escape (5.1) can lengthen a run
+of `<` or `>`, so estimating the raw text could admit a request larger than `W`.
 
-**Why 1.10 in the formula gives 118% here:** the count rounds up to whole passages. The
+**Why 1.10 in the formula gives 121% here:** the count rounds up to whole passages. The
 rule is "fetch the smallest number of full-size passages whose total is at least 110%
 of `B`". With 1,800-character passages one extra passage is about 11% of `B`, so the
 over-fetch lands between 110% and 121%. At larger windows the overshoot converges on
-the 10-15% range (16K window: 113.7%). The 50-hit ceiling caps it: 50 x 535 = 26,750
+the 10-15% range (16K window: 110.6%). The 50-hit ceiling caps it: 50 x 535 = 26,750
 tokens is at least 110% of `B` only while `B` is at most about 24,300 tokens (a window
-of about 27.5K), and reaches `B` itself up to a window of about 29.9K. Above that,
-retrieval is capped at 50 and the budget is not reached (32K window: `B` = 29,558,
-`F` = 61, capped at 50, 90.5% of `B`).
+of about 27.6K), and reaches `B` itself up to a window of about 30.1K. Above that,
+retrieval is capped at 50 and the budget is not reached (32K window: `B` = 29,448,
+`F` = 61, capped at 50, 90.8% of `B`).
 
 **Packing.** `PassagePrompt` walks the hits in RRF order. It adds each passage whole if
 it fits in what remains of `B`, and stops at the first one that does not fit. It never
@@ -473,7 +483,8 @@ packed list.
 **Short chunks.** Many chunks are shorter than 1,800 characters (code functions,
 memories, lessons), so 11 hits can total less than `B`. If retrieval returned exactly
 `F` hits, they all fit with room left, and `F` is below the ceiling, the route runs
-**one** top-up search with `limit = min(2F, ceiling)` and packs again from the top.
+**one** top-up search with `limit = ceiling` (50) and packs again from the top, so
+short chunks fill the budget up to the same ceiling search has.
 When the first fetch already used the ceiling there is no top-up, since it would
 repeat the same search. That is retrieval only, tens
 of milliseconds, and never a second model call. At most two searches per answer.
@@ -576,7 +587,7 @@ reads from its own daemon.
 ## 7. Privacy and endpoint disclosure
 
 - **What leaves the machine:** the system prompt, the question, and the packed passages,
-  sent to `base_url`. With the default config that is `localhost:11434`, so nothing
+  sent to `base_url`. With the default config that is `127.0.0.1:11434`, so nothing
   leaves. With a hosted endpoint, the passages go to that provider. Captures and
   memories were scrubbed at write time (DES-036, DES-041). Deliberately ingested
   documents were not, as PR/FAQ `faq:privacy` states (baseline 1.5).
@@ -612,7 +623,7 @@ quarry answer QUESTION [--collection C] [--document D] [--page-type T]
   login` (DES-021).
 - Text output: the answer, a blank line, `Sources:` with `[n] document, p.N` for each
   cited passage, then `via <host> · <model>`. On a remote daemon with a loopback
-  endpoint it prints `via localhost:11434 on <daemon host>`. When `covered` is false it
+  endpoint it prints `via 127.0.0.1:11434 on <daemon host>`. When `covered` is false it
   prints the answer, then `See results: quarry find "<q>"`.
 - `--json` prints the `AnswerResponse` unchanged.
 - On 404 `synthesis_not_configured` or `_invalid`, it prints `error` and the `help`
@@ -832,7 +843,7 @@ inside D4a, not as a unit of its own.
 
 | # | Question | Recommendation |
 |---|---|---|
-| Q1 | With the default written at install and no Ollama present, the feature shows "cannot reach localhost:11434" until the user pulls the model. Is that the intended "on by default"? | Yes: the error carries the `ollama pull` line, which is the help message from S8. |
+| Q1 | With the default written at install and no Ollama present, the feature shows "cannot reach 127.0.0.1:11434" until the user pulls the model. Is that the intended "on by default"? | Yes: the error carries the `ollama pull` line, which is the help message from S8. |
 | Q2 | Default `context_window_tokens`: 8,192 (laptop-safe) or larger? | 8,192 until D6 measures memory and latency on an M-series Mac; Nemotron's trained window is larger. |
 | Q3 | Raise the 50-passage ceiling for large windows? | Keep 50, the search ceiling, until D6 measures retrieval latency above 50. |
 | Q4 | `reasoning = "off"` needs a server-specific fragment; ship only "on" until D6 finds Ollama's? | Yes: keep the field, document "off" as server-specific. |
@@ -853,11 +864,14 @@ Details are in `security-baseline.md` section 3.
   (section 7).
 - **G3 Permission check on read** for every config and secret file, the synthesis file
   included.
-- **G6 Bound graceful shutdown** for all routes: set `timeout_graceful_shutdown`
-  below the smallest service-manager kill timeout (for example 10 s, below launchd's
-  20 s), so the DES-042 ingest drain always runs. Test: SIGTERM while the fake server
-  is in `hang` mode with one queued capture; the capture is written and the process
-  exits within the window. This route is the first to expose it (section 6).
+- **G6 Bound graceful shutdown** for all routes: one shutdown budget (request wait
+  via `timeout_graceful_shutdown`, watch stop, the DES-042 ingest drain bounded by
+  `ingest_drain_timeout_s` = 30 s today, and cleanup) whose sum fits under the
+  service-manager kill deadline. Either shrink the parts or set launchd `ExitTimeOut`
+  and systemd `TimeoutStopSec` to cover the sum. Tests: SIGTERM with a hung request
+  (fake server in `hang` mode) and, separately, a slow drain, each with one queued
+  capture; the capture is written and the process exits within the deadline. This
+  route is the first to expose it (section 6).
 - **G5 One egress policy** for vendor-fixed and operator-fixed URLs (env proxies and
   redirects), its own issue. When it lands, the model client follows it.
 - **G4 (observation only).** Read routes have no overload limit. The operator doubts a
@@ -907,3 +921,8 @@ Details are in `security-baseline.md` section 3.
     v1.5 in D2; the Z spec is its own menu bar issue.
   - F15: `asyncio.timeout(timeout_s)` makes the timeout a deadline; `trickle` test.
   - F16: install prints a line when the env key is ignored.
+- **v4.1 (PR #572 review):** model endpoint dialed only at a literal loopback IP
+  (default `http://127.0.0.1:11434/v1`, loopback names rewritten to `canonical_host`);
+  `outcome` and `model_called` telemetry recorded on expected errors too; budget
+  computed on escaped text with the question at the code ratio (`B` = 4,872); the
+  short-chunk top-up fetches to the ceiling; G6 is one combined shutdown budget.

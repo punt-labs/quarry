@@ -3569,7 +3569,7 @@ the engine (DES-031).
 2. **One OpenAI-compatible call.** `POST {base_url}/chat/completions` through
    `httpx`. No provider SDKs, no bundled model, no streaming, no multi-turn.
    The default is NVIDIA Nemotron 3 Nano 4B served by Ollama
-   (`ollama pull nemotron-3-nano:4b`, `http://localhost:11434/v1`). Any
+   (`ollama pull nemotron-3-nano:4b`, `http://127.0.0.1:11434/v1`). Any
    OpenAI-compatible endpoint may be configured; quarry never requires a larger
    model.
 3. **Inputs are RRF order plus the context limit.** No similarity floor (none
@@ -3600,7 +3600,7 @@ the engine (DES-031).
 8. **Every security and operational choice equals the existing baseline.**
    Each row cites `security-baseline.md`:
    - auth: the same bearer check as every `/v1` route (DES-005);
-   - transport: non-loopback `base_url` must be `https`, verified against the
+   - transport: non-loopback `base_url` must be `https` (plain `http` only to a literal loopback IP; a loopback name is dialed as `127.0.0.1`, the `serve.token` rule of DES-031), verified against the
      system trust store the fetch path uses, with no opt-out (DES-020);
    - client: `trust_env=False`, explicit timeout, one retry only on a refused
      connect, redirects not followed (the CLI-to-daemon and fetch precedents);
@@ -3608,7 +3608,7 @@ the engine (DES-031).
      module, and one `asyncio.timeout(timeout_s)` around the whole call;
    - errors: quarry-written messages only; upstream bodies are never forwarded
      or logged (DES-008);
-   - usage: the search telemetry path with a `kind = "answer"` column, scrubbed
+   - usage: the search telemetry path with a `kind = "answer"` column and an `outcome` recorded on success and on expected errors, scrubbed
      the same way (DES-056); answer and passage text are never stored;
    - concurrency: uncapped, like `/v1/search`.
 9. **Surfaces.** HTTP, `quarry answer` (CLI, local and remote), and the menu
@@ -3632,7 +3632,9 @@ operator chooses:
 - **G6** uvicorn has no `timeout_graceful_shutdown`, so a long in-flight request
   can outlast launchd's 20 s kill and skip the DES-042 ingest drain. `/v1/answer`
   is the first route to hold a request that long; until G6 lands, a restart
-  during an answer can lose queued captures.
+  during an answer can lose queued captures. The fix is one shutdown budget
+  (request wait, watch stop, the 30 s ingest drain, cleanup) that fits under the
+  service-manager deadline.
 
 G4 (no read-route overload limit) is recorded as an observation only: a fixed
 limit does not fit hardware from a laptop to a GPU host.
