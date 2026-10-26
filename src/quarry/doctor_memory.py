@@ -13,6 +13,7 @@ from functools import partial
 from pathlib import Path
 from typing import Self, final
 
+from quarry.doctor_failure import CheckFailure
 from quarry.ethos_handle import EthosConfig
 from quarry.memory_types import DECAYABLE_MEMORY_TYPES, MemoryType
 from quarry.results import CheckResult
@@ -101,7 +102,10 @@ class MemoryDiagnostics:
         try:
             summary = MemoryDiagnostics._summarize(db_path)
         except (RuntimeError, OSError, ValueError) as exc:
-            return result(passed=False, message=f"check failed: {exc}")
+            return result(
+                passed=False,
+                message=f"check failed: {db_path.name}: {CheckFailure.detail(exc)}",
+            )
         return result(passed=True, message=summary)
 
     @staticmethod
@@ -124,7 +128,10 @@ class MemoryDiagnostics:
                 db_path, handle
             )
         except (RuntimeError, OSError, ValueError) as exc:
-            return result(passed=False, message=f"check failed: {exc}")
+            return result(
+                passed=False,
+                message=f"check failed: {db_path.name}: {CheckFailure.detail(exc)}",
+            )
         if total_rows == 0:
             return result(passed=True, message=f"identity '{handle}' active")
         if rows_for_handle == 0:

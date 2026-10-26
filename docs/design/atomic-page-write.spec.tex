@@ -1,0 +1,1005 @@
+%
+% atomic-page-write.spec.tex
+%
+% Atomic page write: a Z specification of how ChunkStoreFunnel writes,
+% replaces, and cleans up one document's chunks, beside the directory-sync
+% writer and its registry (quarry-70zm).
+% Companion to docs/design/atomic-page-write.md, which cites the sections
+% below by number and records the tool runs.
+%
+% Check:        z-spec check docs/design/atomic-page-write.spec.tex
+% Model-check:  probcli with -p MAX_INITIALISATIONS 100 (the command lines
+%               are in atomic-page-write.spec.report.json)
+%
+% Must be .tex, not .md: the z-spec tools glob for .tex.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage{booktabs}
+
+\newcommand{\field}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{Atomic Page Write: A Z Specification}
+\author{Guido R, for Punt Labs}
+\date{October 2026}
+\maketitle
+
+% ===================================================================
+\section{Scope and modelling choices}
+\label{sec:scope}
+% ===================================================================
+
+This specification models the rows of \emph{one document name} in the
+\field{chunks} table and the sync registry's claim on that name. Four kinds of
+actor touch them:
+
+\begin{itemize}
+  \item up to two \emph{funnel writers} (\field{wa}, \field{wb}) that replace,
+    create, or heal the name, and that may fail or crash at any step;
+  \item the \emph{directory-sync writer}, which owns the names its registered
+    directories cover, writes its rows window by window, and deletes them by
+    name;
+  \item the \emph{operator}, who deregisters a directory with its data purged
+    (\field{Purge}); registering a directory claims no name until sync writes
+    that file (the registry lists the name only then), and deregistering with
+    the data kept leaves the name in the retained set, which is ownership that
+    does not change, so neither is an operation;
+  \item the \emph{environment}, which may delete a single row of a funnel
+    generation behind everyone's back, producing a damaged generation.
+\end{itemize}
+
+The rows of every other document are irrelevant to the properties checked,
+because every operation below is predicated on one name; that is itself
+property I4. \textbf{What the model does not cover} is listed in
+\S\ref{sec:nongoals}; every result in the design is scoped to this model.
+
+\subsection{Generations, keys, and the five row classes}
+
+\field{rows}~$g$ is how many of the $K=2$ chunks of class $g$ are in the table.
+
+\begin{center}
+\begin{tabular}{@{}cl@{}}
+\toprule
+$g$ & Rows of that class \\
+\midrule
+0 & funnel rows with no key (written before this protocol): \emph{legacy}; or,
+    when \field{g0sync} holds, the \emph{unmarked sync rows} an earlier build
+    wrote \\
+1, 2 & funnel generations with an ordinary write key ($1<2$ in capture order) \\
+3 & a funnel generation whose key lies beyond \emph{twice} the skew
+    allowance: the \emph{future} key (a clock stepped back, a corrupt row) \\
+4 & sync-marked rows (\field{write\_id = 'sync'}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A funnel generation $g\in 1\upto2$ is \emph{complete} when
+\field{rows}~$g=K$. Key~2 doubles as the \emph{write ceiling}: the highest key
+a write may carry (writes clamp at $\mathit{now}+\mathit{allowance}$), while a
+stored key is accepted up to twice the allowance, so a stored copy can sit at or
+above the ceiling and a submission write cannot exceed it (\field{RefuseCeiling}).
+Generation~3 is \emph{never} complete: a key beyond \emph{twice} the allowance is
+damaged by classification, contributes no stamp, is never held, and is
+reapable once a complete generation exists. New writers never choose key~3
+(design \S7), so the model gives writers keys $1\upto2$ only.
+
+A funnel writer picks its key at \emph{begin}, \emph{independently of begin
+order}. Because the implementation adds a generation with a single LanceDB
+commit, a protocol step can only produce $0$ or $K$ rows for $g\in1\upto2$;
+the model does not assume that, and records whether a protocol step
+\emph{produces} a partial generation (\field{partialVisible}).
+
+\subsection{Ownership}
+
+The sync registry's claim on the name is \field{reg}: the \emph{files} table
+lists it or the retained set does. It becomes true when sync first writes the
+name. A name is \emph{owned} when \field{reg} holds or any marked sync row
+exists. If funnel rows exist when sync first writes the name (the order
+reversal), sync \emph{takes the name over} --- deletes the funnel rows by name
+--- only when those rows are \emph{file-sourced from the same path}
+(\field{fsrc}); otherwise (a label, a capture, a URL page) sync skips the file
+and records a conflict (\field{SyncConflict}), and the funnel copy stays. A
+funnel write, and every heal (the writer's, a held-check's, the sweep's), begin
+only when the name is not owned; if the registry lookup fails the writer fails
+closed (\field{LookupFails}).
+
+\subsection{Two protocols, one switch}
+
+\field{mode}~$=0$ is the protocol proposed in the design. \field{mode}~$=1$ is
+the funnel as it was (overwrite-delete by name, windowed insert into the real
+name, cleanup by name, create-if-absent by name existence, no ordering, no
+ownership). The same witnesses are checked against both; mode~1 must
+\emph{fail} them and mode~0 must not.
+
+\subsection{Re-verification before the delete}
+
+An earlier run of this model found a counter-example: a healer observes key~2
+complete, the environment removes one row of key~2, and the healer's delete
+(older and damaged generations) then removes the older complete copy too. The
+delete therefore \emph{re-verifies} the observed generation immediately before
+deleting and does nothing if it is no longer complete. Re-verify and delete are
+modelled as one step; in the implementation they are two calls, so a second
+external fault inside that millisecond is a residual double fault.
+
+\subsection{Witnesses, not invariants}
+
+A schema invariant that an operation can violate makes that operation
+unsatisfiable under Z's schema calculus: ProB would then report nothing
+rather than a violation. Each property is therefore a latched witness
+\field{ZBOOL} that an operation sets when it commits the bad transition,
+checked by asking ProB whether any state with the witness true is reachable.
+
+\subsection{Non-goals: what a model result does not claim}
+\label{sec:nongoals}
+
+\begin{itemize}
+  \item Row content, ordering inside a generation, and memory (I5).
+  \item Legacy rows that are truncated but look complete.
+  \item The comparison of a new key against a legacy copy's
+    \field{ingestion\_timestamp}; the model orders generation~0 below every
+    real key. The skew allowance is a fixed boundary: keys are either ordinary
+    ($1\upto2$) or future ($3$); skew \emph{within} the allowance, which can
+    misorder two writes, is not modelled.
+  \item The registry lookup and the commit are not one atomic step across
+    processes. \field{Add}'s guard reads the registry and the table in one
+    step; the implementation reads the registry inside the in-process write
+    lock, and a registration that lands after the read and before the commit
+    is a residual (sync then takes the name over at its first write).
+  \item Mixed-version writers beyond the environment's single-row delete.
+  \item That the heal's delete predicate is the one the model writes. The model
+    fixes the predicate (never rows of class 4, never unmarked sync rows, never
+    when the name is owned at heal start); the implementation must match it and
+    the design's tests pin that.
+  \item That the sync operation is as strong in code as here. \field{SyncInsert}
+    decides the takeover and writes in one step; the code checks, deletes, and
+    inserts as separate calls, and a crash between them leaves a partial
+    sync-owned document, which the registry watermark resumes.
+  \item That the registry lookup \emph{fails closed}. \field{LookupFails} is the
+    only transition available when the lookup fails, and it changes no row; the
+    model cannot show that an implementation does not fail open.
+  \item The sync path's own protocol (registry watermark, tail delete).
+  \item Liveness beyond a \emph{possibility} claim: the CTL property below says a
+    clean quiescent state is reachable from every reachable state, not that
+    every execution gets there.
+\end{itemize}
+
+% ===================================================================
+\section{Types and constants}
+\label{sec:types}
+% ===================================================================
+
+\begin{zed}
+ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\begin{zed}
+WRITER ::= wa | wb
+\end{zed}
+
+A writer's phase. \field{staging}: embedding windows into a private spool,
+invisible to readers (the windows are not modelled: the spool is invisible, so
+it is one phase). \field{ready}: spool complete, nothing committed.
+\field{healing}: about to heal. \field{observed}: the newest complete generation
+has been read, the delete not yet issued. \field{inserting}: the old protocol,
+writing into the real name window by window.
+
+\begin{zed}
+PC ::= idle | staging | ready | healing | observed | inserting
+     | done | failed | crashed
+\end{zed}
+
+\begin{axdef}
+mode : \nat
+\where
+mode = 0
+\end{axdef}
+
+% ===================================================================
+\section{State}
+\label{sec:state}
+% ===================================================================
+
+\begin{schema}{Store}
+rows : (0 \upto 4) \fun (0 \upto 2) \\
+reg, g0sync, fsrc : ZBOOL \\
+pc : WRITER \fun PC \\
+wgen : WRITER \fun (1 \upto 2) \\
+seen : WRITER \fun (0 \upto 5) \\
+partialVisible, lost, unsafeDelete, skippedOnPartial, inversion : ZBOOL \\
+syncTouched, syncClash, labelLost : ZBOOL
+\end{schema}
+
+\begin{itemize}
+  \item \field{rows}, \field{reg}, \field{g0sync}: as above.
+  \item \field{fsrc}: any funnel rows now present are file-sourced from the same
+    source path as sync's file (meaningful only when funnel rows exist).
+  \item \field{wgen}: the write key a funnel writer chose at begin.
+  \item \field{seen}: the newest complete generation a healer observed; $5$
+    means \emph{none was complete}.
+  \item Witnesses (latched, never reset): \field{partialVisible} (I1),
+    \field{lost} (I2), \field{unsafeDelete} (I4), \field{skippedOnPartial}
+    (create-if-absent), \field{inversion} (I6), \field{syncTouched} (a funnel
+    or heal step changed marked sync rows, or unmarked sync rows), and
+    \field{syncClash} (a funnel step added a generation to an owned name), and
+    \field{labelLost} (sync's takeover deleted funnel rows that were not
+    file-sourced from the same path: a label, capture, or URL page).
+\end{itemize}
+
+\begin{schema}{Init}
+Store'
+\where
+rows'~0 \in 0 \upto 2 \\
+rows'~1 = 0 \\
+rows'~2 = 0 \\
+rows'~3 \in \{ 0, 2 \} \\
+rows'~4 \in 0 \upto 2 \\
+g0sync' = ztrue \implies reg' = ztrue \\
+fsrc' \in ZBOOL \\
+\forall v : WRITER @ pc'~v = idle \land wgen'~v = 1 \land seen'~v = 5 \\
+partialVisible' = zfalse \\
+lost' = zfalse \\
+unsafeDelete' = zfalse \\
+skippedOnPartial' = zfalse \\
+inversion' = zfalse \\
+syncTouched' = zfalse \\
+syncClash' = zfalse \\
+labelLost' = zfalse
+\end{schema}
+
+The name starts unowned or owned; when owned, generation~0 may hold unmarked
+sync rows; a future-key generation may be present; marked sync rows may be
+present even when the registry does not list the name (a lost registry).
+
+% ===================================================================
+\section{Witness tracking}
+\label{sec:track}
+% ===================================================================
+
+\field{Track} is conjoined to every funnel, heal, and old-protocol step. It
+latches the row-level witnesses from the before and after row maps alone, so
+that no operation can forget to report a violation.
+
+\begin{itemize}
+  \item I1: a step leaves a generation in $1\upto2$ with a proper, nonempty
+    part of a document \emph{and changed it}.
+  \item I2: a complete funnel copy existed before and none exists after.
+  \item I4: a complete funnel generation lost rows while no newer complete
+    generation survives, or a writer still inserting had its rows reduced by
+    someone else.
+  \item I6: the newest complete funnel key after the step is smaller than
+    before.
+  \item Ownership: the step changed the marked sync rows or, while
+    \field{g0sync} holds, the unmarked ones (\field{syncTouched}); or added a
+    funnel generation while the name was owned (\field{syncClash}).
+\end{itemize}
+
+\begin{schema}{Track}
+\Delta Store
+\where
+(\exists g : 1 \upto 2 @ 0 < rows'~g \land rows'~g < 2 \land rows'~g \neq rows~g)
+  \implies partialVisible' = ztrue \\
+\lnot (\exists g : 1 \upto 2 @ 0 < rows'~g \land rows'~g < 2 \land
+  rows'~g \neq rows~g) \implies partialVisible' = partialVisible \\
+((\exists g : 0 \upto 2 @ rows~g = 2) \land
+  \lnot (\exists g : 0 \upto 2 @ rows'~g = 2)) \implies lost' = ztrue \\
+\lnot ((\exists g : 0 \upto 2 @ rows~g = 2) \land
+  \lnot (\exists g : 0 \upto 2 @ rows'~g = 2)) \implies lost' = lost \\
+((\exists g : 0 \upto 2 @ rows~g = 2 \land rows'~g < 2 \land
+    \lnot (\exists h : 0 \upto 2 @ h > g \land rows'~h = 2)) \lor
+  (\exists v : WRITER @ pc~v = inserting \land pc'~v = inserting \land
+    rows'~(wgen~v) < rows~(wgen~v))) \implies unsafeDelete' = ztrue \\
+\lnot ((\exists g : 0 \upto 2 @ rows~g = 2 \land rows'~g < 2 \land
+    \lnot (\exists h : 0 \upto 2 @ h > g \land rows'~h = 2)) \lor
+  (\exists v : WRITER @ pc~v = inserting \land pc'~v = inserting \land
+    rows'~(wgen~v) < rows~(wgen~v))) \implies unsafeDelete' = unsafeDelete \\
+(\exists g : 0 \upto 2 @ rows~g = 2 \land
+  (\forall h : g \upto 2 @ rows'~h \neq 2)) \implies inversion' = ztrue \\
+\lnot (\exists g : 0 \upto 2 @ rows~g = 2 \land
+  (\forall h : g \upto 2 @ rows'~h \neq 2)) \implies inversion' = inversion \\
+(rows'~4 \neq rows~4 \lor (g0sync = ztrue \land rows'~0 \neq rows~0))
+  \implies syncTouched' = ztrue \\
+\lnot (rows'~4 \neq rows~4 \lor (g0sync = ztrue \land rows'~0 \neq rows~0))
+  \implies syncTouched' = syncTouched \\
+((\exists g : 1 \upto 2 @ rows'~g > rows~g) \land
+  (reg = ztrue \lor rows~4 > 0)) \implies syncClash' = ztrue \\
+\lnot ((\exists g : 1 \upto 2 @ rows'~g > rows~g) \land
+  (reg = ztrue \lor rows~4 > 0)) \implies syncClash' = syncClash
+\end{schema}
+
+\field{KeepSkip}: the funnel steps leave \field{skippedOnPartial}, the registry
+claim, and the unmarked-sync flag alone.
+
+\begin{schema}{KeepSkip}
+\Delta Store
+\where
+skippedOnPartial' = skippedOnPartial \\
+reg' = reg \\
+g0sync' = g0sync \\
+fsrc' = fsrc \\
+labelLost' = labelLost
+\end{schema}
+
+\field{KeepAll} is used by the sync, operator, and environment steps, which are
+not under test: it leaves every witness alone.
+
+\begin{schema}{KeepAll}
+\Delta Store
+\where
+partialVisible' = partialVisible \\
+lost' = lost \\
+unsafeDelete' = unsafeDelete \\
+skippedOnPartial' = skippedOnPartial \\
+inversion' = inversion \\
+syncTouched' = syncTouched \\
+syncClash' = syncClash \\
+labelLost' = labelLost
+\end{schema}
+
+% ===================================================================
+\section{Operations: the proposed protocol (mode 0)}
+\label{sec:ops}
+% ===================================================================
+
+A funnel writer may start a new attempt from \field{idle}, \field{done},
+\field{failed}, or \field{crashed}.
+
+\subsection{Begin, skip, refuse}
+
+\field{BeginOverwrite} is a capture-stamped overwrite: it picks any key $k?$
+that no other active attempt holds and that has no rows yet, and begins only
+when the name is \emph{not owned}. \field{BeginSubmission} is a
+submission-order overwrite: its key is above every complete funnel key, so it
+can never be superseded. \field{BeginCreate} is a create-if-absent: no
+\emph{complete} copy may exist; the future-key generation does not count as
+held. \field{SkipHeld} skips a create over a complete copy.
+\field{RefuseSync} is the refusal of an owned name, \field{LookupFails} the
+fail-closed outcome when the registry cannot be read: both end the attempt
+with no row changed.
+
+\begin{schema}{BeginOverwriteCore}
+\Delta Store \\ w? : WRITER \\ k? : 1 \upto 2
+\where
+mode = 0 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+reg = zfalse \\
+rows~4 = 0 \\
+rows~k? = 0 \\
+\forall v : WRITER | v \neq w? @
+  (pc~v \in \{ idle, done, failed, crashed \} \lor wgen~v \neq k?) \\
+pc' = pc \oplus \{ w? \mapsto staging \} \\
+wgen' = wgen \oplus \{ w? \mapsto k? \} \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+BeginOverwrite \defs BeginOverwriteCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{BeginSubmissionCore}
+BeginOverwriteCore
+\where
+\forall g : 0 \upto 2 @ rows~g = 2 \implies g < k?
+\end{schema}
+
+\begin{zed}
+BeginSubmission \defs BeginSubmissionCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{BeginCreateCore}
+BeginOverwriteCore
+\where
+\lnot (\exists g : 0 \upto 2 @ rows~g = 2)
+\end{schema}
+
+\begin{zed}
+BeginCreate \defs BeginCreateCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{SkipHeldCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+\exists g : 0 \upto 2 @ rows~g = 2 \\
+pc' = pc \oplus \{ w? \mapsto done \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+SkipHeld \defs SkipHeldCore \land Track \land KeepSkip
+\end{zed}
+
+A capture-stamped overwrite whose key is older than, \emph{or equal to}, a
+stored \emph{complete} copy may be skipped before any work is done (an equal
+stamp is the same capture again; skipping removes any tie in which a random
+token could delete a stored copy). Only a complete copy counts: a damaged,
+partial, or future-key one contributes no stamp. This is an optimisation and
+the report, not what makes I6 hold, so \field{BeginOverwrite} stays enabled in
+the same state.
+
+\begin{schema}{SkipSupersededCore}
+\Delta Store \\ w? : WRITER \\ k? : 1 \upto 2
+\where
+mode = 0 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+\exists g : 0 \upto 2 @ g \geq k? \land rows~g = 2 \\
+pc' = pc \oplus \{ w? \mapsto done \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+SkipSuperseded \defs SkipSupersededCore \land Track \land KeepSkip
+\end{zed}
+
+A submission-order write (remember, learn, inline, file) is never superseded:
+its stamp is above the stored stamp. When the stored complete copy already sits
+at the write ceiling (key~2), there is no higher key a write may carry and the
+write \emph{fails loudly} with a refusal; it does not tie, and it does not
+delete the stored copy.
+
+\begin{schema}{RefuseCeilingCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+reg = zfalse \\
+rows~4 = 0 \\
+rows~2 = 2 \\
+pc' = pc \oplus \{ w? \mapsto done \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+RefuseCeiling \defs RefuseCeilingCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{RefuseSyncCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+(reg = ztrue \lor rows~4 > 0) \\
+pc' = pc \oplus \{ w? \mapsto done \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+RefuseSync \defs RefuseSyncCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{LookupFailsCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+pc' = pc \oplus \{ w? \mapsto failed \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+LookupFails \defs LookupFailsCore \land Track \land KeepSkip
+\end{zed}
+
+\subsection{Seal}
+
+The windows are staged in the private spool; sealing completes it. Nothing is
+added to \field{rows}.
+
+\begin{schema}{SealCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? = staging \\
+pc' = pc \oplus \{ w? \mapsto ready \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+Seal \defs SealCore \land Track \land KeepSkip
+\end{zed}
+
+\subsection{Add}
+
+One LanceDB commit makes the whole generation visible. Its guard is the
+ownership re-check: enabled only when the name is not owned (one step here; in
+the implementation the registry read and the commit run under the one
+in-process write lock that sync's inserts also take).
+
+\begin{schema}{AddCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? = ready \\
+reg = zfalse \\
+rows~4 = 0 \\
+rows' = rows \oplus \{ wgen~w? \mapsto 2 \} \\
+pc' = pc \oplus \{ w? \mapsto healing \} \\
+wgen' = wgen \\
+seen' = seen
+\end{schema}
+
+\begin{zed}
+Add \defs AddCore \land Track \land KeepSkip
+\end{zed}
+
+\subsection{Heal: ownership check, observe, then delete}
+
+A heal \emph{starts} only on a name that is not owned (the check is the
+registry lookup; the writer's own heal, the held-check heal, and the sweep all
+begin here), observes the newest complete funnel generation, then deletes every
+funnel generation \emph{older} than it, every \emph{damaged} generation of any
+key (partial, or the future key), and nothing else. It never deletes the newest
+complete generation, never deletes when none was complete, never touches marked
+sync rows, and re-verifies the observed generation before the delete.
+
+\begin{schema}{BeginHealCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+reg = zfalse \\
+rows~4 = 0 \\
+pc' = pc \oplus \{ w? \mapsto healing \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+BeginHeal \defs BeginHealCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{ObserveCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? = healing \\
+pc' = pc \oplus \{ w? \mapsto observed \} \\
+(\exists g : 0 \upto 2 @ rows~g = 2) \implies
+  (seen'~w? \leq 2 \land rows~(seen'~w?) = 2 \land
+   (\forall h : 0 \upto 2 @ rows~h = 2 \implies h \leq seen'~w?)) \\
+\lnot (\exists g : 0 \upto 2 @ rows~g = 2) \implies seen'~w? = 5 \\
+\forall v : WRITER | v \neq w? @ seen'~v = seen~v \\
+wgen' = wgen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+Observe \defs ObserveCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{DeleteOlderCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? = observed \\
+seen~w? = 5 \implies rows' = rows \\
+(seen~w? \leq 2 \land rows~(seen~w?) \neq 2) \implies rows' = rows \\
+(seen~w? \leq 2 \land rows~(seen~w?) = 2) \implies
+  ((\forall g : 0 \upto 2 @
+    ((g < seen~w? \lor (g \geq 1 \land 0 < rows~g \land rows~g < 2))
+       \implies rows'~g = 0) \land
+    (\lnot (g < seen~w? \lor (g \geq 1 \land 0 < rows~g \land rows~g < 2))
+       \implies rows'~g = rows~g)) \land
+   rows'~3 = 0 \land rows'~4 = rows~4) \\
+pc' = pc \oplus \{ w? \mapsto done \} \\
+wgen' = wgen \\
+seen' = seen
+\end{schema}
+
+\begin{zed}
+DeleteOlder \defs DeleteOlderCore \land Track \land KeepSkip
+\end{zed}
+
+\subsection{Fail and crash}
+
+A failure at any step before \field{Add} touches no row. A failure or crash
+after \field{Add} leaves the committed generation alone; older generations stay
+until the next heal.
+
+\begin{schema}{FailCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 0 \\
+pc~w? \in \{ staging, ready, healing, observed \} \\
+pc' = pc \oplus \{ w? \mapsto failed \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+Fail \defs FailCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{CrashCore}
+\Delta Store \\ w? : WRITER
+\where
+pc~w? \in \{ staging, ready, healing, observed, inserting \} \\
+pc' = pc \oplus \{ w? \mapsto crashed \} \\
+wgen' = wgen \\
+seen' = seen \\
+rows' = rows
+\end{schema}
+
+\begin{zed}
+Crash \defs CrashCore \land Track \land KeepSkip
+\end{zed}
+
+% ===================================================================
+\section{Sync, operator, and environment}
+\label{sec:other}
+% ===================================================================
+
+Enabled in both modes; none is under test.
+
+\subsection{Sync}
+
+Sync writes only names its registry covers, and a name enters the registry's
+\emph{files} table when sync first writes it. Its \emph{first} write of a name
+that holds funnel rows is a \emph{takeover} only when those rows are
+file-sourced from the same path (\field{fsrc}): it then deletes them by name
+(the registered directory is authoritative for its files) --- funnel
+generations $1\upto3$, and generation~0 unless it is sync's own unmarked rows.
+When the funnel rows are anything else (a label, a capture, a URL page) sync
+\emph{skips the file} and records a conflict (\field{SyncConflict}, which
+changes nothing the model tracks); the funnel copy stays and the name stays
+unowned. Sync's rows are marked, window by window, and a partial sync-owned
+document is legitimate: the registry owns completeness.
+
+\begin{schema}{SyncInsertCore}
+\Delta Store
+\where
+rows~4 < 2 \\
+((\exists g : 1 \upto 3 @ rows~g > 0) \lor
+  (g0sync = zfalse \land rows~0 > 0)) \implies fsrc = ztrue \\
+rows'~4 = rows~4 + 1 \\
+rows'~1 = 0 \\
+rows'~2 = 0 \\
+rows'~3 = 0 \\
+g0sync = ztrue \implies rows'~0 = rows~0 \\
+g0sync = zfalse \implies rows'~0 = 0 \\
+pc' = pc \\
+wgen' = wgen \\
+seen' = seen \\
+reg' = ztrue \\
+g0sync' = g0sync \\
+fsrc' = fsrc \\
+((\exists g : 1 \upto 3 @ rows~g > 0) \lor
+  (g0sync = zfalse \land rows~0 > 0)) \land fsrc = zfalse
+  \implies labelLost' = ztrue \\
+\lnot (((\exists g : 1 \upto 3 @ rows~g > 0) \lor
+  (g0sync = zfalse \land rows~0 > 0)) \land fsrc = zfalse)
+  \implies labelLost' = labelLost \\
+partialVisible' = partialVisible \\
+lost' = lost \\
+unsafeDelete' = unsafeDelete \\
+skippedOnPartial' = skippedOnPartial \\
+inversion' = inversion \\
+syncTouched' = syncTouched \\
+syncClash' = syncClash
+\end{schema}
+
+\begin{zed}
+SyncInsert \defs SyncInsertCore
+\end{zed}
+
+\begin{schema}{SyncConflictCore}
+\Delta Store
+\where
+reg = zfalse \\
+((\exists g : 1 \upto 3 @ rows~g > 0) \lor
+  (g0sync = zfalse \land rows~0 > 0)) \\
+fsrc = zfalse \\
+rows' = rows \\
+pc' = pc \\
+wgen' = wgen \\
+seen' = seen \\
+reg' = reg \\
+g0sync' = g0sync \\
+fsrc' = fsrc
+\end{schema}
+
+\begin{zed}
+SyncConflict \defs SyncConflictCore \land KeepAll
+\end{zed}
+
+\begin{schema}{SyncDeleteCore}
+\Delta Store
+\where
+rows~4 > 0 \\
+rows'~4 = 0 \\
+g0sync = ztrue \implies rows'~0 = 0 \\
+g0sync = zfalse \implies rows'~0 = rows~0 \\
+rows'~1 = rows~1 \\
+rows'~2 = rows~2 \\
+rows'~3 = rows~3 \\
+pc' = pc \\
+wgen' = wgen \\
+seen' = seen \\
+reg' = reg \\
+g0sync' = zfalse \\
+fsrc' = fsrc
+\end{schema}
+
+\begin{zed}
+SyncDelete \defs SyncDeleteCore \land KeepAll
+\end{zed}
+
+\subsection{Operator}
+
+\field{Purge} deregisters a directory and deletes its data: the name leaves the
+registry. With the data kept, deregistering changes nothing the model tracks,
+because the name stays in the retained set.
+
+\begin{schema}{PurgeCore}
+\Delta Store
+\where
+reg = ztrue \\
+reg' = zfalse \\
+g0sync' = zfalse \\
+rows'~4 = 0 \\
+g0sync = ztrue \implies rows'~0 = 0 \\
+g0sync = zfalse \implies rows'~0 = rows~0 \\
+rows'~1 = rows~1 \\
+rows'~2 = rows~2 \\
+rows'~3 = rows~3 \\
+pc' = pc \\
+wgen' = wgen \\
+seen' = seen \\
+fsrc' = fsrc
+\end{schema}
+
+\begin{zed}
+Purge \defs PurgeCore \land KeepAll
+\end{zed}
+
+\subsection{Environment}
+
+One row of a funnel generation disappears: an external delete, a mixed-version
+writer, a delete that half-failed. A complete generation becomes damaged; the
+heal must repair it.
+
+\begin{schema}{ExternalDeleteCore}
+\Delta Store \\ g? : 0 \upto 2
+\where
+mode = 0 \\
+rows~g? > 0 \\
+rows' = rows \oplus \{ g? \mapsto rows~g? - 1 \} \\
+reg' = reg \\
+g0sync' = g0sync \\
+fsrc' = fsrc \\
+pc' = pc \\
+wgen' = wgen \\
+seen' = seen
+\end{schema}
+
+\begin{zed}
+ExternalDelete \defs ExternalDeleteCore \land KeepAll
+\end{zed}
+
+% ===================================================================
+\section{Operations: the previous protocol (mode 1)}
+\label{sec:old}
+% ===================================================================
+
+These operations reproduce the funnel as it was: overwrite deletes every
+prior row of the name whatever its owner or key, windows insert straight into
+the real name, a failed insert deletes the name's rows, create-if-absent
+treats any row under the name as held, and nothing compares capture times,
+owners, or the registry. They are enabled only when \field{mode}~$=1$.
+
+\begin{schema}{OldBeginOverwriteCore}
+\Delta Store \\ w? : WRITER \\ k? : 1 \upto 2
+\where
+mode = 1 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+\forall v : WRITER | v \neq w? @
+  (pc~v \in \{ idle, done, failed, crashed \} \lor wgen~v \neq k?) \\
+\forall g : 0 \upto 4 @ rows'~g = 0 \\
+pc' = pc \oplus \{ w? \mapsto inserting \} \\
+wgen' = wgen \oplus \{ w? \mapsto k? \} \\
+seen' = seen \\
+skippedOnPartial' = skippedOnPartial \\
+reg' = reg \\
+g0sync' = zfalse \\
+fsrc' = fsrc \\
+labelLost' = labelLost
+\end{schema}
+
+\begin{zed}
+OldBeginOverwrite \defs OldBeginOverwriteCore \land Track
+\end{zed}
+
+\begin{schema}{OldBeginCreateCore}
+\Delta Store \\ w? : WRITER \\ k? : 1 \upto 2
+\where
+mode = 1 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+\forall v : WRITER | v \neq w? @
+  (pc~v \in \{ idle, done, failed, crashed \} \lor wgen~v \neq k?) \\
+\forall g : 0 \upto 4 @ rows~g = 0 \\
+rows' = rows \\
+pc' = pc \oplus \{ w? \mapsto inserting \} \\
+wgen' = wgen \oplus \{ w? \mapsto k? \} \\
+seen' = seen
+\end{schema}
+
+\begin{zed}
+OldBeginCreate \defs OldBeginCreateCore \land Track \land KeepSkip
+\end{zed}
+
+The old held check: any row under the name means ``already stored''. A
+partial copy is skipped forever; \field{skippedOnPartial} latches.
+
+\begin{schema}{OldSkipHeldCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 1 \\
+pc~w? \in \{ idle, done, failed, crashed \} \\
+\exists g : 0 \upto 4 @ rows~g > 0 \\
+pc' = pc \oplus \{ w? \mapsto done \} \\
+rows' = rows \\
+wgen' = wgen \\
+seen' = seen \\
+reg' = reg \\
+g0sync' = g0sync \\
+fsrc' = fsrc \\
+labelLost' = labelLost \\
+(\lnot (\exists g : 0 \upto 2 @ rows~g = 2)) \implies skippedOnPartial' = ztrue \\
+(\exists g : 0 \upto 2 @ rows~g = 2) \implies
+  skippedOnPartial' = skippedOnPartial
+\end{schema}
+
+\begin{zed}
+OldSkipHeld \defs OldSkipHeldCore \land Track
+\end{zed}
+
+\begin{schema}{OldInsertCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 1 \\
+pc~w? = inserting \\
+rows~(wgen~w?) < 2 \\
+rows' = rows \oplus \{ wgen~w? \mapsto rows~(wgen~w?) + 1 \} \\
+pc' = pc \\
+wgen' = wgen \\
+seen' = seen
+\end{schema}
+
+\begin{zed}
+OldInsert \defs OldInsertCore \land Track \land KeepSkip
+\end{zed}
+
+\begin{schema}{OldFinishCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 1 \\
+pc~w? = inserting \\
+rows~(wgen~w?) = 2 \\
+pc' = pc \oplus \{ w? \mapsto done \} \\
+rows' = rows \\
+wgen' = wgen \\
+seen' = seen
+\end{schema}
+
+\begin{zed}
+OldFinish \defs OldFinishCore \land Track \land KeepSkip
+\end{zed}
+
+The old failure cleanup: delete by name, whatever owner or generation the
+rows belong to.
+
+\begin{schema}{OldFailCore}
+\Delta Store \\ w? : WRITER
+\where
+mode = 1 \\
+pc~w? = inserting \\
+\forall g : 0 \upto 4 @ rows'~g = 0 \\
+pc' = pc \oplus \{ w? \mapsto failed \} \\
+wgen' = wgen \\
+seen' = seen \\
+skippedOnPartial' = skippedOnPartial \\
+reg' = reg \\
+g0sync' = zfalse \\
+fsrc' = fsrc \\
+labelLost' = labelLost
+\end{schema}
+
+\begin{zed}
+OldFail \defs OldFailCore \land Track
+\end{zed}
+
+The previous sync took a name over unconditionally (this was the earlier
+ruling, before the file-sourced rule): it is the mode-1 operation that reaches
+\field{labelLost}.
+
+\begin{schema}{OldSyncTakeoverCore}
+\Delta Store
+\where
+mode = 1 \\
+rows~4 < 2 \\
+((\exists g : 1 \upto 3 @ rows~g > 0) \lor
+  (g0sync = zfalse \land rows~0 > 0)) \\
+rows'~4 = rows~4 + 1 \\
+rows'~1 = 0 \\
+rows'~2 = 0 \\
+rows'~3 = 0 \\
+g0sync = ztrue \implies rows'~0 = rows~0 \\
+g0sync = zfalse \implies rows'~0 = 0 \\
+pc' = pc \\
+wgen' = wgen \\
+seen' = seen \\
+reg' = ztrue \\
+g0sync' = g0sync \\
+fsrc' = fsrc \\
+fsrc = zfalse \implies labelLost' = ztrue \\
+fsrc = ztrue \implies labelLost' = labelLost \\
+partialVisible' = partialVisible \\
+lost' = lost \\
+unsafeDelete' = unsafeDelete \\
+skippedOnPartial' = skippedOnPartial \\
+inversion' = inversion \\
+syncTouched' = syncTouched \\
+syncClash' = syncClash
+\end{schema}
+
+\begin{zed}
+OldSyncTakeover \defs OldSyncTakeoverCore
+\end{zed}
+
+% ===================================================================
+\section{Properties checked}
+\label{sec:props}
+% ===================================================================
+
+Each property is a goal that ProB must \emph{not} reach in mode~0 and
+\emph{must} reach in mode~1 (where applicable). All claims are scoped to this
+model (\S\ref{sec:nongoals}).
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Property & Goal (unreachable in mode 0) & Meaning \\
+\midrule
+I1 & \field{partialVisible = ztrue} & a protocol step produced a partial copy \\
+I2 & \field{lost = ztrue} & a complete copy existed and none survives \\
+I4 & \field{unsafeDelete = ztrue} & cleanup removed a copy it did not supersede \\
+create & \field{skippedOnPartial = ztrue} & held check trusted a partial copy \\
+I6 & \field{inversion = ztrue} & the newest complete key went backwards \\
+own & \field{syncTouched = ztrue} & funnel or heal changed sync rows, marked or not \\
+own & \field{syncClash = ztrue} & funnel added a generation to an owned name \\
+own & \field{labelLost = ztrue} & sync's takeover deleted a label, capture, or URL copy \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+I3 (replace converges) has two parts. The transient \emph{duplicate} (two
+complete generations) is reachable and is reported as such. Convergence is the
+CTL formula \field{AG EF} that from every reachable state a quiescent state (no
+active writer) with at most one complete generation, and, when one is
+complete, no damaged funnel generation in $1\upto2$ and no future-key
+generation, is reachable. (Without a complete generation a damaged one is
+deliberately kept for the doctor; the model has two keys, so a store in which
+both are damaged and none is complete has no free key. The real key space has
+no such dead end.) This is a \emph{possibility} claim: it says no reachable
+state is a dead end for repair, not that every execution reaches a clean state.
+
+\end{document}

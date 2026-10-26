@@ -2,7 +2,7 @@
 
 The daemon is started via the ``quarryd`` entry point / :class:`DaemonLauncher`,
 which bundles the bind options into a :class:`ServeConfig` and drives a
-:class:`DaemonServer`.  The server warms the engine single-threaded (DES-032)
+:class:`DaemonServer`.  The server warms the engine single-threaded
 before accepting traffic, then --- only after a successful bind --- writes both
 sidecars beside the data dir: ``serve.port`` (so ephemeral-port ``port=0``
 callers can discover the bound port) and ``serve.token`` (the loopback bearer
@@ -26,10 +26,14 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.crash_logging import UncaughtExceptionLog
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.daemon.job_spool import JobSpool
+from quarry.daemon.spool_sweep import StartupSweep
+from quarry.daemon.teardown import Teardown
 from quarry.fd_config import FdEnvelope
 from quarry.fd_telemetry import FdTelemetry
 from quarry.remote import to_netloc
 from quarry.run_dir import RunDir
+from quarry.shutdown_policy import ShutdownPolicy
 from quarry.thread_config import ThreadConfig
 
 if TYPE_CHECKING:
@@ -156,7 +160,7 @@ class DaemonServer:
             # and lance reads LANCE_CPU_THREADS once when it builds its runtime, so
             # a later set is ignored.  is_gpu=False since the lance/OMP caps are
             # provider-independent.
-            FdEnvelope(target=self._settings.fd_limit).apply()  # DES-046
+            FdEnvelope(target=self._settings.fd_limit).apply()
             ThreadConfig(is_gpu=False).apply_env_limits()
             ctx.warm()  # Build cached resources single-threaded before serving.
 
@@ -267,27 +271,31 @@ class DaemonServer:
         # nobody awaited fails silently into asyncio's default reporting.
         UncaughtExceptionLog.bind_loop(asyncio.get_running_loop())
         monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
+        # A task, not an await: a stalled disk must not hold startup.  Kept here, so
+        # it is not collected while the daemon runs; it logs its own end.
+        spool_sweep = StartupSweep.start(JobSpool.for_settings(ctx.settings))
         # Warm + queue are ready by now; start watching every roster database so
-        # continuous indexing runs as a queue producer (DES-045).
+        # continuous indexing runs as a queue producer.
         await ctx.start_watch_loop()
         try:
             yield
         finally:
-            # Stop the watch loop FIRST so no fresh index job enqueues mid-drain,
-            # THEN drain queued captures before touching sidecars so a clean
-            # shutdown loses no admitted-but-unwritten capture (DES-045/DES-042).
-            await ctx.aclose_watch_loop()
-            await ctx.aclose_ingest_queue()
-            monitor.cancel()
-            # Remove ONLY the sidecars this instance wrote after its own
-            # successful bind.  A second quarryd that fails to bind (port in
-            # use) must not delete a running peer's live serve.token / port
-            # file on the shared path on its way out.
-            if self._bound:
-                self._run_dir.port_file.remove()
-                self._run_dir.token_file.remove()
-            with suppress(asyncio.CancelledError):
-                await monitor
+            try:
+                # Drain queued captures before touching sidecars so a clean
+                # shutdown loses no admitted-but-unwritten capture.
+                await Teardown(ctx).run()
+            finally:
+                monitor.cancel()
+                spool_sweep.cancel()  # a sweep still waiting on a stalled disk
+                # Remove ONLY the sidecars this instance wrote after its own
+                # successful bind.  A second quarryd that fails to bind (port in
+                # use) must not delete a running peer's live serve.token / port
+                # file on the shared path on its way out.
+                if self._bound:
+                    self._run_dir.port_file.remove()
+                    self._run_dir.token_file.remove()
+                with suppress(asyncio.CancelledError):
+                    await monitor
 
     def _uvicorn_config(self, app: Starlette) -> uvicorn.Config:
         return uvicorn.Config(
@@ -299,6 +307,9 @@ class DaemonServer:
             access_log=False,
             ssl_certfile=self._config.ssl_certfile,
             ssl_keyfile=self._config.ssl_keyfile,
+            # The connections' drain happens before the lifespan teardown and is
+            # outside its budget; bound it by what the stop margin leaves.
+            timeout_graceful_shutdown=ShutdownPolicy.GRACEFUL_S,
         )
 
     def _install_startup_hook(self, server: uvicorn.Server) -> None:

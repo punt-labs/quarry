@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry._frontmatter import Frontmatter
 from quarry._hook_trace import HookTrace
+from quarry.home_paths import HomeUnresolvedError, QuarryHome
 from quarry.logging_config import LoggingConfig
 
 if TYPE_CHECKING:
@@ -177,7 +178,9 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
         result = handler(payload)
         sys.stdout.write(json.dumps(result))
         sys.stdout.write("\n")
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, HomeUnresolvedError):
+            raise  # one clean line from the entry point, never a traceback
         logger.exception("Hook %s failed (fail-open)", handler.__name__)
         sys.stdout.write("{}\n")
 
@@ -220,7 +223,7 @@ class _SessionSetup:
         self = super().__new__(cls)
         self._plugin_root = plugin_root
         self._is_dev = plugin_name.endswith("-dev")
-        self._commands_dir = Path.home() / ".claude" / "commands"
+        self._commands_dir = QuarryHome.home() / ".claude" / "commands"
         return self
 
     @classmethod

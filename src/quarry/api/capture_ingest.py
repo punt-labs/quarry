@@ -35,3 +35,7 @@ class CaptureIngestRequest(BaseModel):
     # never stored as-is: the daemon files the capture under the redacted
     # ``document_name``.  Empty for transcripts, which have nothing to re-fetch.
     source_url: str = ""
+    # The ISO-8601 UTC instant the hook read its transcript snapshot.  The daemon
+    # stores it as the capture's ingestion time (queue time when absent), so a
+    # transcript written after the read is newer than the stored document.
+    captured_at: str = ""

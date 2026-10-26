@@ -12,27 +12,26 @@ saw the name absent cannot both land.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import partial
 from typing import TYPE_CHECKING
 
-from starlette.concurrency import run_in_threadpool
-
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
+from quarry.daemon.store_run import StoreRun
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from datetime import datetime
+
     from quarry.daemon.context import DaemonContext
+    from quarry.daemon.ingest_labels import IngestLabels
     from quarry.daemon.tasks import TaskState
     from quarry.http_url import HttpUrl
     from quarry.ingestion.web_ingest import FormatHint
 
 logger = logging.getLogger(__name__)
-
-# The result key a create-if-absent skip carries.  It is the one way to tell a
-# skip (``chunks: 0`` because the document is already stored) from an empty
-# extraction (``chunks: 0`` because the page yielded nothing).
-_SKIPPED = "skipped"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +65,12 @@ class ScrubbedIngestJob:
     # True only for a capture, whose name is a fetched URL's storage name; a
     # ``remember`` or ``learn`` name is a label, whatever its format hint.
     url_sourced: bool = False
+    # When the hook read the snapshot this stores; ``None`` is the queue's own time.
+    captured_at: datetime | None = None
+    # What the source was when it was read (a transcript's version); ``""`` is unset.
+    source_version: str = ""
+    # Hears each progress line of the ingest; ``None`` hears none (the default).
+    checkpoint: Callable[[str], None] | None = None
 
     @property
     def collection(self) -> str:
@@ -74,9 +79,15 @@ class ScrubbedIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
-        terminal = RefusalAwareTerminal(state, self._stored_name)
+        terminal = RefusalAwareTerminal.for_job(state, self._stored_name)
         with terminal.record():
-            terminal.complete(await run_in_threadpool(self.scrub_and_ingest, ctx))
+            store = StoreRun.start(
+                self,
+                state,
+                partial(self.scrub_and_ingest, ctx),
+                RefusalAwareTerminal.settlement,
+            )
+            terminal.apply(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return a scrubbed snapshot; ``remember`` has no durable client copy.
@@ -103,7 +114,7 @@ class ScrubbedIngestJob:
 
         The pipeline redacts content AND metadata.  The existence check uses the
         name the pipeline stores (:meth:`InlineIngest.stored_name`), computed once,
-        and a skip reports it, never the name as sent.
+        and a skip reports the name the store holds, never the name as sent.
         """
         from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
         from quarry.ingestion.web_ingest import (  # noqa: PLC0415
@@ -117,18 +128,21 @@ class ScrubbedIngestJob:
             content_scrubber=self._scrubbed,
             url_sourced=self.url_sourced,
         )
-        stored = self._stored_name()
-        if not self.labels.overwrite and self.labels.holds(
-            ctx, stored, url_sourced=self.url_sourced
+        if existing := self.labels.existing(
+            ctx, self._stored_name(), url_sourced=self.url_sourced
         ):
-            return {
-                "document_name": stored,
-                "collection": self.collection,
-                "chunks": 0,
-                _SKIPPED: "exists",
-            }
+            return dict(existing.skip())
         return dict(
-            ingest_content(inline, self.name, Progress(None), self.labels.context(ctx))
+            ingest_content(
+                inline,
+                self.name,
+                Progress(self.checkpoint),
+                replace(
+                    self.labels.context(ctx),
+                    ingested_at=self.captured_at,
+                    source_version=self.source_version,
+                ),
+            )
         )
 
     def scrubbed_name(self) -> str:
@@ -176,9 +190,15 @@ class CaptureIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""
-        terminal = RefusalAwareTerminal(state, self.inline.scrubbed_name)
+        terminal = RefusalAwareTerminal.for_job(state, self.inline.scrubbed_name)
         with terminal.record():
-            terminal.complete(await run_in_threadpool(self._capture, ctx))
+            store = StoreRun.start(
+                self,
+                state,
+                partial(self._capture, ctx),
+                RefusalAwareTerminal.settlement,
+            )
+            terminal.apply(await store.wait())
 
     def _capture(self, ctx: DaemonContext) -> dict[str, object]:
         """Scrub-ingest inline; on an empty extraction with a source URL, re-fetch.

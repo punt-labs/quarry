@@ -9,18 +9,16 @@ atomic, so a partial or half-redacted capture is never left behind.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from quarry.artifacts import format_artifacts_frontmatter
+from quarry.capture_file import CaptureFile
 from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
-
-logger = logging.getLogger(__name__)
+    from quarry.capture_outcome import CaptureResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,9 +44,7 @@ class CaptureRequest:
 
     def scrubbed_content(self) -> str:
         """Return the scrubbed frontmatter+body, or ``""`` if no frontmatter."""
-        frontmatter = format_artifacts_frontmatter(
-            self.session_id, self.timestamp, self.artifacts
-        )
+        frontmatter = self.artifacts.format_frontmatter(self.session_id, self.timestamp)
         if not frontmatter:
             return ""
         return scrub_and_log(frontmatter + "\n\n" + self.text, self.label)
@@ -60,29 +56,14 @@ class CaptureWriter:
     __slots__ = ()
 
     def write(self, request: CaptureRequest) -> bool:
-        """Scrub *request* and write the capture file; return whether one landed.
+        """Scrub *request* and write the capture file; return whether one landed."""
+        return CaptureFile(request).landed()
+
+    def outcome(self, request: CaptureRequest) -> CaptureResult:
+        """Scrub *request*, write the capture file, and say how that ended.
 
         Fails silently — a capture-file problem must never block the main
         ingest flow.  Scrubbing precedes the write, and the write is atomic,
         so no partial or unredacted file is ever left on disk.
         """
-        try:
-            content = request.scrubbed_content()
-            if content:
-                self._atomic_write(request.capture_path(), content)
-            return bool(content)
-        except Exception:
-            logger.exception("%s: capture file write failed", request.label)
-            return False
-
-    @staticmethod
-    def _atomic_write(path: Path, content: str) -> None:
-        """Write *content* to *path* via a temp file and atomic rename."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        try:
-            tmp.write_text(content, encoding="utf-8")
-            tmp.replace(path)
-        except OSError:
-            tmp.unlink(missing_ok=True)
-            raise
+        return CaptureFile(request).write()

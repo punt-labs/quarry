@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from quarry.home_paths import HomeUnresolvedError
 from quarry.logging_config import LoggingConfig
 from tests.hermetic_env import ENV
 
@@ -242,6 +243,67 @@ class TestLogFileIsABareFilename:
         for name in (LoggingConfig.CLIENT_LOG, LoggingConfig.DAEMON_LOG):
             with patch("quarry.logging_config.logging.config.dictConfig"):
                 LoggingConfig.configure(log_file=name)
+
+
+class TestWithoutAHomeDirectory:
+    """No home and no ``QUARRY_LOG_DIR``: log to stderr, say so once, never fail."""
+
+    @staticmethod
+    def _no_home(monkeypatch: pytest.MonkeyPatch) -> None:
+        def missing() -> Path:
+            msg = "Could not determine home directory."
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(Path, "home", missing)
+        monkeypatch.delenv("QUARRY_LOG_DIR", raising=False)
+        monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
+
+    def test_configure_falls_back_to_a_stderr_only_handler(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        self._no_home(monkeypatch)
+        with (
+            patch("quarry.logging_config.logging.config.dictConfig") as mock_dc,
+            caplog.at_level(logging.WARNING, logger="quarry.logging_config"),
+        ):
+            LoggingConfig.configure(stderr_level="INFO")
+
+        config = mock_dc.call_args[0][0]
+        assert list(config["handlers"]) == ["stderr"]
+        assert config["root"]["handlers"] == ["stderr"]
+        assert [r.getMessage() for r in caplog.records].count(
+            "no home directory: logging to stderr only "
+            "(set HOME, or QUARRY_LOG_DIR for a log file)"
+        ) == 1
+
+    def test_stderr_keeps_warnings_and_above_when_there_is_no_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_home(monkeypatch)
+        with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+            LoggingConfig.configure(stderr_level="INFO")
+
+        assert mock_dc.call_args[0][0]["handlers"]["stderr"]["level"] == "WARNING"
+
+    def test_a_log_dir_override_still_gets_its_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._no_home(monkeypatch)
+        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path))
+        with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+            LoggingConfig.configure(stderr_level="INFO")
+
+        config = mock_dc.call_args[0][0]
+        assert set(config["handlers"]) == {"stderr", "file"}
+        assert config["handlers"]["stderr"]["level"] == "INFO"
+
+    def test_log_dir_itself_raises_the_typed_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_home(monkeypatch)
+
+        with pytest.raises(HomeUnresolvedError):
+            LoggingConfig.log_dir()
 
 
 @pytest.mark.parametrize("name", ["usp", "usp.helpers"])

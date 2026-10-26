@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, cast, final
+from typing import TYPE_CHECKING, Self, cast, final
 
 from quarry.display_name import DisplayName
+from quarry.ingestion.existing_page import ExistingPage
+from quarry.ingestion.owned_insert import OwnedInsert
 from quarry.ingestion.run_context import RunContext
 from quarry.ingestion.streaming import DocumentStreamer
 
@@ -31,7 +33,22 @@ logger = logging.getLogger(__name__)
 
 @final
 class ChunkStoreFunnel:
-    """DES-036's single convergence point: chunk, embed, and store pages."""
+    """DES-036's single convergence point: chunk, embed, and store one document."""
+
+    __slots__ = ("_context", "_name", "_progress")
+
+    _name: str
+    _progress: Progress
+    _context: IngestContext
+
+    def __new__(
+        cls, document_name: str, progress: Progress, context: IngestContext
+    ) -> Self:
+        self = super().__new__(cls)
+        self._name = document_name
+        self._progress = progress
+        self._context = context
+        return self
 
     @staticmethod
     def _chunk_embed_store(
@@ -47,28 +64,36 @@ class ChunkStoreFunnel:
         Pages that parse but chunk to nothing (unchunkable/empty sections) must not
         delete a prior good document and then store nothing: the fail-closed delete
         fires only when a replacement chunk set actually exists.
+
+        Create-if-absent lives here too: a fetched page whose name, or a legacy
+        spelling of it, is already held is skipped before anything is deleted or
+        inserted, so no front door has to get that right on its own.
         """
-        progress("Chunking")
-        chunks = ChunkStoreFunnel._chunk(extracted, context)
-        progress("Created %d chunks", len(chunks))
+        return ChunkStoreFunnel(document_name, progress, context).run(extracted)
 
-        if chunks:
-            inserted = ChunkStoreFunnel._embed_and_store(
-                chunks, document_name, progress, context
-            )
-        else:
-            inserted = ChunkStoreFunnel._skip(document_name, progress)
+    def run(self, extracted: ExtractedDocument) -> IngestResult:
+        """Return the result of storing *extracted*, or of skipping it."""
+        self._progress("Chunking")
+        chunks = self._chunk(extracted)
+        self._progress("Created %d chunks", len(chunks))
 
-        return ChunkStoreFunnel._build_result(
-            document_name, inserted, extracted.stats, context.collection
-        )
+        if not chunks:
+            return self._build_result(self._skip(), extracted.stats)
+        if existing := self._existing():
+            return existing.skip()
+        return self._build_result(self._embed_and_store(chunks), extracted.stats)
 
-    @staticmethod
-    def _chunk(extracted: ExtractedDocument, context: IngestContext) -> list[Chunk]:
+    def _existing(self) -> ExistingPage | None:
+        """Return the held page that makes this a skip: a fetched page, not a label."""
+        if self._context.url_sourced:
+            return ExistingPage.page(self._name, self._context)
+        return None
+
+    def _chunk(self, extracted: ExtractedDocument) -> list[Chunk]:
         """Chunk the extracted pages, labelled for this ingest."""
         t0 = time.perf_counter()
-        chunks = DocumentStreamer(context.settings).build_chunks(
-            extracted.pages, DocumentStreamer.ingest_labels(extracted, context)
+        chunks = DocumentStreamer(self._context.settings).build_chunks(
+            extracted.pages, DocumentStreamer.ingest_labels(extracted, self._context)
         )
         logger.info(
             "pipeline: chunked %d pages → %d chunks in %.2fs",
@@ -78,8 +103,7 @@ class ChunkStoreFunnel:
         )
         return chunks
 
-    @staticmethod
-    def _replace_prior(chunks: list[Chunk], context: IngestContext) -> list[str]:
+    def _replace_prior(self, chunks: list[Chunk]) -> list[str]:
         """Delete the document's earlier chunks, if overwriting; return its twins.
 
         A copy an older build stored under a former spelling of the same URL is
@@ -88,63 +112,54 @@ class ChunkStoreFunnel:
         not deleted: it goes only once the new document is stored.
 
         Every chunk of a document carries its name.  Whether it was fetched from a
-        URL is the caller's fact, carried on the *context*, not read back from the
+        URL is the caller's fact, carried on the context, not read back from the
         document's path: a label that merely looks like a URL is not a page.
         """
-        return RunContext.legacy_names_of(context).replace_prior(
-            chunks[0].document_name, context
+        return RunContext.legacy_names_of(self._context).replace_prior(
+            chunks[0].document_name, self._context
         )
 
-    @staticmethod
-    def _embed_and_store(
-        chunks: list[Chunk],
-        document_name: str,
-        progress: Progress,
-        context: IngestContext,
-    ) -> int:
-        """Delete the prior document (if overwriting), embed and store, then drop
-        any legacy-named copy the stored document replaces."""
-        twins = ChunkStoreFunnel._replace_prior(chunks, context)
-        progress("Embedding + storing in bounded windows")
+    def _embed_and_store(self, chunks: list[Chunk]) -> int:
+        """Delete the prior document (if overwriting), store, then drop legacy twins.
+
+        A legacy-named copy the stored document replaces goes only once the new
+        document is stored, so a failed embed or write leaves it in place.
+        """
+        self._progress("Embedding + storing in bounded windows")
+        twins = self._replace_prior(chunks)
         t0 = time.perf_counter()
-        inserted = DocumentStreamer(context.settings).insert(
-            chunks, context.database.store, document_name
-        )
-        RunContext.note_stored(context, document_name)
-        RunContext.legacy_names_of(context).drop_legacy(
-            chunks[0].document_name, twins, context.collection
+        inserted = OwnedInsert(self._name, self._context).run(chunks)
+        RunContext.note_stored(self._context, self._name)
+        RunContext.legacy_names_of(self._context).drop_legacy(
+            chunks[0].document_name, twins, self._context.collection
         )
         logger.info(
             "pipeline: embedded + stored %d chunks in %.2fs",
             inserted,
             time.perf_counter() - t0,
         )
-        progress(
+        self._progress(
             "Done: %d chunks indexed from %s",
             inserted,
-            DisplayName(document_name).redacted(),
+            DisplayName(self._name).redacted(),
         )
         return inserted
 
-    @staticmethod
-    def _skip(document_name: str, progress: Progress) -> int:
+    def _skip(self) -> int:
         """Log and report that zero chunks were produced; nothing is stored."""
         logger.warning(
             "pipeline: %s produced zero chunks — keeping any prior document, "
             "storing nothing",
-            DisplayName(document_name).redacted(),
+            DisplayName(self._name).redacted(),
         )
-        progress("No text found — nothing to index")
+        self._progress("No text found — nothing to index")
         return 0
 
-    @staticmethod
-    def _build_result(
-        document_name: str, inserted: int, stats: IngestStats, collection: str
-    ) -> IngestResult:
+    def _build_result(self, inserted: int, stats: IngestStats) -> IngestResult:
         """Assemble the IngestResult: identity fields plus format-specific stats."""
         result: IngestResult = {
-            "document_name": document_name,
-            "collection": collection,
+            "document_name": self._name,
+            "collection": self._context.collection,
             "chunks": inserted,
         }
         # IngestResult keys are literal-typed, so a variable-key assignment can't be

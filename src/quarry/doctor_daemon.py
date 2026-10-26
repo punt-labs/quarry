@@ -17,29 +17,35 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import ssl
 import stat
 from functools import partial
-from pathlib import Path
-from typing import final
+from typing import TYPE_CHECKING, final
 
 from pydantic import ValidationError
 
 from quarry.api.meta import FdHealth
-from quarry.config import Settings
+from quarry.daemon_ca_error import DaemonCaError
+from quarry.daemon_unready_error import DaemonUnreadyError
 from quarry.db_pointer import SELECTION
+from quarry.doctor_stop_timeout import StopTimeoutDiagnostic
+from quarry.failure_reason import FailureReason
 from quarry.fd_headroom import FdHeadroom
+from quarry.home_paths import QuarryHome
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
+
+if TYPE_CHECKING:
+    from quarry.config import Settings
+
+logger = logging.getLogger(__name__)
 
 # The literal loopback the daemon binds and login pins (never the ambiguous name
 # ``localhost``); doctor probes exactly what the client connects to.
 _HEALTH_HOST = "127.0.0.1"
 _PROBE_TIMEOUT_SECONDS = 5.0
 _TOKEN_MODE = 0o600
-# The daemon's pinned CA, written by ``quarry install`` (mirrors tls.TLS_DIR);
-# defined locally so this diagnostic never imports cryptography via quarry.tls.
-_CA_CERT_PATH = Path.home() / ".punt-labs" / "quarry" / "tls" / "ca.crt"
 # Reported when the daemon's fd headroom cannot be read: fd headroom is a
 # property of the resident daemon, so with no daemon there is nothing to sample
 # (never a local CLI fallback — that fallback is the observability bug itself).
@@ -53,23 +59,33 @@ class DaemonDiagnostics:
     __slots__ = ()
 
     @classmethod
-    def reachability(cls) -> CheckResult:
+    def reachability(cls, settings: Settings) -> CheckResult:
         """Report whether quarryd is up and READY on the literal loopback.
 
-        Resolves the active-db run dir, reads ``serve.port``, and probes
+        Resolves the active-db run dir from *settings*, reads ``serve.port``, and probes
         ``/health`` for ``state == "ready"`` (mirrors install.sh's gate). Fail
         soft: a missing port file or an unreachable/unready daemon is a ``✗``
         report with a start-the-service hint, never a doctor crash.
         """
         result = partial(CheckResult, name="quarryd", required=False)
         try:
-            port = cls._run_dir().port_file.read()
+            port = cls._run_dir(settings).port_file.read()
         except (OSError, ValueError):
             return result(
                 passed=False,
                 message="not reachable — start the service (quarryd not running)",
             )
-        if cls._probe_health(port):
+        try:
+            is_ready = cls._probe_health(port)
+        except DaemonCaError as exc:
+            return result(passed=False, message=f"{exc}; run 'quarry install'")
+        except DaemonUnreadyError as exc:
+            return result(
+                passed=False,
+                message=f"not ready on {_HEALTH_HOST}:{port} — {exc}; "
+                "start or check the service",
+            )
+        if is_ready:
             return result(
                 passed=True, message=f"running and ready on {_HEALTH_HOST}:{port}"
             )
@@ -78,8 +94,13 @@ class DaemonDiagnostics:
             message=f"not ready on {_HEALTH_HOST}:{port} — start or check the service",
         )
 
+    @staticmethod
+    def stop_timeout(settings: Settings) -> CheckResult:
+        """Report whether the installed service gives the daemon time to drain."""
+        return StopTimeoutDiagnostic.check(settings)
+
     @classmethod
-    def serve_token(cls) -> CheckResult:
+    def serve_token(cls, settings: Settings) -> CheckResult:
         """Report whether ``serve.token`` is present, mode-0600, and non-empty.
 
         Checks the SAME run dir the loopback client reads, so a token outage the
@@ -89,7 +110,7 @@ class DaemonDiagnostics:
         """
         result = partial(CheckResult, name="serve.token", required=False)
         try:
-            token_path = cls._run_dir().token_file.path
+            token_path = cls._run_dir(settings).token_file.path
         except (OSError, ValueError):
             return result(
                 passed=False, message="run dir unresolved — quarryd not installed"
@@ -118,7 +139,7 @@ class DaemonDiagnostics:
         return result(passed=True, message=f"present, 0600 ({token_path})")
 
     @classmethod
-    def fd_headroom(cls) -> CheckResult:
+    def fd_headroom(cls, settings: Settings) -> CheckResult:
         """Report the DAEMON's open-fd headroom, read from its ``/health``.
 
         The resident daemon is the only long-lived process that accumulates
@@ -131,10 +152,15 @@ class DaemonDiagnostics:
         """
         result = partial(CheckResult, name="FD headroom", required=False)
         try:
-            port = cls._run_dir().port_file.read()
+            port = cls._run_dir(settings).port_file.read()
         except (OSError, ValueError):
             return result(passed=False, message=_FD_UNAVAILABLE)
-        body = cls._fetch_health(port)
+        try:
+            body = cls._fetch_health(port)
+        except DaemonCaError as exc:
+            return result(passed=False, message=f"{exc}; run 'quarry install'")
+        except DaemonUnreadyError as exc:
+            return result(passed=False, message=f"{_FD_UNAVAILABLE} ({exc})")
         if body is None:
             return result(passed=False, message=_FD_UNAVAILABLE)
         headroom = cls._fd_from_health(body)
@@ -166,15 +192,15 @@ class DaemonDiagnostics:
         return FdHeadroom(open_fds=health.open_fds, soft_limit=health.soft_limit)
 
     @staticmethod
-    def _run_dir() -> RunDir:
+    def _run_dir(settings: Settings) -> RunDir:
         """The active database's run dir — the SAME one ClientConfig reads.
 
         Mirrors the client's resolution (the CLI's ``--db`` override, else the
         persistent default) so doctor inspects the run dir the loopback client
         actually uses, not a hardcoded default.
         """
-        settings = Settings.load().resolve_db_paths(SELECTION.active())
-        return RunDir(settings.lancedb_path.parent)
+        paths = settings.resolve_db_paths(SELECTION.active())
+        return RunDir(paths.lancedb_path.parent)
 
     @classmethod
     def _probe_health(cls, port: int) -> bool:
@@ -184,37 +210,62 @@ class DaemonDiagnostics:
 
     @classmethod
     def _fetch_health(cls, port: int) -> dict[str, object] | None:
-        """GET ``/health`` over HTTPS then HTTP; return the parsed object or None.
+        """GET ``/health`` over HTTPS, then HTTP only if no CA is installed.
 
         The single daemon-health read that both :meth:`reachability` and
         :meth:`fd_headroom` consume, so the two checks never drift into separate
-        probes (bug-class-3). A managed daemon serves ``--tls``; a bare
-        ``quarryd`` (no ``--tls``) serves plaintext. Try HTTPS first (verify
-        against the pinned CA when present, else skip verification — a loopback
-        liveness check, not a security boundary; mirrors install.sh's ``--cacert``
-        gate and its ``-k`` fallback). On a TLS handshake failure (plaintext
-        behind https / wrong-version-number), fall back to plain HTTP so a
-        plaintext daemon still answers. Returns ``None`` — the documented
-        not-reachable signal — on a refused/broken connection, a non-200, or a
-        non-object body, so callers render one degraded state.
+        probes.  With the daemon CA installed the daemon is a managed ``--tls``
+        one, and the probe verifies against that CA: a certificate that does not
+        chain to it, or a listener that does not speak TLS at all, is a fault
+        (:class:`DaemonCaError`), never a reason to ask again in plaintext, which
+        would pass a spoofed daemon.  With no CA (a bare ``quarryd`` serves
+        plaintext, or nothing is installed yet) verification is off, as it is in
+        install.sh's ``-k`` fallback, and a TLS handshake failure retries over
+        plain HTTP.  Returns ``None`` — the documented not-reachable signal — on
+        a refused/broken connection, a non-200, or a non-object body, so callers
+        render one degraded state.
         """
+        ca = QuarryHome.daemon_ca()  # before anything is built: no home raises here
+        pinned = cls._pinned_context()
         https = http.client.HTTPSConnection(
             _HEALTH_HOST,
             port,
-            context=cls._ssl_context(),
+            context=pinned or cls._unverified_context(),
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
         try:
-            return cls._read_health(https)
-        except ssl.SSLError:
-            # Plaintext daemon behind an HTTPS probe — retry over HTTP.
+            return cls._read_health(https, tls=True)
+        except ssl.SSLCertVerificationError as exc:
+            reason = exc.verify_message or type(exc).__name__
+            msg = f"the daemon's certificate fails verification against {ca} ({reason})"
+            raise DaemonCaError(msg) from exc
+        except (ssl.SSLError, ConnectionError) as exc:
+            if pinned is not None:
+                tls_reason = exc.reason if isinstance(exc, ssl.SSLError) else None
+                reason = tls_reason or type(exc).__name__
+                msg = (
+                    f"the daemon does not complete TLS although {ca} is installed "
+                    f"({reason})"
+                )
+                raise DaemonCaError(msg) from exc
+            logger.info(
+                "doctor: the TLS handshake failed with no CA pinned (%s); retrying "
+                "over plain HTTP",
+                type(exc).__name__,
+            )
             http_conn = http.client.HTTPConnection(
                 _HEALTH_HOST, port, timeout=_PROBE_TIMEOUT_SECONDS
             )
-            return cls._read_health(http_conn)
+            body = cls._read_health(http_conn)
+            if body is None:
+                msg = f"the TLS attempt failed first ({type(exc).__name__})"
+                raise DaemonUnreadyError(msg) from exc
+            return body
 
     @classmethod
-    def _read_health(cls, conn: http.client.HTTPConnection) -> dict[str, object] | None:
+    def _read_health(
+        cls, conn: http.client.HTTPConnection, *, tls: bool = False
+    ) -> dict[str, object] | None:
         """GET ``/health`` on *conn*; return the parsed JSON object or None.
 
         Fail soft on a refused/broken connection (``None``), but let an
@@ -227,30 +278,58 @@ class DaemonDiagnostics:
                 return None
             body = response.read()
         except (OSError, http.client.HTTPException) as exc:
-            if isinstance(exc, ssl.SSLError):
-                raise  # a TLS handshake failure: let the HTTP fallback retry
+            if isinstance(exc, ssl.SSLError) or (
+                tls and cls._dropped_before_tls(conn, exc)
+            ):
+                raise  # a TLS handshake failure: the caller decides what it means
             return None
         finally:
             conn.close()
         return cls._parse_object(body)
 
     @staticmethod
-    def _ssl_context() -> ssl.SSLContext:
-        """A client context pinned to the daemon CA, or verification-disabled.
+    def _dropped_before_tls(conn: http.client.HTTPConnection, exc: Exception) -> bool:
+        """Return whether *exc* dropped an HTTPS connection before TLS was up.
+
+        A reset, an abort or a broken pipe once the TCP connection was made but
+        before it became an ``SSLSocket``: a refused connection never reached the
+        daemon, one with no socket at all never connected, and one that dropped
+        after TLS was up (a daemon restarting) is the daemon's, not the CA's.
+        """
+        return (
+            isinstance(exc, ConnectionError)
+            and not isinstance(exc, ConnectionRefusedError)
+            and conn.sock is not None
+            and not isinstance(conn.sock, ssl.SSLSocket)
+        )
+
+    @staticmethod
+    def _pinned_context() -> ssl.SSLContext | None:  # None: no CA is installed
+        """Return a client context pinned to the daemon CA, or ``None`` if absent.
 
         The daemon serves a self-signed cert with a ``127.0.0.1`` IP SAN, so a
-        pinned-CA context verifies the literal-loopback probe. Absent the CA (a
-        plaintext or not-yet-installed daemon), fall back to no verification so
-        the liveness probe still connects.
+        pinned-CA context verifies the literal-loopback probe.  A CA that is
+        there but cannot be used is a fault to report: falling back to no
+        verification would pass a spoofed daemon.
         """
+        ca = QuarryHome.daemon_ca()
+        try:
+            if not ca.exists():
+                return None
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.load_verify_locations(str(ca))
+        except ssl.SSLError as exc:
+            msg = f"{ca} is not a usable certificate ({exc.reason})"
+            raise DaemonCaError(msg) from exc
+        except OSError as exc:
+            msg = f"{ca} cannot be read ({FailureReason.os_name(exc)})"
+            raise DaemonCaError(msg) from exc
+        return ctx
+
+    @staticmethod
+    def _unverified_context() -> ssl.SSLContext:
+        """Return a client context that skips verification: a liveness probe only."""
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        if _CA_CERT_PATH.exists():
-            try:
-                ctx.load_verify_locations(str(_CA_CERT_PATH))
-            except (OSError, ssl.SSLError):
-                pass
-            else:
-                return ctx
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         return ctx

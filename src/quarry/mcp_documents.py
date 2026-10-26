@@ -24,6 +24,7 @@ from quarry.api import (
 from quarry.client import HttpError, TargetResolver
 from quarry.collection_namer import CollectionNamer
 from quarry.formatting import format_document_detail
+from quarry.home_paths import QuarryHome
 from quarry.mcp_guard import ToolGuard
 
 if TYPE_CHECKING:
@@ -157,7 +158,7 @@ class DocumentTools:
         # An empty directory would resolve to the cwd and silently register it.
         if err := self._reject_blank(directory, "directory"):
             return err
-        resolved = Path(directory).expanduser().resolve()
+        resolved = QuarryHome.expanded(Path(directory)).resolve()
         col = collection or CollectionNamer.safe(resolved.name) or "root"
         request = RegisterRequest(directory=str(resolved), collection=col)
         accepted = self._connect().register(request)

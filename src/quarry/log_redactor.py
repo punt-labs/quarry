@@ -80,7 +80,7 @@ class LogRedactor:
         r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]"
     )
     # Line breaks and the bidi marks that reorder or hide what follows.
-    _MARKS = "\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069"
+    _MARKS = r"\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069"
     _LINE_BREAKS: ClassVar[re.Pattern[str]] = re.compile(f"[\r\n{_MARKS}]")
     _BIDI: ClassVar[re.Pattern[str]] = re.compile(f"[\r{_MARKS}]")
 

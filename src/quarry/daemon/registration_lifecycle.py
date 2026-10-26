@@ -44,7 +44,7 @@ class RegistrationLifecycle:
         self, state: TaskState, resolved: Path, collection: str
     ) -> None:
         """Execute register_directory in the background and update *state*."""
-        with RefusalAwareTerminal(state).record():
+        with RefusalAwareTerminal.for_task(state).record():
             reg, subsumed = await run_in_threadpool(
                 self._register_sync,
                 self._ctx.settings.registry_path,
@@ -84,7 +84,7 @@ class RegistrationLifecycle:
 
     async def run_purge(self, state: TaskState, collection: str) -> None:
         """Purge a deregistered collection's chunks THROUGH the queue."""
-        with RefusalAwareTerminal(state).record():
+        with RefusalAwareTerminal.for_task(state).record():
             purge = await CollectionPurger(self._ctx).purge(
                 collection, "deregister-purge"
             )

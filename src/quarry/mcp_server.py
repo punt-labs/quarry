@@ -177,7 +177,7 @@ class McpTools:
 
         Args:
             source: HTTP(S) URL to ingest.
-            overwrite: If true, replace existing data.
+            overwrite: If true, replace a stored URL; if false, skip it.
             collection: Collection name. Auto-derived if empty.
         """
         )

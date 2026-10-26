@@ -12,6 +12,7 @@ from quarry.enablement_result import DisablementResult, EnablementResult
 from quarry.file_lock import FileLock
 from quarry.gitignore import QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE, Guidance
+from quarry.home_paths import QuarryHome
 from quarry.own_checkout import OwnCheckout
 from quarry.skills_install import SkillsInstaller
 
@@ -216,7 +217,7 @@ class _SkillRetraction:
         never abort the caller" contract, not a value :meth:`run` inspects
         further.
         """
-        installer = SkillsInstaller(self._skills_source_dir(), Path.home())
+        installer = SkillsInstaller(self._skills_source_dir(), QuarryHome.home())
         try:
             return installer.remove_all()
         except OSError:

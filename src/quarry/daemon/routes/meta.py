@@ -14,6 +14,7 @@ from quarry.api.meta import FdHealth
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.routes.insights_builder import InsightsBuilder
 from quarry.fd_headroom import FdHeadroom
+from quarry.home_paths import QuarryHome
 from quarry.ingestion.provider import ProviderSelection
 from quarry.query_log import get_query_log
 from quarry.sync_registry import SyncRegistry
@@ -69,9 +70,8 @@ class MetaRoutes(RouteGroup):
         Auth-exempt so the client can fetch it before login.
         Returns 404 with JSON error if no cert file exists.
         """
-        from quarry.tls import TLS_DIR  # noqa: PLC0415
 
-        ca_path = TLS_DIR / "ca.crt"
+        ca_path = QuarryHome.daemon_ca()
         if not ca_path.exists():
             return JSONResponse(
                 {"error": "No CA certificate found. Run 'quarry install' first."},

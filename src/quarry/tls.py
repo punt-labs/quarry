@@ -27,6 +27,8 @@ from cryptography.hazmat.primitives.asymmetric import (
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
+from quarry.home_paths import QuarryHome
+
 if TYPE_CHECKING:
     from cryptography.hazmat.primitives.asymmetric.types import (
         CertificatePublicKeyTypes,
@@ -34,7 +36,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-TLS_DIR: Path = Path.home() / ".punt-labs" / "quarry" / "tls"
 
 _CERT_VALID_YEARS = 10
 _EC_CURVE = ec.SECP256R1()
@@ -101,7 +102,7 @@ def _verify_ca_keypair(ca_cert_pem: bytes, ca_key_pem: bytes) -> None:
     )
     if cert_pub != key_pub:
         msg = (
-            f"CA cert and key at {TLS_DIR} do not match. "
+            f"CA cert and key at {QuarryHome.tls_dir()} do not match. "
             "Delete ca.crt and ca.key and re-run 'quarry install'."
         )
         raise ValueError(msg)
@@ -283,7 +284,7 @@ def cert_fingerprint(cert_pem: bytes) -> str:
 
 
 def write_tls_files(hostname: str) -> bool:
-    """Generate CA + server cert, write to TLS_DIR.
+    """Generate CA + server cert, write to the TLS directory.
 
     Idempotent: skips generation if all four files already exist. If the CA
     already exists but server certs are missing (partial state), reuses the
@@ -301,17 +302,21 @@ def write_tls_files(hostname: str) -> bool:
     Returns:
         True if new cert files were written, False if all files already existed.
     """
-    ca_crt_path = TLS_DIR / "ca.crt"
-    ca_key_path = TLS_DIR / "ca.key"
-    server_crt_path = TLS_DIR / "server.crt"
-    server_key_path = TLS_DIR / "server.key"
+    tls_dir = QuarryHome.tls_dir()
+    ca_crt_path = tls_dir / "ca.crt"
+    ca_key_path = tls_dir / "ca.key"
+    server_crt_path = tls_dir / "server.crt"
+    server_key_path = tls_dir / "server.key"
 
     all_paths = (ca_crt_path, ca_key_path, server_crt_path, server_key_path)
     if all(p.exists() for p in all_paths):
-        logger.debug("TLS files already exist at %s — skipping generation", TLS_DIR)
+        logger.debug("TLS files already exist at %s — skipping generation", tls_dir)
         return False
 
-    TLS_DIR.mkdir(parents=True, exist_ok=True)
+    # Private from the start, and made so if it already existed open: the keys
+    # inside are 0600, but nobody else has any business listing the directory.
+    tls_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tls_dir.chmod(0o700)
 
     # Reuse existing CA if present; only generate a new one if neither file exists.
     # Regenerating the CA would break all clients that pinned the old CA cert.
@@ -319,7 +324,7 @@ def write_tls_files(hostname: str) -> bool:
     ca_key_exists = ca_key_path.exists()
 
     if ca_crt_exists and ca_key_exists:
-        logger.info("Reusing existing CA at %s", TLS_DIR)
+        logger.info("Reusing existing CA at %s", tls_dir)
         ca_cert_pem = ca_crt_path.read_bytes()
         ca_key_pem = ca_key_path.read_bytes()
         _verify_ca_keypair(ca_cert_pem, ca_key_pem)
@@ -329,7 +334,7 @@ def write_tls_files(hostname: str) -> bool:
         missing = ca_key_path if ca_crt_exists else ca_crt_path
         present = ca_crt_path if ca_crt_exists else ca_key_path
         msg = (
-            f"Partial CA state at {TLS_DIR}: {present.name} exists but "
+            f"Partial CA state at {tls_dir}: {present.name} exists but "
             f"{missing.name} is missing. Delete both files and re-run "
             "'quarry install' to regenerate."
         )
@@ -348,7 +353,7 @@ def write_tls_files(hostname: str) -> bool:
     _write_file(server_crt_path, server_cert_pem, mode=0o600)
     _write_file(server_key_path, server_key_pem, mode=0o600)
 
-    logger.info("TLS files written to %s", TLS_DIR)
+    logger.info("TLS files written to %s", tls_dir)
     return True
 
 

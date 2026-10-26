@@ -8,12 +8,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 from quarry.captures_collection import CapturesCollection
+from quarry.doctor_failure import CheckFailure
 from quarry.results import CheckResult
 from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION
 
 if TYPE_CHECKING:
     from quarry.shadow.config import ShadowConfig
     from quarry.shadow.repo import ShadowRepo
+
+# Where a project keeps its private capture shadow, relative to the project.
+_SHADOW_REPO = ".punt-labs/quarry/captures"
 
 
 @final
@@ -31,7 +35,13 @@ class CaptureDiagnostics:
         try:
             unlinked = CaptureDiagnostics._unlinked_names(registry_path, db_path)
         except Exception as exc:  # noqa: BLE001
-            return result(passed=False, message=f"check failed: {exc}")
+            return result(
+                passed=False,
+                message=(
+                    f"check failed ({registry_path.name}, {db_path.name}): "
+                    f"{CheckFailure.detail(exc)}"
+                ),
+            )
         if unlinked:
             return result(passed=False, message=f"unlinked: {', '.join(unlinked)}")
         return result(passed=True, message="all captures map to a registered base")
@@ -71,7 +81,7 @@ class CaptureDiagnostics:
         from quarry.shadow.repo import ShadowRepo  # noqa: PLC0415
 
         directory = Path(cwd)
-        captures_dir = directory / ".punt-labs" / "quarry" / "captures"
+        captures_dir = directory / _SHADOW_REPO
         config = ShadowConfig.from_project(directory)
         repo = ShadowRepo(captures_dir, directory, config.remote if config else "")
         if not repo.parent_in_work_tree():
@@ -131,7 +141,10 @@ class CaptureDiagnostics:
                 name="Shadow repo",
                 passed=False,
                 required=True,
-                message=f"cannot verify parent-tracked captures (git error: {exc})",
+                message=(
+                    "cannot verify parent-tracked captures for the shadow repo "
+                    f"{_SHADOW_REPO} (git error: {CheckFailure.detail(exc)})"
+                ),
             )
         if not tracked:
             return None

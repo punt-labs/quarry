@@ -18,6 +18,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
+from quarry._cli_entry import CliEntry
 from quarry._stdlib import run_hook
 
 
@@ -31,7 +32,7 @@ def main() -> None:
     handler = _HANDLERS.get(event)
     if handler is None:
         sys.exit(f"Unknown hook event: {event}")
-    handler()
+    CliEntry.run(handler)
 
 
 # ── Handler dispatch ─────────────────────────────────────────────────

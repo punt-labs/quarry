@@ -7,9 +7,8 @@ import threading
 from typing import TYPE_CHECKING, Self, final
 from urllib.parse import urlsplit
 
-from quarry.db.name_prefix import NamePrefix
-from quarry.display_name import DisplayName
 from quarry.http_url import HttpUrl
+from quarry.ingestion.legacy_twins import LegacyTwins
 
 if TYPE_CHECKING:
     from quarry.db.facade import Database
@@ -126,7 +125,7 @@ class LegacyUrlNames:
         with self._lock:
             if key not in self._listed:
                 self._listed[key] = set(
-                    NamePrefix(self._database.db).names(prefix, collection)
+                    self._database.url_names.names(prefix, collection)
                 )
             return sorted(self._listed[key])
 
@@ -174,14 +173,8 @@ class LegacyUrlNames:
         return twins
 
     def drop_legacy(self, name: str, twins: list[str], collection: str) -> None:
-        """Delete the legacy *twins* of *name*, now that *name* is stored."""
-        for legacy in twins:
-            logger.warning(
-                "replacing legacy-named document %s with %s",
-                DisplayName(legacy).redacted(),
-                DisplayName(name).redacted(),
-            )
-            self._database.store.delete_document(
-                legacy, collection=collection, count=False
-            )
-        self.dropped(twins, collection)
+        """Delete the legacy *twins* of *name*, now that *name* is stored.
+
+        A fault in a delete never fails the ingest: see :class:`LegacyTwins`.
+        """
+        LegacyTwins(self, self._database).drop(name, twins, collection)

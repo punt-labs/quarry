@@ -26,12 +26,13 @@ import pytest
 from starlette.testclient import TestClient
 
 from quarry.api import HealthResponse, SearchResponse, StatusResponse
-from quarry.backfill import BackfillStats
+from quarry.backfill_stats import BackfillStats
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon import routes
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
+from quarry.daemon.task_drain import TaskDrain
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
 from quarry.http_url import HttpUrl
@@ -45,7 +46,7 @@ from tests.url_names import with_query
 _TEARDOWN_DRAIN_TIMEOUT_S = 10.0
 
 
-async def _aclose_ingest_queue(ctx: DaemonContext) -> None:
+async def _drain_and_close_queue(ctx: DaemonContext) -> None:
     """Drain the ingest queue with the teardown timeout (keyword-only ``aclose``)."""
     await ctx.ingest_queue.aclose(drain_timeout=_TEARDOWN_DRAIN_TIMEOUT_S)
 
@@ -147,15 +148,17 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         if portal is not None:
             # Ingest jobs now run inside per-collection queue workers, not tracked
             # tasks, so drain those too or a queued job could run into a later
-            # test's mock window (the same isolation guard as ctx.tasks.drain).
+            # test's mock window (the same isolation guard as TaskDrain).
             # ``finally`` is load-bearing: a registry drain timeout now raises
             # (fail-closed) rather than swallowing, so the queue close must not
             # be skipped -- that queue is the OTHER leak vector this teardown
             # guards, tracked independently of ``TaskRegistry._refs``.
             try:
-                portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
+                portal.call(
+                    TaskDrain(ctx.tasks.tracked()).run, _TEARDOWN_DRAIN_TIMEOUT_S
+                )
             finally:
-                portal.call(_aclose_ingest_queue, ctx)
+                portal.call(_drain_and_close_queue, ctx)
 
 
 class TestHealth:
@@ -228,7 +231,7 @@ class TestCaCertRoute:
 
     def test_returns_404_when_no_cert(self, client: TestClient, tmp_path: Path) -> None:
         empty_tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", empty_tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=empty_tls_dir):
             resp = client.get("/ca.crt")
         assert resp.status_code == 404
         data = resp.json()
@@ -240,7 +243,7 @@ class TestCaCertRoute:
         tls_dir.mkdir()
         fake_pem = "-----BEGIN CERTIFICATE-----\nfakecert\n-----END CERTIFICATE-----\n"
         (tls_dir / "ca.crt").write_text(fake_pem)
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             resp = client.get("/ca.crt")
         assert resp.status_code == 200
         assert "BEGIN CERTIFICATE" in resp.text
@@ -258,7 +261,7 @@ class TestCaCertRoute:
         (tls_dir / "ca.crt").write_text(fake_pem)
 
         # No Authorization header -- should still get the cert.
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             resp = auth_client.get("/ca.crt")
         assert resp.status_code == 200
 
@@ -3495,6 +3498,19 @@ class TestRegistrations:
         assert data["status"] == "accepted"
         assert data["task_id"].startswith("register-")
 
+    @pytest.mark.parametrize("home", ["", "relative/home"])
+    def test_post_with_a_tilde_and_an_unusable_home_is_a_clean_400(
+        self, home_client: TestClient, monkeypatch: pytest.MonkeyPatch, home: str
+    ) -> None:
+        monkeypatch.setenv("HOME", home)
+
+        resp = home_client.post(
+            "/v1/registrations", json={"directory": "~/proj", "collection": "c"}
+        )
+
+        assert resp.status_code == 400
+        assert "home directory" in resp.json()["error"]
+
     def test_post_rejects_missing_directory(self, client: TestClient) -> None:
         resp = client.post("/v1/registrations", json={"collection": "c"})
         assert resp.status_code == 400
@@ -4291,18 +4307,18 @@ class TestMaintenance:
         app = build_app(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
+        def _fake_backfill(config: object, _runtime: object) -> BackfillStats:
             captured.update(
                 dry_run=config.dry_run,  # type: ignore[attr-defined]
                 collection=config.collection_override,  # type: ignore[attr-defined]
                 project=config.project_filter,  # type: ignore[attr-defined]
                 limit=config.limit,  # type: ignore[attr-defined]
             )
-            return BackfillStats(ingested=3, skipped_existing=1)
+            return BackfillStats(would_ingest=3, skipped_existing=1)
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.backfill.backfill_sessions", _fake_backfill),
+            patch("quarry.backfill.Backfill.sessions", _fake_backfill),
         ):
             resp = tc.post(
                 "/v1/backfill-sessions",
@@ -4311,6 +4327,7 @@ class TestMaintenance:
             assert resp.status_code == 202
             data = _poll_task_done(tc, resp.json()["task_id"])
 
+        assert len(ctx.tasks) == 1  # the backfill itself; never one per transcript
         # Every CLI param reached the engine call (bug-class-3: param -> server).
         assert captured == {
             "dry_run": True,
@@ -4319,7 +4336,8 @@ class TestMaintenance:
             "limit": 5,
         }
         results = data["results"]
-        assert results["ingested"] == 3
+        assert results["would_ingest"] == 3
+        assert "ingested" not in results  # a dry run stores nothing
         assert results["skipped_existing"] == 1
         assert results["dry_run"] is True
 
@@ -4360,7 +4378,7 @@ class TestMaintenance:
         a time and does not leak descriptors (proven by
         ``test_large_backfill_does_not_leak_descriptors``) — so no magic-number
         cap stands in for resource safety. ``limit=0``/empty means "all"
-        (matching ``backfill_sessions(limit=0)``) and a positive limit passes
+        (matching ``Backfill.sessions(limit=0)``) and a positive limit passes
         through unchanged with no ceiling; a *negative* limit is rejected at the
         boundary (``expected=None`` → 400, engine never called), never silently
         normalised to "all". This is the remote half of the local/remote
@@ -4371,13 +4389,13 @@ class TestMaintenance:
         _inject_mocks(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
+        def _fake_backfill(config: object, _runtime: object) -> BackfillStats:
             captured["limit"] = config.limit  # type: ignore[attr-defined]
             return BackfillStats()
 
         with (
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
-            patch("quarry.backfill.backfill_sessions", _fake_backfill),
+            patch("quarry.backfill.Backfill.sessions", _fake_backfill),
         ):
             resp = tc.post("/v1/backfill-sessions", json=json_body, headers=headers)
             if expected is None:
@@ -4393,12 +4411,12 @@ class TestMaintenance:
     def test_cli_backfill_request_reaches_engine_unchanged(
         self, tmp_path: Path, limit: int
     ) -> None:
-        """A CLI ``BackfillRequest`` reaches ``backfill_sessions`` field-for-field.
+        """A CLI ``BackfillRequest`` reaches ``Backfill.sessions`` field-for-field.
 
         The full local/remote equivalence (bug class 3): the CLI builds a
         ``BackfillRequest`` and the client posts ``model_dump()`` as the body, so
         serializing that exact contract and driving the route must hand
-        ``backfill_sessions`` the same values the CLI asked for. This locks both
+        ``Backfill.sessions`` the same values the CLI asked for. This locks both
         the ``0 == all`` limit semantics (no silent rewrite into a cap) AND the
         two field *renames* the route performs — ``collection`` →
         ``collection_override`` and ``project`` → ``project_filter`` — where a
@@ -4410,7 +4428,7 @@ class TestMaintenance:
         _inject_mocks(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
+        def _fake_backfill(config: object, _runtime: object) -> BackfillStats:
             captured.update(
                 dry_run=config.dry_run,  # type: ignore[attr-defined]
                 collection_override=config.collection_override,  # type: ignore[attr-defined]
@@ -4424,7 +4442,7 @@ class TestMaintenance:
         )
         with (
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
-            patch("quarry.backfill.backfill_sessions", _fake_backfill),
+            patch("quarry.backfill.Backfill.sessions", _fake_backfill),
         ):
             resp = tc.post("/v1/backfill-sessions", json=req.model_dump())
             assert resp.status_code == 202

@@ -52,6 +52,7 @@ class DocumentStreamer:
             context.agent_handle,
             context.memory_type,
             context.summary,
+            context.ingested_at,
             context.source_version,
         )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
 from starlette.concurrency import run_in_threadpool
@@ -9,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.capture_naming import CaptureNaming
+from quarry.capture_snapshot import CaptureSnapshot
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.content_group import ContentRouteGroup
@@ -48,13 +50,10 @@ class CaptureRoutes(ContentRouteGroup):
         content = self._require_content(body, "content", "capture")
         if isinstance(content, JSONResponse):
             return content
-        try:
-            name = CaptureNaming.name(
-                self._str_field(body, "document_name"),
-                self._str_field(body, "session_id"),
-            )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        identity = self._require_identity(body)
+        if isinstance(identity, JSONResponse):
+            return identity
+        name, snapshot = identity
         options = self._require_options(body)
         if isinstance(options, JSONResponse):
             return options
@@ -64,6 +63,10 @@ class CaptureRoutes(ContentRouteGroup):
         if isinstance(source, JSONResponse):
             return source
         collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
+        # The resolved name carries the ``-captures`` suffix the request did not.
+        refused = self._reject_oversized({"collection": collection.name}, "capture")
+        if refused is not None:
+            return refused
         labels = self._labels(
             memory_type, body, overwrite=overwrite, collection=collection.name
         )
@@ -71,9 +74,44 @@ class CaptureRoutes(ContentRouteGroup):
         # capture named for some other URL, is a label and never a page.
         is_page = CaptureNaming.is_page(name, source_url)
         inline = ScrubbedIngestJob(
-            name, content, labels, format_hint, "capture", url_sourced=is_page
+            name,
+            content,
+            labels,
+            format_hint,
+            "capture",
+            url_sourced=is_page,
+            captured_at=snapshot,
         )
         return CaptureIngestJob(inline=inline, source_url=source if is_page else None)
+
+    @staticmethod
+    def _require_strings(body: dict[str, object], keys: tuple[str, ...]) -> None:
+        """Raise ``ValueError`` naming the first of *keys* present but not a string."""
+        for key in keys:
+            value = body.get(key)
+            if value is not None and not isinstance(value, str):
+                msg = f"{key} must be a string"
+                raise ValueError(msg)
+
+    def _require_identity(
+        self, body: dict[str, object]
+    ) -> tuple[str, datetime | None] | JSONResponse:
+        """Return the capture's document name and snapshot time, or a 400.
+
+        The snapshot is ``None`` when ``captured_at`` is absent (queue time).
+        """
+        try:
+            self._require_strings(body, ("session_id", "captured_at"))
+            name = CaptureNaming.name(
+                self._str_field(body, "document_name"),
+                self._str_field(body, "session_id"),
+            )
+            snapshot = CaptureSnapshot.parse(
+                self._str_field(body, "captured_at"), now=datetime.now(UTC)
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return name, snapshot
 
     async def _collection_for_cwd(self, cwd: str) -> CapturesCollection:
         """Derive the ``<repo>-captures`` collection for *cwd* off the event loop.

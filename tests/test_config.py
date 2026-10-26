@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from quarry import __version__
-from quarry.config import Settings
+from quarry.config import INGEST_DRAIN_MAX_S, INGEST_DRAIN_MIN_S, Settings
 
 
 class TestVersion:
@@ -20,6 +20,19 @@ class TestVersion:
 
 
 class TestSettings:
+    def test_a_raw_settings_puts_its_paths_under_a_set_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``QUARRY_ROOT`` moves the database, registry and telemetry paths too."""
+        monkeypatch.setenv("QUARRY_ROOT", str(tmp_path))
+        monkeypatch.delenv("LANCEDB_PATH", raising=False)
+
+        settings = Settings()
+
+        assert settings.lancedb_path == tmp_path / "default" / "lancedb"
+        assert settings.registry_path == tmp_path / "default" / "registry.db"
+        assert settings.telemetry_path == tmp_path / "default" / "telemetry.db"
+
     def test_defaults(self):
         settings = Settings()
         assert settings.chunk_max_chars == 1800
@@ -189,3 +202,45 @@ class TestChunkBounds:
 
     def test_zero_overlap_is_accepted(self) -> None:
         assert Settings(chunk_overlap_chars=0).chunk_overlap_chars == 0
+
+
+class TestIngestDrainTimeout:
+    """The teardown budget must be one a service stop timeout can be built from."""
+
+    @staticmethod
+    def _bounds() -> tuple[float, float]:
+        return INGEST_DRAIN_MIN_S, INGEST_DRAIN_MAX_S
+
+    @pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "0", "-1", "0.5"])
+    def test_a_value_that_is_not_a_usable_budget_is_refused(
+        self, raw: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with monkeypatch.context() as scoped:  # the env must not outlive the check
+            scoped.setenv("INGEST_DRAIN_TIMEOUT_S", raw)
+            with pytest.raises(ValidationError):
+                Settings()
+
+    def test_a_value_over_the_maximum_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, high = self._bounds()
+        with monkeypatch.context() as scoped:
+            scoped.setenv("INGEST_DRAIN_TIMEOUT_S", str(high + 1))
+            with pytest.raises(ValidationError):
+                Settings()
+
+    def test_the_bounds_themselves_are_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for bound in self._bounds():
+            with monkeypatch.context() as scoped:
+                scoped.setenv("INGEST_DRAIN_TIMEOUT_S", str(bound))
+                assert Settings().ingest_drain_timeout_s == bound
+
+
+def test_the_field_enforces_exactly_the_named_bounds() -> None:
+    field = Settings.model_fields["ingest_drain_timeout_s"]
+    walked = {type(m).__name__: m for m in field.metadata}
+
+    assert walked["Ge"].ge == INGEST_DRAIN_MIN_S
+    assert walked["Le"].le == INGEST_DRAIN_MAX_S

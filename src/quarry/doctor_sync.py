@@ -6,6 +6,7 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
+from quarry.doctor_failure import CheckFailure
 from quarry.results import CheckResult
 
 if TYPE_CHECKING:
@@ -38,7 +39,9 @@ class SyncDiagnostics:
             return CheckResult(
                 name="Sync directories",
                 passed=False,
-                message=f"registry error: {exc}",
+                message=(
+                    f"registry error: {registry_path.name}: {CheckFailure.detail(exc)}"
+                ),
                 required=False,
             )
 

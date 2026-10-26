@@ -5,7 +5,9 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
-from typing import Self, final
+from typing import ClassVar, Self, final
+
+from quarry.doctor_failure import CheckFailure
 
 __all__ = ["HeadlessOpenCv"]
 
@@ -24,6 +26,10 @@ class HeadlessOpenCv:
     ``quarry install`` so every install path gets working headless OCR.
     """
 
+    # One small wheel: long enough for a slow network, short enough that an
+    # install never hangs on it.
+    _TIMEOUT_S: ClassVar[float] = 300.0
+
     __slots__ = ("_python",)
 
     _python: str
@@ -36,13 +42,28 @@ class HeadlessOpenCv:
     def enforce(self) -> str:
         """Reinstall the headless wheel so it provides ``cv2``; return a status line.
 
-        Raises ``subprocess.CalledProcessError`` if the reinstall fails; the
+        Raises ``RuntimeError`` (with pip's last line) if the reinstall fails; the
         caller (``quarry install``) treats that as a best-effort skip, and the
         runtime OCR guard still degrades cleanly.
         """
-        subprocess.run(  # noqa: S603  # fixed argv, no shell, no user input
-            self._reinstall_command(), check=True, capture_output=True
+        done = subprocess.run(  # noqa: S603  # fixed argv, no shell, no user input
+            self._reinstall_command(),
+            check=False,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=self._TIMEOUT_S,
         )
+        if done.returncode != 0:
+            # uv and pip both explain on stderr, but a missing interpreter or a
+            # refused argument is sometimes said on stdout alone.
+            why = CheckFailure.because(
+                done.stderr if done.stderr.strip() else done.stdout
+            )
+            msg = f"the reinstall exited {done.returncode}{why}"
+            raise RuntimeError(msg)
         return f"{_PACKAGE} is the cv2 provider"
 
     def remediation(self) -> str:
@@ -64,4 +85,13 @@ class HeadlessOpenCv:
         uv = shutil.which("uv")
         if uv is not None:
             return [uv, "pip", "install", "--python", self._python, *args]
-        return [self._python, "-m", "pip", "install", *args]
+        # pip must neither phone home for its own upgrade nor ask a question.
+        return [
+            self._python,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-input",
+            *args,
+        ]

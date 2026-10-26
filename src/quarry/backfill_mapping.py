@@ -7,12 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
+from quarry.home_paths import QuarryHome
 from quarry.shared_project_dirs import SharedProjectDirs
 
 if TYPE_CHECKING:
     from quarry.sync_registry import DirectoryRegistration
-
-CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
 
 @final
@@ -36,7 +35,7 @@ class ProjectMapping:
         A ``shared`` dir holds other projects' sessions too, so only the
         transcripts that record this project as their ``cwd`` are its own.
         """
-        project_dir = CLAUDE_PROJECTS_DIR / self.encoded_dir
+        project_dir = QuarryHome.claude_projects() / self.encoded_dir
         if not project_dir.is_dir():
             return []
         files = sorted(project_dir.glob("*.jsonl"))
@@ -100,6 +99,6 @@ class ProjectMappingResolver:
     @staticmethod
     def _project_dir_names() -> set[str]:
         """Return every directory name under ``~/.claude/projects/``."""
-        if not CLAUDE_PROJECTS_DIR.is_dir():
+        if not QuarryHome.claude_projects().is_dir():
             return set()
-        return {d.name for d in CLAUDE_PROJECTS_DIR.iterdir() if d.is_dir()}
+        return {d.name for d in QuarryHome.claude_projects().iterdir() if d.is_dir()}

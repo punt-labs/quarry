@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import logging
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from quarry.transcript_reader import TranscriptReader
+from quarry.transcript_records import TranscriptRecords
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestText:
@@ -186,6 +193,124 @@ class TestMalformedLines:
         assert reader.text() == "[user] first\n\n[assistant] second"
         assert reader.last_assistant_text() == "second"
 
+    def test_a_line_nested_too_deeply_to_parse_is_skipped(self, tmp_path: Path) -> None:
+        path = tmp_path / "t.jsonl"
+        deep = "[" * 200_000
+        path.write_text(f"{deep}\n{json.dumps(_turn('user', 'after'))}")
+
+        assert TranscriptReader(path).text() == "[user] after"
+
+
+class TestTruncation:
+    """What the bounds drop is reported, never silent."""
+
+    @staticmethod
+    def _transcript(path: Path, count: int) -> Path:
+        path.write_text(
+            "\n".join(json.dumps(_turn("user", f"m{n}")) for n in range(count))
+        )
+        return path
+
+    def test_the_record_bound_drop_is_a_warning_naming_the_transcript(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = self._transcript(tmp_path / "session.jsonl", 8)
+
+        with (
+            patch.object(TranscriptRecords, "MAX", 5),
+            patch.object(TranscriptRecords, "TRIM", 2),
+            caplog.at_level(logging.WARNING, logger="quarry.transcript_reader"),
+        ):
+            reader = TranscriptReader(path)
+
+        assert reader.truncated == 3
+        [record] = caplog.records
+        assert "session.jsonl" in record.getMessage()
+        assert "3 oldest records" in record.getMessage()
+
+    def test_a_transcript_within_the_bound_is_not_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 3))
+
+        assert reader.truncated == 0
+
+    def test_the_character_budget_drop_is_a_warning_naming_the_transcript(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 4))
+
+        with (
+            patch.object(TranscriptReader, "_MAX_CHARS", 20),
+            caplog.at_level(logging.WARNING, logger="quarry.transcript_reader"),
+        ):
+            text = reader.text()
+            truncated = reader.truncated
+
+        [record] = caplog.records
+        assert "t.jsonl" in record.getMessage()
+        assert "2 oldest entries" in record.getMessage()
+        assert text == "[user] m2\n\n[user] m3"
+        assert truncated == 2  # the budget drop is part of the count
+
+    def test_a_cut_with_nothing_dropped_does_not_say_dropped_zero(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 1))
+
+        with (
+            patch.object(TranscriptReader, "_MAX_CHARS", 4),
+            caplog.at_level(logging.WARNING, logger="quarry.transcript_reader"),
+        ):
+            reader.text()
+
+        [record] = caplog.records
+        assert "dropped" not in record.getMessage()
+        assert "cut the newest to its tail past the character budget" in (
+            record.getMessage()
+        )
+
+    def test_a_cut_newest_entry_is_named_in_the_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 3))
+
+        with (
+            patch.object(TranscriptReader, "_MAX_CHARS", 4),
+            caplog.at_level(logging.WARNING, logger="quarry.transcript_reader"),
+        ):
+            reader.text()
+
+        [record] = caplog.records
+        assert "dropped 2 oldest entries and cut the newest to its tail" in (
+            record.getMessage()
+        )
+
+    def test_one_message_over_the_budget_keeps_its_tail_and_is_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        budget = TranscriptReader._MAX_CHARS
+        path = tmp_path / "t.jsonl"
+        path.write_text(json.dumps(_turn("user", "a" * budget + "TAIL")))
+        reader = TranscriptReader(path)
+
+        text = reader.text()
+
+        assert len(text) == budget
+        assert text.endswith("TAIL")
+        assert reader.truncated == 1
+
+    def test_the_newest_entry_is_never_dropped_for_the_budget(
+        self, tmp_path: Path
+    ) -> None:
+        reader = TranscriptReader(self._transcript(tmp_path / "t.jsonl", 3))
+
+        with patch.object(TranscriptReader, "_MAX_CHARS", 1):
+            text = reader.text()
+
+        assert text != ""
+        assert text.endswith("2")
+
 
 class TestReadOnce:
     """A reader parses its file at construction and never again."""
@@ -287,3 +412,35 @@ class TestArchive:
             else:
                 msg = "expected archive to propagate the copy failure"
                 raise AssertionError(msg)
+
+
+class TestAReadFaultIsNotAnEmptyConversation:
+    @staticmethod
+    def _failing_read(monkeypatch: pytest.MonkeyPatch) -> None:
+        def emfile(self: Path, *args: object, **kwargs: object) -> str:
+            raise OSError(errno.EMFILE, "Too many open files")
+
+        monkeypatch.setattr(Path, "read_text", emfile)
+
+    def test_the_default_reader_still_reads_it_as_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text("{}")
+        self._failing_read(monkeypatch)
+
+        assert TranscriptReader(transcript).text() == ""
+
+    def test_a_reader_built_from_text_parses_that_text_and_never_reads_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transcript = tmp_path / "gone.jsonl"  # no file: only the text is used
+        self._failing_read(monkeypatch)
+        record = {
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
+        }
+
+        reader = TranscriptReader.from_text(transcript, json.dumps(record))
+
+        assert "Hi" in reader.text()

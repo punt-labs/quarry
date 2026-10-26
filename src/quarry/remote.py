@@ -10,14 +10,11 @@ import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from typing import Any
 
 from quarry.api import API_VERSION
+from quarry.home_paths import QuarryHome
 from quarry.net import LoopbackPolicy
-
-MCP_PROXY_CONFIG_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry.toml"
-CA_CERT_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry-ca.crt"
 
 
 class PermissionWarning(Warning):
@@ -31,13 +28,13 @@ def _toml_escape(value: str) -> str:
 
 def read_proxy_config() -> dict[str, Any]:
     """Return parsed mcp-proxy config, or {} if file does not exist."""
-    if not MCP_PROXY_CONFIG_PATH.exists():
+    if not QuarryHome.proxy_config().exists():
         return {}
     try:
-        return tomllib.loads(MCP_PROXY_CONFIG_PATH.read_text())
+        return tomllib.loads(QuarryHome.proxy_config().read_text())
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(
-            f"Malformed config at {MCP_PROXY_CONFIG_PATH}: {exc}. "
+            f"Malformed config at {QuarryHome.proxy_config()}: {exc}. "
             "Delete the file and run 'quarry login' again."
         ) from exc
 
@@ -69,8 +66,8 @@ def write_proxy_config(
             f'Authorization = "Bearer {_toml_escape(token)}"\n',
         ]
     content = "".join(lines)
-    MCP_PROXY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = MCP_PROXY_CONFIG_PATH.with_suffix(".tmp")
+    QuarryHome.proxy_config().parent.mkdir(parents=True, exist_ok=True)
+    tmp = QuarryHome.proxy_config().with_suffix(".tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(str(tmp), flags, 0o600)
     try:
@@ -82,15 +79,15 @@ def write_proxy_config(
     try:
         with f:
             f.write(content)
-        tmp.replace(MCP_PROXY_CONFIG_PATH)
+        tmp.replace(QuarryHome.proxy_config())
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
     try:
-        MCP_PROXY_CONFIG_PATH.chmod(0o600)  # belt-and-suspenders for overwrite case
+        QuarryHome.proxy_config().chmod(0o600)  # belt-and-suspenders for overwrite case
     except OSError as exc:
         raise PermissionWarning(
-            f"Config written to {MCP_PROXY_CONFIG_PATH} but could not restrict "
+            f"Config written to {QuarryHome.proxy_config()} but could not restrict "
             f"permissions: {exc}. The token is stored but may be readable by other "
             "users on this system."
         ) from exc
@@ -101,9 +98,9 @@ def delete_proxy_config() -> bool:
 
     Return False if nothing to remove.
     """
-    if not MCP_PROXY_CONFIG_PATH.exists():
+    if not QuarryHome.proxy_config().exists():
         return False
-    raw = MCP_PROXY_CONFIG_PATH.read_text()
+    raw = QuarryHome.proxy_config().read_text()
     # Strip the [quarry] block including all [quarry.*] subsections.
     # Stop at the next section that is not a quarry subsection (any [header]
     # except [quarry] and [quarry.*]) or EOF.
@@ -114,7 +111,7 @@ def delete_proxy_config() -> bool:
         return False
     stripped = cleaned.strip()
     if stripped:
-        tmp = MCP_PROXY_CONFIG_PATH.with_suffix(".tmp")
+        tmp = QuarryHome.proxy_config().with_suffix(".tmp")
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         fd = os.open(str(tmp), flags, 0o600)
         try:
@@ -126,12 +123,12 @@ def delete_proxy_config() -> bool:
         try:
             with f:
                 f.write(stripped + "\n")
-            tmp.replace(MCP_PROXY_CONFIG_PATH)
+            tmp.replace(QuarryHome.proxy_config())
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
     else:
-        MCP_PROXY_CONFIG_PATH.unlink()
+        QuarryHome.proxy_config().unlink()
     return True
 
 
@@ -304,7 +301,7 @@ def fetch_ca_cert(host: str, port: int) -> bytes:
 
 
 def store_ca_cert(cert_pem: bytes) -> None:
-    """Write the CA certificate to CA_CERT_PATH with 0600 permissions, atomically.
+    """Write the CA certificate to the stored CA path, 0600, atomically.
 
     Uses os.open() with mode 0600 from creation so no chmod race window exists.
     Writes to a .tmp sibling then renames into place so a crash cannot leave a
@@ -313,8 +310,8 @@ def store_ca_cert(cert_pem: bytes) -> None:
     Args:
         cert_pem: CA certificate in PEM format.
     """
-    CA_CERT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CA_CERT_PATH.with_suffix(".tmp")
+    QuarryHome.proxy_ca().parent.mkdir(parents=True, exist_ok=True)
+    tmp = QuarryHome.proxy_ca().with_suffix(".tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(str(tmp), flags, 0o600)
     try:
@@ -326,7 +323,7 @@ def store_ca_cert(cert_pem: bytes) -> None:
     try:
         with f:
             f.write(cert_pem)
-        tmp.replace(CA_CERT_PATH)
+        tmp.replace(QuarryHome.proxy_ca())
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

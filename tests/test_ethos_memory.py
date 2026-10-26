@@ -154,7 +154,9 @@ class TestForRepo:
 
     def test_no_vendored_tree_is_global_only(self, unpinned_root: Path) -> None:
         identities = _identities(unpinned_root / "global", "rmh")
-        with patch("quarry.ethos_memory._GLOBAL_IDENTITIES", identities):
+        with patch(
+            "quarry.home_paths.QuarryHome.ethos_identities", return_value=identities
+        ):
             result = EthosMemoryBootstrap.for_repo(unpinned_root).run()
         assert result.updated == ["rmh"]
         assert result.vendored_updated == []
@@ -165,7 +167,9 @@ class TestForRepo:
         repo_subdir = unpinned_root / "src"
         repo_subdir.mkdir()
 
-        with patch("quarry.ethos_memory._GLOBAL_IDENTITIES", identities):
+        with patch(
+            "quarry.home_paths.QuarryHome.ethos_identities", return_value=identities
+        ):
             result = EthosMemoryBootstrap.for_repo(repo_subdir).run()
 
         assert result.vendored_updated == ["claude", "rmh"]
@@ -258,7 +262,9 @@ class TestVendoredSeal:
         (unpinned_root / ".punt-labs" / "ethos").mkdir(parents=True)
         (unpinned_root / ".punt-labs" / "ethos" / "identities").symlink_to(elsewhere)
 
-        with patch("quarry.ethos_memory._GLOBAL_IDENTITIES", identities):
+        with patch(
+            "quarry.home_paths.QuarryHome.ethos_identities", return_value=identities
+        ):
             result = EthosMemoryBootstrap.for_repo(unpinned_root).run()
 
         assert "claude" in result.failed

@@ -3217,7 +3217,18 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
    - Label columns (`summary`, `document_name`, `document_path`, `collection`,
      `agent_handle`) have their own 8 KiB budget. `summary` is copied onto
      every chunk, so an unbounded label could recreate the overflow. The
-     content routes refuse an over-budget label with HTTP 400.
+     content routes refuse an over-budget or non-string label with HTTP 400,
+     checking what is actually stored: the admitted URL's stored name rather
+     than the raw URL (whose query becomes a short digest), and the final
+     collection after any `-captures`, `-lessons`, or `memory-` derivation.
+   - A URL ingest aborted at shutdown is recoverable only when nothing was
+     dropped from it (no query, no `;params`); its stored name is spooled,
+     which fetches the same resource. A URL with a query is spooled with
+     `recoverable: false`, the distinct kind `ingest-unrecoverable` (so a
+     replayer keyed on kind alone never treats the note as a URL), and no
+     URL text, since the raw query never reaches disk. The task says it
+     must be re-run "(query or parameters not persisted)" rather than that
+     it was spooled for recovery.
    - The budget is checked over the whole document before any overwrite-delete,
      so a violation never leaves a partial document.
    - Overlong sentences are hard-wrapped to `max_chars`.
@@ -3309,7 +3320,22 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
        it never lists as a page candidate. When both the stored document
        and the page being stored are URL-sourced, a store replaces the
        document under its former spelling, overwriting or not, and logs the
-       replacement at WARNING. One case remains: a label an older build
+       replacement at WARNING. The twins are dropped only after the new
+       document is stored, so a failed embed or write loses nothing. A
+       single-URL ingest without overwrite is create-if-absent, like the
+       content jobs: a name already held is skipped as `exists`, so a
+       re-ingest never appends duplicate chunks. A failed insert of a
+       URL-sourced page removes its partial write only when it owned the
+       name (the name was absent before, or overwrite deleted the prior
+       copy on purpose), so a failure never deletes a good page; a failed
+       cleanup never replaces the insert's own error. A failed twin lookup
+       or delete is logged with its remedy (re-ingest with overwrite)
+       without failing the stored page. Two
+       cases remain. A legacy name whose literal query is already
+       `q[sha256]=<16 hex>` reads as a current-build name and spells only
+       itself, so it sits beside its re-ingested copy; reading it the
+       other way would let a copied digest alias a different page. And a
+       label an older build
        stored with an html hint and a URL-shaped, non-canonical name is
        indistinguishable from a captured page in every stored column, so a
        later fetch of that page can replace it.
@@ -3451,7 +3477,12 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
      backfill-sessions` indexes missed sessions of registered directories;
      that conditional is true for every session, so no reach check is made
      (an earlier reach check mis-encoded paths and was removed). Backfill
-     re-ingests a session whose transcript grew since it was stored. The
+     re-ingests a session whose transcript grew since it was stored. A
+     capture's `ingestion_timestamp` is the instant the hook took its
+     snapshot (`captured_at`: offset-aware, in range, not before 2000; a
+     future value from a skewed clock is clamped to now), not the queue
+     time, so a transcript written while the capture waited in the queue
+     still reads as grown. Backfill stamps its own read time the same way. The
      quarry archive is reported separately as saved or not. A fault on the
      background-sync lock, or any failure to start the sync process, is
      reported as a failed launch with a pointer to the log, never as
@@ -3656,3 +3687,35 @@ limit does not fit hardware from a laptop to a GPU host.
   for any other channel; the real gaps are G1-G6.
 - **Key in the launchd/systemd environment like `QUARRY_API_KEY`.** That is the
   path G1 breaks, and a daemon-read file behaves the same on both platforms.
+
+## DES-060: Shutdown abort of queued ingest jobs follows a model-checked lifecycle
+
+**Status:** Accepted (quarry-70zm).
+
+**Context.** A daemon shutdown aborts queued and running ingest jobs. Several
+review rounds of point fixes to the abort accounting kept producing new
+defects:
+
+- jobs left in the wrong status;
+- kept jobs spooled;
+- stores that landed after the cancel left `failed`.
+
+**Decision.** The lifecycle is specified in Z and model-checked with ProB. The
+spec is `docs/design/job-abort.spec.tex` and its prose is
+`docs/design/job-abort.md`. The implementation follows it:
+
+- `JobLifecycle` is the only writer of a queued job's status, under an
+  owner-tracking claim.
+- Stores run on their own daemon-thread pool through `StoreRun`. A store that
+  ends after its cancel is observed and settles its job.
+- The abort tally is a per-job ledger, so its terms always sum.
+- `LoopClose` waits for detached stores and spool removals within the shutdown
+  budget, then names anything still running.
+
+**Rejected.** More empirical fix rounds without a model.
+
+**Open.** Two items are modelled in the spec's r3 amendment but not yet
+implemented:
+
+- refusal and fault store outcomes, with the REFUSED term;
+- a tracked respool drained at loop close.

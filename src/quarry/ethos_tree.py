@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
 
+from quarry.home_paths import QuarryHome
 from quarry.path_guard import FOLLOW_SYMLINKS, PathGuard, SealedTree
 
 if TYPE_CHECKING:
@@ -75,7 +76,7 @@ class EthosTree:
         symlinked ``$HOME`` would otherwise never match and the skip would
         silently stop applying.
         """
-        home = Path.home().resolve()
+        home = QuarryHome.home().resolve()
         for ancestor in self.ancestors():
             if ancestor != home:
                 yield ancestor
@@ -198,7 +199,7 @@ class EthosTree:
     def global_identities() -> Path:
         """Return the operator's global identities directory (may not exist).
 
-        Read from ``Path.home()`` at call time, not bound at import, so the
+        Read from the home directory at call time, not bound at import, so the
         hermetic test HOME redirect applies.
         """
-        return Path.home() / _ETHOS_DIR / "identities"
+        return QuarryHome.ethos_identities()

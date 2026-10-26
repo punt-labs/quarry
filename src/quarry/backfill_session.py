@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.artifacts import extract_artifacts, format_artifacts_header
+from quarry.capture import CaptureRequest
 from quarry.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -47,21 +48,17 @@ class BackfillSession:
         header = format_artifacts_header(self._artifacts)
         return f"{header}\n\n{self._text}" if header else self._text
 
-    def write_capture_file(self) -> None:
-        """Write the session's capture file via the shared CaptureWriter.
+    def capture_request(self) -> CaptureRequest:
+        """Return the request that writes the session's capture file.
 
-        The writer scrubs secrets, PII, and profanity before any bytes reach the
-        git-tracked capture file, and fails silently.
+        The shared CaptureWriter scrubs secrets, PII, and profanity before any
+        bytes reach the git-tracked capture file.
         """
-        from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
-
-        CaptureWriter().write(
-            CaptureRequest(
-                project_dir=Path(self._project_path),
-                session_id=self._transcript.stem,
-                timestamp=Transcript(self._transcript).timestamp("%Y-%m-%dT%H:%M:%SZ"),
-                artifacts=self._artifacts,
-                text=self._text,
-                label="backfill",
-            )
+        return CaptureRequest(
+            project_dir=Path(self._project_path),
+            session_id=self._transcript.stem,
+            timestamp=Transcript(self._transcript).timestamp("%Y-%m-%dT%H:%M:%SZ"),
+            artifacts=self._artifacts,
+            text=self._text,
+            label="backfill",
         )

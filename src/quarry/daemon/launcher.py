@@ -1,6 +1,6 @@
 """The ``quarryd`` launcher: resolve bind options and start the engine daemon.
 
-Only the daemon process imports the engine (DES-031 v2.2 R3); this launcher is
+Only the daemon process imports the engine; this launcher is
 its entry point.  It refuses a remote-reachable bind that carries no operator
 key, mints a loopback ``serve.token`` when none is supplied, and hands a
 :class:`ServeConfig` to :class:`DaemonServer`.  The bind options are bundled in
@@ -15,14 +15,16 @@ from typing import Annotated, Self, final
 
 import typer
 
+from quarry._cli_entry import CliEntry
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.crash_logging import UncaughtExceptionLog
 from quarry.daemon.bind_options import BindOptions
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.db_pointer import SELECTION
+from quarry.home_paths import QuarryHome
+from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.logging_config import LoggingConfig
 from quarry.net import LoopbackPolicy
-from quarry.tls import TLS_DIR
 
 # 256-bit URL-safe token — the loopback bearer minted when no key is supplied.
 _TOKEN_BYTES = 32
@@ -31,6 +33,8 @@ _TOKEN_BYTES = 32
 @final
 class DaemonLauncher:
     """Turn parsed :class:`BindOptions` into a running engine daemon."""
+
+    __slots__ = ("_options",)
 
     _options: BindOptions
 
@@ -61,7 +65,9 @@ class DaemonLauncher:
             ssl_certfile=certfile,
             ssl_keyfile=keyfile,
         )
-        DaemonServer.serve(self._settings(), config)
+        settings = self._settings()
+        InstalledStopTimeout.installed().report(settings.ingest_drain_timeout_s)
+        DaemonServer.serve(settings, config)
 
     def _settings(self) -> Settings:
         name = self._options.db or SELECTION.persisted()
@@ -79,15 +85,22 @@ class DaemonLauncher:
         """
         if not self._options.tls:
             return None, None
-        cert = TLS_DIR / "server.crt"
-        key = TLS_DIR / "server.key"
+        cert = QuarryHome.tls_dir() / "server.crt"
+        key = QuarryHome.tls_dir() / "server.key"
         if not cert.exists() or not key.exists():
             msg = (
-                f"TLS certificate files not found in {TLS_DIR}. "
+                f"TLS certificate files not found in {QuarryHome.tls_dir()}. "
                 "Run 'quarry install' first."
             )
             raise SystemExit(msg)
         return str(cert), str(key)
+
+    @staticmethod
+    def serve() -> None:
+        """Configure logging, then parse argv and launch the daemon."""
+        LoggingConfig.configure(stderr_level="INFO", log_file=LoggingConfig.DAEMON_LOG)
+        UncaughtExceptionLog.install()
+        typer.run(DaemonLauncher.cli)
 
     @staticmethod
     def cli(
@@ -138,15 +151,12 @@ def entrypoint() -> None:
     Logging is configured HERE rather than inside :meth:`DaemonLauncher.launch`
     so it covers the whole process: argument parsing, the bind-key and TLS
     refusals that exit before any server exists, and the uncaught-exception
-    hooks.  Until this call the daemon had no logging configuration at all --
-    root had no handlers, so Python fell back to ``logging.lastResort``, a
-    bare stderr handler at WARNING with no formatter.  Every operational INFO
-    line was discarded, and what did escape reached the supervisor's stderr
-    file with no timestamp.
+    hooks.  Without it root has no handlers, so Python falls back to
+    ``logging.lastResort``, a bare stderr handler at WARNING with no formatter:
+    every operational INFO line is discarded, and what escapes reaches the
+    supervisor's stderr file with no timestamp.
 
     ``stderr_level="INFO"`` keeps the supervisor's stderr file readable as a
     live tail; the rotating file is the record.
     """
-    LoggingConfig.configure(stderr_level="INFO", log_file=LoggingConfig.DAEMON_LOG)
-    UncaughtExceptionLog.install()
-    typer.run(DaemonLauncher.cli)
+    CliEntry.run(DaemonLauncher.serve)
