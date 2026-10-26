@@ -36,7 +36,11 @@ _COMMANDS: Final = (
 # The deterministic rule set: enable adds every missing member, disable removes
 # these exact values (§ 2.8). Changing it strands rules on disable, so a rule
 # retired here must stay in the set until no enabled repo can still carry it.
-QUARRY_RULES: Final = ("mcp__quarry__*", *(f"Skill({name})" for name in _COMMANDS))
+QUARRY_RULES: Final = (
+    "mcp__quarry__*",
+    "Bash(quarry:*)",
+    *(f"Skill({name})" for name in _COMMANDS),
+)
 
 _SETTINGS: Final = (".claude", "settings.json")
 

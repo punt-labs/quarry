@@ -14,6 +14,12 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- tool: `quarry enable` also allows the `quarry` CLI (`Bash(quarry:*)`) in the
+  project's `.claude/settings.json`, alongside the MCP and `Skill(...)` rules;
+  `quarry disable` removes it with the rest.
+
 ## [3.5.1] - 2026-10-25
 
 ### Changed
