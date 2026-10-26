@@ -3523,3 +3523,35 @@ fix removes the trigger and isolates the failure, rather than tuning Lance.
 - **A regex log filter alone.** It is a backstop, not a guarantee. A space
   inside a query string defeats it, so admission and `HttpUrl` carry the
   guarantee.
+
+## DES-058: Shutdown abort of queued ingest jobs follows a model-checked lifecycle
+
+**Status:** Accepted (quarry-70zm).
+
+**Context.** A daemon shutdown aborts queued and running ingest jobs. Several
+review rounds of point fixes to the abort accounting kept producing new
+defects:
+
+- jobs left in the wrong status;
+- kept jobs spooled;
+- stores that landed after the cancel left `failed`.
+
+**Decision.** The lifecycle is specified in Z and model-checked with ProB. The
+spec is `docs/design/job-abort.spec.tex` and its prose is
+`docs/design/job-abort.md`. The implementation follows it:
+
+- `JobLifecycle` is the only writer of a queued job's status, under an
+  owner-tracking claim.
+- Stores run on their own daemon-thread pool through `StoreRun`. A store that
+  ends after its cancel is observed and settles its job.
+- The abort tally is a per-job ledger, so its terms always sum.
+- `LoopClose` waits for detached stores and spool removals within the shutdown
+  budget, then names anything still running.
+
+**Rejected.** More empirical fix rounds without a model.
+
+**Open.** Two items are modelled in the spec's r3 amendment but not yet
+implemented:
+
+- refusal and fault store outcomes, with the REFUSED term;
+- a tracked respool drained at loop close.
