@@ -37,18 +37,19 @@
 
 The model has \emph{two jobs} (\field{ja}, \field{jb}) on \emph{one collection
 worker}, which holds at most one job at a time and runs it on a store thread.
-A job is one of three shapes, fixed when it is admitted. A \emph{backfill} job
-(\field{ck} true) reports a commit checkpoint, and is run again from its
-transcript, so it needs no spool. A \emph{rerunnable} job (\field{ck} false,
-\field{skrerun}) is the same without the checkpoint. A \emph{spooled} job
-(\field{skspool}: a \field{remember} or a URL ingest) has no durable client
-copy, so the abort writes it a spool record.
+A job has two attributes, fixed when it is admitted, and all four combinations
+occur. \field{ck} true: it reports a commit checkpoint, so it can be
+\field{committing}. \field{skrerun}: its source outlives it (a backfill
+transcript), so it is run again from the source and needs no spool. \field{skspool}
+(a \field{remember} or a URL ingest): it has no durable copy, so the abort writes
+it a spool record. A committing job with no durable copy is the case a store fault
+turns into a \emph{respool}.
 
 Five actors write a job's status or its tally:
 
 \begin{itemize}
   \item the \emph{worker}, which starts a job and, through its terminal
-    (\field{TaskTerminal}, \field{RefusalAwareTerminal}), records how the body
+    (\field{Terminal}, which settles a queued job through \field{JobLifecycle}), records how the body
     ended;
   \item the \emph{producer}, which gives up on a job by withdrawing it
     (\field{JobLifecycle.withdraw}), from another thread;
@@ -251,7 +252,7 @@ commit checkpoint. \field{tcommit}: past the checkpoint (a backfill job only).
 stopped at the checkpoint, was refused, or failed after the delete).
 
 \begin{zed}
-TS ::= t0 | tpre | tcommit | tstored | tstop
+TS ::= t0 | tpre | tcommit | tstored | tfault | trefuse
 \end{zed}
 
 The abort's progress on a job. \field{an}: not taken. \field{atake}: taken out
@@ -260,7 +261,7 @@ of the queue, or the worker's handler has it, and \field{Begin} has not run.
 write has started. \field{arec}: its outcome is recorded.
 
 \begin{zed}
-AB ::= an | atake | abegun | aspool | arec
+AB ::= an | atake | abegun | aspool | arespool | arec
 \end{zed}
 
 The spool thread.
@@ -283,7 +284,7 @@ committing job, whose store has not ended.
 
 \begin{zed}
 TERM ::= tnone | tpend | tspooled | tnospool | tnotw | tunb | tunfin
-       | tkept | tunconf
+       | tkept | tunconf | trefused
 \end{zed}
 
 The reason a job's status carries. \field{rterm}: the terminal's own (cancelled,
@@ -300,14 +301,14 @@ PHASE ::= pre | started
 
 \begin{zed}
 WIT ::= wTerm | wCount | wKept | wLost | wLate | wClaim | wOver | wDisk
-      | wMatch | wCompl | wGhost | wSilent
+      | wMatch | wCompl | wGhost | wSilent | wRefused | wRespool | wPend
 \end{zed}
 
 \begin{axdef}
 fixed, abl : \nat
 \where
 fixed \in 0 \upto 1 \\
-abl \in 0 \upto 9 \\
+abl \in 0 \upto 12 \\
 abl > 0 \implies fixed = 1 \\
 fixed = 1 \\
 abl = 0
@@ -316,8 +317,6 @@ abl = 0
 \begin{axdef}
 ck : JOB \fun ZBOOL \\
 sk : JOB \fun SK
-\where
-\forall j : JOB @ ck~j = ztrue \implies sk~j = skrerun
 \end{axdef}
 
 The reason that goes with each term, and the term and reason a spool outcome
@@ -381,7 +380,7 @@ Run'
   fl'~j = zfalse \land fc'~j = zfalse \land rp'~j = zfalse \\
 cnt' = \{ tnone \mapsto 2, tpend \mapsto 0, tspooled \mapsto 0, tnospool \mapsto 0,
   tnotw \mapsto 0, tunb \mapsto 0, tunfin \mapsto 0, tkept \mapsto 0,
-  tunconf \mapsto 0 \} \\
+  tunconf \mapsto 0, trefused \mapsto 0 \} \\
 ph' = pre \\
 lc' = zfalse \\
 bx' = zfalse \\
@@ -403,7 +402,7 @@ Every operation below is its own core schema conjoined with \field{Latch}, which
 \where
 wit' = wit \cup \{ w : WIT |
   (w = wTerm \land (\exists j : JOB @ ab'~j = arec \land rp'~j = zfalse \land
-     ts'~j \in \{ t0, tstored, tstop \} \land
+     ts'~j \in \{ t0, tstored, tfault, trefuse \} \land
      \lnot ((st'~j = scompleted \land ts'~j = tstored) \lor
             (st'~j = sfailed \land ts'~j \neq tstored) \lor
             st'~j \in \{ swithdrawn, saborted \}))) \lor
@@ -415,7 +414,8 @@ wit' = wit \cup \{ w : WIT |
      rp'~j = zfalse)) \lor
   (w = wLate \land (\exists j : JOB @ st'~j = sfailed \land
      ((tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j)) \lor
-      (tl'~j = tnospool \land rs'~j \notin \{ rnospool, rterm \})))) \lor
+      (tl'~j = tnospool \land rs'~j \notin \{ rnospool, rterm \}) \lor
+      (tl'~j = trefused \land rs'~j \neq rterm)))) \lor
   (w = wDisk \land (\exists j : JOB @ st'~j = sfailed \land
      ((rs'~j = rspooled \land sp'~j \neq sok) \lor
       (rs'~j \in \{ rnotw, runb \} \land sp'~j \in \{ srun, sok \}) \lor
@@ -425,14 +425,21 @@ wit' = wit \cup \{ w : WIT |
      (st~j = scommitting \land st'~j = sfailed \land ts'~j = tcommit))) \lor
   (w = wMatch \land (\exists j : JOB @
      (tl'~j = tunconf \land st'~j \neq scommitting) \lor
-     (tl'~j \in \{ tpend, tunfin, tspooled, tnotw, tunb, tnospool \} \land
+     (tl'~j \in \{ tpend, tunfin, tspooled, tnotw, tunb, tnospool, trefused \} \land
         st'~j \neq sfailed) \lor
      (tl'~j = tkept \land st'~j \notin \{ swithdrawn, saborted, scompleted \}))) \lor
   (w = wCompl \land (\exists j : JOB @ st'~j = scompleted \land rs'~j \neq rnone)) \lor
   (w = wGhost \land (\exists j : JOB @ st'~j = scompleted \land sp'~j = sok \land
      rp'~j = zfalse)) \lor
   (w = wSilent \land lc' = ztrue \land (\exists j : JOB @ rp'~j = zfalse \land
-     (ts'~j \in \{ tpre, tcommit \} \lor (st'~j = scompleted \land sp'~j = srun)))) \}
+     (ts'~j \in \{ tpre, tcommit \} \lor
+      ((st'~j = scompleted \lor tl'~j = trefused) \land sp'~j = srun)))) \lor
+  (w = wRefused \land (\exists j : JOB @ ts'~j = trefuse \land rp'~j = zfalse \land
+     (tl'~j \notin \{ tnone, trefused, tkept \} \lor sp'~j = sok))) \lor
+  (w = wRespool \land lc' = ztrue \land
+     (\exists j : JOB @ ab'~j = arespool \land rp'~j = zfalse)) \lor
+  (w = wPend \land lc' = ztrue \land
+     (\exists j : JOB @ tl'~j = tpend \land ab'~j \neq arespool \land rp'~j = zfalse)) \}
 \end{schema}
 
 \begin{schema}{LatchClaim}
@@ -440,7 +447,7 @@ wit' = wit \cup \{ w : WIT |
 \where
 wit' = wit \cup \{ w : WIT |
   (w = wTerm \land (\exists j : JOB @ ab'~j = arec \land rp'~j = zfalse \land
-     ts'~j \in \{ t0, tstored, tstop \} \land
+     ts'~j \in \{ t0, tstored, tfault, trefuse \} \land
      \lnot ((st'~j = scompleted \land ts'~j = tstored) \lor
             (st'~j = sfailed \land ts'~j \neq tstored) \lor
             st'~j \in \{ swithdrawn, saborted \}))) \lor
@@ -452,7 +459,8 @@ wit' = wit \cup \{ w : WIT |
      rp'~j = zfalse)) \lor
   (w = wLate \land (\exists j : JOB @ st'~j = sfailed \land
      ((tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j)) \lor
-      (tl'~j = tnospool \land rs'~j \notin \{ rnospool, rterm \})))) \lor
+      (tl'~j = tnospool \land rs'~j \notin \{ rnospool, rterm \}) \lor
+      (tl'~j = trefused \land rs'~j \neq rterm)))) \lor
   (w = wDisk \land (\exists j : JOB @ st'~j = sfailed \land
      ((rs'~j = rspooled \land sp'~j \neq sok) \lor
       (rs'~j \in \{ rnotw, runb \} \land sp'~j \in \{ srun, sok \}) \lor
@@ -462,14 +470,21 @@ wit' = wit \cup \{ w : WIT |
      (st~j = scommitting \land st'~j = sfailed \land ts'~j = tcommit))) \lor
   (w = wMatch \land (\exists j : JOB @
      (tl'~j = tunconf \land st'~j \neq scommitting) \lor
-     (tl'~j \in \{ tpend, tunfin, tspooled, tnotw, tunb, tnospool \} \land
+     (tl'~j \in \{ tpend, tunfin, tspooled, tnotw, tunb, tnospool, trefused \} \land
         st'~j \neq sfailed) \lor
      (tl'~j = tkept \land st'~j \notin \{ swithdrawn, saborted, scompleted \}))) \lor
   (w = wCompl \land (\exists j : JOB @ st'~j = scompleted \land rs'~j \neq rnone)) \lor
   (w = wGhost \land (\exists j : JOB @ st'~j = scompleted \land sp'~j = sok \land
      rp'~j = zfalse)) \lor
   (w = wSilent \land lc' = ztrue \land (\exists j : JOB @ rp'~j = zfalse \land
-     (ts'~j \in \{ tpre, tcommit \} \lor (st'~j = scompleted \land sp'~j = srun)))) \lor w = wClaim \}
+     (ts'~j \in \{ tpre, tcommit \} \lor
+      ((st'~j = scompleted \lor tl'~j = trefused) \land sp'~j = srun)))) \lor
+  (w = wRefused \land (\exists j : JOB @ ts'~j = trefuse \land rp'~j = zfalse \land
+     (tl'~j \notin \{ tnone, trefused, tkept \} \lor sp'~j = sok))) \lor
+  (w = wRespool \land lc' = ztrue \land
+     (\exists j : JOB @ ab'~j = arespool \land rp'~j = zfalse)) \lor
+  (w = wPend \land lc' = ztrue \land
+     (\exists j : JOB @ tl'~j = tpend \land ab'~j \neq arespool \land rp'~j = zfalse)) \lor w = wClaim \}
 \end{schema}
 
 % ===================================================================
@@ -662,7 +677,7 @@ ts~j? = tpre \\
 st~j? \neq srunning \\
 st' = st \\
 loc' = loc \\
-ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ts' = ts \oplus \{ j? \mapsto tfault \} \\
 ab' = ab \\
 sp' = sp \\
 tl' = tl \\
@@ -708,17 +723,20 @@ bx' = bx
 StoreEnds \defs StoreEndsCore \land Latch
 \end{zed}
 
-The store thread ends without rows (a refusal, an insert that failed after the
-delete), while the worker still awaits it.
+The store thread ends without rows, while the worker still awaits it. \field{f?}
+says how: \field{trefuse}, a \emph{refusal} (the content was looked at and rejected:
+binary, blank, zero rows), or \field{tfault}, a \emph{fault} (the write broke, an
+insert failed after the delete).
 
 \begin{schema}{StoreFailsCore}
-\Delta Run \\ j? : JOB
+\Delta Run \\ j? : JOB \\ f? : TS
 \where
 ((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
 loc~j? = body \\
+f? \in \{ tfault, trefuse \} \\
 st' = st \\
 loc' = loc \\
-ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ts' = ts \oplus \{ j? \mapsto f? \} \\
 ab' = ab \\
 sp' = sp \\
 tl' = tl \\
@@ -779,14 +797,15 @@ StoreEndsOld \defs StoreEndsOldCore \land Latch
 \emph{Old build.} The detached thread ends without rows; nobody observes it.
 
 \begin{schema}{StoreFailsOldCore}
-\Delta Run \\ j? : JOB
+\Delta Run \\ j? : JOB \\ f? : TS
 \where
 fixed = 0 \\
 ((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
 loc~j? = out \\
+f? \in \{ tfault, trefuse \} \\
 st' = st \\
 loc' = loc \\
-ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ts' = ts \oplus \{ j? \mapsto f? \} \\
 ab' = ab \\
 sp' = sp \\
 tl' = tl \\
@@ -1012,7 +1031,7 @@ the path), so no ghost record survives.
 fixed = 1 \\
 abl \neq 5 \\
 sp~j? = srun \\
-st~j? = scompleted \\
+(st~j? = scompleted \lor tl~j? = trefused) \\
 lc = zfalse \\
 st' = st \\
 loc' = loc \\
@@ -1048,7 +1067,7 @@ tl~j? = tunconf \\
 lc = zfalse \\
 st' = st \oplus \{ j? \mapsto sfailed \} \\
 loc' = loc \\
-ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ts' = ts \oplus \{ j? \mapsto tfault \} \\
 ab' = ab \\
 sp' = sp \\
 tl' = tl \\
@@ -1110,10 +1129,11 @@ abl \neq 6 \\
 loc~j? = out \\
 st~j? = scommitting \\
 tl~j? = tunconf \\
+sk~j? = skrerun \\
 lc = zfalse \\
 st' = st \oplus \{ j? \mapsto sfailed \} \\
 loc' = loc \\
-ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ts' = ts \oplus \{ j? \mapsto tfault \} \\
 ab' = ab \\
 sp' = sp \\
 tl' = tl \oplus \{ j? \mapsto tnospool \} \\
@@ -1131,12 +1151,118 @@ bx' = bx
 StoreFailsObservedCommitting \defs StoreFailsObservedCommittingCore \land Latch
 \end{zed}
 
-\emph{Fixed build.} The same, before the abort has begun the job.
+\emph{Fixed build.} The detached store of a committing job with no durable copy
+\emph{faults}: nothing is stored and nothing can be run again, so the job is
+\emph{respooled}: failed provisionally, counted pending again, and its spool write
+starts now. The respool is a tracked operation (\field{ab} is \field{arespool}):
+\field{LoopClose} waits for it, and reports it if it is still running.
 
-\begin{schema}{StoreFailsObservedUnbegunCore}
+\begin{schema}{StoreFaultsRespoolCore}
 \Delta Run \\ j? : JOB
 \where
 fixed = 1 \\
+((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
+loc~j? = out \\
+st~j? = scommitting \\
+tl~j? = tunconf \\
+sk~j? = skspool \\
+lc = zfalse \\
+st' = st \oplus \{ j? \mapsto sfailed \} \\
+loc' = loc \\
+ts' = ts \oplus \{ j? \mapsto tfault \} \\
+ab' = ab \oplus \{ j? \mapsto arespool \} \\
+sp' = sp \oplus \{ j? \mapsto srun \} \\
+tl' = tl \oplus \{ j? \mapsto tpend \} \\
+rs' = rs \oplus \{ j? \mapsto rprov \} \\
+fl' = fl \\
+fc' = fc \\
+rp' = rp \\
+cnt' = cnt \oplus \{ tunconf \mapsto cnt~tunconf - 1, tpend \mapsto cnt~tpend + 1 \} \\
+ph' = ph \\
+lc' = lc \\
+bx' = bx
+\end{schema}
+
+\begin{zed}
+StoreFaultsRespool \defs StoreFaultsRespoolCore \land Latch
+\end{zed}
+
+\emph{Fixed build.} The detached store \emph{refuses} the content, whenever it ends
+and whatever the abort had decided: the job ends \field{failed} with the store's
+reason, in the term \emph{refused} (nothing to recover), is never spooled, and a
+spool record already written is removed (a spool write still running is removed
+when it ends, \field{SpoolEndsRemoved}).
+
+\begin{schema}{StoreRefusesObservedCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 1 \\
+abl \neq 12 \\
+((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
+loc~j? = out \\
+st~j? \in \{ sfailed, scommitting \} \\
+tl~j? \in \{ tpend, tspooled, tnospool, tnotw, tunb, tunfin, tunconf \} \\
+lc = zfalse \\
+st' = st \oplus \{ j? \mapsto sfailed \} \\
+loc' = loc \\
+ts' = ts \oplus \{ j? \mapsto trefuse \} \\
+ab' = ab \oplus \{ j? \mapsto arec \} \\
+(sp~j? = sok \implies sp' = sp \oplus \{ j? \mapsto s0 \}) \land (sp~j? \neq sok \implies sp' = sp) \\
+tl' = tl \oplus \{ j? \mapsto trefused \} \\
+rs' = rs \oplus \{ j? \mapsto rterm \} \\
+fl' = fl \\
+fc' = fc \\
+rp' = rp \\
+cnt' = cnt \oplus \{ tl~j? \mapsto cnt~(tl~j?) - 1, trefused \mapsto cnt~trefused + 1 \} \\
+ph' = ph \\
+lc' = lc \\
+bx' = bx
+\end{schema}
+
+\begin{zed}
+StoreRefusesObserved \defs StoreRefusesObservedCore \land Latch
+\end{zed}
+
+\emph{Seeded fault 12.} The same, and the job's term and spool record are left as
+they were: a refused job is left \emph{spooled}.
+
+\begin{schema}{StoreRefusesObservedStaleCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 1 \\
+abl = 12 \\
+((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
+loc~j? = out \\
+st~j? \in \{ sfailed, scommitting \} \\
+tl~j? \in \{ tpend, tspooled, tnospool, tnotw, tunb, tunfin, tunconf \} \\
+lc = zfalse \\
+st' = st \oplus \{ j? \mapsto sfailed \} \\
+loc' = loc \\
+ts' = ts \oplus \{ j? \mapsto trefuse \} \\
+ab' = ab \\
+sp' = sp \\
+tl' = tl \\
+rs' = rs \oplus \{ j? \mapsto rterm \} \\
+fl' = fl \\
+fc' = fc \\
+rp' = rp \\
+cnt' = cnt \\
+ph' = ph \\
+lc' = lc \\
+bx' = bx
+\end{schema}
+
+\begin{zed}
+StoreRefusesObservedStale \defs StoreRefusesObservedStaleCore \land Latch
+\end{zed}
+
+\emph{Fixed build.} The same, before the abort has begun the job.
+
+\begin{schema}{StoreFailsObservedUnbegunCore}
+\Delta Run \\ j? : JOB \\ f? : TS
+\where
+fixed = 1 \\
+f? \in \{ tfault, trefuse \} \\
 ((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
 loc~j? = out \\
 st~j? = scommitting \\
@@ -1144,7 +1270,7 @@ tl~j? = tnone \\
 lc = zfalse \\
 st' = st \oplus \{ j? \mapsto sfailed \} \\
 loc' = loc \\
-ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ts' = ts \oplus \{ j? \mapsto f? \} \\
 ab' = ab \\
 sp' = sp \\
 tl' = tl \\
@@ -1163,19 +1289,23 @@ StoreFailsObservedUnbegun \defs StoreFailsObservedUnbegunCore \land Latch
 \end{zed}
 
 \emph{Fixed build.} A detached store that fails on a job whose status already
-says it did not store (failed) or is the producer's: nothing to correct.
+says it did not store (failed) or is the producer's, and nothing to correct:
+a fault on a failed job, any end of a job not yet begun, or any end of a producer's
+job.
 
 \begin{schema}{StoreFailsDetachedOtherCore}
-\Delta Run \\ j? : JOB
+\Delta Run \\ j? : JOB \\ f? : TS
 \where
 fixed = 1 \\
+f? \in \{ tfault, trefuse \} \\
 ((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
 loc~j? = out \\
 st~j? \neq scommitting \\
+(f? = tfault \lor st~j? \in \{ swithdrawn, saborted, scompleted \} \lor tl~j? = tnone) \\
 lc = zfalse \\
 st' = st \\
 loc' = loc \\
-ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ts' = ts \oplus \{ j? \mapsto f? \} \\
 ab' = ab \\
 sp' = sp \\
 tl' = tl \\
@@ -1199,12 +1329,12 @@ StoreFailsDetachedOther \defs StoreFailsDetachedOtherCore \land Latch
 \label{sec:terminal}
 % ===================================================================
 
-\field{TaskTerminal.recording} and \field{RefusalAwareTerminal} record how the
+\field{Terminal.recording} records, through the job's lifecycle, how the
 body ended. Before the abort the body's exit is \field{Finish}; the cancel
 reaches the body through the \field{CancelInBody} family.
 
 \emph{Old build.} The worker's terminal records \field{completed}
-(\field{RefusalAwareTerminal.complete}) with no claim and over any status.
+(at eaa5118, \field{RefusalAwareTerminal.complete}) with no claim and over any status.
 
 \begin{schema}{FinishStoredOldCore}
 \Delta Run \\ j? : JOB
@@ -1243,7 +1373,7 @@ and over any status, a producer's \field{aborted} included.
 fixed = 0 \\
 ph = pre \\
 loc~j? = body \\
-ts~j? = tstop \\
+ts~j? \in \{ tfault, trefuse \} \\
 st' = st \oplus \{ j? \mapsto sfailed \} \\
 loc' = loc \oplus \{ j? \mapsto out \} \\
 ts' = ts \\
@@ -1304,7 +1434,7 @@ over a running or committing job (the store is over, so the commit is settled).
 fixed = 1 \\
 ph = pre \\
 loc~j? = body \\
-ts~j? = tstop \\
+ts~j? \in \{ tfault, trefuse \} \\
 st~j? \in \{ srunning, scommitting \} \\
 st' = st \oplus \{ j? \mapsto sfailed \} \\
 loc' = loc \oplus \{ j? \mapsto out \} \\
@@ -1335,7 +1465,7 @@ exit leaves that status alone.
 fixed = 1 \\
 ph = pre \\
 loc~j? = body \\
-ts~j? \in \{ tstored, tstop \} \\
+ts~j? \in \{ tstored, tfault, trefuse \} \\
 st~j? = saborted \\
 st' = st \\
 loc' = loc \oplus \{ j? \mapsto out \} \\
@@ -1422,7 +1552,7 @@ CancelAtGate \defs CancelAtGateCore \land Latch
 \end{zed}
 
 \emph{Old build.} The cancel reaches the job inside its terminal
-(\field{TaskTerminal.recording}), which records \field{failed} with no claim and
+(at eaa5118, \field{TaskTerminal.recording}), which records \field{failed} with no claim and
 over whatever the status is: a committing job, a producer's \field{aborted}, and
 a store that has in fact already landed.
 
@@ -1462,7 +1592,7 @@ claim.
 fixed = 1 \\
 ph = started \\
 loc~j? = body \\
-((st~j? = srunning \land ts~j? \neq tstored) \lor (st~j? = scommitting \land ts~j? = tstop)) \\
+((st~j? = srunning \land ts~j? \neq tstored) \lor (st~j? = scommitting \land ts~j? \in \{ tfault, trefuse \})) \\
 st' = st \oplus \{ j? \mapsto sfailed \} \\
 loc' = loc \oplus \{ j? \mapsto out \} \\
 ts' = ts \\
@@ -1653,7 +1783,7 @@ under the claim, and counted pending.
 fixed = 1 \\
 ab~j? = atake \\
 st~j? \in \{ squeued, srunning, sfailed \} \\
-\lnot (st~j? = sfailed \land ts~j? = tstop) \\
+(abl = 12 \lor \lnot (st~j? = sfailed \land (ts~j? = trefuse \lor (ts~j? = tfault \land sk~j? = skrerun)))) \\
 st' = st \oplus \{ j? \mapsto sfailed \} \\
 loc' = loc \\
 ts' = ts \\
@@ -1674,11 +1804,43 @@ bx' = bx
 BeginFail \defs BeginFailCore \land Latch
 \end{zed}
 
-\emph{Fixed build.} A taken job whose own store has already ended without rows (it
-refused, failed, or stopped at the checkpoint) is \emph{settled}: it keeps the
-store's reason and is counted \emph{needs no spool}. It is not spooled (its content
-was refused or is rerunnable), and it is not counted \emph{kept}, because \emph{kept}
-with a \field{failed} status would break I9.
+\emph{Fixed build.} A taken job whose own store has already \emph{refused} the
+content keeps the store's reason and is counted \emph{refused}: there is nothing to
+recover, so it is never spooled. (Counting it \emph{needs no spool} would claim a
+source to run again from, which a refused \field{remember} has not.)
+
+\begin{schema}{BeginRefusedCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 1 \\
+ab~j? = atake \\
+st~j? = sfailed \\
+ts~j? = trefuse \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \oplus \{ j? \mapsto arec \} \\
+sp' = sp \\
+tl' = tl \oplus \{ j? \mapsto trefused \} \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+rp' = rp \\
+cnt' = cnt \oplus \{ tnone \mapsto cnt~tnone - 1, trefused \mapsto cnt~trefused + 1 \} \\
+ph' = ph \\
+lc' = lc \\
+bx' = bx
+\end{schema}
+
+\begin{zed}
+BeginRefused \defs BeginRefusedCore \land Latch
+\end{zed}
+
+\emph{Fixed build.} A taken job whose own store has already \emph{faulted} or
+stopped at the checkpoint, and which can be run again from its source, is
+\emph{settled}: it keeps the store's reason and is counted \emph{needs no spool}.
+It is not counted \emph{kept}, because \emph{kept} with a \field{failed} status would
+break I9. A job with no durable copy is not settled: \field{BeginFail} spools it.
 
 \begin{schema}{BeginSettledCore}
 \Delta Run \\ j? : JOB
@@ -1687,7 +1849,8 @@ fixed = 1 \\
 abl \neq 9 \\
 ab~j? = atake \\
 st~j? = sfailed \\
-ts~j? = tstop \\
+ts~j? = tfault \\
+sk~j? = skrerun \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -1717,7 +1880,8 @@ fixed = 1 \\
 abl = 9 \\
 ab~j? = atake \\
 st~j? = sfailed \\
-ts~j? = tstop \\
+ts~j? = tfault \\
+sk~j? = skrerun \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -1776,6 +1940,7 @@ job too.
 \where
 ab~j? = abegun \\
 sk~j? = skrerun \\
+lc = zfalse \\
 (st~j? \in \{ swithdrawn, scommitting, scompleted \} \implies st' = st) \land (st~j? \notin \{ swithdrawn, scommitting, scompleted \} \implies st' = st \oplus \{ j? \mapsto sfailed \}) \\
 loc' = loc \\
 ts' = ts \\
@@ -1804,6 +1969,7 @@ build starts it for a kept job too.
 \where
 ab~j? = abegun \\
 sk~j? = skspool \\
+lc = zfalse \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -1833,7 +1999,7 @@ abort is still waiting is a separate matter.
 \where
 sp~j? = srun \\
 o? \in \{ sok, sfail, sunb \} \\
-(fixed = 0 \lor abl = 5 \lor lc = ztrue \lor st~j? \neq scompleted) \\
+(fixed = 0 \lor abl = 5 \lor lc = ztrue \lor (st~j? \neq scompleted \land tl~j? \neq trefused)) \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -1862,10 +2028,11 @@ anyway.
 \begin{schema}{RecordCore}
 \Delta Run \\ j? : JOB
 \where
-ab~j? = aspool \\
+ab~j? \in \{ aspool, arespool \} \\
 sp~j? \in \{ sok, sfail, sunb \} \\
 fc~j? = zfalse \\
 tl~j? = tpend \\
+lc = zfalse \\
 (st~j? \in \{ swithdrawn, scommitting, scompleted \} \implies st' = st) \land (st~j? \notin \{ swithdrawn, scommitting, scompleted \} \implies st' = st \oplus \{ j? \mapsto sfailed \}) \\
 loc' = loc \\
 ts' = ts \\
@@ -1896,6 +2063,7 @@ callback is armed.
 ab~j? = aspool \\
 fl~j? = ztrue \\
 tl~j? = tpend \\
+lc = zfalse \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -2024,6 +2192,7 @@ fl~j? = ztrue \\
 sp~j? = srun \\
 fc~j? = zfalse \\
 tl~j? = tpend \\
+lc = zfalse \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -2117,7 +2286,8 @@ state from being a deadlock, so that a deadlock anywhere else is a finding.
 \Delta Run
 \where
 ph = started \\
-\forall j : JOB @ (ab~j = arec \lor (ab~j = an \land loc~j = out)) \land ts~j \in \{ t0, tstored, tstop \} \\
+\forall j : JOB @ ts~j \in \{ t0, tstored, tfault, trefuse \} \\
+(\forall j : JOB @ ab~j = arec \lor (ab~j = an \land loc~j = out)) \lor lc = ztrue \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -2177,21 +2347,21 @@ bx' = ztrue
 BudgetExpires \defs BudgetExpiresCore \land Latch
 \end{zed}
 
-\emph{Fixed build.} \field{IngestQueue.aclose} has settled the abort and waited
-for the detached stores and the pending spool removals, at most until the budget
-expired; then \field{asyncio.run} closes the loop. Whatever is still running is
-reported (\field{rp}): a warning names its task, and the tally logged is the
-corrected one. After this no observer runs.
+\emph{Fixed build.} \field{IngestQueue.aclose} has settled the abort and waited for
+the detached stores, the pending spool removals and the respools, at most until
+the budget expired; then \field{asyncio.run} closes the loop. Whatever is still
+running or still pending is reported (\field{rp}): a warning names each task, and
+the summary logged is the corrected one, with a \emph{pending} clause. After this no
+observer, respool or late callback runs.
 
 \begin{schema}{LoopCloseCore}
 \Delta Run
 \where
 fixed = 1 \\
-abl \neq 8 \\
+abl \notin \{ 8, 10, 11 \} \\
 ph = started \\
 lc = zfalse \\
-\forall j : JOB @ ab~j = arec \lor (ab~j = an \land loc~j = out) \\
-((\forall j : JOB @ ts~j \notin \{ tpre, tcommit \} \land \lnot (st~j = scompleted \land sp~j = srun)) \lor bx = ztrue) \\
+(((\forall j : JOB @ ab~j = arec \lor (ab~j = an \land loc~j = out)) \land (\forall j : JOB @ ts~j \notin \{ tpre, tcommit \} \land \lnot ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun))) \lor (bx = ztrue \land (\forall j : JOB @ ab~j \in \{ abegun, aspool, arespool, arec \} \lor (ab~j = an \land loc~j = out)))) \\
 st' = st \\
 loc' = loc \\
 ts' = ts \\
@@ -2201,7 +2371,7 @@ tl' = tl \\
 rs' = rs \\
 fl' = fl \\
 fc' = fc \\
-rp' = \{ j : JOB; v : ZBOOL | ((ts~j \in \{ tpre, tcommit \} \lor (st~j = scompleted \land sp~j = srun)) \land v = ztrue) \lor (\lnot (ts~j \in \{ tpre, tcommit \} \lor (st~j = scompleted \land sp~j = srun)) \land v = rp~j) @ j \mapsto v \} \\
+rp' = \{ j : JOB; v : ZBOOL | ((ts~j \in \{ tpre, tcommit \} \lor ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun) \lor tl~j = tpend) \land v = ztrue) \lor (\lnot (ts~j \in \{ tpre, tcommit \} \lor ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun) \lor tl~j = tpend) \land v = rp~j) @ j \mapsto v \} \\
 cnt' = cnt \\
 ph' = ph \\
 lc' = ztrue \\
@@ -2212,6 +2382,68 @@ bx' = bx
 LoopClose \defs LoopCloseCore \land Latch
 \end{zed}
 
+\emph{Seeded fault 10.} The drain does not wait for a respool and the close does not
+report it.
+
+\begin{schema}{LoopCloseBlindRespoolCore}
+\Delta Run
+\where
+fixed = 1 \\
+abl = 10 \\
+ph = started \\
+lc = zfalse \\
+(\forall j : JOB @ ab~j \in \{ arec, arespool \} \lor (ab~j = an \land loc~j = out)) \land (\forall j : JOB @ ts~j \notin \{ tpre, tcommit \} \land \lnot ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun)) \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \\
+sp' = sp \\
+tl' = tl \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+rp' = \{ j : JOB; v : ZBOOL | ((ts~j \in \{ tpre, tcommit \} \lor ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun) \lor (tl~j = tpend \land ab~j \neq arespool)) \land v = ztrue) \lor (\lnot (ts~j \in \{ tpre, tcommit \} \lor ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun) \lor (tl~j = tpend \land ab~j \neq arespool)) \land v = rp~j) @ j \mapsto v \} \\
+cnt' = cnt \\
+ph' = ph \\
+lc' = ztrue \\
+bx' = bx
+\end{schema}
+
+\begin{zed}
+LoopCloseBlindRespool \defs LoopCloseBlindRespoolCore \land Latch
+\end{zed}
+
+\emph{Seeded fault 11.} The summary has no \emph{pending} clause: a job still pending
+at the close is not reported.
+
+\begin{schema}{LoopCloseNoPendingClauseCore}
+\Delta Run
+\where
+fixed = 1 \\
+abl = 11 \\
+ph = started \\
+lc = zfalse \\
+(((\forall j : JOB @ ab~j = arec \lor (ab~j = an \land loc~j = out)) \land (\forall j : JOB @ ts~j \notin \{ tpre, tcommit \} \land \lnot ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun))) \lor (bx = ztrue \land (\forall j : JOB @ ab~j \in \{ abegun, aspool, arespool, arec \} \lor (ab~j = an \land loc~j = out)))) \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \\
+sp' = sp \\
+tl' = tl \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+rp' = \{ j : JOB; v : ZBOOL | ((ts~j \in \{ tpre, tcommit \} \lor ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun) \lor ab~j = arespool) \land v = ztrue) \lor (\lnot (ts~j \in \{ tpre, tcommit \} \lor ((st~j = scompleted \lor tl~j = trefused) \land sp~j = srun) \lor ab~j = arespool) \land v = rp~j) @ j \mapsto v \} \\
+cnt' = cnt \\
+ph' = ph \\
+lc' = ztrue \\
+bx' = bx
+\end{schema}
+
+\begin{zed}
+LoopCloseNoPendingClause \defs LoopCloseNoPendingClauseCore \land Latch
+\end{zed}
+
 \emph{Old build, and seeded fault 8.} The loop closes with no drain and no report:
 a store still running is simply abandoned, and nobody says so.
 
@@ -2220,7 +2452,7 @@ a store still running is simply abandoned, and nobody says so.
 \where
 ph = started \\
 lc = zfalse \\
-\forall j : JOB @ ab~j = arec \lor (ab~j = an \land loc~j = out) \\
+(\forall j : JOB @ ab~j = arec \lor (ab~j = an \land loc~j = out)) \\
 (fixed = 0 \lor abl = 8) \\
 st' = st \\
 loc' = loc \\
@@ -2275,15 +2507,16 @@ StoreEndsUnobserved \defs StoreEndsUnobservedCore \land Latch
 \emph{Fixed build.} The same, for a store that ends without rows.
 
 \begin{schema}{StoreFailsUnobservedCore}
-\Delta Run \\ j? : JOB
+\Delta Run \\ j? : JOB \\ f? : TS
 \where
 fixed = 1 \\
 lc = ztrue \\
+f? \in \{ tfault, trefuse \} \\
 ((ck~j? = zfalse \land ts~j? = tpre) \lor (ck~j? = ztrue \land ts~j? = tcommit)) \\
 loc~j? = out \\
 st' = st \\
 loc' = loc \\
-ts' = ts \oplus \{ j? \mapsto tstop \} \\
+ts' = ts \oplus \{ j? \mapsto f? \} \\
 ab' = ab \\
 sp' = sp \\
 tl' = tl \\

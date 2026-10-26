@@ -1,6 +1,6 @@
 # Job abort lifecycle: the model the implementation follows
 
-**Status:** RATIFIED by the leader (D1-D3 of §9), amended after security review (A1-A6, L1-L5) and after the C3 review (the loop close, §2.5); model-checked
+**Status:** RATIFIED by the leader (D1-D3 of §9), amended after security review (A1-A6, L1-L5), after the C3 review (the loop close, §2.5) and after the review of d01cb86 (refusal against fault, the tracked respool, REFUSED, §2.6); model-checked
 **Bead:** quarry-70zm
 **Companion model:** `docs/design/job-abort.spec.tex` (Z, fuzz-checked, ProB-checked); the tool runs are recorded in §4
 **Generator:** `docs/design/job-abort.spec.gen.py.txt` (§10)
@@ -13,10 +13,10 @@ of three consecutive review rounds. Each fix moved the defect to a neighbour,
 because the status of a job is written by five actors, none of which knows what
 the others have written, and the tally that counts the jobs is a second record
 that has to agree with the first. This document stops the empirical rounds. It
-gives the job lifecycle a Z model, states twelve invariants as witnesses, and
+gives the job lifecycle a Z model, states fifteen invariants as witnesses, and
 shows with ProB that the lifecycle this document requires reaches none of them
-(34155 states, every state visited, no deadlock), while the code as it stands
-reaches eight of the twelve, and a seeded fault reaches each witness. The
+(109536 states, every state visited, no deadlock), while the code as it stands
+reaches nine of the fifteen, and a seeded fault reaches each witness. The
 implementation follows the model: §5 maps schema to code, §6 lists every place
 the code breaks it, §7 is the write-set, §8 the tests, each driven through the
 real cancel path.
@@ -45,10 +45,10 @@ every move a single critical section.
 ## 2. The model in prose
 
 Two jobs on one collection worker; the worker holds at most one at a time. A job
-has three fixed attributes: whether it reports a commit checkpoint (`ck`: a
+has two fixed attributes, all four combinations of which occur: whether it reports a commit checkpoint (`ck`: a
 backfill transcript), and whether the abort must spool it (`skspool`: a
 `remember` or URL ingest) or can leave it to be run again (`skrerun`). A
-checkpointed job is always rerunnable.
+committing job with no durable copy is the case a store fault turns into a respool.
 
 ### 2.1 State (spec §State)
 
@@ -57,17 +57,18 @@ checkpointed job is always rerunnable.
 | `st` | queued, running, committing, completed, failed, withdrawn, aborted | the job's `TaskState.status` (all seven the brief names) |
 | `rs` | none, term, prov, spooled, nospool, notw, unb | the reason in `TaskState.error` |
 | `loc` | inq, gate, body, qtaken, out | where the worker has it; `out` while `ts` is running is *detached* |
-| `ts` | t0, tpre, tcommit, tstored, tstop | the store thread; `tstored` means the rows are in the table |
-| `ab` | an, atake, abegun, aspool, arec | the abort's progress on the job |
+| `ts` | t0, tpre, tcommit, tstored, tfault, trefuse | the store thread; `tstored` means the rows are in the table; `trefuse` is a *refusal* (the content was looked at and rejected: binary, blank, zero rows), `tfault` a *fault* (the write broke, or the checkpoint stopped it) |
+| `ab` | an, atake, abegun, aspool, arespool, arec | the abort's progress on the job; `arespool` is a spool write started again after a store fault, tracked so the close can wait for it |
 | `sp`, `fl`, `fc` | spool thread; in flight when taken; spool future cancelled | the spool write (`sp = sok` means the file is on disk) |
 | `tl`, `cnt` | the job's term, and the counters the code keeps | the tally |
 | `ph`, `wit` | phase; latched witnesses | |
 
 The tally's terms are the brief's five (spooled, not written, unbuilt,
-unfinished, pending) and three the model needs: *needs no spool* (a rerunnable
+unfinished, pending) and four the model needs: *needs no spool* (a rerunnable
 job; the code has it as a residual), *kept* (the abort left the job as it is:
-withdrawn, aborted by its producer, or stored), and *unconfirmed* (a committing
-job whose store has not ended). Without *kept* a withdrawn job has nowhere to be
+withdrawn, aborted by its producer, or stored), *unconfirmed* (a committing
+job whose store has not ended), and *refused* (the store looked at the content and
+rejected it: nothing to recover). Without *kept* a withdrawn job has nowhere to be
 counted that is not a lie, and without *unconfirmed* neither has a committing
 one. The old code hides both in the residual `unspooled` (`abort_reason.py:147-153`).
 
@@ -80,37 +81,52 @@ one. The old code hides both in the residual `unspooled` (`abort_reason.py:147-1
   withdrawn one go, and when the store thread ends records the body's result
   through the terminal. In the fixed build `FinishKept` leaves `aborted` alone.
 - **Store thread** (`Commit`, `CommitRefused`, `StoreEnds`, `StoreFails`): runs on
-  its own and no cancel stops it. A checkpointed job reaches `Commit`, which
+  its own and no cancel stops it. It ends stored, or without rows in one of two
+  ways that the abort must tell apart: a *refusal* (`trefuse`: the content was
+  looked at and rejected) and a *fault* (`tfault`: the write broke). A checkpointed job reaches `Commit`, which
   succeeds only while the status is `running`; otherwise the thread stops before
   it deletes or inserts.
-- **Observer** (`StoreEndsObserved*`, `StoreFailsObserved*`, `StoreEndsKept`,
-  `StoreFailsDetachedOther`): the actor the old code lacks. When the store thread
+- **Observer** (`StoreEndsObserved*`, `StoreFailsObserved*`, `StoreFaultsRespool`,
+  `StoreRefusesObserved`, `StoreEndsKept`, `StoreFailsDetachedOther`): the actor
+  the old code lacks. When the store thread
   of a *detached* job ends, the observer, in one critical section, settles the
   status from what the thread did, clears the failure reason, moves the job's
-  term, and removes the job's spool file if one was written.
+  term, and removes the job's spool file if one was written. Its three answers to a
+  store that ended without rows depend on *why*:
+  - a **refusal**, at any time, ends the job `failed` with the store's reason in the
+    term *refused*, and a spool record already written (or still being written) is
+    removed: the content was rejected, so replaying it would be refused again;
+  - a **fault** on a committing job that can be run again from its source ends it
+    `failed`, term *needs no spool*;
+  - a **fault** on a committing job with no durable copy is *respooled*
+    (`StoreFaultsRespool`): failed provisionally, *pending* again, and its spool
+    write starts at once. The respool is tracked (`ab = arespool`).
 - **Abort** (`AbortStart`, `CancelAtGate`, `CancelInBody*`, `Begin*`, `Decide*`,
   `SpoolEnds`, `Record`, `Deadline`, `Late`, `SpoolCancel`, `QueueCancel`):
   cancels the worker and takes the queued jobs in one synchronous step; the
   in-flight job arrives through the worker's cancel handler. `Begin` fails each
   taken job provisionally and counts it pending, *unless the job is kept,
-  committing, or settled*: a kept job is counted *kept*, a committing one
-  *unconfirmed*, and a settled one (`BeginSettled`: its own store has already ended
-  without rows, by refusal, failure or a refused checkpoint) keeps the store's
-  reason and is counted *needs no spool*. None of the three goes any further. `Decide` starts a spool write for a spooled job. The outcome arrives
+  committing, refused or settled*: a kept job is counted *kept*, a committing one
+  *unconfirmed*, a job whose own store already **refused** (`BeginRefused`) keeps
+  the store's reason and is counted *refused*, and a job whose own store already
+  **faulted** and which can be run again from its source (`BeginSettled`) keeps it
+  and is counted *needs no spool*. None of the four goes any further. A job whose
+  store faulted and which has *no* durable copy is not settled: `BeginFail` spools
+  it. `Decide` starts a spool write for a spooled job. The outcome arrives
   within the wait (`Record`), or, for an in-flight job only, the wait expires
   first (`Deadline`) and the job is *unfinished* until the write ends (`Late`). A
   cancel of the queued path's gather (`QueueCancel`) also records *unfinished*
   and leaves the late callback armed.
 
-### 2.3 Two builds, nine seeded faults, two switches
+### 2.3 Two builds, twelve seeded faults, two switches
 
 `fixed = 0` is eaa5118. `fixed = 1` is the lifecycle this document requires.
-`abl = 1..9` seeds one fault into the fixed build: the observer moves a term and
+`abl = 1..12` seeds one fault into the fixed build: the observer moves a term and
 not the counter (1); the late correction moves a term and not the reason (2); the
 observer writes without the claim (3); the kept set lacks `aborted` (4); the
 observer leaves the spool file (5); a failed committing store leaves the term
-*unconfirmed* (6); the observer leaves the failure reason on a completed job (7); the loop closes with no drain and no report (8); a settled job is counted *kept* (9).
-The same twelve witnesses are checked against every build. The old build's
+*unconfirmed* (6); the observer leaves the failure reason on a completed job (7); the loop closes with no drain and no report (8); a settled job is counted *kept* (9); the drain does not wait for a respool and the close does not report it (10); the summary has no *pending* clause (11); a refused job is left *spooled* (12).
+The same fifteen witnesses are checked against every build. The old build's
 operations are guarded by `fixed = 0` and live in the same spec, so a reader sees
 what changes, one operation at a time. Faults 6 and 7 are the two mutants the
 security review found; the fixed build is checked against them in §4.
@@ -143,8 +159,29 @@ logged. `LoopClose` models the close, and what the fixed build does before it:
   now is `StoreEndsUnobserved`: the job's status is left as it was.
 
 So I4 and I11 hold for stores that end *before* the close, and the new invariant I12
-holds for the rest: none is silent. The old build has `LoopCloseOld`, no drain and no
+holds for the rest: none is silent. The report also names what is still *pending*
+(I15) and every respool still running (I14). The old build has `LoopCloseOld`, no drain and no
 report; seeded fault 8 gives the fixed build the same.
+
+### 2.6 Refusal against fault, and the tracked respool (d01cb86)
+
+The first implementation treated every store that ended without rows alike: before
+`Begin` the job was *settled* and never spooled, after `Begin` it was respooled.
+That is inconsistent, and each half is wrong for one kind of failure. The rulings:
+
+- **A refusal, at any time**, is *refused*: nothing to recover, never spooled; a
+  spool record that exists is removed (the ghost-removal path). Counting a refused
+  `remember` *needs no spool* would claim a source to run again from, which it has
+  not (the meaning of that term is "run again from its source, or a durable copy
+  exists").
+- **A fault before `Begin`** on a job with a durable copy or a rerunnable source is
+  *needs no spool*. On a job with no durable copy `Begin` spools it; it is not
+  settled.
+- **A fault after `Begin`** on a non-durable committing job is respooled, and the
+  respool is a tracked operation: `LoopClose` waits for it, within the budget, and
+  reports it if it is still running.
+- **The summary has a *pending* clause**: a job still pending at the close is named,
+  not dropped from the total.
 
 ## 3. The invariants
 
@@ -158,10 +195,13 @@ report; seeded fault 8 gives the fixed build the same.
 | I6 | `wClaim` | Every status write holds `state.claim`. | reached | `abl=3` |
 | I7 | `wOver` | A `withdrawn`, `aborted` or `completed` status is never overwritten, and a committing job is never failed while its store thread runs. | reached | `abl=4` |
 | I8 | `wDisk` | A failed job's reason matches what reached disk: *spooled* only if the file is there; *not written* or *unbuilt* only if the write cannot land; *needs no spool* only if there is no file. | reached | |
-| I9 | `wMatch` | A term matches its status: *unconfirmed* means `committing`; *pending*, *unfinished*, *spooled*, *not written*, *unbuilt* and *needs no spool* mean `failed`; *kept* means `withdrawn`, `aborted` or `completed`. A settled job (its own store ended without rows) is `failed`, so it is *needs no spool*, never *kept*. | reached | `abl=6`, `abl=9` |
+| I9 | `wMatch` | A term matches its status: *unconfirmed* means `committing`; *pending*, *unfinished*, *spooled*, *not written*, *unbuilt*, *needs no spool* and *refused* mean `failed`; *kept* means `withdrawn`, `aborted` or `completed`. A settled job (its own store faulted) is `failed`, so it is *needs no spool*, never *kept*. | reached | `abl=6`, `abl=9` |
 | I10 | `wCompl` | A `completed` job carries no failure reason. | not reached | `abl=7` |
-| I11 | `wGhost` | A `completed` job has no spool file on disk, unless the loop closed first and reported it. Conditional on the store ending before the close. | not reached | `abl=5` |
-| I12 | `wSilent` | Every job whose store, or whose spool write for a `completed` job, is still running when the loop closes is reported. The operator's final report is never silently wrong. | reached | `abl=8` |
+| I11 | `wGhost` | A `completed` job has no spool file on disk, unless the loop closed first and reported it. Conditional on the store ending before the close. (A refused job's file is I13's.) | not reached | `abl=5` |
+| I12 | `wSilent` | Every job whose store, or whose spool write for a `completed` or *refused* job, is still running when the loop closes is reported. The operator's final report is never silently wrong. | reached | `abl=8` |
+| I13 | `wRefused` | A job whose store refused is never spooled and never left *spooled*: its term is *refused* (or *kept*, if the producer owns the status), and no spool file remains, unless the loop closed first and reported it. | reached | `abl=12` |
+| I14 | `wRespool` | A respool still running at the close is reported: the drain waits for it, within the budget, and the close names what it could not wait for. | not reached | `abl=10` |
+| I15 | `wPend` | A job still *pending* at the close is reported: the summary has a *pending* clause. | not reached | `abl=11` |
 
 I7 is the one the brief did not list; the code needed it (SFH-H1 and the missing
 `aborted` are both I7). I8 is the brief's "a reason that matches what reached
@@ -188,61 +228,71 @@ setups.
 **Fixed build** (`fixed = 1`, `abl = 0`), `-goal 'card(wit)>0'`, with ProB's
 default deadlock check on:
 
-- 34155 states analysed, 93635 transitions, all states visited,
+- 109536 states analysed, 307984 transitions, all states visited,
   `No counter example found`: no witness and **no deadlock**. The settled state
   is the explicit `Quiesce` self-loop, so any other deadlock would be a finding.
-- Of 58 operations, 17 never fire, as they must not: nine are old-build
+- Of 64 operations, 20 never fire, as they must not: nine are old-build
   operations (`StoreEndsOld`, `StoreFailsOld`, `FinishStoredOld`, `FinishStopOld`,
   `CancelInBodyOld`, `BeginOld`, `SpoolCancelOld`, `QueueCancelOld`,
   `LoopCloseOld`, all guarded by `fixed = 0`, `LoopCloseOld` also by seeded fault
-  8) and eight are seeded faults (`StoreEndsObservedNoCount`,
+  8) and eleven are seeded faults (`StoreEndsObservedNoCount`,
   `StoreEndsObservedUnclaimed`, `StoreEndsObservedGhost`,
   `StoreEndsObservedUnbegunKeepsReason`, `StoreFailsObservedCommittingStale`,
-  `BeginAbortedOverwritten`, `BeginSettledKept`, `LateNoReason`). Every operation
-  of the fixed build fires, `LoopClose`, `BudgetExpires`, `StoreEndsUnobserved` and
-  `BeginSettled` among them.
-- **All twelve witnesses are unreachable.**
+  `StoreRefusesObservedStale`, `BeginAbortedOverwritten`, `BeginSettledKept`,
+  `LateNoReason`, `LoopCloseBlindRespool`, `LoopCloseNoPendingClause`). Every
+  operation of the fixed build fires, among them `StoreFaultsRespool`,
+  `StoreRefusesObserved`, `BeginRefused`, `BeginSettled`, `LoopClose` and
+  `StoreEndsUnobserved`.
+- **All fifteen witnesses are unreachable.**
 - `AG({ph = pre} or EF({settled}))`, `settled` = every job is either out of the
-  abort's hands or recorded, and no store thread runs: **TRUE**. From any state
-  after the abort starts, a settled state is reachable.
+  abort's hands or recorded and no store thread runs, or the loop has closed and no
+  store thread runs: **TRUE**. From any state after the abort starts, a settled
+  state is reachable.
 
-**Old build** (`fixed = 0`): the full search visits 61123 states, 176214
+An earlier run of this revision, before `ck` and `sk` were made independent, found
+51505 states and left `StoreFaultsRespool` unfired: with every committing job
+rerunnable, no job could be respooled. The axiom `ck ⇒ skrerun` is gone, so all four
+combinations occur.
+
+**Old build** (`fixed = 0`): the full search visits 221008 states, 662288
 transitions. Per witness, the first counter-example ProB found:
 
 | Witness | Trace length | States analysed | Reached |
 |---|---|---|---|
-| `wTerm` | 13 | 737 | yes |
-| `wKept` | 5 | 32 | yes |
-| `wLost` | 17 | 459 | yes |
-| `wClaim` | 11 | 244 | yes |
-| `wOver` | 10 | 657 | yes |
-| `wDisk` | 14 | 223 | yes |
-| `wMatch` | 8 | 20 | yes |
-| `wSilent` | 12 | 179 | yes |
-| `wCount` | | 61123 (all) | **no** |
-| `wLate` | | 61123 (all) | **no** |
-| `wCompl` | | 61123 (all) | **no** |
-| `wGhost` | | 61123 (all) | **no** |
+| `wTerm` | 16 | 1488 | yes |
+| `wKept` | 6 | 48 | yes |
+| `wLost` | 16 | 1488 | yes |
+| `wClaim` | 10 | 790 | yes |
+| `wOver` | 8 | 819 | yes |
+| `wDisk` | 14 | 243 | yes |
+| `wMatch` | 10 | 35 | yes |
+| `wSilent` | 12 | 1361 | yes |
+| `wRefused` | 11 | 848 | yes |
+| `wCount`, `wLate`, `wCompl`, `wGhost`, `wRespool`, `wPend` | | 221008 (all, one search for the six) | **no** |
 
-The old build reaches eight of the twelve. It never breaks I2, I5, I10 or I11 on
-its own: its counters and its late correction are consistent, and it has no late
-completion to leave a reason or a file behind. What breaks is what they are
-counting. The liveness formula holds in the fixed build and fails in the old build
-(below), where a cancelled queued spool is never recorded.
+The old build reaches nine of the fifteen. It never breaks I2, I5, I10, I11, I14 or
+I15 on its own: its counters and its late correction are consistent, it has no late
+completion to leave a reason or a file behind, and it has no respool and no budget
+to leave a job pending at the close. What breaks is what they are counting. The
+liveness formula holds in the fixed build and fails in the old build (below), where
+a cancelled queued spool is never recorded.
 
 ### 4.1 Seeded faults
 
 | `abl` | Fault | Witness | Trace length | States analysed |
 |---|---|---|---|---|
-| 1 | observer moves the term, not the counter | `wCount` | 11 | 1454 |
-| 2 | late correction moves the term, not the reason | `wLate` | 9 | 86 |
-| 3 | observer writes without the claim | `wClaim` | 13 | 847 |
-| 4 | kept set lacks `aborted` | `wOver` | 11 | 193 |
-| 5 | observer leaves the spool file | `wGhost` | 15 | 1664 |
-| 6 | failed committing store leaves the term *unconfirmed* | `wMatch` | 12 | 1824 |
-| 7 | observer leaves the failure reason on a completed job | `wCompl` | 12 | 516 |
-| 8 | the loop closes with no drain and no report | `wSilent` | 12 | 306 |
-| 9 | a settled job is counted *kept* | `wMatch` | 10 | 386 |
+| 1 | observer moves the term, not the counter | `wCount` | 11 | 1676 |
+| 2 | late correction moves the term, not the reason | `wLate` | 10 | 101 |
+| 3 | observer writes without the claim | `wClaim` | 11 | 1476 |
+| 4 | kept set lacks `aborted` | `wOver` | 12 | 1116 |
+| 5 | observer leaves the spool file | `wGhost` | 15 | 6666 |
+| 6 | failed committing store leaves the term *unconfirmed* | `wMatch` | 12 | 1673 |
+| 7 | observer leaves the failure reason on a completed job | `wCompl` | 7 | 1859 |
+| 8 | the loop closes with no drain and no report | `wSilent` | 13 | 209 |
+| 9 | a settled job is counted *kept* | `wMatch` | 12 | 1022 |
+| 10 | the drain does not wait for a respool and the close does not report it | `wRespool` | 13 | 915 |
+| 11 | the summary has no *pending* clause | `wPend` | 8 | 82 |
+| 12 | a refused job is left *spooled* | `wRefused` | 11 | 433 |
 
 Each fault is reached, so each witness can fire; the fixed build reaches none.
 
@@ -250,7 +300,8 @@ Each fault is reached, so each witness can fire; the fixed build reaches none.
 
 The two mutants in `.tmp/scratch-djb/` are single-line edits of the spec as it
 stood at a1b20c0 (before the loop close; the numbers below are from that revision,
-and seeded faults 6 and 7 above repeat them on this one). I applied the same two edits to this spec (the term and counter left
+and seeded faults 6 and 7 above repeat them on this one; this revision's spec
+was not re-run against the literal mutant files). I applied the same two edits to this spec (the term and counter left
 unchanged in `StoreFailsObservedCommittingCore`; the reason left in
 `StoreEndsObservedUnbegunCore`) and ran the goal of the witness added for each.
 
@@ -261,7 +312,8 @@ unchanged in `StoreFailsObservedCommittingCore`; the reason left in
 
 Both are caught. The previous spec's eight witnesses did not fire on either.
 
-`z-spec test` (its default suite, `--max-ops 100000 --timeout 900000`) passes
+`z-spec test` (its default suite, `--max-ops 100000 --timeout 900000`; run at
+a1b20c0 and not repeated since, its verdict being the same kind each time) passes
 `init`, `animate` and `cbc_assertions`, and reports `model_check` as a warning
 (3002 states, "not certified complete": the suite does not pass
 `MAX_INITIALISATIONS`, so it visits one of the nine constant setups). It fails
@@ -287,10 +339,10 @@ requires that does not exist.
 | `Commit`, `CommitRefused` | `JobLifecycle.commit` (`job_lifecycle.py:83-89`); `QueuedJob.checkpoint` (`queued_job.py:83-87`) |
 | `StoreEnds`, `StoreFails` | the threadpool call in each job's `run`: `content_jobs.py:82`, `:183`; `ingest_jobs.py:70`; `index_jobs.py:62`, `:116`, `:162`; `finalize_job.py:63`, `:105` |
 | `StoreEndsObserved*`, `StoreFailsObserved*`, `StoreEndsKept`, `StoreFailsDetachedOther`, `SpoolEndsRemoved` | **new**: `StoreRun` (the store's future, kept by the job) and `JobLifecycle.observe_store` |
-| `FinishStored`, `FinishStop`, `FinishKept` | `RefusalAwareTerminal.complete`, `_fail` (`refusal_aware_terminal.py:68-97`); `TaskTerminal.recording` (`task_terminal.py:28-58`); the direct writes in `index_jobs.py:64-68`, `:117-118`, `:163-164` and `finalize_job.py:64`, `:106-107` |
+| `FinishStored`, `FinishStop`, `FinishKept` | `Terminal.settle_stored`, `settle_failed`, `recording` (`terminal.py:66-98`), through `JobLifecycle.settle_stored`, `settle_failed` (`job_lifecycle.py:149-176`); the `Lifecycle` protocol (`lifecycle.py`); the direct writes in `index_jobs.py:64-68`, `:117-118`, `:163-164` and `finalize_job.py:64`, `:106-107` |
 | `AbortStart` | `CollectionWorker.abort`, `abort_off_loop`, `_take_queued` (`collection_worker.py:119-162`); `QueueAbort.run` (`queue_abort.py:39-58`) |
-| `CancelAtGate`, `CancelInBody*` | `_run`'s `except CancelledError` (`collection_worker.py:197-206`); the cancel handler of `TaskTerminal.recording` (`task_terminal.py:41-44`) |
-| `BeginKept`, `BeginUnconfirmed`, `BeginFail` | `JobAbort._begin` (`job_abort.py:213-217`); `JobLifecycle.fail_aborted` (`job_lifecycle.py:108-121`) |
+| `CancelAtGate`, `CancelInBody*` | `_run`'s `except CancelledError` (`collection_worker.py:197-206`); the cancel handler of `Terminal.recording` (`terminal.py:85-87`), which calls `Lifecycle.cancelled` |
+| `BeginKept`, `BeginUnconfirmed`, `BeginFail`, `BeginRefused`, `BeginSettled` | `JobAbort._begin` (`job_abort.py:213-217`); `JobLifecycle.fail_aborted` (`job_lifecycle.py:108-121`) |
 | `DecideRerun`, `DecideSpool` | `JobAbort._outcome` (`job_abort.py:195-211`); `AbortReason.of` (`abort_reason.py:64-89`) |
 | `SpoolEnds` | `JobSpool.write` (`job_spool.py:103-134`) on `DaemonThreads.run` (`daemon_threads.py:72-90`) |
 | `Record` | `JobAbort._record` (`job_abort.py:219-223`), `_one_off_loop` (`:181-193`) |
@@ -298,6 +350,7 @@ requires that does not exist.
 | `Late` | `JobAbort._ended_late` (`job_abort.py:152-179`) |
 | `SpoolCancel` | `await_spool`'s `spooling.cancelled()` branch (`job_abort.py:140-141`) |
 | `BudgetExpires`, `LoopClose`, `StoreEndsUnobserved`, `StoreFailsUnobserved` | `IngestQueue.aclose` (`ingest_queue.py:120-144`) and, beyond it, `asyncio.run`'s close of the loop: the drain, the corrected tally and the warning are new |
+| `StoreFaultsRespool`, `StoreRefusesObserved` | `AbortRecord` (`abort_record.py:138-159`): the observer's listener; `JobAbort._respool_in_background` (`job_abort.py:125-130`) |
 | `QueueCancel` | `JobAbort._one_off_loop` (`job_abort.py:181-193`), `fail_off_loop` (`:102-105`) |
 | `tl`, `cnt`, terms | `AbortTally` (`abort_reason.py:92-164`); `QueueAbort._summary` (`queue_abort.py:60-69`) |
 | `Latch`, `Quiesce` | no code: the invariant tests of §8 |
@@ -305,7 +358,11 @@ requires that does not exist.
 ## 6. Where the code violates the model
 
 Each row is a path the old-build search reaches, or an absence the model shows
-cannot be tolerated. The witness is the invariant broken.
+cannot be tolerated. The witness is the invariant broken. Rows V1 to V17 are the violations at
+eaa5118, and V18 to V21 at d01cb86; their file names are those commits'.
+`TaskTerminal` and `RefusalAwareTerminal` (V1 to V3, V11, V13) no longer exist: ce28855
+replaced them with `Terminal` and the `Lifecycle` protocol (§7.2), and the rows stay
+as the analysis that required it.
 
 | # | Violation | `file:line` | Witness |
 |---|---|---|---|
@@ -326,6 +383,11 @@ cannot be tolerated. The witness is the invariant broken.
 | V15 | Four jobs write their terminal status directly, with no claim and over any status: `FileIndexJob` (`index_jobs.py:64-68`: `failed`, `error`, `completed`, `results`), the delete and sync jobs (`index_jobs.py:117-118`, `:163-164`), and `finalize_job.py:64`, `:106-107`. | as listed | I6, I7 |
 | V16 | `JobSpool.write` returns `bool`, not the path it wrote, so nothing can remove a record once its job has stored. | `job_spool.py:103-134` | I11 |
 | V17 | `aclose` returns once the abort's wait ends. It does not wait for a detached store or a pending spool removal, and it logs no report of one still running; with a shielded `StoreRun.wait()` the loop then closes under the observer. | `ingest_queue.py:120-144` | I12 |
+
+| V18 | The settled path does not tell a refusal from a fault. `take_for_abort` settles any job whose store has an outcome, counting it *needs no spool*; for a refused job that term claims a source to run again from that a `remember` does not have, and nothing is recoverable. | `job_lifecycle.py:232-246`; `abort_record.py:188-189` | I9, I13 |
+| V19 | The same failure *after* `Begin` is handled the other way: a fault on a non-durable committing job is respooled, a refusal on an already-spooled job stays *spooled*, and its record is replayed and refused again. | `abort_record.py:138-159` | I13 |
+| V20 | The respool is not tracked. `_respool_in_background` adds a task to a private set; the close does not wait on it, and a respool still running when the loop closes is dropped from the total and named nowhere. | `job_abort.py:125-130` | I12, I14 |
+| V21 | The summary has no *pending* clause, so a job back in *pending* by a respool, or never recorded, is missing from it. | `abort_tally.py` (`summary`) | I15 |
 
 Not violations, and not changed: a queued job's spool has no deadline
 (`job_abort.py:102-105`); it stays *pending* until the write ends, and the summary
@@ -355,19 +417,21 @@ shapes the OO rules ask for.
    - `fail_aborted` returns a disposition (failed, kept, unconfirmed), not a
      `bool`, and its kept set is `{withdrawn, aborted, completed}`, with
      `committing` answering *unconfirmed*.
-2. **Every terminal and every job stops assigning status.** `TaskTerminal` and
-   `RefusalAwareTerminal` call the lifecycle's moves from their cancel, exception
-   and `finally` branches; so do `FileIndexJob`, the delete and sync jobs
+2. **Every terminal and every job stops assigning status.** `Terminal`
+   (`terminal.py`; `for_job` and `for_task`) calls the `Lifecycle` protocol's four
+   moves (`lifecycle.py`: `settle_stored`, `settle_failed`, `cancelled`, `exited`)
+   from its cancel, exception and `finally` branches, and the queued job's
+   `JobLifecycle` and the polled task's `TaskLifecycle` implement them; so do `FileIndexJob`, the delete and sync jobs
    (`index_jobs.py:64-68`, `:117-118`, `:163-164`) and `finalize_job.py:64`,
-   `:106-107` (V15). `TaskTerminal.recording` is also used by tasks that are not
+   `:106-107` (V15). `Terminal.for_task` is used by tasks that are not
    queued jobs (`routes/base.py:196`, `routes/maintenance.py:93`, `:110`,
    `watch_loop.py:254`). The lifecycle's rules must change nothing for them, and
    T15 pins that for each caller. They do not all hold only `running`,
    `completed` and `failed` in the sense of one terminal write: a `BackfillTask`
    records a partial `completed` and then fails on cancel, a sequence the
-   queued-job rules would refuse (completed is never overwritten). The
-   implementation keeps the old semantics for such tasks (`TaskState.is_job`,
-   below).
+   queued-job rules would refuse (completed is never overwritten). Such tasks end
+   through `TaskLifecycle` (`task_lifecycle.py`), where what the body says last
+   stands (below).
    The `finally` clause writes only when the status is still `running`: `aborted`
    and a committing job whose store runs are not "exited without a terminal
    status".
@@ -380,7 +444,7 @@ shapes the OO rules ask for.
    - **The settle continuation (A6).** The job supplies `settle(result) ->
      Settlement`, run by the normal path and by the observer alike, so a detached
      store is settled by the same code that settles an attached one. For a content
-     job it is `RefusalAwareTerminal.is_stored(results)`: stored becomes
+     job it is `Settlement.is_stored` (`job_lifecycle.py:179`): stored becomes
      `Settlement.stored(results)`, otherwise `Settlement.failed(reason)` with the
      fixed no-pages or nothing-stored text, so **zero rows is never `completed`**.
      For `FileIndexJob` it is its outcome: `outcome.error` becomes `failed`, its
@@ -421,7 +485,24 @@ shapes the OO rules ask for.
      the cancel does not cancel it, and re-raises (`QueueCancel`);
    - it registers the observer's listener per taken job, so a store that lands
      moves the job's term to *kept* in the same turn that completes it.
-5. **The ghost is removed, not tolerated (L1).** `JobSpool.write` returns the path
+5. **Refusal and fault are different outcomes (d01cb86).** `StoreRun`'s settlement
+   says which: *stored*, *refused* (`RefusalError`, blank content, zero rows: the
+   content was looked at and rejected) or *faulted* (anything else that kept the
+   rows from the table, and a stop at the checkpoint). `JobLifecycle` gains the
+   disposition `REFUSED` beside `SETTLED`, which now means *faulted and rerunnable*:
+   - `take_for_abort` returns `REFUSED` for a job whose own store refused, `SETTLED`
+     for one that faulted and can be run again, and `FAILED` (so the job is
+     spooled) for one that faulted and cannot;
+   - `AbortTerm` gains `REFUSED`; `AbortRecord._term_of` maps `REFUSED` to it;
+   - the observer's listener (`AbortRecord`, `abort_record.py:138-159`) answers a
+     *refusal* at any time by moving the job to `REFUSED` and removing its spool
+     record (a record still being written is removed when its write ends), and a
+     *fault* on a committing job by `NO_SPOOL` when `is_durable`, else by a respool.
+6. **The respool is tracked.** `JobAbort._respool_in_background` registers its task
+   with the same set the close drains, and `AbortTally.pending` counts it. The
+   drain in item 8 waits for it, within the budget, and the close reports it if it
+   is still running (I14).
+7. **The ghost is removed, not tolerated (L1).** `JobSpool.write` returns the path
    it wrote (or `None`), not a `bool`; `JobAbort` keeps the path per job. When the
    observer completes a job whose spool file exists it removes the file, and the
    spool thread's completion callback removes the file it has just written if the
@@ -431,16 +512,17 @@ shapes the OO rules ask for.
    removal is what makes the question moot for the case the model covers; the
    residual (a crash between the store and the removal) leaves a record that the
    daemon's start-up sweep does not touch, because it removes temps, not records.
-6. **The drain and the report** (`ingest_queue.py`). After the abort settles,
-   `aclose` waits for the detached stores and the pending spool removals
-   (`SpoolDiscard`), bounded by the shutdown budget; then it logs the corrected
+8. **The drain and the report** (`ingest_queue.py`). After the abort settles,
+   `aclose` waits for the detached stores, the pending spool removals
+   (`SpoolDiscard`) and the respools, bounded by the shutdown budget; then it logs the corrected
    tally, and emits one WARNING per store or removal still running, naming its
    task (`LoopClose`, I12). Nothing it cannot wait for is silent. The wait is a
    `wait`-with-timeout over the stores' futures, never a join: a store that never
    returns must not hold the process (T16).
-7. **The summary** (`queue_abort.py`) prints the kept and unconfirmed terms; "not
-   yet accounted for" stays *pending* only.
-8. **`CollectionWorker`** hands each taken job to the ledger and nothing else
+9. **The summary** (`queue_abort.py`, `abort_tally.py`) prints the kept, unconfirmed
+   and refused terms and a *pending* clause that names the jobs still pending at the
+   close (I15); "not yet accounted for" stays *pending* only.
+10. **`CollectionWorker`** hands each taken job to the ledger and nothing else
    changes: its abort and cancel flow is the model's.
 
 Commit-gate semantics: `JobLifecycle.commit` and `QueuedJob.checkpoint` are
@@ -468,19 +550,22 @@ unaffected: the model's counts are the sums of the code's.
 | `NO_SPOOL` | *needs no spool* (`tnospool`) | run again from its source, or a durable copy exists |
 | `KEPT` | *kept* (`tkept`) | withdrawn, aborted by its producer, or stored |
 | `UNCONFIRMED` | *unconfirmed* (`tunconf`) | a committing job whose store has not ended |
-| `NO_SPOOL` by `Disposition.SETTLED` | *needs no spool* (`tnospool`) | the job's own store had already ended without rows; its status is `failed` with the store's reason, not the abort's `rnospool` text (`BeginSettled`; I5 accepts either reason for this term) |
+| `NO_SPOOL` by `Disposition.SETTLED` | *needs no spool* (`tnospool`) | the job's own store had already *faulted* and the job can be run again from its source; its status is `failed` with the store's reason, not the abort's `rnospool` text (`BeginSettled`; I5 accepts either reason for this term). A store that *refused* is not settled this way: it is `REFUSED` |
+| `REFUSED` | *refused* (`trefused`) | the store looked at the content and rejected it (`RefusalError`, blank, zero rows): `failed` with the store's reason, never spooled, any spool record removed (`BeginRefused`, `StoreRefusesObserved`). New in this round: the code term does not exist at d01cb86 |
+| `PENDING` after a respool | *pending* (`tpend`), `ab = arespool` | a fault on a non-durable committing job: tracked, drained by the close, reported if still running |
 
 The pre-split `LOST` term (the write failed or the record could not be built) is
 the sum of `NOT_WRITTEN` and `UNBUILT`; the split is by reason, and the model had
 it from the start.
 
-`TaskState.is_job` separates queued jobs from the other background tasks.
+`Terminal.for_job` and `Terminal.for_task` separate queued jobs, which end through
+`JobLifecycle`, from the other background tasks, which end through `TaskLifecycle`.
 `BackfillTask`, for one, records a partial `completed` (its results so far) and then
 fails on cancel, which the lifecycle's rule that a `completed` status is never
 overwritten would refuse. The task is not a queued job: no producer withdraws it,
 no abort takes it, and no store thread outlives it, so none of I1 to I11 speaks
-of it. `is_job` keeps the old terminal writes for it, and the lifecycle's moves
-apply only where it is true. §7.2's statement that every non-queued caller holds
+of it. `TaskLifecycle` keeps the old terminal writes for it (every move still holds
+the task's claim), and `JobLifecycle`'s rules apply only to a queued job. §7.2's statement that every non-queued caller holds
 only `running`, `completed` and `failed` is corrected accordingly: they hold those
 statuses, but not always in one write each.
 
@@ -516,7 +601,11 @@ write blocks or fails through `JobSpool.write`, the one seam the code has.
 | T17 | I12 loop close | A detached store (and, separately, a pending spool removal) that is still running when `aclose` returns; close the loop; then let it end. | One WARNING names its task; the logged tally is the corrected one; no exception from a cancelled observer; the store's later end changes no status. |
 | T18 | I4, I11 before the close | A detached store that ends *inside* the drain budget. | The job is `completed`, counted *kept*, its spool file removed, before `aclose` returns; no warning. |
 | T19 | budget | A store that outlasts the budget. | `aclose` returns within the budget plus its grace; the warning is emitted once. |
-| T20 | I9 settled | A running job whose store refuses (zero rows) and a backfill job stopped at its checkpoint, each cancelled after its store ended and before `Begin`; abort. | Each is `failed` with the store's own reason, counted *needs no spool*, not *kept*, not spooled. |
+| T20 | I9 settled | A backfill job stopped at its checkpoint (a fault on a rerunnable job), cancelled after its store ended and before `Begin`; abort. | `failed` with the store's own reason, counted *needs no spool*, not *kept*, not spooled. (A refusal is T21's, not this one's.) |
+| T21 | I13 refusal | A refused `remember`, three ways: its store refuses before `Begin`; after `Begin` with its spool write still running; after the spool record was written. | Counted *refused*, never *spooled* or *needs no spool*; no spool file remains in all three, and the status is `failed` with the store's own reason. |
+| T22 | refusal against fault | The same store ended by a fault, on a rerunnable job and on a `remember`, before and after `Begin`. | Rerunnable: *needs no spool*, not spooled. `remember`: spooled (before `Begin`, `BeginFail`), or respooled and *pending* again (after `Begin`). Never *refused*. |
+| T23 | I14 respool | A non-durable committing job whose store faults after `Begin`; hold the respool's write; close. | `aclose` waits for the respool within the budget; at expiry one WARNING names it; the summary lists it as *pending*; when the write ends later, nothing is corrected and nothing raises. |
+| T24 | I15 pending clause | A queued spooled job whose write is held past the budget. | The summary line contains the *pending* clause with the job counted in it, and the terms still sum to the jobs taken. |
 
 Each failing test must fail on the starting commit for the reason in §6; T2, T5
 and T13 are the ones that need the seeded faults of §4.1 in mind, because the old
