@@ -20,6 +20,19 @@ class TestVersion:
 
 
 class TestSettings:
+    def test_a_raw_settings_puts_its_paths_under_a_set_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``QUARRY_ROOT`` moves the database, registry and telemetry paths too."""
+        monkeypatch.setenv("QUARRY_ROOT", str(tmp_path))
+        monkeypatch.delenv("LANCEDB_PATH", raising=False)
+
+        settings = Settings()
+
+        assert settings.lancedb_path == tmp_path / "default" / "lancedb"
+        assert settings.registry_path == tmp_path / "default" / "registry.db"
+        assert settings.telemetry_path == tmp_path / "default" / "telemetry.db"
+
     def test_defaults(self):
         settings = Settings()
         assert settings.chunk_max_chars == 1800

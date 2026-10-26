@@ -51,6 +51,17 @@ if TYPE_CHECKING:
 MP = pytest.MonkeyPatch
 
 
+def _home_only(monkeypatch: MP, home: Path) -> None:
+    """Make *home* the one place quarry puts its data and logs.
+
+    The suite redirects ``QUARRY_ROOT`` and ``QUARRY_LOG_DIR``, which win over the
+    home directory; a test about the home-derived paths clears them.
+    """
+    monkeypatch.setattr(Path, "home", lambda: home)
+    for name in ("QUARRY_ROOT", "QUARRY_LOG_DIR", "LANCEDB_PATH"):
+        monkeypatch.delenv(name, raising=False)
+
+
 class TestCheckPythonVersion:
     def test_always_passes(self):
         result = _check_python_version()
@@ -61,17 +72,29 @@ class TestCheckPythonVersion:
 
 class TestCheckDataDirectory:
     def test_existing_writable_directory(self, tmp_path: Path, monkeypatch: MP):
-        data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
+        data_dir = tmp_path / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUARRY_ROOT", str(tmp_path / "data"))
         result = _check_data_directory()
         assert result.passed is True
+        assert result.message == str(data_dir)
 
     def test_missing_directory(self, tmp_path: Path, monkeypatch: MP):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("QUARRY_ROOT", str(tmp_path / "data"))
         result = _check_data_directory()
         assert result.passed is False
         assert "does not exist" in result.message
+
+    def test_the_check_follows_the_home_when_the_root_is_unset(
+        self, tmp_path: Path, monkeypatch: MP
+    ):
+        monkeypatch.delenv("QUARRY_ROOT", raising=False)
+        monkeypatch.delenv("LANCEDB_PATH", raising=False)
+        _home_only(monkeypatch, tmp_path)
+        data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
+        data_dir.mkdir(parents=True)
+
+        assert _check_data_directory().message == str(data_dir)
 
 
 class TestCheckEmbeddingModel:
@@ -491,7 +514,7 @@ class TestCheckEnvironment:
     def test_returns_zero_when_all_pass(self, tmp_path: Path, monkeypatch: MP):
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         import quarry.doctor as doctor_mod
 
         _ok = CheckResult
@@ -542,7 +565,7 @@ class TestCheckEnvironment:
         assert check_environment() == 0
 
     def test_returns_one_when_required_fails(self, tmp_path: Path, monkeypatch: MP):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
         monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
@@ -968,7 +991,7 @@ class TestRunInstall:
     _DL = "quarry.embeddings.OnnxEmbeddingBackend.download_model_files"
 
     def test_creates_data_directory(self, tmp_path: Path, monkeypatch: MP):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
@@ -978,7 +1001,7 @@ class TestRunInstall:
         assert data_dir.is_dir()
 
     def test_downloads_model(self, tmp_path: Path, monkeypatch: MP):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
@@ -988,7 +1011,7 @@ class TestRunInstall:
         assert mock_dl.call_count >= 1
 
     def test_idempotent(self, tmp_path: Path, monkeypatch: MP):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
@@ -1002,7 +1025,7 @@ class TestRunInstall:
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ):
         """A genuine failure (RESTORE_FAILED) sets failed and prints a cross."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
@@ -1027,7 +1050,7 @@ class TestRunInstall:
         restored and the daemon can start, so install returns 0 and the GPU
         line shows a warning glyph, not a cross.
         """
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
@@ -1055,7 +1078,7 @@ class TestRunInstall:
         log for the detected vs supported CUDA majors \u2014 the CUDA-major-specific
         message the design requires ``quarry doctor``/install to render.
         """
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
@@ -1093,7 +1116,7 @@ class TestRunInstall:
         capsys: pytest.CaptureFixture[str],
     ):
         """Non-failure states print a check and never fail the install."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch("quarry.gpu_runtime.GpuRuntime.ensure", return_value=status),
@@ -1115,7 +1138,7 @@ class TestRunInstall:
         uninstalled -- is unexpected and may leave a broken runtime, so install
         must exit non-zero and print an error rather than a benign "Skipped".
         """
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
@@ -1133,7 +1156,7 @@ class TestRunInstall:
         assert "Skipped: OSError" not in captured.out
 
     def test_model_download_failure_returns_one(self, tmp_path: Path, monkeypatch: MP):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with patch(
             "quarry.embeddings.OnnxEmbeddingBackend.download_model_files",
@@ -1156,7 +1179,7 @@ class TestRunInstall:
         """
         import sys
 
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         # Force `from quarry.service import install` to raise ImportError: a None
         # entry in sys.modules makes the import machinery raise on lookup.
@@ -1342,6 +1365,7 @@ class TestCheckShadowRepo:
         assert result.passed is False
         assert result.required is True
         assert "cannot verify parent-tracked captures" in result.message
+        assert ".punt-labs/quarry/captures" in result.message  # the shadow repo
 
     def test_public_remote_refusal(self, tmp_path: Path) -> None:
         from quarry.shadow.visibility import Visibility
@@ -1446,7 +1470,7 @@ class TestImportIsolation:
     def test_check_environment_completes_with_the_embedding_and_database_imports_broken(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         self._break(monkeypatch, "huggingface_hub", "quarry.db.facade")
 
         code = check_environment()
@@ -1505,7 +1529,7 @@ class TestConfigureClaudeDesktopRobustness:
             return "registered"
 
         real_configure = ClaudeDesktopMcp.configure
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         monkeypatch.setattr(ClaudeDesktopMcp, "configure", real_configure)
         monkeypatch.setattr("quarry.service.install", register)
@@ -1541,7 +1565,7 @@ class TestDoctorNeverCrashes:
     def test_core_imports_survives_an_oserror_and_every_check_still_prints(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         monkeypatch.setattr(
             builtins, "__import__", _importer_that_raises("lancedb", OSError("dlopen"))
         )
@@ -1773,7 +1797,7 @@ class TestEveryCheckRuns:
     def test_a_check_that_raises_is_a_failed_result_and_the_rest_still_run(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
 
         def boom() -> CheckResult:
             msg = "daemon probe exploded"
@@ -1791,7 +1815,7 @@ class TestEveryCheckRuns:
     def test_invalid_settings_fail_one_check_and_the_independent_ones_run(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _home_only(monkeypatch, tmp_path)
         with monkeypatch.context() as bad:
             bad.setenv("INGEST_DRAIN_TIMEOUT_S", "not-a-number")
             code = check_environment()

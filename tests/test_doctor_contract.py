@@ -11,6 +11,7 @@ import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
+import lancedb
 import pytest
 from pydantic import BaseModel, ValidationError, field_validator
 
@@ -19,6 +20,7 @@ from quarry.doctor import check_environment, run_install
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_failure import CheckFailure
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.doctor_memory import MemoryDiagnostics
 from quarry.json_file import JsonFile
 from quarry.opencv_headless import HeadlessOpenCv
 from tests.test_doctor import _mock_install_deps
@@ -89,8 +91,9 @@ class TestHomeAndCwdAreGuarded:
         check_environment()
         out = capsys.readouterr().out
 
-        assert "RuntimeError" in out
+        assert "✗ Home directory" in out
         assert "Python" in out
+        assert "issue(s) found" in out
 
 
 @pytest.mark.usefixtures("real_embedding_factory")
@@ -131,13 +134,18 @@ class TestInstallAlwaysCompletes:
             msg = "no home"
             raise RuntimeError(msg)
 
-        monkeypatch.setattr(Path, "home", no_home)
-        with patch(self._DL) as download:
-            download.return_value = ("/m.onnx", "/t.json")
-            code = run_install()
+        # A context, so the home is back before the autouse fixtures tear down.
+        with monkeypatch.context() as scoped:
+            scoped.setattr(Path, "home", no_home)
+            for name in ("QUARRY_ROOT", "QUARRY_LOG_DIR", "LANCEDB_PATH"):
+                scoped.delenv(name, raising=False)
+            with patch(self._DL) as download:
+                download.return_value = ("/m.onnx", "/t.json")
+                code = run_install()
 
         assert code == 1
-        assert "Failed to create directories: RuntimeError" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "Failed to create directories: HomeUnresolvedError" in out
 
     def test_the_fp16_step_says_why_it_was_skipped(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
@@ -578,8 +586,15 @@ pwd.getpwuid = missing
 """
 
 
-def _run_without_a_home(body: str) -> subprocess.CompletedProcess[str]:
-    """Run *body* in a fresh interpreter with no HOME and no passwd entry."""
+def _run_without_a_home(
+    body: str, *, roots: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run *body* in a fresh interpreter with no HOME and no passwd entry.
+
+    With *roots*, ``QUARRY_ROOT`` and ``QUARRY_LOG_DIR`` point under it: the
+    data and log directories then resolve without a home directory, and the
+    home directory is still what is missing.
+    """
     # QUARRY_* too: the suite redirects the data and log roots, which would make
     # the home directory unnecessary.
     env = {
@@ -587,6 +602,9 @@ def _run_without_a_home(body: str) -> subprocess.CompletedProcess[str]:
         for k, v in os.environ.items()
         if k != "HOME" and not k.startswith(("QUARRY", "INGEST_"))
     }
+    if roots is not None:
+        env["QUARRY_ROOT"] = str(roots / "data")
+        env["QUARRY_LOG_DIR"] = str(roots / "logs")
     return subprocess.run(
         [sys.executable, "-c", _NO_HOME_PRELUDE + textwrap.dedent(body)],
         capture_output=True,
@@ -597,19 +615,54 @@ def _run_without_a_home(body: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+_REPO = Path(__file__).resolve().parent.parent
+
+_NO_HOME_LINE = (
+    "quarry: cannot determine the home directory "
+    "(set HOME, or give this user a passwd entry)"
+)
+
+
+def _lines_but_the_log_warning(stderr: str) -> list[str]:
+    """Return stderr's lines, minus the one warning that logging has no file."""
+    return [
+        line for line in stderr.splitlines() if "logging to stderr only" not in line
+    ]
+
+
+# ``quarry install`` runs real steps; the ones that would install packages,
+# download a model or register a service are stubbed, as the in-process install
+# tests stub them.
+_INSTALL = f"""
+        sys.path.insert(0, {str(_REPO)!r})
+        import pytest
+        from unittest.mock import patch
+        from tests.test_doctor import _mock_install_deps
+        mp = pytest.MonkeyPatch()
+        import quarry.doctor as doctor
+        real_check = doctor.check_environment
+        _mock_install_deps(mp)
+        mp.setattr(doctor, "check_environment", real_check)
+        download = "quarry.embeddings.OnnxEmbeddingBackend.download_model_files"
+        with patch(download, return_value=("/m.onnx", "/t.json")):
+            sys.argv = ["quarry", "install"]
+            from quarry._cli_entry import main
+            main()
+"""
+
 _ENTRY_POINTS: dict[str, str] = {
     "quarry doctor": """
         sys.argv = ["quarry", "doctor"]
         from quarry._cli_entry import main
         main()
     """,
-    "quarry install": """
-        sys.argv = ["quarry", "install"]
+    "quarry find": """
+        sys.argv = ["quarry", "find", "x"]
         from quarry._cli_entry import main
         main()
     """,
-    "quarry find": """
-        sys.argv = ["quarry", "find", "x"]
+    "quarry find doctor": """
+        sys.argv = ["quarry", "find", "doctor"]
         from quarry._cli_entry import main
         main()
     """,
@@ -631,21 +684,70 @@ _ENTRY_POINTS: dict[str, str] = {
 }
 
 
-@pytest.mark.parametrize("entry", sorted(_ENTRY_POINTS))
-def test_every_entry_point_fails_cleanly_when_home_cannot_be_resolved(
+def test_a_hook_without_a_home_fails_open_and_never_prints_a_traceback() -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry-hook"])
+
+    assert done.returncode == 0
+    assert done.stdout.strip() == "{}"
+    assert "Traceback" not in done.stderr
+    [line] = done.stderr.splitlines()  # exactly one line, and it names the cause
+    assert "no home directory: logging to stderr only" in line
+
+
+@pytest.mark.parametrize("entry", ["quarry find", "quarry find doctor", "quarryd"])
+def test_every_other_entry_point_prints_one_clean_line_without_a_home(
     entry: str,
 ) -> None:
     done = _run_without_a_home(_ENTRY_POINTS[entry])
 
     assert done.returncode == 1
-    if entry.endswith(("doctor", "install")):
-        # They finish and report it as a failed, required check.
-        assert "✗ Home directory" in done.stdout
-        assert "set HOME" in done.stdout
+    assert "Traceback" not in done.stderr + done.stdout
+    assert _lines_but_the_log_warning(done.stderr) == [_NO_HOME_LINE]
+    assert done.stdout == ""
+
+
+@pytest.mark.parametrize("with_roots", [False, True], ids=["unset", "set"])
+@pytest.mark.parametrize("entry", ["quarry doctor", "python -m quarry doctor"])
+def test_doctor_runs_its_real_checks_without_a_home(
+    entry: str, *, with_roots: bool, tmp_path: Path
+) -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS[entry], roots=tmp_path if with_roots else None
+    )
+
+    assert done.returncode == 1
+    assert "Traceback" not in done.stdout
+    assert "Python version" in done.stdout
+    assert "✗ Home directory" in done.stdout
+    assert "set HOME" in done.stdout
+    assert "issue(s) found" in done.stdout
+
+
+@pytest.mark.parametrize("with_roots", [False, True], ids=["unset", "set"])
+def test_install_runs_its_real_steps_without_a_home(
+    *, with_roots: bool, tmp_path: Path
+) -> None:
+    done = _run_without_a_home(_INSTALL, roots=tmp_path if with_roots else None)
+
+    assert done.returncode == 1
+    assert "Traceback" not in done.stdout
+    assert "[7/7]" in done.stdout  # every step ran
+    assert "✗ Home directory" in done.stdout
+    assert "issue(s) found" in done.stdout
+    if with_roots:
+        assert (tmp_path / "data" / "default" / "lancedb").is_dir()
     else:
-        assert "Traceback" not in done.stderr + done.stdout
-        assert done.stderr.count("\n") == 1  # one line
-        assert "cannot determine the home directory" in done.stderr
+        assert "Failed to create directories" in done.stdout
+
+
+def test_a_command_prints_one_clean_line_when_only_the_roots_are_set(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry find"], roots=tmp_path)
+
+    assert done.returncode == 1
+    assert "Traceback" not in done.stderr + done.stdout
+    assert _lines_but_the_log_warning(done.stderr) == [_NO_HOME_LINE]
 
 
 def test_every_quarry_module_imports_when_home_cannot_be_resolved() -> None:
@@ -692,8 +794,6 @@ def test_an_oserror_on_the_plugin_manifest_is_reported_under_the_manifest(
 
 
 def test_a_diagnostic_that_fails_names_its_file_and_never_echoes_the_message() -> None:
-    from quarry.doctor_memory import MemoryDiagnostics
-
     private_path = "/home/someone/private"
     with patch.object(
         MemoryDiagnostics,
@@ -710,8 +810,6 @@ def test_the_fts_check_treats_a_table_without_an_index_as_missing(
     tmp_path: Path,
 ) -> None:
     """Against a real LanceDB table, not a double."""
-    import lancedb
-
     db_dir = tmp_path / "db"
     lancedb.connect(str(db_dir)).create_table(
         "chunks", data=[{"text": "hello", "vector": [0.1, 0.2, 0.3, 0.4]}]

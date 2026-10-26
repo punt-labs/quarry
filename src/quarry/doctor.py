@@ -14,6 +14,7 @@ from quarry.config import (
     ONNX_MODEL_REPO,
     ONNX_MODEL_REVISION,
     ONNX_TOKENIZER_FILE,
+    Settings,
 )
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_ethos import EthosExtDiagnostics
@@ -22,6 +23,7 @@ from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
 from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
 from quarry.gpu_runtime import GpuRuntime
+from quarry.logging_config import LoggingConfig
 from quarry.opencv_headless import HeadlessOpenCv
 from quarry.results import CheckResult
 
@@ -82,24 +84,15 @@ def _check_python_version() -> CheckResult:
 
 
 def _check_data_directory() -> CheckResult:
-    data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
-    if data_dir.exists() and os.access(data_dir, os.W_OK):
-        return CheckResult(
-            name="Data directory",
-            passed=True,
-            message=str(data_dir),
-        )
-    if data_dir.exists():
-        return CheckResult(
-            name="Data directory",
-            passed=False,
-            message=f"{data_dir} exists but is not writable",
-        )
-    return CheckResult(
-        name="Data directory",
-        passed=False,
-        message=f"{data_dir} does not exist (run 'quarry install')",
-    )
+    data_dir = Settings().resolve_db_paths().lancedb_path
+    is_usable = data_dir.exists() and os.access(data_dir, os.W_OK)
+    if is_usable:
+        message = str(data_dir)
+    elif data_dir.exists():
+        message = f"{data_dir} exists but is not writable"
+    else:
+        message = f"{data_dir} does not exist (run 'quarry install')"
+    return CheckResult(name="Data directory", passed=is_usable, message=message)
 
 
 def _check_embedding_model() -> CheckResult:
@@ -340,12 +333,11 @@ def _install_embedding_model() -> bool:
 def _create_directories() -> bool:
     """Create the data and logs directories; return whether both now exist."""
     try:
-        root = Path.home() / ".punt-labs" / "quarry"
-        data_dir = root / "data" / "default" / "lancedb"
-        logs_dir = root / "logs"
+        data_dir = Settings().resolve_db_paths().lancedb_path
+        logs_dir = LoggingConfig.log_dir()
         data_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         print(f"  \u2717 Failed to create directories: {CheckFailure.detail(exc)}")  # noqa: T201
         return False
     print(f"  \u2713 {data_dir}")  # noqa: T201

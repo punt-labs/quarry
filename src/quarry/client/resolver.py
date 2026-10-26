@@ -24,10 +24,6 @@ from quarry.remote import read_proxy_config, ws_to_http
 
 logger = logging.getLogger(__name__)
 
-# The daemon's pinned CA (written by ``quarry install``); a managed daemon serves
-# ``--tls`` with it, so a loopback client verifies against it when present and
-# falls back to plaintext only for a bare ``quarryd`` with no CA on disk.
-
 # The literal loopback the daemon binds and the client pins — never the ambiguous
 # name ``localhost``, which a dual-stack resolver could point at a co-tenant.
 _LOOPBACK_HOST = "127.0.0.1"

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from quarry.home_paths import QuarryHome
+from quarry.home_paths import HomeUnresolvedError, QuarryHome
 
 
 def test_every_path_follows_the_home_directory_at_the_call(
@@ -38,5 +38,39 @@ def test_a_home_that_cannot_be_resolved_fails_only_when_a_path_is_asked_for(
 
     monkeypatch.setattr(Path, "home", no_home)
 
-    with pytest.raises(RuntimeError, match="home directory"):
+    with pytest.raises(HomeUnresolvedError, match="home directory"):
         QuarryHome.tls_dir()
+
+
+@pytest.mark.parametrize("home", ["", "relative/home", "."])
+def test_an_empty_or_relative_home_is_refused(
+    home: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: Path(home))
+
+    with pytest.raises(HomeUnresolvedError, match="not an absolute path"):
+        QuarryHome.root()
+
+
+def test_the_unresolved_error_is_chained_to_what_pathlib_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_home() -> Path:
+        msg = "Could not determine home directory."
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(Path, "home", no_home)
+
+    with pytest.raises(HomeUnresolvedError) as raised:
+        QuarryHome.home()
+
+    assert isinstance(raised.value.__cause__, RuntimeError)
+    assert isinstance(raised.value, RuntimeError)
+
+
+def test_the_log_directory_follows_the_home_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert QuarryHome.log_root() == tmp_path / ".punt-labs" / "quarry" / "logs"

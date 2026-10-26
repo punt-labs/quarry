@@ -57,8 +57,8 @@ class EthosMemoryBootstrap:
     def __new__(
         cls, identities: Path | None = None, vendored: Path | None = None
     ) -> Self:
-        # None means "use the configured global identities dir" — read at call
-        # time (not bound as a default) so a test can patch the module global.
+        # None means "use the global identities dir", resolved here at call time
+        # (not bound as a default) so it follows the home directory then.
         self = super().__new__(cls)
         self._identities = (
             identities if identities is not None else QuarryHome.ethos_identities()

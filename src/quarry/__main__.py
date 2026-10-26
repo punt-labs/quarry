@@ -30,6 +30,7 @@ from quarry.client import (
 )
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
+from quarry.home_paths import HomeUnresolvedError
 from quarry.logging_config import LoggingConfig
 
 if TYPE_CHECKING:
@@ -197,8 +198,8 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
     def wrapper(*args: object, **kwargs: object) -> None:
         try:
             fn(*args, **kwargs)
-        except (SystemExit, KeyboardInterrupt, typer.Exit):
-            raise
+        except (SystemExit, KeyboardInterrupt, typer.Exit, HomeUnresolvedError):
+            raise  # the entry point turns an unresolvable home into one line
         except QuarryConnectionError as exc:
             err_console.print(f"Error: {exc.message}", style="red")
             if exc.is_loopback:

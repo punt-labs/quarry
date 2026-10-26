@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
+from quarry.home_paths import QuarryHome
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
@@ -152,7 +153,7 @@ class SessionTranscriptCapture:
 
     def _archive(self) -> bool:
         """Copy the raw JSONL under sessions/ and dedup prior archives for it."""
-        sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
+        sessions_dir = QuarryHome.root() / "sessions"
         try:
             self._reader.archive(self._source.session_id, sessions_dir)
         except OSError:

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Self, final
 
+from quarry.home_paths import QuarryHome
 from quarry.lock_pid_file import LockPidFile
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class SyncLock:
     @staticmethod
     def _default_path() -> Path:
         """Return the default lockfile path in a user-owned directory."""
-        return Path.home() / ".punt-labs" / "quarry" / "sync.pid"
+        return QuarryHome.root() / "sync.pid"
 
     @property
     def path(self) -> Path:

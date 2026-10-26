@@ -13,6 +13,7 @@ from typing import ClassVar, Self, final
 from xml.parsers.expat import ExpatError
 
 from quarry.failure_reason import FailureReason
+from quarry.home_paths import QuarryHome
 from quarry.installed_budget import BudgetState, InstalledBudget
 from quarry.redacted_failure import RedactedFailure
 from quarry.shutdown_policy import ShutdownPolicy
@@ -91,13 +92,9 @@ class InstalledStopTimeout:
         agree); they are held here so a diagnostic never imports the service
         module, and its TLS code, to find a file.
         """
-        home = Path.home()
         if platform.system() == "Darwin":
-            return cls(home / "Library" / "LaunchAgents" / "com.punt-labs.quarry.plist")
-        return cls(
-            home / ".config" / "systemd" / "user" / "quarry.service",
-            home / ".punt-labs" / "quarry" / "quarry.env",
-        )
+            return cls(QuarryHome.launchd_plist("com.punt-labs.quarry"))
+        return cls(QuarryHome.systemd_unit(), QuarryHome.env_file())
 
     def verdict(self, total_s: float) -> StopTimeoutVerdict:
         """Return what the installed stop timeout comes to for a *total_s* budget."""

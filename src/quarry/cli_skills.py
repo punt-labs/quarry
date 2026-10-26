@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Annotated, NoReturn, Self, final
 
 import typer
 
+from quarry.home_paths import QuarryHome
 from quarry.skills_install import Harness, SkillsInstaller
 
 if TYPE_CHECKING:
@@ -83,7 +84,7 @@ class SkillsCli:
 
     def _installer(self) -> SkillsInstaller:
         source_dir = SkillsInstaller.locate_source(Path.cwd())
-        return SkillsInstaller(source_dir, Path.home())
+        return SkillsInstaller(source_dir, QuarryHome.home())
 
     def _parse_harness(self, agent: str) -> Harness:
         try:

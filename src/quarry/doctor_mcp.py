@@ -13,6 +13,7 @@ from typing import ClassVar, Self, final
 
 from quarry.atomic_file import AtomicFile
 from quarry.doctor_failure import CheckFailure
+from quarry.home_paths import QuarryHome
 from quarry.json_file import ConfigError, JsonFile
 from quarry.results import CheckResult
 
@@ -37,7 +38,7 @@ class ClaudeCodeMcp:
     def __new__(cls, plugins_path: Path | None = None) -> Self:
         self = super().__new__(cls)
         self._plugins_path = plugins_path or (
-            Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+            QuarryHome.home() / ".claude" / "plugins" / "installed_plugins.json"
         )
         return self
 
@@ -241,7 +242,7 @@ class ClaudeDesktopMcp:
     def __new__(cls, config_path: Path | None = None) -> Self:
         self = super().__new__(cls)
         self._config_path = config_path or (
-            Path.home()
+            QuarryHome.home()
             / "Library"
             / "Application Support"
             / "Claude"

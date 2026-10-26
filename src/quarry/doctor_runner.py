@@ -13,6 +13,7 @@ from quarry.doctor_failure import CheckFailure
 from quarry.doctor_memory import MemoryDiagnostics
 from quarry.doctor_recall import RecallDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
+from quarry.home_paths import HomeUnresolvedError, QuarryHome
 from quarry.redacted_failure import RedactedFailure
 from quarry.results import CheckResult
 
@@ -48,12 +49,12 @@ class CheckRunner:
     def home() -> CheckResult:
         """Return whether the home directory resolves (everything else needs it)."""
         try:
-            Path.home()
-        except RuntimeError as exc:
+            QuarryHome.home()
+        except HomeUnresolvedError as exc:
             return CheckResult(
                 name="Home directory",
                 passed=False,
-                message=f"cannot be determined ({CheckFailure.detail(exc)}); "
+                message=f"cannot be determined ({exc}); "
                 "set HOME, or give this user a passwd entry",
             )
         return CheckResult(name="Home directory", passed=True, message="resolved")
