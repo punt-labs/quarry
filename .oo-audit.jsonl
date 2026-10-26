@@ -1534,3 +1534,4 @@
 {"ts":"2026-10-25T20:30:00Z","commit":"86ee49d","source":null,"files_scored":332,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
 {"ts":"2026-10-25T20:34:01Z","commit":"86ee49d","source":null,"files_scored":332,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
 {"ts":"2026-10-25T21:50:08Z","commit":"fd43f57","source":null,"files_scored":332,"files_improved":1,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{"src/quarry/_stdlib.py":{"module_size":[308.0,306.0]}}}
+{"ts":"2026-10-26T03:53:51Z","commit":"8cbcae4","source":null,"files_scored":332,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"Fleet CLI-rule consistency (PL-182): QUARRY_RULES gains Bash(quarry:*), which pushes the tuple past one line (+4 lines); no logic added","deltas":{"src/quarry/claude_permissions.py":{"module_size":[146.0,150.0]}}}
