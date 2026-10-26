@@ -15,11 +15,12 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.daemon.abort_reason import Aborted
+from quarry.daemon.abort_reason import Aborted, AbortReason
 from quarry.daemon.abort_tally import AbortTally, AbortTerm
 from quarry.daemon.daemon_threads import DaemonThreads
-from quarry.daemon.job_abort import JobAbort, QueuedJob
+from quarry.daemon.job_abort import JobAbort
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
+from quarry.daemon.queued_unit import QueuedUnit
 from quarry.daemon.tasks import TaskState
 from quarry.shutdown_policy import ShutdownPolicy
 
@@ -49,9 +50,9 @@ def _abort(tmp_path: Path) -> tuple[JobAbort, AbortTally]:
     return JobAbort(settings, tally), tally
 
 
-def _job(name: str, *, spooled: bool = True) -> QueuedJob:
+def _job(name: str, *, spooled: bool = True) -> QueuedUnit:
     record = SpoolRecord("remember", "c", name, f"payload {name}") if spooled else None
-    return QueuedJob(_Unit(record), TaskState(task_id=name, kind="remember"))
+    return QueuedUnit(_Unit(record), TaskState(task_id=name, kind="remember"))
 
 
 def test_fail_spools_each_job_and_marks_it_failed_with_its_reason(
@@ -82,8 +83,8 @@ class _Exploding:
         raise RuntimeError(msg)
 
 
-def _exploding(name: str) -> QueuedJob:
-    return QueuedJob(
+def _exploding(name: str) -> QueuedUnit:
+    return QueuedUnit(
         cast("IngestUnit", _Exploding()), TaskState(task_id=name, kind="remember")
     )
 
@@ -94,7 +95,7 @@ def test_one_job_that_cannot_decide_its_outcome_costs_only_itself(
     abort, tally = _abort(tmp_path)
     jobs = [_exploding("bad"), _job("good")]
 
-    with caplog.at_level(logging.ERROR, logger="quarry.daemon.job_abort"):
+    with caplog.at_level(logging.ERROR, logger="quarry.daemon"):
         abort.fail(jobs)
 
     assert [job.state.status for job in jobs] == ["failed", "failed"]
@@ -239,7 +240,7 @@ async def test_a_cancelled_spooling_task_is_unfinished_not_a_failed_write(
 
     outcome = await abort.await_spool(spooling, _job("a"))
 
-    assert outcome is JobAbort.UNFINISHED
+    assert outcome is AbortReason.UNFINISHED
 
 
 async def test_a_late_successful_write_corrects_the_reason_and_the_tally(
@@ -257,7 +258,7 @@ async def test_a_late_successful_write_corrects_the_reason_and_the_tally(
 
     with (
         patch.object(JobSpool, "write", late),
-        caplog.at_level(logging.INFO, logger="quarry.daemon.job_abort"),
+        caplog.at_level(logging.INFO, logger="quarry.daemon"),
     ):
         await abort.fail_in_flight(job)
         assert "1 spool unfinished at shutdown" in tally.summary()
@@ -289,7 +290,7 @@ async def test_a_late_spool_that_raises_or_is_cancelled_is_logged_by_kind(
         await asyncio.sleep(0.15)
         raise asyncio.CancelledError
 
-    with caplog.at_level(logging.INFO, logger="quarry.daemon.job_abort"):
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
         for fake in (raises, cancelled):
             with patch.object(DaemonThreads, "run", fake):
                 await abort.fail_in_flight(_job("a"))

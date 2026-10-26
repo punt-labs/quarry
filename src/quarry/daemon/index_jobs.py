@@ -19,9 +19,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from starlette.concurrency import run_in_threadpool
-
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.settlement import Settlement
+from quarry.daemon.store_run import StoreRun
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync import sync_collection
@@ -59,19 +59,22 @@ class FileIndexJob:
         del ctx  # this job carries its own database; the queue's ctx is unused
         # TaskTerminal so an UNEXPECTED failure records ``failed`` and never
         # escapes to crash the queue worker (the queue's per-job contract).
+        store = StoreRun.start(state, self._index, self._settlement)
         with TaskTerminal.recording(state):
-            outcome = await run_in_threadpool(self._index)
-            lifecycle = JobLifecycle(state)
-            if outcome.error is not None:
-                lifecycle.settle_failed(outcome.error)
-                return
-            lifecycle.settle_stored(
-                {"document": outcome.document_name, "ingested": outcome.ingested}
-            )
+            JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: the file on disk is the recoverable artifact."""
         return None
+
+    @staticmethod
+    def _settlement(outcome: FileIndexOutcome) -> Settlement:
+        """Return how *outcome* settles the job: its error is its own."""
+        if outcome.error is not None:
+            return Settlement.failed(outcome.error)
+        return Settlement.done(
+            {"document": outcome.document_name, "ingested": outcome.ingested}
+        )
 
     def _index(self) -> FileIndexOutcome:
         """Open a thread-bound registry, index the file, then close it (DES-026)."""
@@ -111,15 +114,17 @@ class DocumentDeleteJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete every document's chunks + registry rows off-thread."""
         del ctx
+        store = StoreRun.start(state, self._delete, self._settlement)
         with TaskTerminal.recording(state):
-            deleted = await run_in_threadpool(self._delete)
-            JobLifecycle(state).settle_stored(
-                {"documents": len(self.documents), "deleted": deleted}
-            )
+            JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a delete has no content to recover."""
         return None
+
+    def _settlement(self, deleted: int) -> Settlement:
+        """Return the settlement of a delete that removed *deleted* chunks."""
+        return Settlement.done({"documents": len(self.documents), "deleted": deleted})
 
     def _delete(self) -> int:
         """Delete chunks for every document, then their registry rows, in one txn."""
@@ -158,23 +163,28 @@ class CollectionSyncJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the bulk collection sync off-thread, recording its counts."""
         del ctx
+        store = StoreRun.start(state, self._sync, self._settlement)
         with TaskTerminal.recording(state):
-            result = await run_in_threadpool(self._sync)
-            JobLifecycle(state).settle_stored(
-                {
-                    "collection": result.collection,
-                    "ingested": result.ingested,
-                    "refreshed": result.refreshed,
-                    "deleted": result.deleted,
-                    "skipped": result.skipped,
-                    "failed": result.failed,
-                    "errors": list(result.errors),
-                }
-            )
+            JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a bulk scan reconciles from disk, nothing to spool."""
         return None
+
+    @staticmethod
+    def _settlement(result: SyncResult) -> Settlement:
+        """Return the settlement of a bulk sync that counted *result*."""
+        return Settlement.done(
+            {
+                "collection": result.collection,
+                "ingested": result.ingested,
+                "refreshed": result.refreshed,
+                "deleted": result.deleted,
+                "skipped": result.skipped,
+                "failed": result.failed,
+                "errors": list(result.errors),
+            }
+        )
 
     def _sync(self) -> SyncResult:
         """Open a thread-bound registry, run the bulk sync, then close it."""

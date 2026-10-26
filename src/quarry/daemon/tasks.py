@@ -13,9 +13,12 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal, Self, final
+from typing import TYPE_CHECKING, Literal, Self, final
 
 from quarry.daemon.owner_lock import Claim, OwnerLock
+
+if TYPE_CHECKING:
+    from quarry.daemon.store_run import StoreRun
 
 # Task GC: completed/failed tasks are evicted after this many seconds.
 TASK_TTL_SECONDS = 3600  # 1 hour
@@ -63,6 +66,9 @@ class TaskState:
     # overwrite a status the producer or the store settled.  A polled task that
     # never was a job is simply ``running`` until it is ``completed`` or ``failed``.
     is_job: bool = field(default=False, init=False, repr=False, compare=False)
+    # The job's store, kept so a cancelled worker's store can still be read when
+    # it ends.  ``None`` until the job starts one: absence is the contract.
+    store: StoreRun | None = field(default=None, init=False, repr=False, compare=False)
     claim: Claim = field(
         default_factory=OwnerLock, init=False, repr=False, compare=False
     )

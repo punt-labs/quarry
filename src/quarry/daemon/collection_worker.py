@@ -17,8 +17,9 @@ from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.abort_tally import AbortTally
-from quarry.daemon.job_abort import JobAbort, QueuedJob
+from quarry.daemon.job_abort import JobAbort
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.queued_unit import QueuedUnit
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -46,7 +47,6 @@ class CollectionWorker:
         "_queue",
         "_release_admit",
         "_running",
-        "_tally",
         "_task",
     )
 
@@ -54,10 +54,9 @@ class CollectionWorker:
     _embed_gate: asyncio.Semaphore
     _jobs: JobAbort
     _last_active: float
-    _queue: asyncio.Queue[QueuedJob | None]
+    _queue: asyncio.Queue[QueuedUnit | None]
     _release_admit: Callable[[], None]
     _running: bool
-    _tally: AbortTally
     _task: asyncio.Task[None]
 
     def __new__(
@@ -72,8 +71,7 @@ class CollectionWorker:
         self._queue = asyncio.Queue()
         self._release_admit = release_admit
         self._running = False
-        self._tally = AbortTally()
-        self._jobs = JobAbort(ctx.settings, self._tally)
+        self._jobs = JobAbort(ctx.settings, AbortTally())
         self._last_active = monotonic()
         # Start the resident consumer now; try_submit only ever runs inside a
         # request handler, so a running loop is guaranteed at creation.
@@ -83,7 +81,7 @@ class CollectionWorker:
     def enqueue(self, job: IngestUnit, state: TaskState) -> None:
         """Append a job (with its task state) to this FIFO queue (never blocks)."""
         JobLifecycle(state).enqueue()
-        self._queue.put_nowait(QueuedJob(job, state))
+        self._queue.put_nowait(QueuedUnit(job, state))
 
     def stop(self) -> None:
         """Enqueue the drain sentinel so the worker returns after its backlog."""
@@ -149,9 +147,9 @@ class CollectionWorker:
             return self._task
         return asyncio.ensure_future(self._aborted(doomed))
 
-    def _take_queued(self) -> list[QueuedJob]:
+    def _take_queued(self) -> list[QueuedUnit]:
         """Empty the queue of waiting jobs, freeing their admit slots."""
-        doomed: list[QueuedJob] = []
+        doomed: list[QueuedUnit] = []
         while True:
             try:
                 item = self._queue.get_nowait()
@@ -169,9 +167,9 @@ class CollectionWorker:
     @property
     def tally(self) -> AbortTally:
         """Return how this worker's aborted jobs ended."""
-        return self._tally
+        return self._jobs.tally
 
-    async def _aborted(self, doomed: list[QueuedJob]) -> None:
+    async def _aborted(self, doomed: list[QueuedUnit]) -> None:
         """Spool *doomed* off the loop, record how each ended, then join the worker."""
         await self._jobs.fail_off_loop(doomed)
         await self._task  # the cancel, or whatever the worker died of

@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
-
-from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
+from quarry.daemon.store_run import StoreRun
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -66,8 +66,11 @@ class IngestJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Fetch and index the URL in a background thread, updating task state."""
         terminal = RefusalAwareTerminal(state, self._captured().subject)
+        store = StoreRun.start(
+            state, partial(self._ingest, ctx), RefusalAwareTerminal.settlement
+        )
         with terminal.record():
-            terminal.complete(await run_in_threadpool(self._ingest, ctx))
+            terminal.apply(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return a snapshot of the source URL; an ``ingest`` has no client copy.

@@ -22,9 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from starlette.concurrency import run_in_threadpool
-
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.settlement import Settlement
+from quarry.daemon.store_run import StoreRun
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
@@ -60,9 +60,9 @@ class CollectionFinalizeJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the coalesced FTS rebuild + optimize off-thread (DES-045 §9)."""
         del ctx  # this job carries its own database; the queue's ctx is unused
+        store = StoreRun.start(state, self._finalize, lambda _: Settlement.done({}))
         with TaskTerminal.recording(state):
-            await run_in_threadpool(self._finalize)
-            JobLifecycle(state).settle_stored({})
+            JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a finalize is idempotent and reruns on the next batch."""
@@ -102,9 +102,11 @@ class CollectionPurgeJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete the collection's chunks off-thread, recording the count."""
         del ctx  # this job carries its own database; the queue's ctx is unused
+        store = StoreRun.start(
+            state, self._purge, lambda deleted: Settlement.done({"deleted": deleted})
+        )
         with TaskTerminal.recording(state):
-            deleted = await run_in_threadpool(self._purge)
-            JobLifecycle(state).settle_stored({"deleted": deleted})
+            JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a purge has no content to recover."""

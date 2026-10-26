@@ -7,6 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.finalize_job import CollectionPurgeJob
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TERMINAL_STATUSES
 
@@ -74,7 +75,8 @@ class CollectionPurger:
         while not self._ctx.ingest_queue.try_submit(key, job, purge):
             if loop.time() >= deadline:
                 self._ctx.tasks.drop(purge)
-                purge.status = "failed"
-                purge.error = "ingest queue full; purge not admitted"
+                JobLifecycle(purge).settle_failed(
+                    "ingest queue full; purge not admitted"
+                )
                 return
             await asyncio.sleep(_PURGE_POLL_S)

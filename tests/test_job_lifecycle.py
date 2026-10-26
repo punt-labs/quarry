@@ -10,11 +10,13 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.settlement import Settlement
 from quarry.daemon.tasks import TaskState
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
+    from quarry.daemon.store_run import StoreRun
     from quarry.daemon.tasks import TaskStatus
 
 _CTX = cast("DaemonContext", SimpleNamespace())
@@ -278,3 +280,106 @@ def test_the_abort_fails_only_what_it_owns(
     failed = disposition is JobLifecycle.Disposition.FAILED
     assert (state.status == "failed") is failed
     assert (state.error == "shut down") is failed
+
+
+def test_observing_a_store_that_landed_completes_a_failed_or_committing_job() -> None:
+    for status in ("failed", "committing"):
+        state = _job(status)
+        state.error = "daemon shut down before ingest"
+
+        observed = JobLifecycle(state).observe_store(Settlement.done({"chunks": 2}))
+
+        assert observed is JobLifecycle.Observed.COMPLETED
+        assert (state.status, state.error, state.results) == (
+            "completed",
+            "",
+            {"chunks": 2},
+        )
+
+
+def test_observing_a_failed_store_fails_a_committing_job_only() -> None:
+    committing = _job("committing")
+
+    observed = JobLifecycle(committing).observe_store(
+        Settlement.failed("insert failed")
+    )
+
+    assert observed is JobLifecycle.Observed.FAILED
+    assert (committing.status, committing.error) == ("failed", "insert failed")
+
+
+@pytest.mark.parametrize("status", ["running", "withdrawn", "aborted", "completed"])
+def test_observing_a_store_leaves_a_status_somebody_else_settled(
+    status: TaskStatus,
+) -> None:
+    for settlement in (Settlement.done({"chunks": 2}), Settlement.failed("no")):
+        state = _job(status)
+
+        observed = JobLifecycle(state).observe_store(settlement)
+
+        assert observed is JobLifecycle.Observed.UNCHANGED
+        assert (state.status, state.error, state.results) == (status, "", {})
+
+
+def test_observing_a_failed_store_leaves_a_failed_job_and_its_reason() -> None:
+    state = _job("failed")
+    state.error = "kept"
+
+    observed = JobLifecycle(state).observe_store(Settlement.failed("later"))
+
+    assert observed is JobLifecycle.Observed.UNCHANGED
+    assert state.error == "kept"
+
+
+class _Store:
+    """A store double: it has ended with *outcome* or still runs; it is observed."""
+
+    def __init__(self, outcome: Settlement | None) -> None:
+        self._outcome = outcome
+        self.detached = False
+
+    def outcome(self) -> Settlement | None:
+        return self._outcome
+
+    def detach(self) -> None:
+        self.detached = True
+
+
+def _cancelled(
+    status: TaskStatus, outcome: Settlement | None
+) -> tuple[TaskState, _Store]:
+    state = _job(status)
+    store = _Store(outcome)
+    state.store = cast("StoreRun", store)
+    JobLifecycle(state).cancelled("task was cancelled")
+    return state, store
+
+
+@pytest.mark.parametrize("status", ["running", "committing"])
+def test_a_cancel_after_the_store_landed_completes_the_job(
+    status: TaskStatus,
+) -> None:
+    state, store = _cancelled(status, Settlement.done({"chunks": 1}))
+
+    assert (state.status, state.results) == ("completed", {"chunks": 1})
+    assert store.detached
+
+
+@pytest.mark.parametrize(
+    ("status", "outcome", "want"),
+    [
+        ("running", None, "failed"),
+        ("committing", None, "committing"),
+        ("running", Settlement.failed("no"), "failed"),
+        ("committing", Settlement.failed("no"), "failed"),
+        ("aborted", None, "aborted"),
+        ("withdrawn", None, "withdrawn"),
+    ],
+)
+def test_a_cancel_fails_only_a_job_whose_store_did_not_land(
+    status: TaskStatus, outcome: Settlement | None, want: str
+) -> None:
+    state, store = _cancelled(status, outcome)
+
+    assert state.status == want
+    assert store.detached

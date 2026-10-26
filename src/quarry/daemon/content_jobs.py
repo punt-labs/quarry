@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import TYPE_CHECKING
-
-from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
+from quarry.daemon.store_run import StoreRun
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -78,8 +78,11 @@ class ScrubbedIngestJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
         terminal = RefusalAwareTerminal(state, self._stored_name)
+        store = StoreRun.start(
+            state, partial(self.scrub_and_ingest, ctx), RefusalAwareTerminal.settlement
+        )
         with terminal.record():
-            terminal.complete(await run_in_threadpool(self.scrub_and_ingest, ctx))
+            terminal.apply(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return a scrubbed snapshot; ``remember`` has no durable client copy.
@@ -179,8 +182,11 @@ class CaptureIngestJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""
         terminal = RefusalAwareTerminal(state, self.inline.scrubbed_name)
+        store = StoreRun.start(
+            state, partial(self._capture, ctx), RefusalAwareTerminal.settlement
+        )
         with terminal.record():
-            terminal.complete(await run_in_threadpool(self._capture, ctx))
+            terminal.apply(await store.wait())
 
     def _capture(self, ctx: DaemonContext) -> dict[str, object]:
         """Scrub-ingest inline; on an empty extraction with a source URL, re-fetch.

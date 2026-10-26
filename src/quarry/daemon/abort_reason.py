@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.daemon.abort_tally import AbortTerm
 from quarry.daemon.job_spool import JobSpool
@@ -43,6 +43,21 @@ class AbortReason:
     silent loss this path prevents.
     """
 
+    UNFINISHED: ClassVar[Aborted] = Aborted(
+        "daemon shut down before ingest; spool unfinished at shutdown, "
+        "content may or may not be saved",
+        AbortTerm.UNFINISHED,
+    )
+    UNBUILT: ClassVar[Aborted] = Aborted(
+        "daemon shut down before ingest; spool record could not be built, "
+        "content not recovered",
+        AbortTerm.LOST,
+    )
+    NOT_WRITTEN: ClassVar[Aborted] = Aborted(
+        "daemon shut down before ingest; spool write failed, content not recovered",
+        AbortTerm.LOST,
+    )
+
     __slots__ = ("_spool",)
 
     _spool: JobSpool
@@ -57,21 +72,25 @@ class AbortReason:
         """Return the reasons for a daemon with *settings*."""
         return cls(JobSpool.for_settings(settings))
 
-    def of(self, job: IngestUnit) -> Aborted:
-        """Return the outcome for *job*, spooling it first if it needs it."""
+    @staticmethod
+    def without_spool(job: IngestUnit) -> Aborted:
+        """Return the outcome of *job* when nothing is spooled for it.
+
+        A job whose source outlives it says how to run it again; any other has a
+        durable copy elsewhere, or is a committing job the abort left to its store.
+        """
         if isinstance(job, RerunnableUnit):
             return Aborted(
                 f"daemon shut down before ingest completed; {job.rerun_hint}"
             )
-        record = job.spool_record()
-        if record is None:
-            return Aborted("daemon shut down before ingest completed")
+        return Aborted("daemon shut down before ingest completed")
+
+    def of(self, job: IngestUnit) -> Aborted:
+        """Return the outcome for *job*, spooling it first if it needs it."""
+        if isinstance(job, RerunnableUnit) or (record := job.spool_record()) is None:
+            return self.without_spool(job)
         if (path := self._spool.write(record)) is None:
-            return Aborted(
-                "daemon shut down before ingest; spool write failed, "
-                "content not recovered",
-                AbortTerm.LOST,
-            )
+            return self.NOT_WRITTEN
         if record.recoverable:
             return Aborted(
                 "daemon shut down before ingest; spooled for recovery",

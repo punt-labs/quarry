@@ -288,6 +288,7 @@ class World:
             store = self.stores[name]
             store.started.set()
             store.release.wait(30)
+            store.ended.set()
             return store.outcome
 
         return call
@@ -334,6 +335,12 @@ class World:
     async def abort(self) -> None:
         """Close the queue with a drain that has already run out."""
         await self.ctx.ingest_queue.aclose(drain_timeout=0.05)
+
+    async def landed(self, *entries: Entry) -> None:
+        """Wait until each store thread has ended and the loop has heard of it."""
+        for entry in entries:
+            await until(entry.store.ended.is_set)
+        await asyncio.sleep(0.05)
 
     async def running(self, *names: str) -> None:
         """Wait until each named job's store thread is running."""

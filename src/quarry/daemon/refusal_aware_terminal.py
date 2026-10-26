@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.content_guard import UnindexableContentError
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.settlement import Settlement
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.refusal import RefusalError
 
@@ -66,21 +67,30 @@ class RefusalAwareTerminal:
         """
         return any(results.get(key) for key in ("chunks", "ingested", "skipped"))
 
-    def complete(self, results: Mapping[str, object]) -> None:
-        """Record the task as completed with *results*, or refused if none stored.
+    @classmethod
+    def settlement(cls, results: Mapping[str, object]) -> Settlement:
+        """Return how a store with *results* ended: stored, or refused if none stored.
 
         A job that wrote no rows did not do what was asked, so reporting
-        ``completed`` would claim a store that never happened: it ends ``failed``
-        with a fixed reason that follows the result's shape (a crawl selected no
-        pages; a single document had no indexable text), the way a refused fetch
-        does.
+        ``completed`` would claim a store that never happened: it fails with a
+        fixed reason that follows the result's shape (a crawl selected no pages;
+        a single document had no indexable text), the way a refused fetch does.
         """
-        if not self.is_stored(results):
-            is_blank_crawl = "ingested" not in results or results.get("empty")
-            reason = self.NOTHING_STORED if is_blank_crawl else self.NO_PAGES
-            self._fail(UnindexableContentError(reason))
-            return
-        JobLifecycle(self._state).settle_stored(results)
+        if cls.is_stored(results):
+            return Settlement.done(results)
+        is_blank_crawl = "ingested" not in results or results.get("empty")
+        return Settlement.failed(cls.NOTHING_STORED if is_blank_crawl else cls.NO_PAGES)
+
+    def complete(self, results: Mapping[str, object]) -> None:
+        """Record the task as completed with *results*, or refused if none stored."""
+        self.apply(self.settlement(results))
+
+    def apply(self, settlement: Settlement) -> None:
+        """Record how the store ended: completed, or refused with its reason."""
+        if settlement.is_stored:
+            JobLifecycle(self._state).settle_stored(settlement.results)
+        else:
+            self._fail(UnindexableContentError(settlement.reason))
 
     @contextmanager
     def record(self) -> Generator[None]:
