@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.content_guard import UnindexableContentError
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.refusal import RefusalError
 
@@ -79,8 +80,7 @@ class RefusalAwareTerminal:
             reason = self.NOTHING_STORED if is_blank_crawl else self.NO_PAGES
             self._fail(UnindexableContentError(reason))
             return
-        self._state.status = "completed"
-        self._state.results = dict(results)
+        JobLifecycle(self._state).settle_stored(results)
 
     @contextmanager
     def record(self) -> Generator[None]:
@@ -93,8 +93,7 @@ class RefusalAwareTerminal:
 
     def _fail(self, exc: RefusalError) -> None:
         """Record the failure first, then log it: naming the task cannot undo it."""
-        self._state.status = "failed"
-        self._state.error = str(exc)
+        JobLifecycle(self._state).settle_failed(str(exc))
         subject = "(unnamed)"
         # The subject only decorates a log line, so whatever naming it raises must
         # not stop the failure from being logged; it is reported, not swallowed.

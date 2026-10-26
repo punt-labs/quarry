@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
@@ -61,7 +62,7 @@ class CollectionFinalizeJob:
         del ctx  # this job carries its own database; the queue's ctx is unused
         with TaskTerminal.recording(state):
             await run_in_threadpool(self._finalize)
-            state.status = "completed"
+            JobLifecycle(state).settle_stored({})
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a finalize is idempotent and reruns on the next batch."""
@@ -103,8 +104,7 @@ class CollectionPurgeJob:
         del ctx  # this job carries its own database; the queue's ctx is unused
         with TaskTerminal.recording(state):
             deleted = await run_in_threadpool(self._purge)
-            state.status = "completed"
-            state.results = {"deleted": deleted}
+            JobLifecycle(state).settle_stored({"deleted": deleted})
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a purge has no content to recover."""

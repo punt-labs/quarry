@@ -10,11 +10,12 @@ completed states after a TTL so a long-lived daemon does not leak them.
 from __future__ import annotations
 
 import asyncio
-import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Literal, Self, final
+
+from quarry.daemon.owner_lock import Claim, OwnerLock
 
 # Task GC: completed/failed tasks are evicted after this many seconds.
 TASK_TTL_SECONDS = 3600  # 1 hour
@@ -57,8 +58,13 @@ class TaskState:
     error: str = ""
     created_at: float = field(default_factory=time.monotonic)
     holds_thread: bool = False
-    claim: threading.Lock = field(
-        default_factory=threading.Lock, init=False, repr=False, compare=False
+    # Set once the task is enqueued as a job: the rules of
+    # :class:`~quarry.daemon.job_lifecycle.JobLifecycle` then apply, which never
+    # overwrite a status the producer or the store settled.  A polled task that
+    # never was a job is simply ``running`` until it is ``completed`` or ``failed``.
+    is_job: bool = field(default=False, init=False, repr=False, compare=False)
+    claim: Claim = field(
+        default_factory=OwnerLock, init=False, repr=False, compare=False
     )
 
     def reason_or(self, default: str) -> str:

@@ -179,3 +179,102 @@ async def test_a_job_that_is_not_queued_warns_when_it_is_skipped(
         )
 
     assert "running" in caplog.text
+
+
+def _job(status: TaskStatus) -> TaskState:
+    state = _queued()
+    state.status = status
+    return state
+
+
+@pytest.mark.parametrize("status", ["running", "committing"])
+def test_settle_stored_completes_a_job_the_worker_owns_and_clears_its_reason(
+    status: TaskStatus,
+) -> None:
+    state = _job(status)
+    state.error = "daemon shut down before ingest"
+
+    assert JobLifecycle(state).settle_stored({"chunks": 2})
+
+    assert (state.status, state.error, state.results) == (
+        "completed",
+        "",
+        {"chunks": 2},
+    )
+
+
+@pytest.mark.parametrize("status", ["withdrawn", "aborted", "completed", "failed"])
+def test_settle_never_overwrites_a_status_somebody_else_settled(
+    status: TaskStatus,
+) -> None:
+    state = _job(status)
+    state.error = "kept"
+
+    assert not JobLifecycle(state).settle_stored({"chunks": 2})
+    assert not JobLifecycle(state).settle_failed("late")
+
+    assert (state.status, state.error, state.results) == (status, "kept", {})
+
+
+@pytest.mark.parametrize("status", ["running", "committing"])
+def test_settle_failed_fails_a_job_the_worker_owns(status: TaskStatus) -> None:
+    state = _job(status)
+
+    assert JobLifecycle(state).settle_failed("refused")
+
+    assert (state.status, state.error) == ("failed", "refused")
+
+
+def test_a_cancel_fails_a_running_job_but_leaves_the_others() -> None:
+    kept = {s: _job(s) for s in ("committing", "aborted", "completed", "withdrawn")}
+    running = _job("running")
+
+    for state in (running, *kept.values()):
+        JobLifecycle(state).cancelled("task was cancelled")
+
+    assert (running.status, running.error) == ("failed", "task was cancelled")
+    assert {s: state.status for s, state in kept.items()} == {s: s for s in kept}
+
+
+def test_a_task_that_never_was_a_job_is_failed_by_a_cancel_whatever_it_recorded() -> (
+    None
+):
+    state = _state("completed")
+
+    JobLifecycle(state).cancelled("task was cancelled")
+
+    assert (state.status, state.error) == ("failed", "task was cancelled")
+
+
+def test_an_exit_with_no_terminal_status_fails_only_a_running_job() -> None:
+    running, aborted = _job("running"), _job("aborted")
+
+    for state in (running, aborted):
+        JobLifecycle(state).exited("task exited without setting terminal status")
+
+    assert running.status == "failed"
+    assert aborted.status == "aborted"
+
+
+@pytest.mark.parametrize(
+    ("status", "disposition"),
+    [
+        ("withdrawn", JobLifecycle.Disposition.KEPT),
+        ("aborted", JobLifecycle.Disposition.KEPT),
+        ("completed", JobLifecycle.Disposition.KEPT),
+        ("committing", JobLifecycle.Disposition.UNCONFIRMED),
+        ("queued", JobLifecycle.Disposition.FAILED),
+        ("running", JobLifecycle.Disposition.FAILED),
+        ("failed", JobLifecycle.Disposition.FAILED),
+    ],
+)
+def test_the_abort_fails_only_what_it_owns(
+    status: TaskStatus, disposition: JobLifecycle.Disposition
+) -> None:
+    state = _job(status)
+
+    assert JobLifecycle(state).fail_aborted("shut down") is disposition
+
+    failed = disposition is JobLifecycle.Disposition.FAILED
+    assert (state.status == "failed") is failed
+    assert (state.error == "shut down") is failed

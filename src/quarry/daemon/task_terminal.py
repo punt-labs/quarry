@@ -7,7 +7,7 @@ import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, final
 
-from quarry.daemon.tasks import TERMINAL_STATUSES
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.failure_reason import FailureReason
 from quarry.redacted_failure import RedactedFailure
 
@@ -36,23 +36,16 @@ class TaskTerminal:
         ``internal error: <Class>`` (a ReportedError's carried class); a body
         that sets no terminal status fails.
         """
+        lifecycle = JobLifecycle(state)
         try:
             yield
         except asyncio.CancelledError:
-            state.status = "failed"
-            state.error = state.reason_or("task was cancelled")
+            lifecycle.cancelled("task was cancelled")
             raise
         except Exception as exc:
             logger.error(
                 "Background %s failed", state.kind, exc_info=RedactedFailure.of(exc)
             )
-            state.status = "failed"
-            state.error = FailureReason.of(exc)
+            lifecycle.settle_failed(FailureReason.of(exc))
         finally:
-            if state.status not in TERMINAL_STATUSES:
-                # A body that exits mid-job (running, committing, aborted) did
-                # not finish; it keeps any reason the job already gave.
-                state.status = "failed"
-                state.error = state.reason_or(
-                    "task exited without setting terminal status"
-                )
+            lifecycle.exited("task exited without setting terminal status")

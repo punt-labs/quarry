@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync import sync_collection
@@ -60,15 +61,13 @@ class FileIndexJob:
         # escapes to crash the queue worker (the queue's per-job contract).
         with TaskTerminal.recording(state):
             outcome = await run_in_threadpool(self._index)
+            lifecycle = JobLifecycle(state)
             if outcome.error is not None:
-                state.status = "failed"
-                state.error = outcome.error
+                lifecycle.settle_failed(outcome.error)
                 return
-            state.status = "completed"
-            state.results = {
-                "document": outcome.document_name,
-                "ingested": outcome.ingested,
-            }
+            lifecycle.settle_stored(
+                {"document": outcome.document_name, "ingested": outcome.ingested}
+            )
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: the file on disk is the recoverable artifact."""
@@ -114,8 +113,9 @@ class DocumentDeleteJob:
         del ctx
         with TaskTerminal.recording(state):
             deleted = await run_in_threadpool(self._delete)
-            state.status = "completed"
-            state.results = {"documents": len(self.documents), "deleted": deleted}
+            JobLifecycle(state).settle_stored(
+                {"documents": len(self.documents), "deleted": deleted}
+            )
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a delete has no content to recover."""
@@ -160,16 +160,17 @@ class CollectionSyncJob:
         del ctx
         with TaskTerminal.recording(state):
             result = await run_in_threadpool(self._sync)
-            state.status = "completed"
-            state.results = {
-                "collection": result.collection,
-                "ingested": result.ingested,
-                "refreshed": result.refreshed,
-                "deleted": result.deleted,
-                "skipped": result.skipped,
-                "failed": result.failed,
-                "errors": list(result.errors),
-            }
+            JobLifecycle(state).settle_stored(
+                {
+                    "collection": result.collection,
+                    "ingested": result.ingested,
+                    "refreshed": result.refreshed,
+                    "deleted": result.deleted,
+                    "skipped": result.skipped,
+                    "failed": result.failed,
+                    "errors": list(result.errors),
+                }
+            )
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a bulk scan reconciles from disk, nothing to spool."""
