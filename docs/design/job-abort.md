@@ -1,6 +1,6 @@
 # Job abort lifecycle: the model the implementation follows
 
-**Status:** RATIFIED by the leader (D1-D3 of §9), amended after security review (A1-A6, L1-L5); model-checked
+**Status:** RATIFIED by the leader (D1-D3 of §9), amended after security review (A1-A6, L1-L5) and after the C3 review (the loop close, §2.5); model-checked
 **Bead:** quarry-70zm
 **Companion model:** `docs/design/job-abort.spec.tex` (Z, fuzz-checked, ProB-checked); the tool runs are recorded in §4
 **Generator:** `docs/design/job-abort.spec.gen.py.txt` (§10)
@@ -13,10 +13,10 @@ of three consecutive review rounds. Each fix moved the defect to a neighbour,
 because the status of a job is written by five actors, none of which knows what
 the others have written, and the tally that counts the jobs is a second record
 that has to agree with the first. This document stops the empirical rounds. It
-gives the job lifecycle a Z model, states eleven invariants as witnesses, and
+gives the job lifecycle a Z model, states twelve invariants as witnesses, and
 shows with ProB that the lifecycle this document requires reaches none of them
-(13030 states, every state visited, no deadlock), while the code as it stands
-reaches seven of the eleven, and a seeded fault reaches each of the others. The
+(33375 states, every state visited, no deadlock), while the code as it stands
+reaches eight of the twelve, and a seeded fault reaches each witness. The
 implementation follows the model: §5 maps schema to code, §6 lists every place
 the code breaks it, §7 is the write-set, §8 the tests, each driven through the
 real cancel path.
@@ -100,15 +100,15 @@ one. The old code hides both in the residual `unspooled` (`abort_reason.py:147-1
   cancel of the queued path's gather (`QueueCancel`) also records *unfinished*
   and leaves the late callback armed.
 
-### 2.3 Two builds, seven seeded faults, two switches
+### 2.3 Two builds, eight seeded faults, two switches
 
 `fixed = 0` is eaa5118. `fixed = 1` is the lifecycle this document requires.
-`abl = 1..7` seeds one fault into the fixed build: the observer moves a term and
+`abl = 1..8` seeds one fault into the fixed build: the observer moves a term and
 not the counter (1); the late correction moves a term and not the reason (2); the
 observer writes without the claim (3); the kept set lacks `aborted` (4); the
 observer leaves the spool file (5); a failed committing store leaves the term
-*unconfirmed* (6); the observer leaves the failure reason on a completed job (7).
-The same eleven witnesses are checked against every build. The old build's
+*unconfirmed* (6); the observer leaves the failure reason on a completed job (7); the loop closes with no drain and no report (8).
+The same twelve witnesses are checked against every build. The old build's
 operations are guarded by `fixed = 0` and live in the same spec, so a reader sees
 what changes, one operation at a time. Faults 6 and 7 are the two mutants the
 security review found; the fixed build is checked against them in §4.
@@ -123,6 +123,27 @@ and no spool write could start, so the abort's wait would expire on every job.
 `StoreRun` therefore owns a separate executor (§7.3) and never takes the shared
 pool. Test T11 pins it.
 
+### 2.5 The loop closes (C3)
+
+The observer is a callback on the event loop, and the loop does not outlive every
+thread. `StoreRun.wait()` is shielded, so a store can still be running when
+`IngestQueue.aclose` returns and `asyncio.run` closes the loop; the observer is
+cancelled with it. The store's end is then never seen: the job stays `failed` with
+its rows, its term is never corrected, a spool file is never removed, and nothing is
+logged. `LoopClose` models the close, and what the fixed build does before it:
+
+- `aclose` **drains**: it waits for the detached stores and the pending spool
+  removals, bounded by the shutdown budget (`BudgetExpires`, which may fire at any
+  time once the abort has started; the model has no clock);
+- it then logs a corrected tally, and **reports** every job whose store or spool
+  write is still running (`rp`): a WARNING names its task;
+- after the close no observer, removal or late callback runs. A store that ends
+  now is `StoreEndsUnobserved`: the job's status is left as it was.
+
+So I4 and I11 hold for stores that end *before* the close, and the new invariant I12
+holds for the rest: none is silent. The old build has `LoopCloseOld`, no drain and no
+report; seeded fault 8 gives the fixed build the same.
+
 ## 3. The invariants
 
 | # | Witness | Statement | Old build | Seeded fault |
@@ -130,14 +151,15 @@ pool. Test T11 pins it.
 | I1 | `wTerm` | A taken job whose outcome is recorded and whose store thread has ended is `completed` (and its rows are stored), `failed` (and none are), `withdrawn` or `aborted`: never queued, running, committing, and never a status that contradicts the table. | reached | |
 | I2 | `wCount` | Every taken job is in exactly one term and the counters equal the terms; so the terms sum to the jobs taken. | not reached | `abl=1` |
 | I3 | `wKept` | A withdrawn, aborted or stored job is counted *kept*, never spooled, lost, unfinished or needing no spool. | reached | |
-| I4 | `wLost` | A job whose rows are stored is never `failed`. | reached | |
+| I4 | `wLost` | A job whose rows are stored is never `failed`, unless the loop closed first and reported it (I12). | reached | |
 | I5 | `wLate` | A failed job's reason and its term agree; a late correction moves both, once. | not reached | `abl=2` |
 | I6 | `wClaim` | Every status write holds `state.claim`. | reached | `abl=3` |
 | I7 | `wOver` | A `withdrawn`, `aborted` or `completed` status is never overwritten, and a committing job is never failed while its store thread runs. | reached | `abl=4` |
 | I8 | `wDisk` | A failed job's reason matches what reached disk: *spooled* only if the file is there; *not written* or *unbuilt* only if the write cannot land; *needs no spool* only if there is no file. | reached | |
 | I9 | `wMatch` | A term matches its status: *unconfirmed* means `committing`; *pending*, *unfinished*, *spooled*, *not written*, *unbuilt* and *needs no spool* mean `failed`; *kept* means `withdrawn`, `aborted` or `completed`. | reached | `abl=6` |
 | I10 | `wCompl` | A `completed` job carries no failure reason. | not reached | `abl=7` |
-| I11 | `wGhost` | A `completed` job has no spool file on disk. | not reached | `abl=5` |
+| I11 | `wGhost` | A `completed` job has no spool file on disk, unless the loop closed first and reported it. Conditional on the store ending before the close. | not reached | `abl=5` |
+| I12 | `wSilent` | Every job whose store, or whose spool write for a `completed` job, is still running when the loop closes is reported. The operator's final report is never silently wrong. | reached | `abl=8` |
 
 I7 is the one the brief did not list; the code needed it (SFH-H1 and the missing
 `aborted` are both I7). I8 is the brief's "a reason that matches what reached
@@ -164,63 +186,67 @@ setups.
 **Fixed build** (`fixed = 1`, `abl = 0`), `-goal 'card(wit)>0'`, with ProB's
 default deadlock check on:
 
-- 13030 states analysed, 30534 transitions, all states visited,
+- 33375 states analysed, 91973 transitions, all states visited,
   `No counter example found`: no witness and **no deadlock**. The settled state
   is the explicit `Quiesce` self-loop, so any other deadlock would be a finding.
-- Of 51 operations, 15 never fire, as they must not: eight are old-build
+- Of 56 operations, 16 never fire, as they must not: nine are old-build
   operations (`StoreEndsOld`, `StoreFailsOld`, `FinishStoredOld`, `FinishStopOld`,
-  `CancelInBodyOld`, `BeginOld`, `SpoolCancelOld`, `QueueCancelOld`, all guarded
-  by `fixed = 0`) and seven are seeded faults (`StoreEndsObservedNoCount`,
+  `CancelInBodyOld`, `BeginOld`, `SpoolCancelOld`, `QueueCancelOld`,
+  `LoopCloseOld`, all guarded by `fixed = 0`, `LoopCloseOld` also by seeded fault
+  8) and seven are seeded faults (`StoreEndsObservedNoCount`,
   `StoreEndsObservedUnclaimed`, `StoreEndsObservedGhost`,
   `StoreEndsObservedUnbegunKeepsReason`, `StoreFailsObservedCommittingStale`,
   `BeginAbortedOverwritten`, `LateNoReason`). Every operation of the fixed build
-  fires.
-- **All eleven witnesses are unreachable.**
+  fires, `LoopClose`, `BudgetExpires` and `StoreEndsUnobserved` among them.
+- **All twelve witnesses are unreachable.**
 - `AG({ph = pre} or EF({settled}))`, `settled` = every job is either out of the
   abort's hands or recorded, and no store thread runs: **TRUE**. From any state
   after the abort starts, a settled state is reachable.
 
-**Old build** (`fixed = 0`): the full search visits 24507 states, 59556
+**Old build** (`fixed = 0`): the full search visits 61123 states, 176214
 transitions. Per witness, the first counter-example ProB found:
 
 | Witness | Trace length | States analysed | Reached |
 |---|---|---|---|
-| `wTerm` | 11 | 1008 | yes |
-| `wKept` | 6 | 24 | yes |
-| `wLost` | 14 | 663 | yes |
-| `wClaim` | 9 | 149 | yes |
-| `wOver` | 10 | 239 | yes |
-| `wDisk` | 13 | 122 | yes |
-| `wMatch` | 5 | 16 | yes |
-| `wCount` | | 24507 (all) | **no** |
-| `wLate` | | 24507 (all) | **no** |
-| `wCompl` | | 24507 (all) | **no** |
-| `wGhost` | | 24507 (all) | **no** |
+| `wTerm` | 13 | 737 | yes |
+| `wKept` | 5 | 32 | yes |
+| `wLost` | 17 | 459 | yes |
+| `wClaim` | 11 | 244 | yes |
+| `wOver` | 10 | 657 | yes |
+| `wDisk` | 14 | 223 | yes |
+| `wMatch` | 8 | 20 | yes |
+| `wSilent` | 12 | 179 | yes |
+| `wCount` | | 61123 (all) | **no** |
+| `wLate` | | 61123 (all) | **no** |
+| `wCompl` | | 61123 (all) | **no** |
+| `wGhost` | | 61123 (all) | **no** |
 
-The old build never breaks I2, I5, I10 or I11 on its own: its counters and its
-late correction are consistent, and it has no late completion to leave a reason or
-a file behind. What breaks is what they are counting. The liveness formula holds
-in the fixed build and fails in the old build (below), where a cancelled
-queued spool is never recorded.
+The old build reaches eight of the twelve. It never breaks I2, I5, I10 or I11 on
+its own: its counters and its late correction are consistent, and it has no late
+completion to leave a reason or a file behind. What breaks is what they are
+counting. The liveness formula holds in the fixed build and fails in the old build
+(below), where a cancelled queued spool is never recorded.
 
 ### 4.1 Seeded faults
 
 | `abl` | Fault | Witness | Trace length | States analysed |
 |---|---|---|---|---|
-| 1 | observer moves the term, not the counter | `wCount` | 11 | 459 |
-| 2 | late correction moves the term, not the reason | `wLate` | 11 | 254 |
-| 3 | observer writes without the claim | `wClaim` | 11 | 292 |
-| 4 | kept set lacks `aborted` | `wOver` | 10 | 362 |
-| 5 | observer leaves the spool file | `wGhost` | 15 | 1176 |
-| 6 | failed committing store leaves the term *unconfirmed* | `wMatch` | 11 | 230 |
-| 7 | observer leaves the failure reason on a completed job | `wCompl` | 9 | 1117 |
+| 1 | observer moves the term, not the counter | `wCount` | 11 | 1454 |
+| 2 | late correction moves the term, not the reason | `wLate` | 11 | 267 |
+| 3 | observer writes without the claim | `wClaim` | 13 | 847 |
+| 4 | kept set lacks `aborted` | `wOver` | 11 | 193 |
+| 5 | observer leaves the spool file | `wGhost` | 15 | 1664 |
+| 6 | failed committing store leaves the term *unconfirmed* | `wMatch` | 12 | 1824 |
+| 7 | observer leaves the failure reason on a completed job | `wCompl` | 12 | 516 |
+| 8 | the loop closes with no drain and no report | `wSilent` | 12 | 306 |
 
 Each fault is reached, so each witness can fire; the fixed build reaches none.
 
 ### 4.2 The security review's mutants, replayed
 
-The two mutants in `.tmp/scratch-djb/` are single-line edits of the previous
-spec. I applied the same two edits to this spec (the term and counter left
+The two mutants in `.tmp/scratch-djb/` are single-line edits of the spec as it
+stood at a1b20c0 (before the loop close; the numbers below are from that revision,
+and seeded faults 6 and 7 above repeat them on this one). I applied the same two edits to this spec (the term and counter left
 unchanged in `StoreFailsObservedCommittingCore`; the reason left in
 `StoreEndsObservedUnbegunCore`) and ran the goal of the witness added for each.
 
@@ -267,6 +293,7 @@ requires that does not exist.
 | `Deadline` | `JobAbort.fail_in_flight`, `await_spool` (`job_abort.py:107-150`) |
 | `Late` | `JobAbort._ended_late` (`job_abort.py:152-179`) |
 | `SpoolCancel` | `await_spool`'s `spooling.cancelled()` branch (`job_abort.py:140-141`) |
+| `BudgetExpires`, `LoopClose`, `StoreEndsUnobserved`, `StoreFailsUnobserved` | `IngestQueue.aclose` (`ingest_queue.py:120-144`) and, beyond it, `asyncio.run`'s close of the loop: the drain, the corrected tally and the warning are new |
 | `QueueCancel` | `JobAbort._one_off_loop` (`job_abort.py:181-193`), `fail_off_loop` (`:102-105`) |
 | `tl`, `cnt`, terms | `AbortTally` (`abort_reason.py:92-164`); `QueueAbort._summary` (`queue_abort.py:60-69`) |
 | `Latch`, `Quiesce` | no code: the invariant tests of §8 |
@@ -294,6 +321,7 @@ cannot be tolerated. The witness is the invariant broken.
 | V14 | `_one_off_loop` catches `Exception`, and a cancel is a `BaseException`: a cancelled gather skips `_record`, the job stays pending for good, and its late callback is never armed. | `job_abort.py:183-193`; `fail_off_loop` `:102-105` | liveness |
 | V15 | Four jobs write their terminal status directly, with no claim and over any status: `FileIndexJob` (`index_jobs.py:64-68`: `failed`, `error`, `completed`, `results`), the delete and sync jobs (`index_jobs.py:117-118`, `:163-164`), and `finalize_job.py:64`, `:106-107`. | as listed | I6, I7 |
 | V16 | `JobSpool.write` returns `bool`, not the path it wrote, so nothing can remove a record once its job has stored. | `job_spool.py:103-134` | I11 |
+| V17 | `aclose` returns once the abort's wait ends. It does not wait for a detached store or a pending spool removal, and it logs no report of one still running; with a shielded `StoreRun.wait()` the loop then closes under the observer. | `ingest_queue.py:120-144` | I12 |
 
 Not violations, and not changed: a queued job's spool has no deadline
 (`job_abort.py:102-105`); it stays *pending* until the write ends, and the summary
@@ -395,9 +423,16 @@ shapes the OO rules ask for.
    removal is what makes the question moot for the case the model covers; the
    residual (a crash between the store and the removal) leaves a record that the
    daemon's start-up sweep does not touch, because it removes temps, not records.
-6. **The summary** (`queue_abort.py`) prints the kept and unconfirmed terms; "not
+6. **The drain and the report** (`ingest_queue.py`). After the abort settles,
+   `aclose` waits for the detached stores and the pending spool removals
+   (`SpoolDiscard`), bounded by the shutdown budget; then it logs the corrected
+   tally, and emits one WARNING per store or removal still running, naming its
+   task (`LoopClose`, I12). Nothing it cannot wait for is silent. The wait is a
+   `wait`-with-timeout over the stores' futures, never a join: a store that never
+   returns must not hold the process (T16).
+7. **The summary** (`queue_abort.py`) prints the kept and unconfirmed terms; "not
    yet accounted for" stays *pending* only.
-7. **`CollectionWorker`** hands each taken job to the ledger and nothing else
+8. **`CollectionWorker`** hands each taken job to the ledger and nothing else
    changes: its abort and cancel flow is the model's.
 
 Commit-gate semantics: `JobLifecycle.commit` and `QueuedJob.checkpoint` are
@@ -410,21 +445,25 @@ it by design, and the summary says so.
 
 ### Implementation refinements
 
-The implementation splits some of the model's terms more finely, and keeps the old
-semantics for tasks that are not queued jobs. None of it changes a witness: each
-finer code term maps to exactly one model term, so the model's counts are the sums
-of the code's.
+The implementation's terms are `AbortTerm` in `src/quarry/daemon/abort_tally.py`.
+Some are finer than the model's, and each maps to one model term, so a witness is
+unaffected: the model's counts are the sums of the code's.
 
-| Code term | Model term | Note |
+| Code term (`AbortTerm`) | Model term | Note |
 |---|---|---|
-| `SPOOLED` | *spooled* (`tspooled`) | a record written and recoverable |
-| `UNRECOVERABLE` | *spooled* (`tspooled`) | a record written as a note only (a URL without its query); the model has one term for both, as the old tally had two counters under one reason class |
+| `PENDING` | *pending* (`tpend`) | taken, outcome not yet known |
+| `SPOOLED` | *spooled* (`tspooled`) | a record was written and can be run again |
+| `UNRECOVERABLE` | *spooled* (`tspooled`) | a record was written as a note only (a URL without its query); a file exists in both, so I8 reads both as *spooled* |
 | `NOT_WRITTEN` | *not written* (`tnotw`) | the spool write failed |
 | `UNBUILT` | *unbuilt* (`tunb`) | the record could not be built |
-| `LOST` | *not written* or *unbuilt* | the old term; split by reason into the two above |
+| `UNFINISHED` | *unfinished* (`tunfin`) | the write was still running when the abort stopped waiting |
+| `NO_SPOOL` | *needs no spool* (`tnospool`) | run again from its source, or a durable copy exists |
+| `KEPT` | *kept* (`tkept`) | withdrawn, aborted by its producer, or stored |
+| `UNCONFIRMED` | *unconfirmed* (`tunconf`) | a committing job whose store has not ended |
 
-The reason string for `UNRECOVERABLE` differs from `SPOOLED`'s, so I8 reads it as
-*spooled*: a file exists in both.
+The pre-split `LOST` term (the write failed or the record could not be built) is
+the sum of `NOT_WRITTEN` and `UNBUILT`; the split is by reason, and the model had
+it from the start.
 
 `TaskState.is_job` separates queued jobs from the other background tasks.
 `BackfillTask`, for one, records a partial `completed` (its results so far) and then
@@ -465,6 +504,9 @@ write blocks or fails through `JobSpool.write`, the one seam the code has.
 | T14 | observer, closed loop | A store ends after the loop has closed. | No exception reaches the thread; the callback is dropped. |
 | T15 | observer contract; callers | A detached store that raises; one that returns zero rows; a `FileIndexJob` store with an `error`. Then each non-queued `TaskTerminal.recording` caller (`routes/base.py:196`, `routes/maintenance.py:93`, `:110`, `watch_loop.py:254`) through cancel and failure. | The exception is retrieved and logged once, redacted (a message that quotes a URL or a credential does not reach `state.error`); zero rows is `failed`, never `completed`; the index job's error is its own; every caller ends as before. |
 | T16 | committing, store never ends | A committing job whose store never returns; abort. | `committing`, counted *unconfirmed*; the process exits within its stop timeout. |
+| T17 | I12 loop close | A detached store (and, separately, a pending spool removal) that is still running when `aclose` returns; close the loop; then let it end. | One WARNING names its task; the logged tally is the corrected one; no exception from a cancelled observer; the store's later end changes no status. |
+| T18 | I4, I11 before the close | A detached store that ends *inside* the drain budget. | The job is `completed`, counted *kept*, its spool file removed, before `aclose` returns; no warning. |
+| T19 | budget | A store that outlasts the budget. | `aclose` returns within the budget plus its grace; the warning is emitted once. |
 
 Each failing test must fail on the starting commit for the reason in §6; T2, T5
 and T13 are the ones that need the seeded faults of §4.1 in mind, because the old
@@ -523,6 +565,9 @@ and run `probcli` on that file with the flags of §4; do not run the tools insid
   tally, which two jobs exercise; more jobs are the same moves over more keys.
 - A store thread that never ends. The job stays *unconfirmed* or *pending* by
   design; the liveness check is a possibility claim.
+- The budget's length, and whether a store that never ends is ever observed: the
+  model only distinguishes a store that ends before the close from one that ends
+  after, unobserved and reported.
 - Thread-pool contention. The model assumes the store executor is separate (§2.4)
   and has no pool to starve.
 - Replay of a spooled record, and the spool record's bytes, recoverability flag and
