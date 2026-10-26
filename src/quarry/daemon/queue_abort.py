@@ -7,7 +7,7 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.daemon.abort_reason import AbortTally
+from quarry.daemon.abort_tally import AbortTally
 from quarry.redacted_failure import RedactedFailure
 
 if TYPE_CHECKING:

@@ -118,17 +118,17 @@ class JobSpool:
         with SpoolLock(self._dir).exclusive():
             sweep.run()
 
-    def write(self, record: SpoolRecord) -> bool:
-        """Persist *record* atomically and privately; return whether it stuck.
+    def write(self, record: SpoolRecord) -> Path | None:
+        """Persist *record* atomically and privately; return where it stuck.
 
-        Returns ``True`` only when the rename succeeded, so the record is in
-        place and recoverable.  What is durable, exactly: the file's bytes are
+        Returns the record's path only when the rename succeeded, so the record
+        is in place and recoverable.  What is durable, exactly: the file's bytes are
         synced before the rename, and the spool directory is synced after it, so
         the entry survives a crash; when this call created the spool directory,
         its entry in the parent is synced too.  A failed directory sync is a
-        warning and still returns ``True``: the record is there, but a crash
+        warning and still returns the path: the record is there, but a crash
         before the filesystem flushes could lose its name.  Any other failure
-        returns ``False`` and never raises into shutdown, so the caller records
+        returns ``None`` and never raises into shutdown, so the caller records
         the truth instead of a false recoverability claim: the content is lost,
         not spooled.  It is logged with the collection so the loss stays visible.
 
@@ -138,10 +138,11 @@ class JobSpool:
         instant.  The name carries a full UUID, so a record never replaces an
         earlier one.
         """
+        path = self._dir / record.filename()
         try:
             PrivateWrite.ensure_directory(self._dir, "spool directory")
             with SpoolLock(self._dir).shared():
-                self._atomic_write(self._dir / record.filename(), record.as_json())
+                self._atomic_write(path, record.as_json())
         except Exception as exc:
             logger.error(
                 "failed to spool aborted %s job for %s",
@@ -149,8 +150,8 @@ class JobSpool:
                 record.collection,
                 exc_info=RedactedFailure.of(exc),
             )
-            return False
-        return True
+            return None
+        return path
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:

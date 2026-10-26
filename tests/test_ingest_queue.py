@@ -22,7 +22,8 @@ from typing import TYPE_CHECKING, Self, cast, final
 from unittest.mock import patch
 
 from quarry.daemon import ingest_queue as iq
-from quarry.daemon.abort_reason import Aborted, AbortTally
+from quarry.daemon.abort_reason import Aborted
+from quarry.daemon.abort_tally import AbortTally, AbortTerm
 from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.route_key import RouteKey
@@ -628,7 +629,7 @@ def test_abort_time_spool_writes_run_off_the_event_loop(tmp_path: Path) -> None:
     threads: list[int] = []
     real_write = JobSpool.write
 
-    def recording_write(self: JobSpool, record: SpoolRecord) -> bool:
+    def recording_write(self: JobSpool, record: SpoolRecord) -> Path | None:
         threads.append(threading.get_ident())
         return real_write(self, record)
 
@@ -673,7 +674,7 @@ def test_a_second_cancel_while_spooling_never_skips_the_record(
         spooling = threading.Event()
         release = threading.Event()
 
-        def slow_write(self: JobSpool, record: SpoolRecord) -> bool:
+        def slow_write(self: JobSpool, record: SpoolRecord) -> Path | None:
             spooling.set()
             release.wait(5)
             return real_write(self, record)
@@ -900,7 +901,9 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
         def __init__(self, outcomes: list[Aborted]) -> None:
             self.tally = AbortTally()
             for outcome in outcomes:
-                self.tally.record(outcome)
+                job = object()
+                self.tally.take(job)
+                self.tally.move(job, outcome.term)
 
         def abort_off_loop(self) -> asyncio.Task[None]:
             async def done() -> None:
@@ -910,9 +913,9 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
 
     async def _run() -> None:
         queue = _make_queue(concurrency=1)
-        recoverable = Aborted("r", spooled=True, recoverable=True)
-        unrecoverable = Aborted("u", spooled=True)
-        lost = Aborted("l", lost=True)
+        recoverable = Aborted("r", AbortTerm.SPOOLED)
+        unrecoverable = Aborted("u", AbortTerm.UNRECOVERABLE)
+        lost = Aborted("l", AbortTerm.LOST)
         none = Aborted("n")
         workers = [
             _Counted([recoverable, recoverable, unrecoverable, lost, none]),
@@ -925,7 +928,7 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
 
     assert (
         "aborted 8 job(s): 2 spooled for recovery, 1 spooled but not recoverable, "
-        "4 lost (spool write failed), 1 needed no spool"
+        "4 lost (spool write failed), 1 needed no spool, 0 kept"
     ) in caplog.text
 
 

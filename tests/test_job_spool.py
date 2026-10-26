@@ -27,9 +27,9 @@ if TYPE_CHECKING:
 def test_write_creates_a_json_file(tmp_path: Path) -> None:
     """A written record lands as a JSON file carrying its recoverable fields."""
     spool = JobSpool(tmp_path / "spool")
-    assert spool.write(SpoolRecord("remember", "mem", "note", "payload text")) is True
+    written = spool.write(SpoolRecord("remember", "mem", "note", "payload text"))
     files = list((tmp_path / "spool").glob("remember-*.json"))
-    assert len(files) == 1
+    assert files == [written]
     data = json.loads(files[0].read_text())
     assert data["kind"] == "remember"
     assert data["collection"] == "mem"
@@ -96,7 +96,7 @@ def test_write_failure_leaves_no_temp(
 
     monkeypatch.setattr(Path, "replace", boom)
     wrote = JobSpool(tmp_path / "spool").write(SpoolRecord("remember", "c", "n", "p"))
-    assert wrote is False  # a failed write reports the loss, never a false success
+    assert wrote is None  # a failed write reports the loss, never a false success
     assert not list((tmp_path / "spool").glob("*.tmp"))
     assert not list((tmp_path / "spool").glob("*.json"))
 
@@ -140,7 +140,7 @@ def test_a_failed_write_is_logged_by_class_and_frames_never_its_message(
         ),
         caplog.at_level(logging.ERROR, logger="quarry.daemon.job_spool"),
     ):
-        assert spool.write(record) is False
+        assert spool.write(record) is None
 
     assert "failed to spool aborted remember job for c" in caplog.text
     assert "PermissionError" in caplog.text
@@ -185,7 +185,7 @@ def test_a_failed_file_sync_loses_the_record_cleanly(
             SpoolRecord("remember", "c", "n", "p")
         )
 
-    assert wrote is False
+    assert wrote is None
     leftovers = [p for p in (tmp_path / "spool").glob("*") if p.name != ".lock"]
     assert leftovers == []
     assert "failed to spool aborted remember job for c" in caplog.text
@@ -209,7 +209,8 @@ def test_a_failed_directory_sync_is_a_warning_and_the_record_stays(
             SpoolRecord("remember", "c", "n", "p")
         )
 
-    assert wrote is True
+    assert wrote is not None
+    assert wrote.exists()
     assert len(list((tmp_path / "spool").glob("remember-*.json"))) == 1
     assert "directory sync failed" in caplog.text
     assert "EIO" in caplog.text
@@ -226,7 +227,7 @@ def test_a_failure_that_is_not_an_oserror_never_raises_into_shutdown(
             SpoolRecord("remember", "c", "n", "p")
         )
 
-    assert wrote is False
+    assert wrote is None
     assert "TypeError" in caplog.text
 
 
@@ -429,7 +430,7 @@ def test_a_write_waits_for_a_sweep_and_then_lands(tmp_path: Path) -> None:
     assert spool.write(SpoolRecord("remember", "c", "first", "p"))
     exclusive = os.open(tmp_path / "spool" / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(exclusive, fcntl.LOCK_EX)  # a sweep, mid-sweep
-    outcome: list[bool] = []
+    outcome: list[Path | None] = []
     writing = threading.Thread(
         target=lambda: outcome.append(
             spool.write(SpoolRecord("remember", "c", "second", "p"))
@@ -444,4 +445,6 @@ def test_a_write_waits_for_a_sweep_and_then_lands(tmp_path: Path) -> None:
     os.close(exclusive)
     writing.join(5)
 
-    assert outcome == [True]
+    assert len(outcome) == 1
+    assert outcome[0] is not None
+    assert outcome[0].exists()

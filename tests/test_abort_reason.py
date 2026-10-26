@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast, final
 
-from quarry.daemon.abort_reason import Aborted, AbortReason, AbortTally
+from quarry.daemon.abort_reason import Aborted, AbortReason
+from quarry.daemon.abort_tally import AbortTally, AbortTerm
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 
 if TYPE_CHECKING:
@@ -20,9 +22,9 @@ class _Spool:
         self.ok = ok
         self.written: list[SpoolRecord] = []
 
-    def write(self, record: SpoolRecord) -> bool:
+    def write(self, record: SpoolRecord) -> Path | None:
         self.written.append(record)
-        return self.ok
+        return Path(f"/spool/{record.kind}-x.json") if self.ok else None
 
 
 @final
@@ -95,13 +97,23 @@ def test_an_unrecoverable_record_says_to_rerun_the_ingest() -> None:
     assert "re-run the ingest" in _reason(_Spool(), _Unit(record))
 
 
-def test_only_a_job_whose_record_was_written_is_marked_spooled() -> None:
+def test_only_a_job_whose_record_was_written_is_counted_spooled() -> None:
     record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
 
-    assert _outcome(_Spool(ok=True), _Unit(record)).spooled
-    assert not _outcome(_Spool(ok=False), _Unit(record)).spooled
-    assert not _outcome(_Spool(), _Unit(None)).spooled
-    assert not _outcome(_Spool(), _Rerunnable()).spooled
+    assert _outcome(_Spool(ok=True), _Unit(record)).term is AbortTerm.SPOOLED
+    assert _outcome(_Spool(ok=False), _Unit(record)).term is AbortTerm.LOST
+    assert _outcome(_Spool(), _Unit(None)).term is AbortTerm.NO_SPOOL
+    assert _outcome(_Spool(), _Rerunnable()).term is AbortTerm.NO_SPOOL
+
+
+def test_the_outcome_names_the_file_it_wrote_so_a_store_can_remove_it() -> None:
+    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
+
+    assert _outcome(_Spool(ok=True), _Unit(record)).path == Path(
+        "/spool/remember-x.json"
+    )
+    assert _outcome(_Spool(ok=False), _Unit(record)).path is None
+    assert _outcome(_Spool(), _Unit(None)).path is None
 
 
 def test_a_url_that_cannot_be_rerun_is_spooled_but_not_recoverable() -> None:
@@ -111,55 +123,68 @@ def test_a_url_that_cannot_be_rerun_is_spooled_but_not_recoverable() -> None:
 
     outcome = _outcome(_Spool(ok=True), _Unit(record))
 
-    assert (outcome.spooled, outcome.recoverable) == (True, False)
+    assert outcome.term is AbortTerm.UNRECOVERABLE
     assert "not recoverable" in outcome.reason
 
 
-def test_a_recoverable_record_is_spooled_and_recoverable() -> None:
-    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
-
-    outcome = _outcome(_Spool(ok=True), _Unit(record))
-
-    assert (outcome.spooled, outcome.recoverable) == (True, True)
-
-
-def test_a_failed_spool_write_is_lost_and_nothing_else_is_claimed() -> None:
-    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
-
-    outcome = _outcome(_Spool(ok=False), _Unit(record))
-
-    assert (outcome.lost, outcome.spooled, outcome.recoverable) == (True, False, False)
-
-
-def test_no_other_outcome_is_lost() -> None:
-    record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
-
-    assert not _outcome(_Spool(ok=True), _Unit(record)).lost
-    assert not _outcome(_Spool(), _Unit(None)).lost
-    assert not _outcome(_Spool(), _Rerunnable()).lost
+def _counted(*outcomes: Aborted) -> AbortTally:
+    tally = AbortTally()
+    for outcome in outcomes:
+        job = object()
+        tally.take(job)
+        tally.move(job, outcome.term)
+    return tally
 
 
 def test_a_tally_counts_each_aborted_job_exactly_once() -> None:
-    tally = AbortTally()
-    for outcome in (
-        Aborted("a", spooled=True, recoverable=True),
-        Aborted("b", spooled=True),
-        Aborted("c", lost=True),
+    tally = _counted(
+        Aborted("a", AbortTerm.SPOOLED),
+        Aborted("b", AbortTerm.UNRECOVERABLE),
+        Aborted("c", AbortTerm.LOST),
         Aborted("d"),
-    ):
-        tally.record(outcome)
+        Aborted("e", AbortTerm.KEPT),
+        Aborted("f", AbortTerm.UNCONFIRMED),
+    )
 
     assert tally.summary() == (
-        "4 job(s): 1 spooled for recovery, 1 spooled but not recoverable, "
-        "1 lost (spool write failed), 1 needed no spool"
+        "6 job(s): 1 spooled for recovery, 1 spooled but not recoverable, "
+        "1 lost (spool write failed), 1 needed no spool, "
+        "1 kept (withdrawn, aborted or stored), "
+        "1 unconfirmed (committing at shutdown)"
     )
 
 
+def test_a_job_moves_between_terms_and_is_counted_in_one() -> None:
+    tally = AbortTally()
+    job = object()
+
+    assert tally.take(job)
+    assert not tally.take(job)
+    assert tally.pending == 1
+    tally.move(job, AbortTerm.UNFINISHED)
+    tally.move(job, AbortTerm.SPOOLED)
+
+    assert tally.term_of(job) is AbortTerm.SPOOLED
+    assert tally.pending == 0
+    assert tally.count(AbortTerm.UNFINISHED) == 0
+    assert tally.summary().startswith("1 job(s): 1 spooled for recovery")
+
+
+def test_a_job_never_taken_has_no_term() -> None:
+    assert AbortTally().term_of(object()) is None
+
+
+def test_a_pending_job_is_not_in_the_summary_until_its_outcome_is_known() -> None:
+    tally = AbortTally()
+    tally.take(object())
+
+    assert tally.pending == 1
+    assert tally.summary().startswith("0 job(s)")
+
+
 def test_tallies_combine_into_one_whose_terms_still_add_up() -> None:
-    first, second = AbortTally(), AbortTally()
-    first.record(Aborted("a", spooled=True, recoverable=True))
-    second.record(Aborted("b", lost=True))
-    second.record(Aborted("c"))
+    first = _counted(Aborted("a", AbortTerm.SPOOLED))
+    second = _counted(Aborted("b", AbortTerm.LOST), Aborted("c"))
 
     total = AbortTally.total([first, second])
 

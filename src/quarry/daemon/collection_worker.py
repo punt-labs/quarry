@@ -16,7 +16,7 @@ import asyncio
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.daemon.abort_reason import AbortTally
+from quarry.daemon.abort_tally import AbortTally
 from quarry.daemon.job_abort import JobAbort, QueuedJob
 from quarry.daemon.job_lifecycle import JobLifecycle
 

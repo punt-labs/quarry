@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
 from unittest.mock import patch
 
-from quarry.daemon.abort_reason import AbortTally
+from quarry.daemon.abort_tally import AbortTally
 from quarry.daemon.backfill_job import BackfillTranscriptJob
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob

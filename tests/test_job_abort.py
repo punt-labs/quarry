@@ -15,7 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.daemon.abort_reason import Aborted, AbortTally
+from quarry.daemon.abort_reason import Aborted
+from quarry.daemon.abort_tally import AbortTally, AbortTerm
 from quarry.daemon.daemon_threads import DaemonThreads
 from quarry.daemon.job_abort import JobAbort, QueuedJob
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
@@ -121,7 +122,7 @@ async def test_fail_off_loop_spools_on_a_thread_and_records_on_the_loop(
     threads: list[int] = []
     real_write = JobSpool.write
 
-    def recording(self: JobSpool, record: SpoolRecord) -> bool:
+    def recording(self: JobSpool, record: SpoolRecord) -> Path | None:
         threads.append(threading.get_ident())
         return real_write(self, record)
 
@@ -141,7 +142,7 @@ async def test_a_job_is_failed_at_once_and_pending_until_its_spool_ends(
     spooling, release = threading.Event(), threading.Event()
     real_write = JobSpool.write
 
-    def slow(self: JobSpool, record: SpoolRecord) -> bool:
+    def slow(self: JobSpool, record: SpoolRecord) -> Path | None:
         spooling.set()
         release.wait(5)
         return real_write(self, record)
@@ -168,7 +169,7 @@ async def test_fail_in_flight_survives_repeated_cancels_and_still_records(
     spooling, release = threading.Event(), threading.Event()
     real_write = JobSpool.write
 
-    def slow(self: JobSpool, record: SpoolRecord) -> bool:
+    def slow(self: JobSpool, record: SpoolRecord) -> Path | None:
         spooling.set()
         release.wait(5)
         return real_write(self, record)
@@ -198,7 +199,7 @@ async def test_a_spool_that_blocks_past_the_deadline_is_recorded_unfinished(
     release = threading.Event()
     real_write = JobSpool.write
 
-    def blocked(self: JobSpool, record: SpoolRecord) -> bool:
+    def blocked(self: JobSpool, record: SpoolRecord) -> Path | None:
         release.wait(5)
         return real_write(self, record)
 
@@ -229,14 +230,16 @@ async def test_a_spool_that_raises_is_recorded_lost_and_never_raises(
     assert "1 lost" in tally.summary()
 
 
-async def test_a_cancelled_spooling_task_is_recorded_lost(tmp_path: Path) -> None:
+async def test_a_cancelled_spooling_task_is_unfinished_not_a_failed_write(
+    tmp_path: Path,
+) -> None:
     abort, _tally = _abort(tmp_path)
     spooling = asyncio.get_running_loop().create_future()
     spooling.cancel()
 
     outcome = await abort.await_spool(spooling, _job("a"))
 
-    assert outcome is JobAbort.NOT_WRITTEN
+    assert outcome is JobAbort.UNFINISHED
 
 
 async def test_a_late_successful_write_corrects_the_reason_and_the_tally(
@@ -248,7 +251,7 @@ async def test_a_late_successful_write_corrects_the_reason_and_the_tally(
     release = threading.Event()
     real_write = JobSpool.write
 
-    def late(self: JobSpool, record: SpoolRecord) -> bool:
+    def late(self: JobSpool, record: SpoolRecord) -> Path | None:
         release.wait(5)
         return real_write(self, record)
 
@@ -303,7 +306,9 @@ async def test_the_summary_terms_add_up_with_every_kind_present(
 ) -> None:
     abort, tally = _abort(tmp_path)
     abort.fail([_job("a"), _job("b", spooled=False), _exploding("c")])
-    tally.record(JobAbort.UNFINISHED)
+    unfinished = object()
+    tally.take(unfinished)
+    tally.move(unfinished, AbortTerm.UNFINISHED)
 
     summary = tally.summary()
 
@@ -314,9 +319,17 @@ async def test_the_summary_terms_add_up_with_every_kind_present(
     assert "1 needed no spool" in summary
 
 
-@pytest.mark.parametrize("status", ["withdrawn", "committing", "completed"])
-def test_a_job_that_is_withdrawn_committing_or_stored_keeps_its_status(
-    tmp_path: Path, status: str
+@pytest.mark.parametrize(
+    ("status", "term", "label"),
+    [
+        ("withdrawn", AbortTerm.KEPT, "1 kept"),
+        ("aborted", AbortTerm.KEPT, "1 kept"),
+        ("completed", AbortTerm.KEPT, "1 kept"),
+        ("committing", AbortTerm.UNCONFIRMED, "1 unconfirmed"),
+    ],
+)
+def test_a_withdrawn_stored_or_committing_job_keeps_its_status_and_is_not_spooled(
+    tmp_path: Path, status: str, term: AbortTerm, label: str
 ) -> None:
     abort, tally = _abort(tmp_path)
     job = _job("a")
@@ -326,7 +339,49 @@ def test_a_job_that_is_withdrawn_committing_or_stored_keeps_its_status(
 
     assert job.state.status == status
     assert job.state.error == ""
+    assert tally.term_of(job) is term
+    assert label in tally.summary()
+    assert not (tmp_path / "spool").exists()
+    assert abort.pending == 0
+
+
+def test_a_job_taken_twice_is_counted_once(tmp_path: Path) -> None:
+    abort, tally = _abort(tmp_path)
+    job = _job("a")
+
+    abort.fail([job])
+    abort.fail([job])
+
     assert tally.summary().startswith("1 job(s)")
+
+
+async def test_a_cancelled_queued_spool_is_unfinished_and_corrected_when_it_ends(
+    tmp_path: Path,
+) -> None:
+    abort, tally = _abort(tmp_path)
+    job = _job("a")
+    started, release = threading.Event(), threading.Event()
+    real_write = JobSpool.write
+
+    def blocked(self: JobSpool, record: SpoolRecord) -> Path | None:
+        started.set()
+        release.wait(5)
+        return real_write(self, record)
+
+    with patch.object(JobSpool, "write", blocked):
+        running = asyncio.ensure_future(abort.fail_off_loop([job]))
+        while not started.is_set():
+            await asyncio.sleep(0.005)
+        running.cancel()
+        await asyncio.wait({running})
+        assert tally.term_of(job) is AbortTerm.UNFINISHED
+        assert abort.pending == 0
+        release.set()
+        while tally.term_of(job) is AbortTerm.UNFINISHED:
+            await asyncio.sleep(0.005)
+
+    assert tally.term_of(job) is AbortTerm.SPOOLED
+    assert "spooled for recovery" in job.state.error
 
 
 async def test_spool_writes_run_on_daemon_threads_not_the_default_executor(
@@ -336,7 +391,7 @@ async def test_spool_writes_run_on_daemon_threads_not_the_default_executor(
     seen: list[tuple[bool, str]] = []
     real_write = JobSpool.write
 
-    def recording(self: JobSpool, record: SpoolRecord) -> bool:
+    def recording(self: JobSpool, record: SpoolRecord) -> Path | None:
         thread = threading.current_thread()
         seen.append((thread.daemon, thread.name))
         return real_write(self, record)
