@@ -329,8 +329,13 @@ shapes the OO rules ask for.
    (`index_jobs.py:64-68`, `:117-118`, `:163-164`) and `finalize_job.py:64`,
    `:106-107` (V15). `TaskTerminal.recording` is also used by tasks that are not
    queued jobs (`routes/base.py:196`, `routes/maintenance.py:93`, `:110`,
-   `watch_loop.py:254`); they hold only `running`, `completed`, `failed`, so the
-   lifecycle's rules change nothing for them, and T15 pins that for each caller.
+   `watch_loop.py:254`). The lifecycle's rules must change nothing for them, and
+   T15 pins that for each caller. They do not all hold only `running`,
+   `completed` and `failed` in the sense of one terminal write: a `BackfillTask`
+   records a partial `completed` and then fails on cancel, a sequence the
+   queued-job rules would refuse (completed is never overwritten). The
+   implementation keeps the old semantics for such tasks (`TaskState.is_job`,
+   below).
    The `finally` clause writes only when the status is still `running`: `aborted`
    and a committing job whose store runs are not "exited without a terminal
    status".
@@ -402,6 +407,34 @@ changes is what a *refused* checkpoint does to a producer's `aborted`: nothing.
 producer owns (`FinishKept`). A committing job whose store never ends stays
 `committing` and counted *unconfirmed* for good (T16): the model has no way out of
 it by design, and the summary says so.
+
+### Implementation refinements
+
+The implementation splits some of the model's terms more finely, and keeps the old
+semantics for tasks that are not queued jobs. None of it changes a witness: each
+finer code term maps to exactly one model term, so the model's counts are the sums
+of the code's.
+
+| Code term | Model term | Note |
+|---|---|---|
+| `SPOOLED` | *spooled* (`tspooled`) | a record written and recoverable |
+| `UNRECOVERABLE` | *spooled* (`tspooled`) | a record written as a note only (a URL without its query); the model has one term for both, as the old tally had two counters under one reason class |
+| `NOT_WRITTEN` | *not written* (`tnotw`) | the spool write failed |
+| `UNBUILT` | *unbuilt* (`tunb`) | the record could not be built |
+| `LOST` | *not written* or *unbuilt* | the old term; split by reason into the two above |
+
+The reason string for `UNRECOVERABLE` differs from `SPOOLED`'s, so I8 reads it as
+*spooled*: a file exists in both.
+
+`TaskState.is_job` separates queued jobs from the other background tasks.
+`BackfillTask`, for one, records a partial `completed` (its results so far) and then
+fails on cancel, which the lifecycle's rule that a `completed` status is never
+overwritten would refuse. The task is not a queued job: no producer withdraws it,
+no abort takes it, and no store thread outlives it, so none of I1 to I11 speaks
+of it. `is_job` keeps the old terminal writes for it, and the lifecycle's moves
+apply only where it is true. §7.2's statement that every non-queued caller holds
+only `running`, `completed` and `failed` is corrected accordingly: they hold those
+statuses, but not always in one write each.
 
 The OO ratchet applies to every file touched; the ledger and `StoreRun` are
 extractions, and `job_abort.py` and `abort_reason.py` should shrink.
