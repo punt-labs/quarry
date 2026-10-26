@@ -3537,3 +3537,120 @@ itself standing permission: rules land when the user asks, in the project.
 - **Remove the rules earlier versions added globally.** The plugin cannot tell
   its own entries from identical ones the user wrote, so deleting them silently
   repeats the original problem. They are documented instead.
+
+## DES-059: Answer synthesis: daemon-owned, one OpenAI-compatible call, equal to the quarryd baseline
+
+**Date:** 2026-10-25
+**Status:** ACCEPTED
+**Topic:** How quarry turns search results into a short cited answer, and where the model, its config, and its key live
+**Design:** [`docs/design/answer-synthesis.md`](docs/design/answer-synthesis.md) v4, [`docs/design/security-baseline.md`](docs/design/security-baseline.md) (ethos missions m-2026-10-25-002 and m-2026-10-25-003, evaluator djb, PASS)
+**Product record:** `docs/prfaq-answer-synthesis.tex`
+
+### Context
+
+A search returns up to 50 passages of up to 1,800 characters each. Outside an
+agent session the user reads them and pieces the answer together. The quarry
+menu bar shows 200 characters of each. A small local model can write a short
+answer with citations to those passages, on request.
+
+The synthesis could live in each client (menu bar, CLI) or in quarryd. Clients
+connect to local and remote daemons alike (DES-021), and only quarryd touches
+the engine (DES-031).
+
+### Decision
+
+1. **quarryd owns synthesis.** One new route, `GET /v1/answer`, takes the same
+   query and full filter set as `/v1/search` and runs the same `SearchService`
+   query through a shared `RouteSearch` (DES-037). `/v1/search` is unchanged on
+   the wire and in `docs/openapi.json`. The answer route is `async`; only
+   retrieval runs in the threadpool. Non-streaming JSON:
+   `{answer, covered, citations, results, endpoint_host, model, ...}`, where
+   every `[n]` in `answer` indexes `results[n-1]`.
+2. **One OpenAI-compatible call.** `POST {base_url}/chat/completions` through
+   `httpx`. No provider SDKs, no bundled model, no streaming, no multi-turn.
+   The default is NVIDIA Nemotron 3 Nano 4B served by Ollama
+   (`ollama pull nemotron-3-nano:4b`, `http://localhost:11434/v1`). Any
+   OpenAI-compatible endpoint may be configured; quarry never requires a larger
+   model.
+3. **Inputs are RRF order plus the context limit.** No similarity floor (none
+   exists today). A `ContextBudget` in tokens subtracts reasoning, answer, prompt,
+   and question reserves from the configured window, and retrieval fetches the
+   smallest number of full-size passages that covers at least 110% of the
+   budget. Passages are packed whole, in RRF order, until the next one does not
+   fit. At the 8,192-token default that is 11 hits fetched and about 9 sent.
+   The fetch ceiling is search's 50. `results` is exactly the packed list.
+4. **Reasoning is on by default, and the trace never reaches the answer.** Only
+   text after the last `</think>` is kept; stray or unclosed blocks are removed.
+5. **Citations are checked.** One `CITATION_GROUP` grammar both neutralizes
+   bracket markers inside the prompt's passages and parses the reply. Numbers
+   outside `1..n_sent` are dropped and counted. Passage delimiters are escaped
+   so passage text cannot pose as another passage.
+6. **Config is one file the daemon reads at start:**
+   `~/.punt-labs/quarry/synthesis.toml`. `quarry install` writes a working
+   default (mode 0600, temp file and rename) if the file is absent and leaves an
+   existing one byte-for-byte untouched. No prompts and no new flags; install
+   stays idempotent. `QUARRY_SYNTHESIS_API_KEY` fills `api_key` on first write
+   only, and install says so when it is ignored. A missing or rejected config
+   never stops search.
+7. **Not configured is a help message.** `/v1/answer` returns 404 with setup
+   help (the `ollama pull` line, the config path, the guide), following the
+   `/ca.crt` precedent. 503 in quarry means "full, retry" (DES-042).
+   `/v1/status` (authenticated) reports `synthesis` state, endpoint host, and
+   model. `/health` reports nothing about it.
+8. **Every security and operational choice equals the existing baseline.**
+   Each row cites `security-baseline.md`:
+   - auth: the same bearer check as every `/v1` route (DES-005);
+   - transport: non-loopback `base_url` must be `https`, verified against the
+     system trust store the fetch path uses, with no opt-out (DES-020);
+   - client: `trust_env=False`, explicit timeout, one retry only on a refused
+     connect, redirects not followed (the CLI-to-daemon and fetch precedents);
+   - reads: the fetch path's 4 MiB `MAX_RESPONSE_BYTES` cap, moved to a shared
+     module, and one `asyncio.timeout(timeout_s)` around the whole call;
+   - errors: quarry-written messages only; upstream bodies are never forwarded
+     or logged (DES-008);
+   - usage: the search telemetry path with a `kind = "answer"` column, scrubbed
+     the same way (DES-056); answer and passage text are never stored;
+   - concurrency: uncapped, like `/v1/search`.
+9. **Surfaces.** HTTP, `quarry answer` (CLI, local and remote), and the menu
+   bar (quarry-menubar ADR-009). MCP and the plugin are excluded: their caller
+   is already a model and wants the passages, not a pre-written answer.
+
+### Hardening found while grounding this design (separate project)
+
+Gaps in the existing baseline are fixed for every channel, not for the model
+channel alone. Each is its own issue, outside this delivery, in an order the
+operator chooses:
+
+- **G1** a re-run of `quarry install` without `QUARRY_API_KEY` in the
+  environment drops the stored operator key;
+- **G2** the scrubber misses common key formats, and content-route 400s return
+  raw exception text;
+- **G3** secret and config file modes are set at write time but never checked
+  at read time;
+- **G5** outbound HTTP has two proxy rules (runtime ignores env proxies, install
+  downloads honor them); decide one;
+- **G6** uvicorn has no `timeout_graceful_shutdown`, so a long in-flight request
+  can outlast launchd's 20 s kill and skip the DES-042 ingest drain. `/v1/answer`
+  is the first route to hold a request that long; until G6 lands, a restart
+  during an answer can lose queued captures.
+
+G4 (no read-route overload limit) is recorded as an observation only: a fixed
+limit does not fit hardware from a laptop to a GPU host.
+
+### Rejected alternatives
+
+- **Synthesis in each client.** Every client would need the endpoint and key,
+  and a remote daemon's users would each configure a model.
+- **Synthesis inside `/v1/search`.** It would slow every keystroke and change
+  the search contract.
+- **A similarity floor or a fixed passage count.** RRF scores are not
+  comparable across queries, and a fixed count wastes a large window and
+  overflows a small one.
+- **An in-process ONNX generator.** Gigabytes in an always-on daemon, no Metal
+  path on macOS, and a sampling loop to own, while Ollama already serves the
+  model locally on the GPU.
+- **Model-only security rules** (a custom redactor, permission checker, rate
+  limiter, plaintext opt-out, custom CA option, `--synthesis-only`). None exists
+  for any other channel; the real gaps are G1-G6.
+- **Key in the launchd/systemd environment like `QUARRY_API_KEY`.** That is the
+  path G1 breaks, and a daemon-read file behaves the same on both platforms.
