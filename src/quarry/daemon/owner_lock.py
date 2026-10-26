@@ -6,6 +6,10 @@ import threading
 from typing import Protocol, Self, final
 
 
+class ClaimNotHeldError(RuntimeError):
+    """A task's state was about to be written by a thread without its claim."""
+
+
 class Claim(Protocol):
     """What a job's status writers need of its lock: take it, and ask who has it."""
 

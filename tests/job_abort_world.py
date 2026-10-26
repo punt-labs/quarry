@@ -47,35 +47,6 @@ WRITES: list[tuple[str, str, bool, str]] = []
 _WATCHED = frozenset({"status", "error", "results"})
 
 
-@final
-class Tracker:
-    """A claim that knows which thread holds it, so a write can ask whether it does."""
-
-    __slots__ = ("_lock", "_owner")
-
-    _lock: threading.Lock
-    _owner: int
-
-    def __new__(cls) -> Self:
-        self = super().__new__(cls)
-        self._lock = threading.Lock()
-        self._owner = 0
-        return self
-
-    def __enter__(self) -> Self:
-        self._lock.acquire()
-        self._owner = threading.get_ident()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._owner = 0
-        self._lock.release()
-
-    def owned(self) -> bool:
-        """Return whether the calling thread holds the claim."""
-        return self._owner == threading.get_ident()
-
-
 @dataclass(slots=True)
 class WatchedState(TaskState):
     """A task state that records who wrote its status, error or results."""
@@ -139,12 +110,27 @@ def checkpoint(state: TaskState, message: str) -> None:
 _TERMS = {
     "spooled": r"(\d+) spooled for recovery",
     "unrecoverable": r"(\d+) spooled but not recoverable",
-    "lost": r"(\d+) lost",
+    "not_written": r"(\d+) not written",
+    "unbuilt": r"(\d+) unbuilt",
     "unfinished": r"(\d+) spool unfinished",
     "no_spool": r"(\d+) needed no spool",
     "kept": r"(\d+) kept",
     "unconfirmed": r"(\d+) unconfirmed",
 }
+
+
+SETTLED = frozenset({"completed", "failed", "withdrawn", "aborted"})
+
+TERM_PARTS = (
+    "spooled",
+    "unrecoverable",
+    "not_written",
+    "unbuilt",
+    "unfinished",
+    "no_spool",
+    "kept",
+    "unconfirmed",
+)
 
 
 def terms(summary: str) -> dict[str, int]:
@@ -174,34 +160,62 @@ async def until(predicate: Callable[[], bool], timeout: float = 5.0) -> None:
 class World:
     """A daemon context whose stores and spool writes the test controls."""
 
-    def __init__(self, tmp_path: Path) -> None:
+    __slots__ = (
+        "_ctx",
+        "_entries",
+        "_gates",
+        "_namespace",
+        "_real_write",
+        "_root",
+        "_stack",
+        "_stores",
+    )
+
+    _ctx: DaemonContext
+    _entries: dict[str, Entry]
+    _gates: dict[str, SpoolGate]
+    _namespace: SimpleNamespace
+    _real_write: Callable[[JobSpool, SpoolRecord], Path | None]
+    _root: Path
+    _stack: ExitStack
+    _stores: dict[str, Store]
+
+    def __new__(cls, tmp_path: Path) -> Self:
+        self = super().__new__(cls)
         tmp_path.mkdir(parents=True, exist_ok=True)
-        self.root: Path = Path(tempfile.mkdtemp(dir=tmp_path))
+        self._root = Path(tempfile.mkdtemp(dir=tmp_path))
         settings = SimpleNamespace(
             ingest_embed_concurrency=16,
             ingest_queue_depth=64,
             ingest_drain_timeout_s=30.0,
             ingest_max_workers=32,
             ingest_worker_idle_s=60.0,
-            quarry_root=self.root,
+            quarry_root=self._root,
             registry_path=tmp_path / "registry.db",
         )
-        namespace = SimpleNamespace(
+        self._namespace = SimpleNamespace(
             settings=settings,
             database_name="db",
             database=object(),
             tasks=TaskRegistry(),
         )
-        self.ctx = cast("DaemonContext", namespace)
-        self._namespace = namespace
-        self.stores: dict[str, Store] = {}
-        self.gates: dict[str, SpoolGate] = {}
-        self.entries: dict[str, Entry] = {}
+        self._ctx = cast("DaemonContext", self._namespace)
+        self._stores = {}
+        self._gates = {}
+        self._entries = {}
         self._stack = ExitStack()
         self._real_write = JobSpool.write
+        return self
+
+    @property
+    def ctx(self) -> DaemonContext:
+        """Return the daemon context the queue runs in."""
+        return self._ctx
 
     def __enter__(self) -> Self:
         for active in (
+            # Most scenarios hold one store per collection at once; with the real
+            # ceiling of one, only the first would ever start.
             patch("quarry.daemon.ingest_queue.EMBED_CONCURRENCY_CEILING", 16),
             patch.object(IngestQueue, "ABORT_WAIT_S", 2.0),
             patch.object(ShutdownPolicy, "SPOOL_WAIT_S", 0.3),
@@ -211,13 +225,13 @@ class World:
             patch.object(JobSpool, "write", self._spool_function()),
         ):
             self._stack.enter_context(active)
-        self._namespace.ingest_queue = IngestQueue(self.ctx)
+        self._namespace.ingest_queue = IngestQueue(self._ctx)
         return self
 
     def __exit__(self, *exc: object) -> None:
-        for store in self.stores.values():
+        for store in self._stores.values():
             store.release.set()
-        for gate in self.gates.values():
+        for gate in self._gates.values():
             gate.release.set()
         self._stack.close()
 
@@ -231,7 +245,6 @@ class World:
     ) -> Entry:
         """Admit a ``remember`` job (or a backfill transcript) the way a route does."""
         state = WatchedState(task_id=name, kind="remember")
-        state.claim = Tracker()
         labels = IngestLabels(
             overwrite=True,
             collection=collection,
@@ -248,17 +261,17 @@ class World:
             checkpoint=partial(checkpoint, state) if commits else None,
         )
         job: IngestUnit = BackfillTranscriptJob(inline) if backfill else inline
-        self.stores[name] = store = Store()
+        self._stores[name] = store = Store()
         entry = Entry(name, job, state, store)
-        self.entries[name] = entry
+        self._entries[name] = entry
         key = RouteKey("db", collection)
-        assert self.ctx.ingest_queue.try_submit(key, job, state)
+        assert self._ctx.ingest_queue.try_submit(key, job, state)
         return entry
 
     def break_spool(self, blocker: Path) -> None:
         """Make the spool directory impossible to create: *blocker* is a file."""
         self._namespace.settings.quarry_root = blocker
-        self.root = blocker
+        self._root = blocker
 
     def admit_index_jobs(self, monkeypatch: pytest.MonkeyPatch) -> list[Entry]:
         """Admit a file index, a delete and a sync job, each held in its own store."""
@@ -273,19 +286,18 @@ class World:
             monkeypatch.setattr(cls, method, self._held(name))
             job = self._index_job(cls, collection)
             state = WatchedState(task_id=name, kind=name, status="new")
-            state.claim = Tracker()
-            self.stores[name] = store = Store(outcome=result)
+            self._stores[name] = store = Store(outcome=result)
             entry = Entry(name, job, state, store)
-            self.entries[name] = entry
+            self._entries[name] = entry
             key = RouteKey("db", collection)
-            assert self.ctx.ingest_queue.try_submit(key, job, state)
+            assert self._ctx.ingest_queue.try_submit(key, job, state)
             entries.append(entry)
         return entries
 
     def _held(self, name: str) -> Callable[[object], object]:
         def call(job: object) -> object:
             del job
-            store = self.stores[name]
+            store = self._stores[name]
             store.started.set()
             store.release.wait(30)
             store.ended.set()
@@ -306,19 +318,24 @@ class World:
 
     def hold_spool(self, name: str) -> SpoolGate:
         """Make the spool write of the job named *name* wait to be released."""
-        self.gates[name] = SpoolGate()
-        return self.gates[name]
+        self._gates[name] = SpoolGate()
+        return self._gates[name]
 
     def worker(self, collection: str = "c1") -> CollectionWorker:
         """Return the worker that runs *collection*."""
-        pool = self.ctx.ingest_queue.pool
-        return next(
-            w for w in pool.workers() if pool.is_alive(RouteKey("db", collection))
-        )
+        worker = self._ctx.ingest_queue.pool.for_key(RouteKey("db", collection))
+        assert worker is not None, f"no worker for {collection}"
+        return worker
 
     def workers(self) -> list[CollectionWorker]:
         """Return every resident worker."""
-        return self.ctx.ingest_queue.pool.workers()
+        return self._ctx.ingest_queue.pool.workers()
+
+    def terms(self) -> dict[str, int]:
+        """Return the tally's counts, after checking they add up to the jobs taken."""
+        found = terms(self.summary())
+        assert sum(found[p] for p in TERM_PARTS) == found["jobs"], self.summary()
+        return found
 
     def summary(self) -> str:
         """Return the tally of every worker, as the abort's log line reports it."""
@@ -330,11 +347,11 @@ class World:
 
     def spool_files(self) -> list[Path]:
         """Return the spool records on disk."""
-        return sorted((self.root / "spool").glob("remember-*.json"))
+        return sorted((self._root / "spool").glob("remember-*.json"))
 
     async def abort(self) -> None:
         """Close the queue with a drain that has already run out."""
-        await self.ctx.ingest_queue.aclose(drain_timeout=0.05)
+        await self._ctx.ingest_queue.aclose(drain_timeout=0.05)
 
     async def landed(self, *entries: Entry) -> None:
         """Wait until each store thread has ended and the loop has heard of it."""
@@ -345,7 +362,7 @@ class World:
     async def running(self, *names: str) -> None:
         """Wait until each named job's store thread is running."""
         for name in names:
-            await until(self.stores[name].started.is_set)
+            await until(self._stores[name].started.is_set)
 
     def _ingest_function(
         self,
@@ -357,7 +374,7 @@ class World:
 
     def _ingest(self, job: ScrubbedIngestJob, ctx: DaemonContext) -> dict[str, object]:
         del ctx
-        store = self.stores[job.name]
+        store = self._stores[job.name]
         try:
             if job.checkpoint is not None:
                 job.checkpoint(QueuedJob.COMMIT_POINT)
@@ -370,7 +387,7 @@ class World:
             store.ended.set()
 
     def _spool(self, spool: JobSpool, record: SpoolRecord) -> object:
-        if (gate := self.gates.get(record.name)) is not None:
+        if (gate := self._gates.get(record.name)) is not None:
             gate.started.set()
             gate.release.wait(30)
         return self._real_write(spool, record)

@@ -50,8 +50,11 @@ class TaskState:
 
     ``holds_thread`` is set while a scan thread this task started is alive: the
     singleton guard counts the task as running until the thread has returned,
-    whatever ``status`` says.  ``claim`` is the lock under which a job is run
-    or withdrawn, never both (:class:`~quarry.daemon.job_lifecycle.JobLifecycle`).
+    whatever ``status`` says.  ``claim`` is the lock under which the status moves:
+    a queued job is run or withdrawn, never both
+    (:class:`~quarry.daemon.job_lifecycle.JobLifecycle`); any other task is only
+    ``running``, ``completed`` or ``failed``
+    (:class:`~quarry.daemon.task_lifecycle.TaskLifecycle`).
     """
 
     task_id: str
@@ -61,11 +64,6 @@ class TaskState:
     error: str = ""
     created_at: float = field(default_factory=time.monotonic)
     holds_thread: bool = False
-    # Set once the task is enqueued as a job: the rules of
-    # :class:`~quarry.daemon.job_lifecycle.JobLifecycle` then apply, which never
-    # overwrite a status the producer or the store settled.  A polled task that
-    # never was a job is simply ``running`` until it is ``completed`` or ``failed``.
-    is_job: bool = field(default=False, init=False, repr=False, compare=False)
     # The job's store, kept so a cancelled worker's store can still be read when
     # it ends.  ``None`` until the job starts one: absence is the contract.
     store: StoreRun | None = field(default=None, init=False, repr=False, compare=False)

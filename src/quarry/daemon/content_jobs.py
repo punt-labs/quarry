@@ -77,11 +77,14 @@ class ScrubbedIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
-        terminal = RefusalAwareTerminal(state, self._stored_name)
-        store = StoreRun.start(
-            state, partial(self.scrub_and_ingest, ctx), RefusalAwareTerminal.settlement
-        )
+        terminal = RefusalAwareTerminal.for_job(state, self._stored_name)
         with terminal.record():
+            store = StoreRun.start(
+                self,
+                state,
+                partial(self.scrub_and_ingest, ctx),
+                RefusalAwareTerminal.settlement,
+            )
             terminal.apply(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
@@ -181,11 +184,14 @@ class CaptureIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""
-        terminal = RefusalAwareTerminal(state, self.inline.scrubbed_name)
-        store = StoreRun.start(
-            state, partial(self._capture, ctx), RefusalAwareTerminal.settlement
-        )
+        terminal = RefusalAwareTerminal.for_job(state, self.inline.scrubbed_name)
         with terminal.record():
+            store = StoreRun.start(
+                self,
+                state,
+                partial(self._capture, ctx),
+                RefusalAwareTerminal.settlement,
+            )
             terminal.apply(await store.wait())
 
     def _capture(self, ctx: DaemonContext) -> dict[str, object]:

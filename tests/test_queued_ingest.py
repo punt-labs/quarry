@@ -11,9 +11,9 @@ import pytest
 
 from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.queued_ingest import QueuedIngest, QueuePolicy
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskState
 from tests.queue_fixtures import ctx_with_queue
 
@@ -55,7 +55,7 @@ class _Unit:
             raise _WorkerDied
         if self.silent:
             return  # no terminal state: the worker lives and the job never ends
-        with TaskTerminal.recording(state):
+        with JobTerminal.recording(state):
             self.events.append(("start", self.name))
             try:
                 if self.gate is not None:
@@ -64,7 +64,7 @@ class _Unit:
                 if self.boom:
                     msg = "stub failure"
                     raise RuntimeError(msg)
-                state.status = "completed"
+                JobLifecycle(state).settle_stored({})
             finally:
                 self.events.append(("end", self.name))
 

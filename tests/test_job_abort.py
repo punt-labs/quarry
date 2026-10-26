@@ -23,6 +23,7 @@ from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.queued_unit import QueuedUnit
 from quarry.daemon.tasks import TaskState
 from quarry.shutdown_policy import ShutdownPolicy
+from tests.job_states import job_in
 
 if TYPE_CHECKING:
     from quarry.config import Settings
@@ -101,7 +102,7 @@ def test_one_job_that_cannot_decide_its_outcome_costs_only_itself(
     assert [job.state.status for job in jobs] == ["failed", "failed"]
     assert "spooled for recovery" in jobs[1].state.error
     assert tally.summary().startswith("2 job(s): 1 spooled for recovery")
-    assert "1 lost" in tally.summary()
+    assert "1 unbuilt" in tally.summary()
     assert "_Exploding job for c" in caplog.text
     assert "spool record could not be built" in jobs[0].state.error
 
@@ -214,7 +215,8 @@ async def test_a_spool_that_blocks_past_the_deadline_is_recorded_unfinished(
     assert job.state.status == "failed"
     assert "spool unfinished at shutdown" in job.state.error
     assert "1 spool unfinished at shutdown" in tally.summary()
-    assert "0 lost" in tally.summary()
+    assert "0 not written" in tally.summary()
+    assert "0 unbuilt" in tally.summary()
     assert abort.pending == 0
 
 
@@ -228,7 +230,7 @@ async def test_a_spool_that_raises_is_recorded_lost_and_never_raises(
         await abort.fail_in_flight(job)
 
     assert job.state.status == "failed"
-    assert "1 lost" in tally.summary()
+    assert "1 unbuilt" in tally.summary()
 
 
 async def test_a_cancelled_spooling_task_is_unfinished_not_a_failed_write(
@@ -299,7 +301,11 @@ async def test_a_late_spool_that_raises_or_is_cancelled_is_logged_by_kind(
     assert "a late spool of a _Unit job for c failed" in caplog.text
     assert "a late spool of a _Unit job for c was cancelled" in caplog.text
     assert "late disk failure detail" not in caplog.text
-    assert "2 spool unfinished at shutdown" in tally.summary()
+    # The write that raised is settled as not written; the one whose future was
+    # cancelled may still land, so that job stays unfinished.
+    assert "1 spool unfinished at shutdown" in tally.summary()
+    assert "1 not written (spool write failed)" in tally.summary()
+    assert abort.pending == 0
 
 
 async def test_the_summary_terms_add_up_with_every_kind_present(
@@ -315,7 +321,7 @@ async def test_the_summary_terms_add_up_with_every_kind_present(
 
     assert summary.startswith("4 job(s)")
     assert "1 spooled for recovery" in summary
-    assert "1 lost" in summary
+    assert "1 unbuilt" in summary
     assert "1 spool unfinished at shutdown" in summary
     assert "1 needed no spool" in summary
 
@@ -330,11 +336,10 @@ async def test_the_summary_terms_add_up_with_every_kind_present(
     ],
 )
 def test_a_withdrawn_stored_or_committing_job_keeps_its_status_and_is_not_spooled(
-    tmp_path: Path, status: str, term: AbortTerm, label: str
+    tmp_path: Path, status: TaskStatus, term: AbortTerm, label: str
 ) -> None:
     abort, tally = _abort(tmp_path)
-    job = _job("a")
-    job.state.status = cast("TaskStatus", status)
+    job = QueuedUnit(_Unit(SpoolRecord("remember", "c", "a", "p")), job_in(status))
 
     abort.fail([job])
 

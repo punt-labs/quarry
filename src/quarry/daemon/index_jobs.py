@@ -1,8 +1,8 @@
 """The watch loop's index jobs: per-file reindex, document delete, and bulk scan.
 
 Each is an :class:`~quarry.daemon.ingest_unit.IngestUnit` the always-on watch
-loop (DES-045) submits to the DES-042 queue as a *producer*.  They write no
-LanceDB table directly beyond the DES-034 core they compose — the queue's
+loop submits to the ingest queue as a *producer*.  They write no LanceDB table
+directly beyond the single-file and bulk-sync cores they compose — the queue's
 per-``(database, collection)`` FIFO worker is still the single writer, and the
 embed gate still bounds concurrency.  Unlike the content jobs (remember /
 capture / URL ingest, which target the daemon's active database), these carry
@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.store_run import StoreRun
-from quarry.daemon.task_terminal import TaskTerminal
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync import sync_collection
 from quarry.sync_registry import SyncRegistry
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class FileIndexJob:
-    """Reindex one changed file through the DES-034 single-file core.
+    """Reindex one changed file through the single-file core.
 
     ``spool_record`` returns ``None``: the file on disk is the durable artifact
     (like a capture's ``.md``), recoverable by a rescan, so a drain-abort need
@@ -57,10 +57,10 @@ class FileIndexJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Index the file off-thread, recording per-file success or a soft error."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        # TaskTerminal so an UNEXPECTED failure records ``failed`` and never
+        # JobTerminal so an UNEXPECTED failure records ``failed`` and never
         # escapes to crash the queue worker (the queue's per-job contract).
-        store = StoreRun.start(state, self._index, self._settlement)
-        with TaskTerminal.recording(state):
+        with JobTerminal.recording(state):
+            store = StoreRun.start(self, state, self._index, self._settlement)
             JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
@@ -77,7 +77,7 @@ class FileIndexJob:
         )
 
     def _index(self) -> FileIndexOutcome:
-        """Open a thread-bound registry, index the file, then close it (DES-026)."""
+        """Open a thread-bound registry, index the file, then close it."""
         conn = SyncRegistry(self.settings.registry_path)
         try:
             indexer = SingleFileIndexer(
@@ -114,8 +114,8 @@ class DocumentDeleteJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete every document's chunks + registry rows off-thread."""
         del ctx
-        store = StoreRun.start(state, self._delete, self._settlement)
-        with TaskTerminal.recording(state):
+        with JobTerminal.recording(state):
+            store = StoreRun.start(self, state, self._delete, self._settlement)
             JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
@@ -146,10 +146,10 @@ class DocumentDeleteJob:
 
 @dataclass(frozen=True, slots=True)
 class CollectionSyncJob:
-    """A bulk scan of one collection — the unchanged DES-034 ``CollectionIngestor``.
+    """A bulk scan of one collection — the unchanged ``CollectionIngestor``.
 
     Used for the initial index on start, an explicit full ``quarry sync``, and a
-    fs-event burst above ``watch_bulk_threshold`` (DES-045 §3.1).  One job per
+    fs-event burst above ``watch_bulk_threshold``.  One job per
     collection, not one per file, so the depth-32 admission bound and the
     fragment budget both hold.  The FTS rebuild is deferred to a following
     ``CollectionFinalizeJob`` (post-quiescence coalescing).
@@ -163,8 +163,8 @@ class CollectionSyncJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the bulk collection sync off-thread, recording its counts."""
         del ctx
-        store = StoreRun.start(state, self._sync, self._settlement)
-        with TaskTerminal.recording(state):
+        with JobTerminal.recording(state):
+            store = StoreRun.start(self, state, self._sync, self._settlement)
             JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:

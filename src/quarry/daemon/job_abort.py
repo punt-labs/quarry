@@ -44,25 +44,41 @@ class JobAbort:
     disk can hold neither the event loop nor the process.
     """
 
-    __slots__ = ("_reason", "_record", "_tally", "_threads")
+    __slots__ = ("_discard", "_reason", "_record", "_respooling", "_tally", "_threads")
 
+    _discard: SpoolDiscard
     _reason: AbortReason
     _record: AbortRecord
+    _respooling: set[asyncio.Future[None]]
     _tally: AbortTally
     _threads: DaemonThreads
 
     def __new__(cls, settings: Settings, tally: AbortTally) -> Self:
         self = super().__new__(cls)
         self._reason = AbortReason.for_settings(settings)
+        self._respooling = set()
         self._tally = tally
         self._threads = DaemonThreads.shared()
-        self._record = AbortRecord(self._reason, tally, SpoolDiscard(self._threads))
+        self._discard = SpoolDiscard(self._threads)
+        self._record = AbortRecord(
+            self._reason, tally, self._discard, self._respool_in_background
+        )
         return self
 
     @property
     def tally(self) -> AbortTally:
         """Return how the jobs this abort took ended."""
         return self._tally
+
+    @property
+    def taken(self) -> tuple[QueuedUnit, ...]:
+        """Return every job this abort has taken."""
+        return self._record.taken
+
+    @property
+    def discard(self) -> SpoolDiscard:
+        """Return the removals of spool records this abort has under way."""
+        return self._discard
 
     @property
     def pending(self) -> int:
@@ -95,13 +111,22 @@ class JobAbort:
         recorded as lost.  Never raises, so the cancel the caller is handling
         still propagates.
         """
-        if not self._record.take([item]):
-            return
+        if self._record.take([item]):
+            await self._decide(item)
+
+    async def _decide(self, item: QueuedUnit) -> None:
+        """Spool the failed *item* and record the outcome, within the deadline."""
         spooling = self._spool(item)
         outcome = await self.await_spool(spooling, item)
         self._record.record(item, outcome)
         if outcome is AbortReason.UNFINISHED:
             spooling.add_done_callback(partial(self._record.late, item))
+
+    def _respool_in_background(self, item: QueuedUnit) -> None:
+        """Spool *item* again, on the loop in the background, once its store failed."""
+        respooling = asyncio.ensure_future(self._decide(item))
+        self._respooling.add(respooling)
+        respooling.add_done_callback(self._respooling.discard)
 
     async def await_spool(
         self, spooling: asyncio.Future[Aborted], item: QueuedUnit

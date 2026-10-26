@@ -51,11 +51,11 @@ class AbortReason:
     UNBUILT: ClassVar[Aborted] = Aborted(
         "daemon shut down before ingest; spool record could not be built, "
         "content not recovered",
-        AbortTerm.LOST,
+        AbortTerm.UNBUILT,
     )
     NOT_WRITTEN: ClassVar[Aborted] = Aborted(
         "daemon shut down before ingest; spool write failed, content not recovered",
-        AbortTerm.LOST,
+        AbortTerm.NOT_WRITTEN,
     )
 
     __slots__ = ("_spool",)
@@ -84,6 +84,16 @@ class AbortReason:
                 f"daemon shut down before ingest completed; {job.rerun_hint}"
             )
         return Aborted("daemon shut down before ingest completed")
+
+    @staticmethod
+    def is_durable(job: IngestUnit) -> bool:
+        """Return whether something outside the daemon holds *job*'s content.
+
+        A job whose source outlives it is run again from there, and one that has
+        no spool record has a durable client copy; any other would be lost if it
+        were not spooled.
+        """
+        return isinstance(job, RerunnableUnit) or job.spool_record() is None
 
     def of(self, job: IngestUnit) -> Aborted:
         """Return the outcome for *job*, spooling it first if it needs it."""

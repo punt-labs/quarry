@@ -15,23 +15,25 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
 from quarry.daemon.daemon_threads import DaemonThreads
+from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.queued_job import JobWithdrawnError
 from quarry.daemon.store_run import StoreRun
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskState
 from quarry.ingestion.file_indexer import FileIndexOutcome
 from quarry.refusal import RefusalError
-from tests.job_abort_world import WRITES, World, terms, until
+from tests.job_abort_world import SETTLED, World, terms, until
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from tests.job_abort_world import Entry
 
 
@@ -40,33 +42,8 @@ def status_of(entry: Entry) -> str:
     return str(entry.state.status)
 
 
-SETTLED = {"completed", "failed", "withdrawn", "aborted"}
-
-
-@pytest.fixture
-def world(tmp_path: Path) -> Iterator[World]:
-    with World(tmp_path) as w:
-        WRITES.clear()
-        yield w
-
-
-def _terms_add_up(w: World) -> dict[str, int]:
-    found = terms(w.summary())
-    parts = [
-        "spooled",
-        "unrecoverable",
-        "lost",
-        "unfinished",
-        "no_spool",
-        "kept",
-        "unconfirmed",
-    ]
-    assert sum(found[p] for p in parts) == found["jobs"], w.summary()
-    return found
-
-
-# T2 -- I2: the terms still sum to the jobs taken when a store lands late.
-async def test_t2_terms_sum_to_the_jobs_taken_while_stores_land_late(
+# the terms still sum to the jobs taken when a store lands late.
+async def test_terms_sum_to_the_jobs_taken_while_stores_land_late(
     world: World,
 ) -> None:
     flight = world.admit("infl", collection="c1")
@@ -77,25 +54,25 @@ async def test_t2_terms_sum_to_the_jobs_taken_while_stores_land_late(
     gate = world.hold_spool("infl")
 
     await world.abort()
-    assert _terms_add_up(world)["unconfirmed"] == 1
+    assert world.terms()["unconfirmed"] == 1
 
     commit.store.land()
     await world.landed(commit)
-    assert _terms_add_up(world)["kept"] == 1
+    assert world.terms()["kept"] == 1
     assert terms(world.summary())["unconfirmed"] == 0
 
     flight.store.land()
     await world.landed(flight)
     gate.release.set()
     await until(lambda: terms(world.summary())["unfinished"] == 0)
-    final = _terms_add_up(world)
+    final = world.terms()
     assert (final["kept"], final["jobs"]) == (2, 3)
     await until(lambda: len(world.spool_files()) == 1)  # only the queued job's
 
 
-# T1 -- I1: every taken job ends in a status that matches the table.
+# every taken job ends in a status that matches the table.
 @pytest.mark.parametrize("stored", [True, False])
-async def test_t1_every_taken_job_reaches_a_status_that_matches_its_store(
+async def test_every_taken_job_reaches_a_status_that_matches_its_store(
     world: World, *, stored: bool
 ) -> None:
     flight = world.admit("flight", collection="c1")
@@ -115,8 +92,8 @@ async def test_t1_every_taken_job_reaches_a_status_that_matches_its_store(
     assert bool(commit.state.results) is stored
 
 
-# T4 -- I4: a store that lands after the cancel is not reported lost.
-async def test_t4_a_store_that_lands_after_the_abort_reports_completed(
+# a store that lands after the cancel is not reported lost.
+async def test_a_store_that_lands_after_the_abort_reports_completed(
     world: World,
 ) -> None:
     entry = world.admit("late")
@@ -132,7 +109,7 @@ async def test_t4_a_store_that_lands_after_the_abort_reports_completed(
     assert terms(world.summary())["kept"] == 1
 
 
-async def test_t4_a_store_that_ended_before_the_cancel_arrived_is_completed(
+async def test_a_store_that_ended_before_the_cancel_arrived_is_completed(
     world: World,
 ) -> None:
     entry = world.admit("race")
@@ -151,9 +128,9 @@ async def test_t4_a_store_that_ended_before_the_cancel_arrived_is_completed(
     assert terms(world.summary())["kept"] == 1
 
 
-# T7 -- I7: a status the producer or the store settled is never overwritten.
+# a status the producer or the store settled is never overwritten.
 @pytest.mark.parametrize("lands", [True, False])
-async def test_t7_kept_statuses_stay_and_a_committing_job_follows_its_store(
+async def test_kept_statuses_stay_and_a_committing_job_follows_its_store(
     world: World, *, lands: bool
 ) -> None:
     running = world.admit("run", collection="c1")
@@ -174,12 +151,12 @@ async def test_t7_kept_statuses_stay_and_a_committing_job_follows_its_store(
     await world.landed(commit)
     assert status_of(commit) == ("completed" if lands else "failed")
     if not lands:
-        assert "re-run backfill" in commit.state.error
+        assert commit.state.error == "insert failed"
     assert status_of(running) == "aborted"
 
 
-# T9 -- liveness: once every event is released, every job is settled.
-async def test_t9_every_job_settles_and_nothing_is_pending(
+# liveness: once every event is released, every job is settled.
+async def test_every_job_settles_and_nothing_is_pending(
     world: World, caplog: pytest.LogCaptureFixture
 ) -> None:
     entries = [
@@ -204,8 +181,8 @@ async def test_t9_every_job_settles_and_nothing_is_pending(
     assert world.pending() == 0
 
 
-# T10 -- I11: a job that stored leaves no spool file behind.
-async def test_t10_a_store_after_the_spool_removes_the_record(world: World) -> None:
+# a job that stored leaves no spool file behind.
+async def test_a_store_after_the_spool_removes_the_record(world: World) -> None:
     entry = world.admit("ghost")
     await world.running("ghost")
 
@@ -220,7 +197,7 @@ async def test_t10_a_store_after_the_spool_removes_the_record(world: World) -> N
     assert terms(world.summary())["kept"] == 1
 
 
-async def test_t10_a_store_while_the_spool_runs_leaves_no_record(
+async def test_a_store_while_the_spool_runs_leaves_no_record(
     world: World,
 ) -> None:
     entry = world.admit("ghost2")
@@ -238,13 +215,13 @@ async def test_t10_a_store_while_the_spool_runs_leaves_no_record(
     assert terms(world.summary())["kept"] == 1
 
 
-# T11 -- A1: stores never starve the spool.
-async def test_t11_a_spool_write_runs_while_every_store_thread_is_blocked(
+# stores never starve the spool.
+async def test_a_spool_write_runs_while_every_store_thread_is_blocked(
     world: World,
 ) -> None:
-    for n in range(8):
+    for n in range(StoreRun.STORE_THREADS):
         world.admit(f"s{n}", collection=f"k{n}")
-    await world.running(*(f"s{n}" for n in range(8)))
+    await world.running(*(f"s{n}" for n in range(StoreRun.STORE_THREADS)))
     world.admit("later", collection="k0")
 
     await world.abort()
@@ -252,12 +229,12 @@ async def test_t11_a_spool_write_runs_while_every_store_thread_is_blocked(
     assert len(world.spool_files()) >= 1
 
 
-def test_t11_the_store_executor_is_not_the_shared_pool() -> None:
+def test_the_store_executor_is_not_the_shared_pool() -> None:
     assert StoreRun.threads() is not DaemonThreads.shared()
 
 
-# T13 -- I9, I10: a late store clears the reason; a failed commit leaves no stale term.
-async def test_t13_a_late_store_clears_the_reason_and_sets_the_results(
+# a late store clears the reason; a failed commit leaves no stale term.
+async def test_a_late_store_clears_the_reason_and_sets_the_results(
     world: World,
 ) -> None:
     entry = world.admit("late")
@@ -273,7 +250,7 @@ async def test_t13_a_late_store_clears_the_reason_and_sets_the_results(
     assert entry.state.results
 
 
-async def test_t13_a_failed_committing_store_is_failed_and_needs_no_spool(
+async def test_a_failed_committing_store_is_failed_and_needs_no_spool(
     world: World,
 ) -> None:
     commit = world.admit("cm", backfill=True, commits=True)
@@ -289,8 +266,8 @@ async def test_t13_a_failed_committing_store_is_failed_and_needs_no_spool(
     assert terms(world.summary())["no_spool"] == 1
 
 
-# T14 -- the observer's hand-back never raises into the store thread.
-def test_t14_a_store_that_ends_after_the_loop_closed_raises_nothing(
+# the observer's hand-back never raises into the store thread.
+def test_a_store_that_ends_after_the_loop_closed_raises_nothing(
     tmp_path: Path,
 ) -> None:
     errors: list[object] = []
@@ -314,8 +291,8 @@ def test_t14_a_store_that_ends_after_the_loop_closed_raises_nothing(
     assert errors == []
 
 
-# T15 -- the observer's contract.
-async def test_t15_a_detached_store_that_raises_is_retrieved_logged_once_and_redacted(
+# the observer's contract.
+async def test_a_detached_store_that_raises_is_retrieved_logged_once_and_redacted(
     world: World, caplog: pytest.LogCaptureFixture
 ) -> None:
     unretrieved: list[str] = []
@@ -341,7 +318,7 @@ async def test_t15_a_detached_store_that_raises_is_retrieved_logged_once_and_red
     assert "secret.example" not in entry.state.error
 
 
-async def test_t15_zero_rows_from_a_detached_store_is_never_completed(
+async def test_zero_rows_from_a_detached_store_is_never_completed(
     world: World,
 ) -> None:
     commit = world.admit("zero", backfill=True, commits=True)
@@ -354,7 +331,7 @@ async def test_t15_zero_rows_from_a_detached_store_is_never_completed(
     assert status_of(commit) == "failed"
 
 
-async def test_t15_an_index_job_error_is_its_own(
+async def test_an_index_job_error_is_its_own(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     entries = world.admit_index_jobs(monkeypatch)
@@ -379,7 +356,7 @@ def _break() -> None:
 
 
 @pytest.mark.parametrize("kind", ["delete", "sync", "umbrella", "register"])
-async def test_t15_callers_outside_the_queue_end_as_before(kind: str) -> None:
+async def test_callers_outside_the_queue_end_as_before(kind: str) -> None:
     done = TaskState(task_id="a", kind=kind)
     with TaskTerminal.recording(done):
         done.status = "completed"
@@ -395,33 +372,32 @@ async def test_t15_callers_outside_the_queue_end_as_before(kind: str) -> None:
     assert (cancelled.status, cancelled.error) == ("failed", "task was cancelled")
 
 
-def test_t16_the_process_exits_with_a_store_that_never_returns(
-    tmp_path: Path,
-) -> None:
+def test_the_process_exits_with_a_store_that_never_returns(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parent.parent
     script = tmp_path / "stuck.py"
     script.write_text(
         textwrap.dedent(
             f"""
-            import asyncio, sys, threading
+            import asyncio, pathlib, sys
             sys.path.insert(0, {str(root)!r})
-            from tests.job_abort_world import World, until
+            from tests.job_abort_world import World
 
             async def main():
-                with World(__import__("pathlib").Path({str(tmp_path)!r})) as w:
-                    w.admit("stuck", backfill=True, commits=True)
-                    await w.running("stuck")
-                    await w.abort()
-                    print("aborted", flush=True)
-                    import os
-                    os._exit(0) if False else None
+                # Never exited: the world does not release the store on the way out.
+                world = World(pathlib.Path({str(tmp_path)!r})).__enter__()
+                world.admit("stuck", backfill=True, commits=True)
+                await world.running("stuck")
+                await world.abort()
+                print("aborted", flush=True)
+
             asyncio.run(main())
             print("exiting", flush=True)
             """
         )
     )
-    # The patched store waits on an event the script never sets (30 s at most):
-    # the interpreter must still exit at once because its threads are daemons.
+    # The store waits on an event nobody sets (30 s at most): the interpreter must
+    # still exit at once, because the thread it runs on is a daemon.
+    started = time.monotonic()
     result = subprocess.run(
         [sys.executable, "-I", str(script)],
         capture_output=True,
@@ -430,4 +406,116 @@ def test_t16_the_process_exits_with_a_store_that_never_returns(
         check=False,
     )
 
-    assert "exiting" in result.stdout, result.stderr
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["aborted", "exiting"]
+    assert time.monotonic() - started < 15
+
+
+STILL_RUNNING = "store still running at shutdown"
+
+
+def _warnings_about(caplog: pytest.LogCaptureFixture, text: str) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and text in r.getMessage()
+    ]
+
+
+# a store still running when the queue closes is named, and the tally is final.
+async def test_a_store_outliving_the_window_is_named_once_and_the_tally_is_corrected(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    world.admit("stuck", collection="c9", backfill=True, commits=True)
+    await world.running("stuck")
+
+    with (
+        patch.object(IngestQueue, "ABORT_WAIT_S", 0.5),
+        caplog.at_level(logging.WARNING, logger="quarry.daemon"),
+    ):
+        await world.abort()
+
+    assert _warnings_about(caplog, STILL_RUNNING) == [
+        (
+            "remember ScrubbedIngestJob for c9 (task stuck): "
+            f"{STILL_RUNNING}; its spool record (if any) may duplicate stored content"
+        )
+    ]
+    [after] = _warnings_about(caplog, "after the drain")
+    assert "1 unconfirmed" in after
+
+
+# a store that ends inside the drain is settled before the close returns.
+async def test_a_store_that_ends_inside_the_drain_is_kept_and_leaves_no_record(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    entry = world.admit("inside", collection="c8")
+    await world.running("inside")
+    landing = threading.Timer(0.3, entry.store.land)
+    landing.start()
+
+    with caplog.at_level(logging.WARNING, logger="quarry.daemon"):
+        await world.abort()
+    landing.join()
+
+    assert status_of(entry) == "completed"
+    assert terms(world.summary())["kept"] == 1
+    assert world.spool_files() == []
+    assert _warnings_about(caplog, STILL_RUNNING) == []
+
+
+# a store that outlasts the budget cannot hold the close past it.
+async def test_a_store_outlasting_the_budget_cannot_hold_the_close(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    budget = 0.5
+    world.admit("slow", collection="c7")
+    await world.running("slow")
+    loop = asyncio.get_running_loop()
+
+    started = loop.time()
+    with (
+        patch.object(IngestQueue, "ABORT_WAIT_S", budget),
+        caplog.at_level(logging.WARNING, logger="quarry.daemon"),
+    ):
+        await world.abort()
+
+    assert loop.time() - started < budget + 1.0
+    assert len(_warnings_about(caplog, STILL_RUNNING)) == 1
+
+
+# a job whose store ended without rows before the abort began is settled: it keeps
+# the store's own reason, needs no spool, and is not counted kept.
+@pytest.mark.parametrize(
+    ("backfill", "outcome", "reason"),
+    [
+        (False, {"chunks": 0}, "nothing was stored"),
+        (
+            True,
+            JobWithdrawnError("job withdrawn before its commit"),
+            "job withdrawn before its commit",
+        ),
+    ],
+    ids=["refused store", "store stopped at its checkpoint"],
+)
+async def test_a_job_whose_store_ended_unstored_keeps_its_reason_and_needs_no_spool(
+    world: World,
+    outcome: object,
+    reason: str,
+    *,
+    backfill: bool,
+) -> None:
+    entry = world.admit("settled", backfill=backfill, commits=backfill)
+    await world.running("settled")
+
+    entry.store.land(outcome)
+    while entry.state.store is None or entry.state.store.outcome() is None:
+        await asyncio.sleep(0)
+    await asyncio.wait({world.worker().abort_off_loop()})  # the same step: no read yet
+
+    assert entry.state.status == "failed"
+    assert reason in entry.state.error
+    assert "spool" not in entry.state.error
+    found = world.terms()
+    assert (found["no_spool"], found["kept"], found["spooled"]) == (1, 0, 0)
+    assert world.spool_files() == []

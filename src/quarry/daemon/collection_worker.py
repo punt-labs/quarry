@@ -1,4 +1,4 @@
-"""One collection's resident FIFO ingest worker and its queued-job message.
+"""One collection's resident FIFO ingest worker.
 
 A :class:`CollectionWorker` is the per-collection serialization the queue is
 built on: a single consumer coroutine draining one ``asyncio.Queue`` means only
@@ -7,7 +7,8 @@ the single-writer precondition the ingest primitives assume.  Each unit
 runs under the shared embed gate; its duration is bounded by the ingest work
 itself — the web fetch enforces a total deadline + size cap and the embed and
 LanceDB write are finite — not by a coroutine-level deadline, which could not
-interrupt a non-cancellable threadpool ingest anyway.
+interrupt the store thread anyway: a store runs on its own daemon thread
+(:class:`~quarry.daemon.store_run.StoreRun`) that no cancel stops.
 """
 
 from __future__ import annotations
@@ -23,9 +24,11 @@ from quarry.daemon.queued_unit import QueuedUnit
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
+    from quarry.daemon.store_run import StoreRun
     from quarry.daemon.tasks import TaskState
 
 
@@ -79,9 +82,15 @@ class CollectionWorker:
         return self
 
     def enqueue(self, job: IngestUnit, state: TaskState) -> None:
-        """Append a job (with its task state) to this FIFO queue (never blocks)."""
-        JobLifecycle(state).enqueue()
-        self._queue.put_nowait(QueuedUnit(job, state))
+        """Append a job (with its task state) to this FIFO queue (never blocks).
+
+        A job its producer already withdrew is not queued, and gives its admit
+        slot back at once: nothing would ever run it or release the slot.
+        """
+        if JobLifecycle(state).enqueue():
+            self._queue.put_nowait(QueuedUnit(job, state))
+        else:
+            self._release_admit()
 
     def stop(self) -> None:
         """Enqueue the drain sentinel so the worker returns after its backlog."""
@@ -168,6 +177,15 @@ class CollectionWorker:
     def tally(self) -> AbortTally:
         """Return how this worker's aborted jobs ended."""
         return self._jobs.tally
+
+    def unobserved_stores(self) -> tuple[StoreRun, ...]:
+        """Return the stores of aborted jobs whose end nobody has read yet."""
+        stores = (unit.state.store for unit in self._jobs.taken)
+        return tuple(s for s in stores if s is not None and s.is_unobserved)
+
+    async def drain_removals(self, timeout: float) -> tuple[Path, ...]:
+        """Wait up to *timeout* seconds for spool-record removals; name what is left."""
+        return await self._jobs.discard.drain(timeout)
 
     async def _aborted(self, doomed: list[QueuedUnit]) -> None:
         """Spool *doomed* off the loop, record how each ended, then join the worker."""

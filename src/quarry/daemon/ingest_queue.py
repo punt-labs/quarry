@@ -24,6 +24,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from quarry.daemon.loop_close import LoopClose
 from quarry.daemon.queue_abort import QueueAbort
 from quarry.daemon.queue_bounds import QueueGate, WorkerPool
 from quarry.shutdown_policy import ShutdownPolicy
@@ -125,7 +126,12 @@ class IngestQueue:
         workers are aborted — their in-flight and queued jobs record ``failed``
         (recoverable via backfill) — and awaited for :attr:`ABORT_WAIT_S` at most,
         so shutdown never hangs.  The timeout says how many jobs it failed and
-        how many of those it spooled.
+        how many of those it spooled.  Then it uses what is left of that
+        allowance to wait for the stores a cancelled worker left running and for
+        the spool records they made unnecessary (:class:`LoopClose`), logs the
+        tally as it then stands, and names every store still running when the
+        loop is about to close: its spool record, if any, may then duplicate
+        stored content.
         """
         self._gate.close()
         workers = self._pool.workers()
@@ -140,8 +146,15 @@ class IngestQueue:
             await self._abort(workers, drain_timeout)
 
     async def _abort(self, workers: list[CollectionWorker], window_s: float) -> None:
-        """Abort *workers* after a drain outran its window; say what that cost."""
+        """Abort *workers* after a drain outran its window; say what that cost.
+
+        The abort's wait and the drain that follows share one allowance,
+        :attr:`ABORT_WAIT_S`, so a shutdown is no longer than it was: the drain
+        gets what the abort left, and reports whatever it could not wait out.
+        """
+        started = asyncio.get_running_loop().time()
         await QueueAbort(workers, self.ABORT_WAIT_S).run(window_s)
+        await LoopClose(workers).run(started + self.ABORT_WAIT_S)
 
     def cancel_workers(self) -> None:
         """Synchronously stop every worker (test-harness teardown, no await).

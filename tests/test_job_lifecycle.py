@@ -10,8 +10,10 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.owner_lock import ClaimNotHeldError
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.tasks import TaskState
+from tests.job_states import job_in
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -34,7 +36,7 @@ class _Job:
     async def run(self, ctx: object, state: TaskState) -> None:
         del ctx
         self.ran += 1
-        state.status = "completed"
+        JobLifecycle(state).settle_stored({})
 
 
 def _queued() -> TaskState:
@@ -184,9 +186,12 @@ async def test_a_job_that_is_not_queued_warns_when_it_is_skipped(
 
 
 def _job(status: TaskStatus) -> TaskState:
-    state = _queued()
-    state.status = status
-    return state
+    return job_in(status, kind="backfill")
+
+
+def _snapshot(state: TaskState) -> tuple[str, str, dict[str, object]]:
+    """Return what a move must leave alone: the status, the reason, the results."""
+    return state.status, state.error, dict(state.results)
 
 
 @pytest.mark.parametrize("status", ["running", "committing"])
@@ -210,12 +215,12 @@ def test_settle_never_overwrites_a_status_somebody_else_settled(
     status: TaskStatus,
 ) -> None:
     state = _job(status)
-    state.error = "kept"
+    before = _snapshot(state)
 
     assert not JobLifecycle(state).settle_stored({"chunks": 2})
     assert not JobLifecycle(state).settle_failed("late")
 
-    assert (state.status, state.error, state.results) == (status, "kept", {})
+    assert _snapshot(state) == before
 
 
 @pytest.mark.parametrize("status", ["running", "committing"])
@@ -236,16 +241,6 @@ def test_a_cancel_fails_a_running_job_but_leaves_the_others() -> None:
 
     assert (running.status, running.error) == ("failed", "task was cancelled")
     assert {s: state.status for s, state in kept.items()} == {s: s for s in kept}
-
-
-def test_a_task_that_never_was_a_job_is_failed_by_a_cancel_whatever_it_recorded() -> (
-    None
-):
-    state = _state("completed")
-
-    JobLifecycle(state).cancelled("task was cancelled")
-
-    assert (state.status, state.error) == ("failed", "task was cancelled")
 
 
 def test_an_exit_with_no_terminal_status_fails_only_a_running_job() -> None:
@@ -314,11 +309,12 @@ def test_observing_a_store_leaves_a_status_somebody_else_settled(
 ) -> None:
     for settlement in (Settlement.done({"chunks": 2}), Settlement.failed("no")):
         state = _job(status)
+        before = _snapshot(state)
 
         observed = JobLifecycle(state).observe_store(settlement)
 
         assert observed is JobLifecycle.Observed.UNCHANGED
-        assert (state.status, state.error, state.results) == (status, "", {})
+        assert _snapshot(state) == before
 
 
 def test_observing_a_failed_store_leaves_a_failed_job_and_its_reason() -> None:
@@ -383,3 +379,65 @@ def test_a_cancel_fails_only_a_job_whose_store_did_not_land(
 
     assert state.status == want
     assert store.detached
+
+
+@pytest.mark.parametrize("status", ["running", "committing"])
+def test_a_cancel_after_a_refused_store_keeps_the_stores_own_reason(
+    status: TaskStatus,
+) -> None:
+    state, _store = _cancelled(status, Settlement.failed("nothing was stored: blank"))
+
+    assert (state.status, state.error) == ("failed", "nothing was stored: blank")
+
+
+def test_a_job_its_own_store_refused_keeps_the_refusal_when_the_abort_takes_it() -> (
+    None
+):
+    state, _store = _cancelled("running", Settlement.failed("blank"))
+
+    taken = JobLifecycle(state).take_for_abort("shut down")
+
+    assert taken is JobLifecycle.Disposition.SETTLED
+    assert (state.status, state.error) == ("failed", "blank")
+
+
+def test_a_job_the_abort_failed_itself_is_not_taken_as_settled() -> None:
+    state = _job("running")
+    store = _Store(Settlement.failed("blank"))
+    state.store = cast("StoreRun", store)
+    JobLifecycle(state).fail_aborted("shut down")  # the abort's own provisional
+
+    again = JobLifecycle(state).take_for_abort("shut down")
+
+    assert again is JobLifecycle.Disposition.SETTLED  # the refusal outranks it
+
+
+def test_a_failed_job_with_no_store_is_the_aborts_to_fail() -> None:
+    state = _job("failed")
+
+    taken = JobLifecycle(state).take_for_abort("shut down")
+
+    assert taken is JobLifecycle.Disposition.FAILED
+    assert state.error == "shut down"
+
+
+def test_a_write_without_the_claim_raises_and_changes_nothing() -> None:
+    state = _job("running")
+
+    with pytest.raises(ClaimNotHeldError):
+        JobLifecycle(state)._set("failed", error="sneaked")
+
+    assert (state.status, state.error) == ("running", "")
+
+
+def test_a_settle_the_status_refused_is_logged_at_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state = _job("aborted")
+
+    with caplog.at_level(logging.DEBUG, logger="quarry.daemon.job_lifecycle"):
+        assert not JobLifecycle(state).settle_failed("late")
+        assert not JobLifecycle(state).settle_stored({})
+
+    assert "not failed, its status is aborted" in caplog.text
+    assert "not completed, its status is aborted" in caplog.text

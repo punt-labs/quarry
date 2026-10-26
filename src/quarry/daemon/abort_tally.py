@@ -14,9 +14,10 @@ class AbortTerm(Enum):
 
     ``PENDING``: taken, outcome not yet known.  ``SPOOLED``: a record was
     written and can be run again; ``UNRECOVERABLE``: a record was written but
-    only as a note.  ``LOST``: the spool write failed or the record could not be
-    built, so the content is gone.  ``UNFINISHED``: the write was still running
-    when the abort stopped waiting, so the content may or may not be on disk.
+    only as a note.  ``NOT_WRITTEN``: the spool write failed, so the content is
+    gone; ``UNBUILT``: the record could not be built, so it is gone too.
+    ``UNFINISHED``: the write was still running when the abort stopped waiting,
+    so the content may or may not be on disk.
     ``NO_SPOOL``: the job is run again from its source, or a durable copy exists.
     ``KEPT``: the abort left the job as it is: withdrawn, aborted by its
     producer, or stored.  ``UNCONFIRMED``: a committing job whose store has not
@@ -26,7 +27,8 @@ class AbortTerm(Enum):
     PENDING = auto()
     SPOOLED = auto()
     UNRECOVERABLE = auto()
-    LOST = auto()
+    NOT_WRITTEN = auto()
+    UNBUILT = auto()
     UNFINISHED = auto()
     NO_SPOOL = auto()
     KEPT = auto()
@@ -77,7 +79,7 @@ class AbortTally:
         """Move the taken *job* to *term*."""
         self._ledger[id(job)] = (job, term)
 
-    def term_of(self, job: object) -> AbortTerm | None:
+    def term_of(self, job: object) -> AbortTerm | None:  # None: never taken
         """Return the term *job* is in, or ``None`` if it was never taken."""
         entry = self._ledger.get(id(job))
         return entry[1] if entry else None  # absence: the job was never taken
@@ -94,7 +96,8 @@ class AbortTally:
         return (
             f"{settled} job(s): {term(AbortTerm.SPOOLED)} spooled for recovery, "
             f"{term(AbortTerm.UNRECOVERABLE)} spooled but not recoverable, "
-            f"{term(AbortTerm.LOST)} lost (spool write failed), "
+            f"{term(AbortTerm.NOT_WRITTEN)} not written (spool write failed), "
+            f"{term(AbortTerm.UNBUILT)} unbuilt (record could not be built), "
             f"{f'{unfinished} spool unfinished at shutdown, ' if unfinished else ''}"
             f"{term(AbortTerm.NO_SPOOL)} needed no spool, "
             f"{term(AbortTerm.KEPT)} kept (withdrawn, aborted or stored), "

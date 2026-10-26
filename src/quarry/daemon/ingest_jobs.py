@@ -65,11 +65,11 @@ class IngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Fetch and index the URL in a background thread, updating task state."""
-        terminal = RefusalAwareTerminal(state, self._captured().subject)
-        store = StoreRun.start(
-            state, partial(self._ingest, ctx), RefusalAwareTerminal.settlement
-        )
+        terminal = RefusalAwareTerminal.for_job(state, self._captured().subject)
         with terminal.record():
+            store = StoreRun.start(
+                self, state, partial(self._ingest, ctx), RefusalAwareTerminal.settlement
+            )
             terminal.apply(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:

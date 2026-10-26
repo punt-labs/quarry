@@ -8,12 +8,15 @@ from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.content_guard import UnindexableContentError
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.settlement import Settlement
+from quarry.daemon.task_lifecycle import Settles, TaskLifecycle
 from quarry.daemon.task_terminal import TaskTerminal
 from quarry.refusal import RefusalError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
+    from contextlib import AbstractContextManager
 
     from quarry.daemon.tasks import TaskState
 
@@ -41,21 +44,41 @@ class RefusalAwareTerminal:
     stop the task from reaching a terminal state, and it must be safe to log.
     """
 
-    __slots__ = ("_state", "_subject")
+    __slots__ = ("_moves", "_recording", "_state", "_subject")
 
     NO_PAGES: ClassVar[str] = "nothing was stored: no pages were selected for ingest"
     NOTHING_STORED: ClassVar[str] = (
         "nothing was stored: the content produced no indexable text"
     )
 
+    _moves: Settles
+    _recording: Callable[[TaskState], AbstractContextManager[None]]
     _state: TaskState
     _subject: Callable[[], str]
 
-    def __new__(cls, state: TaskState, subject: Callable[[], str] = lambda: "") -> Self:
+    def __new__(
+        cls,
+        state: TaskState,
+        subject: Callable[[], str],
+        moves: Settles,
+        recording: Callable[[TaskState], AbstractContextManager[None]],
+    ) -> Self:
         self = super().__new__(cls)
         self._state = state
         self._subject = subject
+        self._moves = moves
+        self._recording = recording
         return self
+
+    @classmethod
+    def for_job(cls, state: TaskState, subject: Callable[[], str] = str) -> Self:
+        """Return the terminal of a queued job's body (see :class:`JobTerminal`)."""
+        return cls(state, subject, JobLifecycle(state), JobTerminal.recording)
+
+    @classmethod
+    def for_task(cls, state: TaskState, subject: Callable[[], str] = str) -> Self:
+        """Return the terminal of a polled task that is not a queued job."""
+        return cls(state, subject, TaskLifecycle(state), TaskTerminal.recording)
 
     @staticmethod
     def is_stored(results: Mapping[str, object]) -> bool:
@@ -81,29 +104,30 @@ class RefusalAwareTerminal:
         is_blank_crawl = "ingested" not in results or results.get("empty")
         return Settlement.failed(cls.NOTHING_STORED if is_blank_crawl else cls.NO_PAGES)
 
-    def complete(self, results: Mapping[str, object]) -> None:
-        """Record the task as completed with *results*, or refused if none stored."""
-        self.apply(self.settlement(results))
-
     def apply(self, settlement: Settlement) -> None:
         """Record how the store ended: completed, or refused with its reason."""
         if settlement.is_stored:
-            JobLifecycle(self._state).settle_stored(settlement.results)
+            self._moves.settle_stored(settlement.results)
         else:
             self._fail(UnindexableContentError(settlement.reason))
 
     @contextmanager
     def record(self) -> Generator[None]:
         """Run the body, recording the task's terminal state when it exits."""
-        with TaskTerminal.recording(self._state):
+        with self._recording(self._state):
             try:
                 yield
             except RefusalError as exc:
                 self._fail(exc)
 
     def _fail(self, exc: RefusalError) -> None:
-        """Record the failure first, then log it: naming the task cannot undo it."""
-        JobLifecycle(self._state).settle_failed(str(exc))
+        """Record the failure first, then log it: naming the task cannot undo it.
+
+        A failure the task's status refused (the producer withdrew the job, or its
+        store already settled it) is not logged as a rejection: it was not one.
+        """
+        if not self._moves.settle_failed(str(exc)):
+            return
         subject = "(unnamed)"
         # The subject only decorates a log line, so whatever naming it raises must
         # not stop the failure from being logged; it is reported, not swallowed.

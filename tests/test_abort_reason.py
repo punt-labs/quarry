@@ -101,7 +101,7 @@ def test_only_a_job_whose_record_was_written_is_counted_spooled() -> None:
     record = SpoolRecord(kind="remember", collection="c", name="n", payload="p")
 
     assert _outcome(_Spool(ok=True), _Unit(record)).term is AbortTerm.SPOOLED
-    assert _outcome(_Spool(ok=False), _Unit(record)).term is AbortTerm.LOST
+    assert _outcome(_Spool(ok=False), _Unit(record)).term is AbortTerm.NOT_WRITTEN
     assert _outcome(_Spool(), _Unit(None)).term is AbortTerm.NO_SPOOL
     assert _outcome(_Spool(), _Rerunnable()).term is AbortTerm.NO_SPOOL
 
@@ -140,15 +140,17 @@ def test_a_tally_counts_each_aborted_job_exactly_once() -> None:
     tally = _counted(
         Aborted("a", AbortTerm.SPOOLED),
         Aborted("b", AbortTerm.UNRECOVERABLE),
-        Aborted("c", AbortTerm.LOST),
+        Aborted("c", AbortTerm.NOT_WRITTEN),
+        Aborted("c2", AbortTerm.UNBUILT),
         Aborted("d"),
         Aborted("e", AbortTerm.KEPT),
         Aborted("f", AbortTerm.UNCONFIRMED),
     )
 
     assert tally.summary() == (
-        "6 job(s): 1 spooled for recovery, 1 spooled but not recoverable, "
-        "1 lost (spool write failed), 1 needed no spool, "
+        "7 job(s): 1 spooled for recovery, 1 spooled but not recoverable, "
+        "1 not written (spool write failed), "
+        "1 unbuilt (record could not be built), 1 needed no spool, "
         "1 kept (withdrawn, aborted or stored), "
         "1 unconfirmed (committing at shutdown)"
     )
@@ -184,10 +186,13 @@ def test_a_pending_job_is_not_in_the_summary_until_its_outcome_is_known() -> Non
 
 def test_tallies_combine_into_one_whose_terms_still_add_up() -> None:
     first = _counted(Aborted("a", AbortTerm.SPOOLED))
-    second = _counted(Aborted("b", AbortTerm.LOST), Aborted("c"))
+    second = _counted(Aborted("b", AbortTerm.NOT_WRITTEN), Aborted("c"))
 
     total = AbortTally.total([first, second])
 
     assert total.summary().startswith("3 job(s)")
     assert "1 spooled for recovery, 0 spooled but not recoverable" in total.summary()
-    assert "1 lost (spool write failed), 1 needed no spool" in total.summary()
+    assert "1 not written (spool write failed)" in total.summary()
+    assert "0 unbuilt (record could not be built), 1 needed no spool" in (
+        total.summary()
+    )

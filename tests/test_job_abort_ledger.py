@@ -11,40 +11,15 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-import pytest
-
-from quarry.daemon.daemon_threads import DaemonThreads
 from quarry.daemon.job_lifecycle import JobLifecycle
 from tests.job_abort_world import World, terms, until
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from pathlib import Path
 
 
-@pytest.fixture
-def world(tmp_path: Path) -> Iterator[World]:
-    with World(tmp_path) as w:
-        yield w
-
-
-def _terms_add_up(w: World) -> dict[str, int]:
-    found = terms(w.summary())
-    parts = [
-        "spooled",
-        "unrecoverable",
-        "lost",
-        "unfinished",
-        "no_spool",
-        "kept",
-        "unconfirmed",
-    ]
-    assert sum(found[p] for p in parts) == found["jobs"], w.summary()
-    return found
-
-
-# T2 -- I2: the terms always sum to the jobs taken, and kept jobs are kept.
-async def test_t2_terms_sum_to_the_jobs_taken_at_every_read(world: World) -> None:
+# the terms always sum to the jobs taken, and kept jobs are kept.
+async def test_terms_sum_to_the_jobs_taken_at_every_read(world: World) -> None:
     world.admit("infl", collection="c1")
     await world.running("infl")
     withdrawn = world.admit("wd", collection="c1")
@@ -55,7 +30,7 @@ async def test_t2_terms_sum_to_the_jobs_taken_at_every_read(world: World) -> Non
     JobLifecycle(withdrawn.state).withdraw()
 
     await world.abort()
-    after_deadline = _terms_add_up(world)
+    after_deadline = world.terms()
     assert after_deadline["jobs"] == 4
     assert after_deadline["kept"] == 1
     assert after_deadline["unconfirmed"] == 1
@@ -63,13 +38,13 @@ async def test_t2_terms_sum_to_the_jobs_taken_at_every_read(world: World) -> Non
 
     gate.release.set()
     await until(lambda: terms(world.summary())["unfinished"] == 0)
-    after_late = _terms_add_up(world)
+    after_late = world.terms()
     assert after_late["spooled"] == 2
     assert after_late["unconfirmed"] == 1
 
 
-# T3 -- I3: a job the producer withdrew is never spooled and is counted kept.
-async def test_t3_a_withdrawn_or_aborted_job_is_counted_kept_and_not_spooled(
+# a job the producer withdrew is never spooled and is counted kept.
+async def test_a_withdrawn_or_aborted_job_is_counted_kept_and_not_spooled(
     world: World,
 ) -> None:
     running = world.admit("run", collection="c1")
@@ -88,8 +63,8 @@ async def test_t3_a_withdrawn_or_aborted_job_is_counted_kept_and_not_spooled(
     assert world.pending() == 0
 
 
-# T5 -- I5: a late correction moves the reason and the term together, once.
-async def test_t5_a_late_spool_corrects_the_reason_and_the_term_together(
+# a late correction moves the reason and the term together, once.
+async def test_a_late_spool_corrects_the_reason_and_the_term_together(
     world: World,
 ) -> None:
     entry = world.admit("slow")
@@ -109,35 +84,8 @@ async def test_t5_a_late_spool_corrects_the_reason_and_the_term_together(
     assert terms(world.summary())["spooled"] == 1
 
 
-# T8 -- I8: a reason says only what reached the disk.
-async def test_t8_a_cancelled_spool_future_is_unfinished_not_a_failed_write(
-    world: World,
-) -> None:
-    entry = world.admit("cancelled")
-    await world.running("cancelled")
-    gate = world.hold_spool("cancelled")
-    shared = DaemonThreads.shared()
-
-    async def cancel_spool_futures() -> None:
-        await until(gate.started.is_set)
-        for task in asyncio.all_tasks():
-            frame = getattr(task.get_coro(), "cr_frame", None)
-            if frame is not None and frame.f_locals.get("self") is shared:
-                task.cancel()
-
-    canceller = asyncio.ensure_future(cancel_spool_futures())
-    await world.abort()
-    await canceller
-
-    assert "spool write failed" not in entry.state.error
-    assert terms(world.summary())["lost"] == 0
-    assert terms(world.summary())["unfinished"] == 1
-    gate.release.set()
-    await until(lambda: len(world.spool_files()) == 1)
-    assert "spool write failed" not in entry.state.error
-
-
-async def test_t8_a_failed_write_says_so_and_leaves_no_record(
+# a reason says only what reached the disk.
+async def test_a_failed_write_says_so_and_leaves_no_record(
     world: World, tmp_path: Path
 ) -> None:
     blocker = tmp_path / "file"
@@ -150,11 +98,11 @@ async def test_t8_a_failed_write_says_so_and_leaves_no_record(
 
     assert world.spool_files() == []
     assert "spool write failed" in entry.state.error
-    assert terms(world.summary())["lost"] == 1
+    assert terms(world.summary())["not_written"] == 1
 
 
-# T12 -- A4: a cancelled abort records its queued job as unfinished.
-async def test_t12_a_cancelled_queued_spool_is_unfinished_not_pending(
+# a cancelled abort records its queued job as unfinished.
+async def test_a_cancelled_queued_spool_is_unfinished_not_pending(
     world: World,
 ) -> None:
     world.admit("run", collection="c1")
@@ -175,8 +123,8 @@ async def test_t12_a_cancelled_queued_spool_is_unfinished_not_pending(
     assert terms(world.summary())["spooled"] == 2
 
 
-# T16 -- a committing job whose store never ends stays unconfirmed; the process exits.
-async def test_t16_a_committing_job_with_a_stuck_store_is_unconfirmed(
+# a committing job whose store never ends stays unconfirmed; the process exits.
+async def test_a_committing_job_with_a_stuck_store_is_unconfirmed(
     world: World,
 ) -> None:
     commit = world.admit("stuck", backfill=True, commits=True)

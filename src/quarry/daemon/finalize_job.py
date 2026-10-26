@@ -1,18 +1,18 @@
 """Collection-table lifecycle jobs the queue runs on a ``(database, collection)`` key.
 
-Both ride the DES-042 per-``(database, collection)`` FIFO worker so they serialize
+Both ride the per-``(database, collection)`` FIFO worker so they serialize
 behind that collection's in-flight index/scan jobs:
 
 - :class:`CollectionFinalizeJob` rebuilds the FTS index once per quiescent batch.
   ``create_fts_index(replace=True)`` leaks a descriptor per generation on the
-  daemon's long-lived connection (quarry-0dss), so the watch loop MUST NOT rebuild
-  per changed file; coalescing to one post-quiescence pass keeps the fd count flat
-  (DES-045 §9, Decision 4) while the FTS lags the vector channel by one batch.
+  daemon's long-lived connection, so the watch loop MUST NOT rebuild per changed
+  file; coalescing to one post-quiescence pass keeps the fd count flat while the
+  FTS lags the vector channel by one batch.
 - :class:`CollectionPurgeJob` deletes every chunk of a *deregistered* collection.
   Running FIFO behind any admitted ``FileIndexJob`` for the collection is what
   makes the deregister purge safe: a queued insert re-inserts *before* the purge
   deletes, never after, so no orphan chunk survives with no directory backing it
-  (DES-045; the single-writer invariant a direct out-of-queue delete would break).
+  (the single-writer invariant a direct out-of-queue delete would break).
   It deletes by *collection*, not a document list, so a racing insert of a
   document unknown at deregister time is still purged.
 """
@@ -23,9 +23,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.store_run import StoreRun
-from quarry.daemon.task_terminal import TaskTerminal
 from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
 
@@ -58,10 +58,12 @@ class CollectionFinalizeJob:
     collection: str
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
-        """Run the coalesced FTS rebuild + optimize off-thread (DES-045 §9)."""
+        """Run the coalesced FTS rebuild + optimize off-thread."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        store = StoreRun.start(state, self._finalize, lambda _: Settlement.done({}))
-        with TaskTerminal.recording(state):
+        with JobTerminal.recording(state):
+            store = StoreRun.start(
+                self, state, self._finalize, lambda _: Settlement.done({})
+            )
             JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
@@ -87,7 +89,7 @@ class CollectionPurgeJob:
     The deregister route removes the registry rows synchronously, then submits
     this on the collection's FIFO worker so it runs *after* any in-flight
     ``FileIndexJob`` — the insert lands first, this purge clears it, and no
-    orphan chunk survives (DES-045).  Deletion is by collection, so a racing
+    orphan chunk survives.  Deletion is by collection, so a racing
     insert of a document unknown at deregister time is purged too.
     """
 
@@ -102,10 +104,13 @@ class CollectionPurgeJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete the collection's chunks off-thread, recording the count."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        store = StoreRun.start(
-            state, self._purge, lambda deleted: Settlement.done({"deleted": deleted})
-        )
-        with TaskTerminal.recording(state):
+        with JobTerminal.recording(state):
+            store = StoreRun.start(
+                self,
+                state,
+                self._purge,
+                lambda deleted: Settlement.done({"deleted": deleted}),
+            )
             JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:

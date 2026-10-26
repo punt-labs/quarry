@@ -12,7 +12,7 @@ from quarry.daemon.job_lifecycle import JobLifecycle
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
     from quarry.daemon.abort_tally import AbortTally
@@ -30,28 +30,44 @@ class AbortRecord:
     it is taken and counted pending; its outcome replaces both, but only while it
     is still pending, so a late or repeated outcome cannot move it again.  A job
     its producer withdrew, one that stored and one past its commit are left as
-    they are and counted *kept* or *unconfirmed*.  A store that lands after the
-    worker was cancelled makes its job kept, and removes the record the abort
-    wrote for it.  Everything here runs on the loop (or the caller of a
-    synchronous teardown), after a job's blocking work has ended.
+    they are and counted *kept* or *unconfirmed*, and one whose own store already
+    refused it keeps that refusal and needs no spool.  A store that lands after
+    the worker was cancelled makes its job kept, and removes the record the abort
+    wrote for it; one that fails on a committing job is run again from its source,
+    or, when nothing durable holds it, spooled after all.  Everything here runs on
+    the loop (or the caller of a synchronous teardown), after a job's blocking
+    work has ended.
     """
 
-    __slots__ = ("_discard", "_reason", "_tally", "_written")
+    __slots__ = ("_discard", "_reason", "_respool", "_tally", "_units", "_written")
 
     _discard: SpoolDiscard
     _reason: AbortReason
+    _respool: Callable[[QueuedUnit], None]
     _tally: AbortTally
+    _units: list[QueuedUnit]
     _written: dict[int, Path]
 
     def __new__(
-        cls, reason: AbortReason, tally: AbortTally, discard: SpoolDiscard
+        cls,
+        reason: AbortReason,
+        tally: AbortTally,
+        discard: SpoolDiscard,
+        respool: Callable[[QueuedUnit], None],
     ) -> Self:
         self = super().__new__(cls)
         self._discard = discard
         self._reason = reason
+        self._respool = respool
         self._tally = tally
+        self._units = []
         self._written = {}
         return self
+
+    @property
+    def taken(self) -> tuple[QueuedUnit, ...]:
+        """Return every job the abort has taken, in the order it took them."""
+        return tuple(self._units)
 
     def take(self, items: Sequence[QueuedUnit]) -> list[QueuedUnit]:
         """Take *items*; return those the abort has failed and must now decide.
@@ -63,9 +79,11 @@ class AbortRecord:
         for item in items:
             if not self._tally.take(item):
                 continue
+            self._units.append(item)
             if (store := item.state.store) is not None:
                 store.listen(partial(self.store_ended, item))
-            found = JobLifecycle(item.state).fail_aborted(AbortReason.UNFINISHED.reason)
+            reason = AbortReason.UNFINISHED.reason
+            found = JobLifecycle(item.state).take_for_abort(reason)
             if found is disposition.FAILED:
                 failing.append(item)
             else:
@@ -82,14 +100,15 @@ class AbortRecord:
         if term is AbortTerm.PENDING:
             self._settle(item, aborted, aborted.reason)
         elif term is AbortTerm.KEPT:
-            self._discard.discard(aborted.path)
+            self._drop(aborted.path)
 
     def late(self, item: QueuedUnit, spooling: asyncio.Future[Aborted]) -> None:
         """Done callback: a spool the abort stopped waiting for has ended.
 
         A write that succeeded corrects the job's reason and its term together,
-        but only while the job is still *unfinished*; one that failed or was
-        cancelled is logged, and the job stays unfinished.
+        but only while the job is still *unfinished*; one that raised settles it
+        as not written; one that was cancelled is logged, and the job stays
+        unfinished (its thread may still write).
         """
         term = self._tally.term_of(item)
         if term is AbortTerm.KEPT:  # the job stored while the spool ran
@@ -104,6 +123,8 @@ class AbortRecord:
             )
         elif (failure := spooling.exception()) is not None:
             item.log_failure("a late spool of", failure)
+            outcome = AbortReason.NOT_WRITTEN
+            self._settle(item, outcome, f"{outcome.reason} (after the wait)")
         else:
             outcome = spooling.result()
             self._settle(item, outcome, f"{outcome.reason} (after the wait)")
@@ -117,17 +138,37 @@ class AbortRecord:
         """Observer's listener: a store ended after the worker was cancelled.
 
         A store that landed makes the job *kept* and removes its spool record.
-        One that failed on a committing job ends it ``failed``, to be run again
-        from its source.  Nothing else changes.
+        One that failed on a committing job leaves the job ``failed`` with the
+        store's own reason: counted as needing no spool when its source outlives
+        it, and spooled after all when nothing does.  Nothing else changes.
         """
         term = self._tally.term_of(item)
         if observed is JobLifecycle.Observed.COMPLETED and term is not None:
-            self._tally.move(item, AbortTerm.KEPT)
-            self._discard.discard(self._written.pop(id(item), None))
+            self._move(item, AbortTerm.KEPT, "its store landed after the abort")
+            self._drop(self._written.pop(id(item), None))
         elif observed is JobLifecycle.Observed.FAILED and term is AbortTerm.UNCONFIRMED:
-            outcome = self._reason.without_spool(item.job)
-            JobLifecycle(item.state).fail_aborted(outcome.reason)
-            self._tally.move(item, outcome.term)
+            if self._reason.is_durable(item.job):
+                self._move(item, AbortTerm.NO_SPOOL, "its committing store failed")
+            else:
+                self._move(item, AbortTerm.PENDING, "its committing store failed")
+                self._respool(item)
+
+    def _drop(self, path: Path | None) -> None:  # None: no record was written
+        """Remove the spool record at *path*, if one was written."""
+        if path is not None:
+            self._discard.discard(path)
+
+    def _move(self, item: QueuedUnit, term: AbortTerm, why: str) -> None:
+        """Move *item* to *term* and say so: a term that changes is logged."""
+        self._tally.move(item, term)
+        logger.info(
+            "abort: a %s job for %s (task %s) is now %s: %s",
+            type(item.job).__name__,
+            item.job.collection,
+            item.state.task_id,
+            term.name.lower(),
+            why,
+        )
 
     def _settle(self, item: QueuedUnit, aborted: Aborted, reason: str) -> None:
         """Move *item*'s reason and its term together, as its status allows."""
@@ -136,7 +177,7 @@ class AbortRecord:
         if found is JobLifecycle.Disposition.FAILED and aborted.path is not None:
             self._written[id(item)] = aborted.path
         elif found is JobLifecycle.Disposition.KEPT:
-            self._discard.discard(aborted.path)
+            self._drop(aborted.path)
 
     @staticmethod
     def _term_of(found: JobLifecycle.Disposition, aborted: Aborted) -> AbortTerm:
@@ -144,6 +185,8 @@ class AbortRecord:
         match found:
             case JobLifecycle.Disposition.KEPT:
                 return AbortTerm.KEPT
+            case JobLifecycle.Disposition.SETTLED:
+                return AbortTerm.NO_SPOOL
             case JobLifecycle.Disposition.UNCONFIRMED:
                 return AbortTerm.UNCONFIRMED
             case _:

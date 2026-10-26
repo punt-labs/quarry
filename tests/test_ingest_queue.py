@@ -25,11 +25,13 @@ from quarry.daemon import ingest_queue as iq
 from quarry.daemon.abort_reason import Aborted
 from quarry.daemon.abort_tally import AbortTally, AbortTerm
 from quarry.daemon.ingest_queue import IngestQueue
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
+from quarry.daemon.job_terminal import JobTerminal
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.task_terminal import TaskTerminal
 from quarry.daemon.tasks import TaskRegistry, TaskState
+from tests.job_states import job_in
 
 if TYPE_CHECKING:
     import pytest
@@ -48,6 +50,23 @@ def _rk(collection: str) -> RouteKey:
     to distinct workers, same collection to the same worker.
     """
     return RouteKey("db", collection)
+
+
+class _IdleWorker:
+    """What a double of a worker answers when the drain after an abort asks it.
+
+    It has taken no store that is still unread and has no spool record being
+    removed; a double that needs more says so itself.
+    """
+
+    @staticmethod
+    def unobserved_stores() -> tuple[object, ...]:
+        return ()
+
+    @staticmethod
+    async def drain_removals(timeout: float) -> tuple[Path, ...]:
+        del timeout
+        return ()
 
 
 @final
@@ -103,7 +122,7 @@ class _StubUnit:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Record entry, wait as configured, then record a terminal status."""
         del ctx  # the stub ignores the daemon context; the queue passes it through
-        with TaskTerminal.recording(state):
+        with JobTerminal.recording(state):
             self.ledger.enter(self.collection)
             try:
                 if self.gate is not None:
@@ -115,7 +134,7 @@ class _StubUnit:
                 if self.boom:
                     msg = "stub failure"
                     raise RuntimeError(msg)
-                state.status = "completed"
+                JobLifecycle(state).settle_stored({})
             finally:
                 self.ledger.leave(self.collection, self.name)
 
@@ -264,6 +283,24 @@ def test_full_queue_rejects_without_dropping() -> None:
         gate.set()
         await queue.aclose(drain_timeout=2.0)
         assert set(ledger.completions) == {"first", "second"}  # overflow never ran
+
+    asyncio.run(_run())
+
+
+def test_a_job_withdrawn_before_it_is_queued_gives_its_slot_back() -> None:
+    """The worker never runs a withdrawn job, so admission must not keep its slot."""
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(depth=1, concurrency=1)
+        withdrawn = job_in("withdrawn")
+        assert queue.try_submit(_rk("c"), _StubUnit("c", "gone", ledger), withdrawn)
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(
+            _rk("c"), _StubUnit("c", "next", ledger), _state("next")
+        )
+        await queue.aclose(drain_timeout=2.0)
+        assert ledger.completions == ["next"]
 
     asyncio.run(_run())
 
@@ -456,13 +493,16 @@ def test_a_drain_that_times_out_says_the_window_and_what_it_aborted(
     assert "0 spooled for recovery, 0 spooled but not recoverable" in (
         record.getMessage()
     )
-    assert "0 lost (spool write failed), 2 needed no spool" in record.getMessage()
+    assert "0 not written (spool write failed)" in record.getMessage()
+    assert "0 unbuilt (record could not be built), 2 needed no spool" in (
+        record.getMessage()
+    )
 
 
 def test_the_wait_after_an_abort_is_bounded(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class _Stubborn:
+    class _Stubborn(_IdleWorker):
         tally = AbortTally()
         pending_jobs = 0
 
@@ -869,7 +909,7 @@ def test_a_recoverable_job_still_says_it_was_spooled(tmp_path: Path) -> None:
 def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class _Dying:
+    class _Dying(_IdleWorker):
         tally = AbortTally()
         pending_jobs = 0
 
@@ -895,7 +935,7 @@ def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
 def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class _Counted:
+    class _Counted(_IdleWorker):
         pending_jobs = 0
 
         def __init__(self, outcomes: list[Aborted]) -> None:
@@ -915,7 +955,7 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
         queue = _make_queue(concurrency=1)
         recoverable = Aborted("r", AbortTerm.SPOOLED)
         unrecoverable = Aborted("u", AbortTerm.UNRECOVERABLE)
-        lost = Aborted("l", AbortTerm.LOST)
+        lost = Aborted("l", AbortTerm.NOT_WRITTEN)
         none = Aborted("n")
         workers = [
             _Counted([recoverable, recoverable, unrecoverable, lost, none]),
@@ -928,7 +968,8 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
 
     assert (
         "aborted 8 job(s): 2 spooled for recovery, 1 spooled but not recoverable, "
-        "4 lost (spool write failed), 1 needed no spool, 0 kept"
+        "4 not written (spool write failed), 0 unbuilt (record could not be built), "
+        "1 needed no spool, 0 kept"
     ) in caplog.text
 
 
@@ -937,7 +978,7 @@ def test_the_abort_summary_counts_jobs_not_yet_accounted_for_and_names_late_ends
 ) -> None:
     """A slow spool and a short wait: the terms still add up and nothing leaks."""
 
-    class _Slow:
+    class _Slow(_IdleWorker):
         tally = AbortTally()
         pending_jobs = 2
 
@@ -975,7 +1016,7 @@ def test_the_abort_summary_counts_jobs_not_yet_accounted_for_and_names_late_ends
 def test_a_worker_that_outlives_the_abort_wait_and_is_cancelled_says_so_at_info(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class _Late:
+    class _Late(_IdleWorker):
         tally = AbortTally()
         pending_jobs = 0
 
