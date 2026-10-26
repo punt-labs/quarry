@@ -170,7 +170,8 @@ one INFO line naming the path it read and the state (baseline 1.5, volume rule).
 @final
 class AnswerRoutes(RouteGroup):
     async def answer(self, request: Request) -> JSONResponse:
-        auth = self.reject_unauthorized(request)               # baseline 1.2
+        if (denied := self.reject_unauthorized(request)) is not None:  # baseline 1.2
+            return denied
         parsed = AnswerQuery.parse(request.query_params)       # q + full SearchFilter (8)
         service = self.ctx.synthesis.service()                 # 404 + setup help if not ready (3.1)
         fetch = service.budget.fetch_limit()                   # over-fetch count (5.2)
