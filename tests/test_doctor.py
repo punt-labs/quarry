@@ -42,7 +42,7 @@ from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
 from quarry.results import CheckResult
-from tests.home_only import home_only
+from tests.home_only import HomeOnly
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -476,7 +476,7 @@ class TestCheckEnvironment:
     def test_returns_zero_when_all_pass(self, tmp_path: Path, monkeypatch: MP):
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         import quarry.doctor as doctor_mod
 
         _ok = CheckResult
@@ -527,7 +527,7 @@ class TestCheckEnvironment:
         assert check_environment() == 0
 
     def test_returns_one_when_required_fails(self, tmp_path: Path, monkeypatch: MP):
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
         monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
@@ -953,7 +953,7 @@ class TestRunInstall:
     _DL = "quarry.embeddings.OnnxEmbeddingBackend.download_model_files"
 
     def test_creates_data_directory(self, tmp_path: Path, monkeypatch: MP):
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
@@ -963,7 +963,7 @@ class TestRunInstall:
         assert data_dir.is_dir()
 
     def test_downloads_model(self, tmp_path: Path, monkeypatch: MP):
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
@@ -973,7 +973,7 @@ class TestRunInstall:
         assert mock_dl.call_count >= 1
 
     def test_idempotent(self, tmp_path: Path, monkeypatch: MP):
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
@@ -987,7 +987,7 @@ class TestRunInstall:
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ):
         """A genuine failure (RESTORE_FAILED) sets failed and prints a cross."""
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
@@ -1012,7 +1012,7 @@ class TestRunInstall:
         restored and the daemon can start, so install returns 0 and the GPU
         line shows a warning glyph, not a cross.
         """
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
@@ -1040,7 +1040,7 @@ class TestRunInstall:
         log for the detected vs supported CUDA majors \u2014 the CUDA-major-specific
         message the design requires ``quarry doctor``/install to render.
         """
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
@@ -1078,7 +1078,7 @@ class TestRunInstall:
         capsys: pytest.CaptureFixture[str],
     ):
         """Non-failure states print a check and never fail the install."""
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch("quarry.gpu_runtime.GpuRuntime.ensure", return_value=status),
@@ -1100,7 +1100,7 @@ class TestRunInstall:
         uninstalled -- is unexpected and may leave a broken runtime, so install
         must exit non-zero and print an error rather than a benign "Skipped".
         """
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with (
             patch(
@@ -1118,7 +1118,7 @@ class TestRunInstall:
         assert "Skipped: OSError" not in captured.out
 
     def test_model_download_failure_returns_one(self, tmp_path: Path, monkeypatch: MP):
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         with patch(
             "quarry.embeddings.OnnxEmbeddingBackend.download_model_files",
@@ -1141,7 +1141,7 @@ class TestRunInstall:
         """
         import sys
 
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         # Force `from quarry.service import install` to raise ImportError: a None
         # entry in sys.modules makes the import machinery raise on lookup.
@@ -1432,7 +1432,7 @@ class TestImportIsolation:
     def test_check_environment_completes_with_the_embedding_and_database_imports_broken(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         self._break(monkeypatch, "huggingface_hub", "quarry.db.facade")
 
         code = check_environment()
@@ -1491,7 +1491,7 @@ class TestConfigureClaudeDesktopRobustness:
             return "registered"
 
         real_configure = ClaudeDesktopMcp.configure
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         _mock_install_deps(monkeypatch)
         monkeypatch.setattr(ClaudeDesktopMcp, "configure", real_configure)
         monkeypatch.setattr("quarry.service.install", register)
@@ -1527,7 +1527,7 @@ class TestDoctorNeverCrashes:
     def test_core_imports_survives_an_oserror_and_every_check_still_prints(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         monkeypatch.setattr(
             builtins, "__import__", _importer_that_raises("lancedb", OSError("dlopen"))
         )
@@ -1759,7 +1759,7 @@ class TestEveryCheckRuns:
     def test_a_check_that_raises_is_a_failed_result_and_the_rest_still_run(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
 
         def boom() -> CheckResult:
             msg = "daemon probe exploded"
@@ -1777,7 +1777,7 @@ class TestEveryCheckRuns:
     def test_invalid_settings_fail_one_check_and_the_independent_ones_run(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         with monkeypatch.context() as bad:
             bad.setenv("INGEST_DRAIN_TIMEOUT_S", "not-a-number")
             code = check_environment()

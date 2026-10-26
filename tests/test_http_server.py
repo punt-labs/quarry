@@ -3498,6 +3498,19 @@ class TestRegistrations:
         assert data["status"] == "accepted"
         assert data["task_id"].startswith("register-")
 
+    @pytest.mark.parametrize("home", ["", "relative/home"])
+    def test_post_with_a_tilde_and_an_unusable_home_is_a_clean_400(
+        self, home_client: TestClient, monkeypatch: pytest.MonkeyPatch, home: str
+    ) -> None:
+        monkeypatch.setenv("HOME", home)
+
+        resp = home_client.post(
+            "/v1/registrations", json={"directory": "~/proj", "collection": "c"}
+        )
+
+        assert resp.status_code == 400
+        assert "home directory" in resp.json()["error"]
+
     def test_post_rejects_missing_directory(self, client: TestClient) -> None:
         resp = client.post("/v1/registrations", json={"collection": "c"})
         assert resp.status_code == 400

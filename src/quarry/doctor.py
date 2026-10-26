@@ -22,6 +22,7 @@ from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
 from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
 from quarry.gpu_runtime import GpuRuntime
+from quarry.home_paths import QuarryHome
 from quarry.install_directories import InstallDirectories
 from quarry.opencv_headless import HeadlessOpenCv
 from quarry.results import CheckResult
@@ -93,6 +94,8 @@ def _check_embedding_model() -> CheckResult:
             passed=False,
             message=CheckFailure.import_message("huggingface_hub", exc),
         )
+    if not (os.environ.get("HF_HOME") or os.environ.get("HF_HUB_CACHE")):
+        QuarryHome.home()  # the default model cache lives under it
     try:
         model_cached = try_to_load_from_cache(
             ONNX_MODEL_REPO,
@@ -416,22 +419,16 @@ def _run_checks() -> list[CheckResult]:
     entries = [
         CheckEntry("Home directory", CheckRunner.home, required=True),
         CheckEntry("Python", _check_python_version, required=True),
-        CheckEntry(
-            "Data directory", InstallDirectories.check, required=True, needs_home=True
-        ),
-        CheckEntry(
-            "Embedding model", _check_embedding_model, required=True, needs_home=True
-        ),
+        CheckEntry("Data directory", InstallDirectories.check, required=True),
+        CheckEntry("Embedding model", _check_embedding_model, required=True),
         CheckEntry("ONNX provider", InferenceDiagnostics.onnx_provider),
         CheckEntry("Core imports", _check_imports, required=True),
-        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().check(), needs_home=True),
-        CheckEntry(
-            "Claude Desktop MCP", lambda: ClaudeDesktopMcp().check(), needs_home=True
-        ),
-        CheckEntry("Daemon", DaemonDiagnostics.reachability, needs_home=True),
-        CheckEntry("Serve token", DaemonDiagnostics.serve_token, needs_home=True),
-        CheckEntry("Fd headroom", DaemonDiagnostics.fd_headroom, needs_home=True),
-        CheckEntry("Stop timeout", DaemonDiagnostics.stop_timeout, needs_home=True),
+        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().check()),
+        CheckEntry("Claude Desktop MCP", lambda: ClaudeDesktopMcp().check()),
+        CheckEntry("Daemon", DaemonDiagnostics.reachability),
+        CheckEntry("Serve token", DaemonDiagnostics.serve_token),
+        CheckEntry("Fd headroom", DaemonDiagnostics.fd_headroom),
+        CheckEntry("Stop timeout", DaemonDiagnostics.stop_timeout),
         *SettingsChecks.entries(_check_fts_health),
     ]
     with _quiet_logging():

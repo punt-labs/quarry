@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import ssl
 import stat
 from functools import partial
@@ -34,6 +35,8 @@ from quarry.fd_headroom import FdHeadroom
 from quarry.home_paths import QuarryHome
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
+
+logger = logging.getLogger(__name__)
 
 # The literal loopback the daemon binds and login pins (never the ambiguous name
 # ``localhost``); doctor probes exactly what the client connects to.
@@ -211,6 +214,7 @@ class DaemonDiagnostics:
         a refused/broken connection, a non-200, or a non-object body, so callers
         render one degraded state.
         """
+        ca = QuarryHome.daemon_ca()  # before anything is built: no home raises here
         pinned = cls._pinned_context()
         https = http.client.HTTPSConnection(
             _HEALTH_HOST,
@@ -218,14 +222,13 @@ class DaemonDiagnostics:
             context=pinned or cls._unverified_context(),
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
-        ca = QuarryHome.daemon_ca().name
         try:
-            return cls._read_health(https)
+            return cls._read_health(https, tls=True)
         except ssl.SSLCertVerificationError as exc:
             reason = exc.verify_message or type(exc).__name__
             msg = f"the daemon's certificate fails verification against {ca} ({reason})"
             raise DaemonCaError(msg) from exc
-        except (ssl.SSLError, ConnectionResetError) as exc:
+        except (ssl.SSLError, ConnectionError) as exc:
             if pinned is not None:
                 tls_reason = exc.reason if isinstance(exc, ssl.SSLError) else None
                 reason = tls_reason or type(exc).__name__
@@ -234,15 +237,20 @@ class DaemonDiagnostics:
                     f"({reason})"
                 )
                 raise DaemonCaError(msg) from exc
-            if isinstance(exc, ConnectionResetError):
-                return None
+            logger.info(
+                "doctor: the TLS handshake failed with no CA pinned (%s); retrying "
+                "over plain HTTP",
+                type(exc).__name__,
+            )
             http_conn = http.client.HTTPConnection(
                 _HEALTH_HOST, port, timeout=_PROBE_TIMEOUT_SECONDS
             )
             return cls._read_health(http_conn)
 
     @classmethod
-    def _read_health(cls, conn: http.client.HTTPConnection) -> dict[str, object] | None:
+    def _read_health(
+        cls, conn: http.client.HTTPConnection, *, tls: bool = False
+    ) -> dict[str, object] | None:
         """GET ``/health`` on *conn*; return the parsed JSON object or None.
 
         Fail soft on a refused/broken connection (``None``), but let an
@@ -255,7 +263,9 @@ class DaemonDiagnostics:
                 return None
             body = response.read()
         except (OSError, http.client.HTTPException) as exc:
-            if isinstance(exc, ssl.SSLError) or cls._reset_in_handshake(conn, exc):
+            if isinstance(exc, ssl.SSLError) or (
+                tls and cls._dropped_before_tls(conn, exc)
+            ):
                 raise  # a TLS handshake failure: the caller decides what it means
             return None
         finally:
@@ -263,11 +273,16 @@ class DaemonDiagnostics:
         return cls._parse_object(body)
 
     @staticmethod
-    def _reset_in_handshake(conn: http.client.HTTPConnection, exc: Exception) -> bool:
-        """Return whether *exc* reset an HTTPS connection before TLS was up."""
+    def _dropped_before_tls(conn: http.client.HTTPConnection, exc: Exception) -> bool:
+        """Return whether *exc* dropped an HTTPS connection before TLS was up.
+
+        A reset, an abort or a broken pipe, which may arrive as the connection is
+        made (then there is no socket yet) or in the handshake; a refused
+        connection never reached the daemon, so it is not one of these.
+        """
         return (
-            isinstance(exc, ConnectionResetError)
-            and isinstance(conn, http.client.HTTPSConnection)
+            isinstance(exc, ConnectionError)
+            and not isinstance(exc, ConnectionRefusedError)
             and not isinstance(conn.sock, ssl.SSLSocket)
         )
 
@@ -287,10 +302,10 @@ class DaemonDiagnostics:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.load_verify_locations(str(ca))
         except ssl.SSLError as exc:
-            msg = f"{ca.name} is not a usable certificate ({exc.reason})"
+            msg = f"{ca} is not a usable certificate ({exc.reason})"
             raise DaemonCaError(msg) from exc
         except OSError as exc:
-            msg = f"{ca.name} cannot be read ({FailureReason.os_name(exc)})"
+            msg = f"{ca} cannot be read ({FailureReason.os_name(exc)})"
             raise DaemonCaError(msg) from exc
         return ctx
 

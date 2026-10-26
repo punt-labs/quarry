@@ -145,7 +145,7 @@ class TestInstallAlwaysCompletes:
 
         assert code == 1
         out = capsys.readouterr().out
-        assert "Failed to create the data directory: HomeUnresolvedError" in out
+        assert "Failed to locate the data directory: HomeUnresolvedError" in out
 
     def test_the_fp16_step_says_why_it_was_skipped(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
@@ -764,7 +764,7 @@ def test_install_runs_its_real_steps_without_a_home(
     if with_roots:
         assert (tmp_path / "data" / "default" / "lancedb").is_dir()
     else:
-        assert "Failed to create the data directory" in done.stdout
+        assert "Failed to locate the data directory" in done.stdout
 
 
 def test_a_command_prints_one_clean_line_when_only_the_roots_are_set(
@@ -889,6 +889,39 @@ def test_a_missing_home_is_exactly_one_doctor_issue() -> None:
     assert "1 issue(s) found" in done.stdout, done.stdout
     assert len(failing) == 1, failing
     assert "Home directory" in failing[0]
+    skipped = [
+        line for line in done.stdout.splitlines() if "skipped (needs the" in line
+    ]
+    assert any("Daemon" in line for line in skipped), done.stdout
+    assert all("○" in line for line in skipped)
+
+
+def test_a_broken_root_is_reported_even_with_no_home(tmp_path: Path) -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS["quarry doctor"],
+        env_extra={
+            "QUARRY_ROOT": "/nonexistent/qroot",
+            "QUARRY_LOG_DIR": str(tmp_path / "logs"),
+            "HF_HOME": "/nonexistent/hf",
+        },
+    )
+
+    failing = [line for line in done.stdout.splitlines() if "✗" in line]
+    assert "3 issue(s) found" in done.stdout, done.stdout
+    assert [
+        name
+        for name in ("Home directory", "Data directory", "Embedding model")
+        if any(name in line for line in failing)
+    ] == ["Home directory", "Data directory", "Embedding model"]
+
+
+def test_memory_identity_is_skipped_not_crashed_when_only_the_roots_are_set(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"], roots=tmp_path)
+
+    identity = [line for line in done.stdout.splitlines() if "Memory identity" in line]
+    assert all("could not run" not in line for line in identity), identity
 
 
 def test_a_malformed_setting_is_reported_beside_the_missing_home(
@@ -901,6 +934,16 @@ def test_a_malformed_setting_is_reported_beside_the_missing_home(
     )
 
     failing = [line for line in done.stdout.splitlines() if "✗" in line]
-    assert "2 issue(s) found" in done.stdout, done.stdout
-    assert any("Home directory" in line for line in failing)
+    assert any("Home directory" in line for line in failing), done.stdout
+    assert any("invalid settings (ingest_drain_timeout_s" in line for line in failing)
+
+
+def test_a_malformed_setting_is_reported_with_no_roots_either() -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS["quarry doctor"],
+        env_extra={"INGEST_DRAIN_TIMEOUT_S": "not-a-number"},
+    )
+
+    failing = [line for line in done.stdout.splitlines() if "✗" in line]
+    assert any("Home directory" in line for line in failing), done.stdout
     assert any("invalid settings (ingest_drain_timeout_s" in line for line in failing)

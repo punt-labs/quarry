@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
+from pydantic import ValidationError
+
 from quarry.config import Settings
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_failure import CheckFailure
@@ -22,6 +24,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MAX_CAUSES = 8  # a bound on how far to follow a chain of causes
+_PLACEHOLDER_ROOT = Path("/quarry-root-for-validation-only")
+
 
 @final
 @dataclass(frozen=True, slots=True)
@@ -31,16 +36,12 @@ class CheckEntry:
     ``required`` is what a check that *crashes* counts as: the same as the
     result it would have returned, so a crash never downgrades a required check.
     ``call`` returns ``None`` for a diagnostic that has nothing to say.
-    ``needs_home`` marks a check that reads something under the home directory:
-    with no home it is not run, because the Home check already reports that one
-    fault and a second line for the same cause would count it twice.
     """
 
     name: str
     # None: the diagnostic has nothing to report
     call: Callable[[], CheckResult | None]
     required: bool = False
-    needs_home: bool = False
 
 
 @final
@@ -63,9 +64,9 @@ class CheckRunner:
             )
         return CheckResult(name="Home directory", passed=True, message="resolved")
 
-    @staticmethod
+    @classmethod
     # None: the entry's diagnostic had nothing to report.
-    def attempt(entry: CheckEntry) -> CheckResult | None:
+    def attempt(cls, entry: CheckEntry) -> CheckResult | None:
         """Run one entry; whatever it raises becomes a failed result naming it.
 
         The report must always complete, so no single check, whatever it hits,
@@ -79,6 +80,13 @@ class CheckRunner:
             logger.info(
                 "doctor: check %s failed", entry.name, exc_info=RedactedFailure.of(exc)
             )
+            if cls.is_missing_home(exc):
+                return CheckResult(
+                    name=entry.name,
+                    passed=False,
+                    message="skipped (needs the home directory)",
+                    required=False,  # the Home check is the one issue for this cause
+                )
             return CheckResult(
                 name=entry.name,
                 passed=False,
@@ -86,13 +94,38 @@ class CheckRunner:
                 required=entry.required,
             )
 
+    @staticmethod
+    def is_missing_home(failure: BaseException) -> bool:
+        """Return whether *failure* is, narrowly, the home directory not resolving.
+
+        It is a :class:`HomeUnresolvedError`, or a pydantic ``ValidationError``
+        every one of whose errors is one, found by following explicit ``from``
+        causes only (never the implicit context, which is whatever happened to be
+        in flight), each exception once and no more than a handful deep.
+        """
+        seen: set[int] = set()
+        link: BaseException | None = failure
+        while link is not None and id(link) not in seen and len(seen) < _MAX_CAUSES:
+            seen.add(id(link))
+            if isinstance(link, HomeUnresolvedError):
+                return True
+            if isinstance(link, ValidationError) and CheckRunner._all_home(link):
+                return True
+            link = link.__cause__
+        return False
+
+    @staticmethod
+    def _all_home(failure: ValidationError) -> bool:
+        errors = failure.errors()
+        return bool(errors) and all(
+            isinstance(error.get("ctx", {}).get("error"), HomeUnresolvedError)
+            for error in errors
+        )
+
     @classmethod
     def run(cls, entries: Iterable[CheckEntry]) -> list[CheckResult]:
         """Run every entry in order; return the results that have something to say."""
-        has_home = cls.home().passed
-        results = [
-            cls.attempt(entry) for entry in entries if has_home or not entry.needs_home
-        ]
+        results = [cls.attempt(entry) for entry in entries]
         return [result for result in results if result is not None]
 
 
@@ -115,13 +148,27 @@ class SettingsChecks:
             raise RuntimeError(msg) from exc
 
     @staticmethod
-    def is_the_home(failure: BaseException | None) -> bool:  # None: end of the chain
-        """Return whether *failure* is, or was raised from, an unresolvable home."""
-        while failure is not None:
-            if isinstance(failure, HomeUnresolvedError):
-                return True
-            failure = failure.__cause__ or failure.__context__
-        return False
+    def unreadable(failure: Exception) -> list[CheckEntry]:
+        """Return the failed Settings entry for *failure*, if more than the home.
+
+        A missing home is the Home check's issue, but it also stops the rest of
+        the settings from being read, so they are validated once more with a
+        placeholder root (for validation only): a malformed setting is still
+        reported.
+        """
+        if CheckRunner.is_missing_home(failure):
+            try:
+                Settings(quarry_root=_PLACEHOLDER_ROOT)
+            except ValidationError as again:
+                failure = again
+            else:
+                return []
+        failed = CheckResult(
+            name="Settings",
+            passed=False,
+            message=f"invalid settings ({CheckFailure.settings_reason(failure)})",
+        )
+        return [CheckEntry("Settings", lambda: failed, required=True)]
 
     @staticmethod
     def entries(fts: Callable[[Path], CheckResult]) -> list[CheckEntry]:
@@ -132,14 +179,7 @@ class SettingsChecks:
             logger.info(
                 "doctor: settings are invalid", exc_info=RedactedFailure.of(exc)
             )
-            if SettingsChecks.is_the_home(exc):
-                return []  # the Home check reports it; the settings are not "invalid"
-            failed = CheckResult(
-                name="Settings",
-                passed=False,
-                message=f"invalid settings ({CheckFailure.settings_reason(exc)})",
-            )
-            return [CheckEntry("Settings", lambda: failed, required=True)]
+            return SettingsChecks.unreadable(exc)
         db, registry = settings.lancedb_path, settings.registry_path
         return [
             CheckEntry("FTS index", lambda: fts(db)),

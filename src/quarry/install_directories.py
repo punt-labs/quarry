@@ -45,7 +45,8 @@ class InstallDirectories:
         """Create the data and logs directories; return whether both now exist.
 
         Each is located and made on its own, so one that cannot be does not hide
-        the other, and each failure names the directory it is about.
+        the other. A failure to locate a directory names which one; a failure to
+        create it names its path too.
         """
         results = [
             cls._make("data", cls.data_dir),
@@ -55,13 +56,21 @@ class InstallDirectories:
 
     @staticmethod
     def _make(label: str, locate: Callable[[], Path]) -> bool:
-        """Locate and create one directory; say how it went."""
+        """Locate and create one directory; say how each step went."""
         try:
             directory = locate()
-            directory.mkdir(parents=True, exist_ok=True)
         except (OSError, RuntimeError, ValueError) as exc:
-            why = CheckFailure.detail(exc)
-            print(f"  ✗ Failed to create the {label} directory: {why}")  # noqa: T201
-            return False
-        print(f"  ✓ {directory}")  # noqa: T201
-        return True
+            failure = (
+                f"Failed to locate the {label} directory: {CheckFailure.detail(exc)}"
+            )
+        else:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                why = CheckFailure.detail(exc)
+                failure = f"Failed to create the {label} directory {directory}: {why}"
+            else:
+                print(f"  ✓ {directory}")  # noqa: T201
+                return True
+        print(f"  ✗ {failure}")  # noqa: T201
+        return False

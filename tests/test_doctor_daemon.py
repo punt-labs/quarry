@@ -8,6 +8,7 @@ and the run dir are mocked.
 
 from __future__ import annotations
 
+import logging
 import resource
 import socket
 import ssl
@@ -16,7 +17,7 @@ import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
+from pathlib import Path, PosixPath
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -104,6 +105,14 @@ class TestReachability:
         assert result.passed is True
 
 
+class _DeniedPath(PosixPath):
+    """A path whose existence cannot even be asked about."""
+
+    def exists(self, *, follow_symlinks: bool = True) -> bool:
+        del follow_symlinks
+        raise PermissionError(13, "Permission denied")
+
+
 class TestPinnedCa:
     """An installed CA that cannot be used is a failed check, never CERT_NONE."""
 
@@ -115,7 +124,7 @@ class TestPinnedCa:
             result = DaemonDiagnostics.reachability()
 
         assert result.passed is False
-        assert "ca.crt" in result.message
+        assert str(tmp_path / "ca.crt") in result.message
         assert "not reachable" not in result.message
 
     def test_an_unreadable_ca_fails_reachability_with_the_errno(
@@ -159,9 +168,7 @@ class TestPinnedCa:
         self, tmp_path: Path
     ) -> None:
         (tmp_path / "serve.port").write_text("8420")
-        ca = MagicMock()
-        ca.name = "ca.crt"
-        ca.exists.side_effect = PermissionError(13, "Permission denied")
+        ca = _DeniedPath(tmp_path / "ca.crt")
         with (
             _run_dir_at(tmp_path),
             patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
@@ -169,7 +176,7 @@ class TestPinnedCa:
             result = DaemonDiagnostics.reachability()
 
         assert result.passed is False
-        assert "ca.crt cannot be read (EACCES)" in result.message
+        assert f"{ca} cannot be read (EACCES)" in result.message
 
 
 class TestServeToken:
@@ -479,7 +486,7 @@ class TestInstalledCaIsNeverBypassed:
             result = DaemonDiagnostics.reachability()
 
         assert result.passed is False
-        assert "fails verification against ca.crt" in result.message
+        assert f"fails verification against {tmp_path / 'ca.crt'}" in result.message
 
     def test_a_plaintext_listener_answering_ready_fails_the_check(
         self, tmp_path: Path
@@ -494,7 +501,10 @@ class TestInstalledCaIsNeverBypassed:
             result = DaemonDiagnostics.reachability()
 
         assert result.passed is False
-        assert "does not complete TLS although ca.crt is installed" in result.message
+        assert (
+            f"does not complete TLS although {tmp_path / 'ca.crt'} is installed"
+            in result.message
+        )
 
     def test_a_certificate_signed_by_the_ca_passes(self, tmp_path: Path) -> None:
         installed = generate_ca()
@@ -524,15 +534,21 @@ class TestInstalledCaIsNeverBypassed:
 
 
 @contextmanager
-def _resetting_listener() -> Generator[int]:
-    """Listen on the loopback and reset every connection the moment it is made."""
+def _resetting_listener(*, resets: int | None = None) -> Generator[int]:
+    """Listen on the loopback and reset a connection the moment it is made.
+
+    With *resets*, only that many are reset; later ones are answered as a plain
+    HTTP daemon that is ready.
+    """
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen()
     listener.settimeout(0.05)
     done = threading.Event()
+    seen = 0
 
     def reset() -> None:
+        nonlocal seen
         while not done.is_set():
             try:
                 conn, _ = listener.accept()
@@ -540,6 +556,16 @@ def _resetting_listener() -> Generator[int]:
                 continue
             except OSError:
                 return
+            seen += 1
+            if resets is not None and seen > resets:
+                conn.recv(4096)
+                conn.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\n"
+                    b"Connection: close\r\n\r\n"
+                    b'{"state":"ready"}'
+                )
+                conn.close()
+                continue
             conn.setsockopt(
                 socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
             )
@@ -570,7 +596,10 @@ class TestAResetHandshake:
             result = DaemonDiagnostics.reachability()
 
         assert result.passed is False
-        assert "does not complete TLS although ca.crt is installed" in result.message
+        assert (
+            f"does not complete TLS although {tmp_path / 'ca.crt'} is installed"
+            in result.message
+        )
 
     def test_without_a_ca_it_is_just_not_ready(self, tmp_path: Path) -> None:
         with (
@@ -586,3 +615,21 @@ class TestAResetHandshake:
 
         assert result.passed is False
         assert "not ready" in result.message
+
+    def test_without_a_ca_a_reset_handshake_retries_over_plain_http(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with (
+            _resetting_listener(resets=1) as port,
+            _run_dir_at(tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.daemon_ca",
+                return_value=tmp_path / "ca.crt",
+            ),
+            caplog.at_level(logging.INFO, logger="quarry.doctor_daemon"),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability()
+
+        assert result.passed is True
+        assert "retrying over plain HTTP" in caplog.text

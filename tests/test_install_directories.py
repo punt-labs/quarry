@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from quarry.db_pointer import SELECTION
 from quarry.install_directories import InstallDirectories
-from tests.home_only import home_only
+from tests.home_only import HomeOnly
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -28,7 +28,7 @@ class TestCreate:
         assert InstallDirectories.create() is False
 
         out = capsys.readouterr().out
-        assert "Failed to create the logs directory:" in out
+        assert f"Failed to create the logs directory {blocker}:" in out
         assert f"✓ {tmp_path / 'data' / 'default' / 'lancedb'}" in out
 
     def test_both_directories_are_listed_when_both_are_made(
@@ -52,7 +52,10 @@ class TestCreate:
         assert InstallDirectories.create() is False
 
         out = capsys.readouterr().out
-        assert "Failed to create the data directory:" in out
+        assert (
+            f"Failed to create the data directory {blocker / 'default' / 'lancedb'}:"
+            in out
+        )
         assert f"✓ {tmp_path / 'logs'}" in out
 
 
@@ -74,9 +77,7 @@ class TestCheck:
     def test_the_check_follows_the_home_when_the_root_is_unset(
         self, tmp_path: Path, monkeypatch: MP
     ):
-        monkeypatch.delenv("QUARRY_ROOT", raising=False)
-        monkeypatch.delenv("LANCEDB_PATH", raising=False)
-        home_only(monkeypatch, tmp_path)
+        HomeOnly.apply(monkeypatch, tmp_path)
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
 
