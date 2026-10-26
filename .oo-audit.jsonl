@@ -1533,3 +1533,4 @@
 {"ts":"2026-10-25T20:29:59Z","commit":"86ee49d","source":null,"files_scored":332,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"PR #552 review: refuse a symlinked .claude/ before locking and report an unreadable .claude/ instead of aborting disable (+14 lines; module new in this PR)","deltas":{"src/quarry/claude_permissions.py":{"module_size":[132.0,146.0]}}}
 {"ts":"2026-10-25T20:30:00Z","commit":"86ee49d","source":null,"files_scored":332,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
 {"ts":"2026-10-25T20:34:01Z","commit":"86ee49d","source":null,"files_scored":332,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-10-25T21:50:08Z","commit":"fd43f57","source":null,"files_scored":332,"files_improved":1,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{"src/quarry/_stdlib.py":{"module_size":[308.0,306.0]}}}
