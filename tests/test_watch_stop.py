@@ -123,6 +123,42 @@ async def test_a_cancel_during_the_safety_retire_still_cancels_timers_and_closes
     await safety
 
 
+async def test_a_step_failing_during_a_cancel_is_logged_and_the_cancel_still_wins(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+    release = asyncio.Event()
+
+    async def slow_to_retire() -> None:
+        while not release.is_set():
+            try:
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                continue
+
+    class _Broken:
+        def cancel_pending(self) -> None:
+            msg = "retries stuck"
+            raise RuntimeError(msg)
+
+    safety = asyncio.ensure_future(slow_to_retire())
+    stopping = asyncio.create_task(
+        WatchStop(
+            _roster(events), None, safety, cast("WatchSubmitter", _Broken()), None
+        ).run()
+    )
+    await asyncio.sleep(0.1)  # in _retire_safety
+    with caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"):
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+
+    assert caplog.text.count("cancelling the submitter's retries failed") == 1
+    assert events == ["unwatch", "close"]
+    release.set()
+    await safety
+
+
 async def test_every_cleanup_runs_even_when_an_earlier_one_fails(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

@@ -566,7 +566,7 @@ def test_cancel_workers_retains_aborted_tasks_until_done() -> None:
 def test_aborted_queued_job_without_durable_copy_is_spooled(tmp_path: Path) -> None:
     """A drain-aborted remember/ingest is spooled, never silently dropped.
 
-    quarry-atsz: job A holds the worker (blocked) so B stays queued; the drain
+    Job A holds the worker (blocked) so B stays queued; the drain
     times out and aborts. B has no durable client copy, so it must be recorded
     in the server-side spool with its recoverable content, and its task records
     the spooled reason rather than a silent 'failed'.
@@ -598,7 +598,7 @@ def test_aborted_queued_job_without_durable_copy_is_spooled(tmp_path: Path) -> N
 def test_aborted_in_flight_job_without_durable_copy_is_spooled(tmp_path: Path) -> None:
     """The single in-flight job (not in the FIFO) is spooled on a hard abort.
 
-    quarry-atsz: the already-dequeued job is tracked as ``_current``; a hard
+    The already-dequeued job is tracked as ``_current``; a hard
     drain-timeout abort must spool it too, else the one in-flight remember/ingest
     is silently lost even though the queued ones are recovered.
     """
@@ -706,7 +706,7 @@ def test_same_route_key_serializes_under_an_interleaved_burst(
     """Four rapid submits on one (database, collection) run one-at-a-time, FIFO.
 
     The single-writer-per-table invariant, re-asserted through the composite
-    RouteKey the watch loop uses (DES-045): even with the embed gate lifted, one
+    RouteKey the watch loop uses: even with the embed gate lifted, one
     ``(database, collection)`` never has two in-flight runs.
     """
     _lift_ceiling(monkeypatch, 4)

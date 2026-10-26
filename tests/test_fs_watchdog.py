@@ -4,10 +4,9 @@ Everything else drives a synthetic source; this proves the one module that
 imports watchdog actually delivers create/modify/delete as :class:`FsEvent`s.
 The stat-walk ``PollingObserver`` is used deterministically (a short poll
 interval) so the test is not subject to native-watcher timing flakiness.
-Directory-level ignore pruning is Linux-inotify-specific (DES-045e) and is
+Directory-level ignore pruning is Linux-inotify-specific and is
 covered in ``tests/test_inotify_prune.py``; the ``PollingObserver`` and
-non-Linux paths here rely on the post-debounce submitter filter, same as
-before DES-045d.
+non-Linux paths here rely on the post-debounce submitter filter.
 """
 
 from __future__ import annotations
@@ -127,7 +126,7 @@ def test_schedule_failure_returns_none_and_spares_other_trees(
 ) -> None:
     """A schedule() failure for one root returns None and does not affect another.
 
-    One recursive watch per root (DES-045e) means a schedule failure is a
+    One recursive watch per root means a schedule failure is a
     single all-or-nothing call — there is no partial per-directory state to
     release — but a failure on one registration must still leave a wholly
     separate registration on the SAME observer unaffected.
@@ -244,7 +243,7 @@ def test_build_observer_polling_overrides_pruned_choice() -> None:
 
 def test_build_observer_picks_pruned_inotify_observer_when_importable() -> None:
     """A non-polling build picks the pruned inotify observer when it imported
-    successfully at module scope (DES-045e) -- this suite runs on Linux, so
+    successfully at module scope -- this suite runs on Linux, so
     the module-level import already succeeded; no per-test patching needed.
     """
     from quarry.daemon.inotify_prune_chain import PrunedInotifyObserver

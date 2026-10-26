@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib
+import io
 import json
+import logging
 from pathlib import Path
 from typing import Self
 from unittest.mock import MagicMock, patch
@@ -15,23 +18,26 @@ from quarry import (
     doctor_sync,
 )
 from quarry.doctor import (
-    _check_claude_code_mcp,
-    _check_claude_desktop_mcp,
+    _QUIETED_LOGGERS,
     _check_data_directory,
     _check_embedding_model,
     _check_fts_health,
     _check_imports,
     _check_python_version,
-    _configure_claude_code,
-    _configure_claude_desktop,
     _human_size,
-    _mcp_command,
     _quiet_logging,
     check_environment,
     run_install,
 )
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
+from quarry.doctor_mcp import (
+    check_claude_code_mcp,
+    check_claude_desktop_mcp,
+    configure_claude_code,
+    configure_claude_desktop,
+    mcp_command,
+)
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
 from quarry.results import CheckResult
@@ -209,8 +215,8 @@ class TestCheckClaudeCodeMcp:
                 ],
             },
         )
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert result.passed is True
         assert "configured" in result.message
 
@@ -221,15 +227,15 @@ class TestCheckClaudeCodeMcp:
                 "other@example": [{"scope": "user", "installPath": "/fake"}],
             },
         )
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert result.passed is False
         assert "not configured" in result.message
 
     def test_no_plugin_registry(self, tmp_path: Path, monkeypatch: MP):
         missing = tmp_path / "nonexistent" / "installed_plugins.json"
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", missing)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", missing)
+        result = check_claude_code_mcp()
         assert result.passed is False
         assert result.required is False
         assert "no plugin registry" in result.message
@@ -238,8 +244,8 @@ class TestCheckClaudeCodeMcp:
         plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         plugins_path.parent.mkdir(parents=True, exist_ok=True)
         plugins_path.write_text("{invalid json", encoding="utf-8")
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert result.passed is False
         assert "config error" in result.message
 
@@ -253,16 +259,16 @@ class TestCheckClaudeCodeMcp:
                 ],
             },
         )
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert result.passed is False
         assert "plugin files missing" in result.message
 
     def test_empty_entries_list(self, tmp_path: Path, monkeypatch: MP):
         """Registry has the key but an empty list of entries."""
         plugins_path = self._write_plugins(tmp_path, {"quarry@punt-labs": []})
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert result.passed is False
         assert "not configured" in result.message
 
@@ -273,8 +279,8 @@ class TestCheckClaudeCodeMcp:
         plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         plugins_path.parent.mkdir(parents=True, exist_ok=True)
         plugins_path.write_text("[]", encoding="utf-8")
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert not result.passed
         assert result.required is False
         assert "config error" in result.message
@@ -285,8 +291,8 @@ class TestCheckClaudeCodeMcp:
             tmp_path,
             {"quarry@punt-labs": "not-a-list"},
         )
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert not result.passed
         assert result.required is False
         assert "config error" in result.message
@@ -297,8 +303,8 @@ class TestCheckClaudeCodeMcp:
             tmp_path,
             {"quarry@punt-labs": [{"scope": "user", "installPath": ""}]},
         )
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert not result.passed
         assert result.required is False
         assert "empty installPath" in result.message
@@ -311,8 +317,8 @@ class TestCheckClaudeCodeMcp:
             tmp_path,
             {"quarry@punt-labs": [{"scope": "user"}]},
         )
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert not result.passed
         assert result.required is False
         assert "empty installPath" in result.message
@@ -332,8 +338,8 @@ class TestCheckClaudeCodeMcp:
                 ],
             },
         )
-        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
-        result = _check_claude_code_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = check_claude_code_mcp()
         assert result.passed is False
         assert "manifest missing" in result.message
 
@@ -341,10 +347,10 @@ class TestCheckClaudeCodeMcp:
 class TestCheckClaudeDesktopMcp:
     def test_desktop_not_installed(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(
-            "quarry.doctor._DESKTOP_CONFIG_PATH",
+            "quarry.doctor_mcp._DESKTOP_CONFIG_PATH",
             tmp_path / "nonexistent" / "config.json",
         )
-        result = _check_claude_desktop_mcp()
+        result = check_claude_desktop_mcp()
         assert result.passed is False
         assert "not installed" in result.message
 
@@ -352,8 +358,8 @@ class TestCheckClaudeDesktopMcp:
         config_path = tmp_path / "claude_desktop_config.json"
         config = {"mcpServers": {"quarry": {"command": "uvx", "args": []}}}
         config_path.write_text(json.dumps(config))
-        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
-        result = _check_claude_desktop_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._DESKTOP_CONFIG_PATH", config_path)
+        result = check_claude_desktop_mcp()
         assert result.passed is True
         assert "configured" in result.message
 
@@ -361,15 +367,15 @@ class TestCheckClaudeDesktopMcp:
         config_path = tmp_path / "claude_desktop_config.json"
         config = {"mcpServers": {"other": {"command": "npx", "args": []}}}
         config_path.write_text(json.dumps(config))
-        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
-        result = _check_claude_desktop_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._DESKTOP_CONFIG_PATH", config_path)
+        result = check_claude_desktop_mcp()
         assert result.passed is False
         assert "not configured" in result.message
 
     def test_no_config_file(self, tmp_path: Path, monkeypatch: MP):
         config_path = tmp_path / "claude_desktop_config.json"
-        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
-        result = _check_claude_desktop_mcp()
+        monkeypatch.setattr("quarry.doctor_mcp._DESKTOP_CONFIG_PATH", config_path)
+        result = check_claude_desktop_mcp()
         assert result.passed is False
         assert "no config file" in result.message
 
@@ -394,31 +400,68 @@ class TestHumanSize:
 
 class TestQuietLogging:
     def test_suppresses_third_party_logging_and_restores_it(self):
-        import logging
-
-        third_party = logging.getLogger("rapidocr")
+        third_party = logging.getLogger("RapidOCR")
         before = third_party.level
         with _quiet_logging():
             assert third_party.level == logging.CRITICAL
         assert third_party.level == before
 
     def test_leaves_quarrys_own_errors_reaching_the_handlers(self, caplog):
-        import logging
-
         with caplog.at_level(logging.ERROR), _quiet_logging():
             logging.getLogger("quarry.doctor_stop_timeout").error("check failed")
-            logging.getLogger("rapidocr").error("noisy third party")
+            logging.getLogger("RapidOCR").error("noisy third party")
 
         assert "check failed" in caplog.text
         assert "noisy third party" not in caplog.text
 
     def test_does_not_touch_the_root_logger(self):
-        import logging
-
         root = logging.getLogger()
         before = root.level
         with _quiet_logging():
             assert root.level == before
+
+    @pytest.mark.parametrize(
+        ("module", "name"),
+        [
+            ("rapidocr.utils.log", "RapidOCR"),
+            ("huggingface_hub.file_download", "huggingface_hub"),
+            ("urllib3.connectionpool", "urllib3"),
+            ("httpx", "httpx"),
+            ("PIL.Image", "PIL"),
+        ],
+    )
+    def test_every_quieted_name_is_one_its_library_creates(self, module, name):
+        importlib.import_module(module)
+
+        created = set(logging.root.manager.loggerDict)
+
+        assert name in _QUIETED_LOGGERS
+        assert name in created or any(c.startswith(f"{name}.") for c in created)
+
+    def test_nothing_quieted_is_a_name_no_library_creates(self):
+        assert set(_QUIETED_LOGGERS) == {
+            "RapidOCR",
+            "huggingface_hub",
+            "urllib3",
+            "httpx",
+            "PIL",
+        }
+
+    def test_the_ocr_engines_own_logger_stays_silent_during_the_checks(self):
+        engine = importlib.import_module("rapidocr.utils.log").logger
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        engine.addHandler(handler)
+        try:
+            engine.info("heard")  # the control: the logger does speak
+            with _quiet_logging():
+                engine.info("init noise")
+                engine.error("init noise")
+        finally:
+            engine.removeHandler(handler)
+
+        assert "heard" in stream.getvalue()
+        assert "init noise" not in stream.getvalue()
 
 
 class TestNoExpensiveChecks:
@@ -487,12 +530,12 @@ class TestCheckEnvironment:
         )
         monkeypatch.setattr(
             doctor_mod,
-            "_check_claude_code_mcp",
+            "check_claude_code_mcp",
             lambda: _ok(name="Claude Code MCP", passed=True, message="mocked"),
         )
         monkeypatch.setattr(
             doctor_mod,
-            "_check_claude_desktop_mcp",
+            "check_claude_desktop_mcp",
             lambda: _ok(name="Claude Desktop MCP", passed=True, message="mocked"),
         )
         monkeypatch.setattr(
@@ -746,8 +789,8 @@ def _mock_install_deps(monkeypatch: MP) -> None:
     noop = lambda: CheckResult(  # noqa: E731
         name="stub", passed=True, message="mocked"
     )
-    monkeypatch.setattr(doctor_mod, "_configure_claude_code", noop)
-    monkeypatch.setattr(doctor_mod, "_configure_claude_desktop", noop)
+    monkeypatch.setattr(doctor_mod, "configure_claude_code", noop)
+    monkeypatch.setattr(doctor_mod, "configure_claude_desktop", noop)
     monkeypatch.setattr(doctor_mod, "check_environment", lambda **_kw: 0)
     monkeypatch.setattr("quarry.proxy.install", lambda: "mocked (skipped in test)")
     monkeypatch.setattr("quarry.service._systemd_install", lambda: None)
@@ -772,13 +815,13 @@ class TestMcpCommand:
 
     def test_direct_quarry_mcp(self) -> None:
         """No proxy, no sh -c wrapper: the command is ``quarry`` with ``["mcp"]``."""
-        command, args = _mcp_command()
+        command, args = mcp_command()
         assert command == "quarry"
         assert args == ["mcp"]
 
     def test_no_proxy_shim(self) -> None:
         """The command must not reference mcp-proxy, its TOML, or a shell shim."""
-        command, args = _mcp_command()
+        command, args = mcp_command()
         joined = command + " " + " ".join(args)
         assert "mcp-proxy" not in joined
         assert "quarry.toml" not in joined
@@ -787,16 +830,16 @@ class TestMcpCommand:
     def test_resolve_paths_uses_absolute_quarry(self, monkeypatch: MP) -> None:
         """When resolve_paths=True (Desktop), quarry resolves to an absolute path."""
         monkeypatch.setattr(
-            "quarry.doctor.shutil.which",
+            "quarry.doctor_mcp.shutil.which",
             lambda name: f"/usr/local/bin/{name}",
         )
-        command, args = _mcp_command(resolve_paths=True)
+        command, args = mcp_command(resolve_paths=True)
         assert command == "/usr/local/bin/quarry"
         assert args == ["mcp"]
 
     def test_default_uses_bare_name(self) -> None:
         """Default (resolve_paths=False) uses the bare ``quarry`` name."""
-        command, _args = _mcp_command()
+        command, _args = mcp_command()
         assert command == "quarry"
         assert not command.startswith("/")
 
@@ -839,22 +882,22 @@ class TestConfigureClaudeCode:
     @staticmethod
     def _install(monkeypatch: MP, results: list[tuple[int, str]]) -> _ScriptedClaude:
         monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
         )
         claude = _ScriptedClaude(results)
-        monkeypatch.setattr("quarry.doctor.subprocess.run", claude.run)
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", claude.run)
         return claude
 
     def test_claude_not_on_path(self, monkeypatch: MP):
-        monkeypatch.setattr("quarry.doctor.shutil.which", lambda _name: None)
-        result = _configure_claude_code()
+        monkeypatch.setattr("quarry.doctor_mcp.shutil.which", lambda _name: None)
+        result = configure_claude_code()
         assert result.passed is False
         assert "not found" in result.message
 
     def test_fresh_add_succeeds_without_remove(self, monkeypatch: MP):
         """A fresh slot: the add succeeds outright, no remove is ever issued."""
         claude = self._install(monkeypatch, [(0, "")])
-        result = _configure_claude_code()
+        result = configure_claude_code()
         assert result.passed is True
         assert "configured" in result.message
         assert ["remove", "quarry"] not in claude.verbs
@@ -866,7 +909,7 @@ class TestConfigureClaudeCode:
         entry is pinned to whatever cwd install happened to run from.
         """
         claude = self._install(monkeypatch, [(0, "")])
-        result = _configure_claude_code()
+        result = configure_claude_code()
         assert result.passed is True
         assert "scope: user" in result.message
         add_argv = claude.calls[-1]
@@ -880,7 +923,7 @@ class TestConfigureClaudeCode:
         remove, then the direct ``quarry mcp`` is re-added.
         """
         claude = self._install(monkeypatch, [(1, "already exists"), (0, ""), (0, "")])
-        result = _configure_claude_code()
+        result = configure_claude_code()
 
         assert result.passed is True
         assert claude.verbs == [
@@ -907,7 +950,7 @@ class TestConfigureClaudeCode:
         directly, not just point at ``claude mcp list``.
         """
         claude = self._install(monkeypatch, [(1, "already exists"), (1, "denied")])
-        result = _configure_claude_code()
+        result = configure_claude_code()
 
         assert result.passed is False
         assert ["remove", "quarry"] in claude.verbs
@@ -924,7 +967,7 @@ class TestConfigureClaudeCode:
         claude = self._install(
             monkeypatch, [(1, "already exists"), (0, ""), (1, "boom")]
         )
-        result = _configure_claude_code()
+        result = configure_claude_code()
 
         assert result.passed is False
         assert ["remove", "quarry"] in claude.verbs
@@ -938,7 +981,7 @@ class TestConfigureClaudeCode:
     def test_fresh_add_fails_leaves_no_remove(self, monkeypatch: MP):
         """A non-"already exists" add failure surfaces and never removes."""
         claude = self._install(monkeypatch, [(1, "permission denied")])
-        result = _configure_claude_code()
+        result = configure_claude_code()
         assert result.passed is False
         assert "permission denied" in result.message
         assert ["remove", "quarry"] not in claude.verbs
@@ -947,17 +990,17 @@ class TestConfigureClaudeCode:
 class TestConfigureClaudeDesktop:
     def test_desktop_not_installed(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(
-            "quarry.doctor._DESKTOP_CONFIG_PATH",
+            "quarry.doctor_mcp._DESKTOP_CONFIG_PATH",
             tmp_path / "nonexistent" / "config.json",
         )
-        result = _configure_claude_desktop()
+        result = configure_claude_desktop()
         assert result.passed is False
         assert "not installed" in result.message
 
     def test_creates_new_config(self, tmp_path: Path, monkeypatch: MP):
         config_path = tmp_path / "claude_desktop_config.json"
-        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
-        result = _configure_claude_desktop()
+        monkeypatch.setattr("quarry.doctor_mcp._DESKTOP_CONFIG_PATH", config_path)
+        result = configure_claude_desktop()
         assert result.passed is True
         config = json.loads(config_path.read_text())
         server = config["mcpServers"]["quarry"]
@@ -969,8 +1012,8 @@ class TestConfigureClaudeDesktop:
         config_path = tmp_path / "claude_desktop_config.json"
         existing = {"mcpServers": {"other": {"command": "npx", "args": ["other"]}}}
         config_path.write_text(json.dumps(existing))
-        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
-        result = _configure_claude_desktop()
+        monkeypatch.setattr("quarry.doctor_mcp._DESKTOP_CONFIG_PATH", config_path)
+        result = configure_claude_desktop()
         assert result.passed is True
         config = json.loads(config_path.read_text())
         assert "other" in config["mcpServers"]

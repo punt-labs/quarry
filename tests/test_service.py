@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import errno
-import logging
 import os
 import platform
 import plistlib
@@ -303,191 +301,6 @@ class TestWriteEnvFile:
         content = env_file.read_text()
         assert '"second"' in content
         assert '"first"' not in content
-
-    def test_fd_closed_and_tmp_removed_when_fdopen_raises(self, tmp_path: Path) -> None:
-        """If os.fdopen raises, the fd os.open returned is closed and tmp removed."""
-        env_file = tmp_path / "quarry.env"
-        opened: list[int] = []
-        closed: list[int] = []
-        real_open, real_close = os.open, os.close
-
-        def recording_open(path: str, flags: int, mode: int = 0o777) -> int:
-            fd = real_open(path, flags, mode)
-            if flags & os.O_EXCL:
-                opened.append(fd)
-            return fd
-
-        def recording_close(fd: int) -> None:
-            closed.append(fd)
-            real_close(fd)
-
-        with (
-            patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.env_file.os.open", recording_open),
-            patch("quarry.env_file.os.fdopen", side_effect=OSError("injected")),
-            patch("quarry.env_file.os.close", recording_close),
-            pytest.raises(OSError, match="injected"),
-        ):
-            _write_env_file("k1")
-
-        assert not any(tmp_path.glob("*.tmp"))
-        assert len(opened) == 1
-        assert opened[0] in closed  # that exact descriptor, not just some close
-
-    def test_a_leftover_temp_under_the_old_name_is_never_reused(
-        self, tmp_path: Path
-    ) -> None:
-        """The temp name is the writer's own each time, so a leftover is ignored."""
-        env_file = tmp_path / "quarry.env"
-        leftover = tmp_path / "quarry.env.tmp"
-        leftover.write_text("STALE=1\n")
-        with patch("quarry.service._ENV_FILE", env_file):
-            _write_env_file("k1")
-
-        assert "STALE" not in env_file.read_text()
-        assert leftover.read_text() == "STALE=1\n"  # untouched, not adopted
-
-    def test_two_installs_never_share_a_temp_name(self, tmp_path: Path) -> None:
-        env_file = tmp_path / "quarry.env"
-        names: list[str] = []
-        real_open = os.open
-
-        def recording(path: str, flags: int, mode: int = 0o777, **kw: int) -> int:
-            if flags & os.O_EXCL:
-                names.append(Path(path).name)
-            return real_open(path, flags, mode, **kw)
-
-        with (
-            patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.env_file.os.open", recording),
-        ):
-            _write_env_file("first")
-            _write_env_file("second")
-
-        assert len(set(names)) == 2
-        assert all(name.startswith("quarry.env.") for name in names)
-
-    def test_the_config_directory_is_created_owner_only(self, tmp_path: Path) -> None:
-        env_file = tmp_path / "config" / "quarry.env"
-        old = os.umask(0)
-        try:
-            with patch("quarry.service._ENV_FILE", env_file):
-                _write_env_file("k1")
-        finally:
-            os.umask(old)
-
-        assert stat.S_IMODE(env_file.parent.stat().st_mode) == 0o700
-
-    def test_a_failed_directory_sync_is_a_warning_not_a_failure(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        env_file = tmp_path / "quarry.env"
-        real_fsync = os.fsync
-
-        def fsync(fd: int) -> None:
-            if stat.S_ISDIR(os.fstat(fd).st_mode):
-                raise OSError(errno.EIO, "injected")
-            real_fsync(fd)
-
-        with (
-            patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.env_file.os.fsync", fsync),
-            caplog.at_level(logging.WARNING, logger="quarry.service"),
-        ):
-            _write_env_file("k1")  # does not raise
-
-        assert 'QUARRY_API_KEY="k1"' in env_file.read_text()  # the file is in place
-        [record] = caplog.records
-        assert "directory sync failed (EIO)" in record.getMessage()
-        assert "durability not guaranteed" in record.getMessage()
-
-    def test_the_temp_file_is_0600_from_creation_whatever_the_umask(
-        self, tmp_path: Path
-    ) -> None:
-        env_file = tmp_path / "quarry.env"
-        modes: list[int] = []
-        real_open = os.open
-
-        def recording(path: str, flags: int, mode: int = 0o777, **kw: int) -> int:
-            fd = real_open(path, flags, mode, **kw)
-            if flags & os.O_EXCL:
-                modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
-            return fd
-
-        old = os.umask(0)
-        try:
-            with (
-                patch("quarry.service._ENV_FILE", env_file),
-                patch("quarry.env_file.os.open", recording),
-            ):
-                _write_env_file("k1")
-        finally:
-            os.umask(old)
-
-        assert modes == [0o600]  # before a byte was written
-
-    def test_the_temp_is_created_exclusively_and_never_through_a_symlink(
-        self, tmp_path: Path
-    ) -> None:
-        env_file = tmp_path / "quarry.env"
-        flags_seen: list[int] = []
-        real_open = os.open
-
-        def recording(path: str, flags: int, mode: int = 0o777, **kw: int) -> int:
-            flags_seen.append(flags)
-            return real_open(path, flags, mode, **kw)
-
-        with (
-            patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.env_file.os.open", recording),
-        ):
-            _write_env_file("k1")
-
-        created = flags_seen[0]
-        assert created & os.O_EXCL
-        assert created & os.O_NOFOLLOW
-        assert created & os.O_CREAT
-
-    def test_the_file_is_synced_before_the_rename_and_the_directory_after(
-        self, tmp_path: Path
-    ) -> None:
-        env_file = tmp_path / "quarry.env"
-        events: list[str] = []
-        real_fsync = os.fsync
-        real_replace = type(env_file).replace
-
-        def fsync(fd: int) -> None:
-            kind = "dir" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
-            events.append(f"fsync-{kind}")
-            real_fsync(fd)
-
-        def replace(self: Path, target: Path) -> Path:
-            events.append("rename")
-            return real_replace(self, target)
-
-        with (
-            patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.env_file.os.fsync", fsync),
-            patch.object(type(env_file), "replace", replace),
-        ):
-            _write_env_file("k1")
-
-        assert events == ["fsync-file", "rename", "fsync-dir"]
-
-    def test_a_failed_write_removes_the_temp_and_keeps_the_old_file(
-        self, tmp_path: Path
-    ) -> None:
-        env_file = tmp_path / "quarry.env"
-        env_file.write_text("OLD=1\n")
-        with (
-            patch("quarry.service._ENV_FILE", env_file),
-            patch("quarry.env_file.os.fsync", side_effect=OSError("injected")),
-            pytest.raises(OSError, match="injected"),
-        ):
-            _write_env_file("k1")
-
-        assert env_file.read_text() == "OLD=1\n"
-        assert not any(tmp_path.glob("*.tmp"))
 
 
 class TestServiceFileApiKey:
@@ -1090,7 +903,7 @@ class TestLaunchdPlistAtomicWrite:
     ) -> None:
         """If os.fdopen raises during plist write, the raw fd is closed and tmp removed.
 
-        Fix 3 invariant: no temp file leaks and no fd leaks on fdopen failure.
+        No temp file leaks and no fd leaks on fdopen failure.
         """
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         closed_fds: list[int] = []
@@ -1106,8 +919,8 @@ class TestLaunchdPlistAtomicWrite:
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
             patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
-            patch("quarry.env_file.os.fdopen", side_effect=OSError("injected")),
-            patch("quarry.env_file.os.close", side_effect=fake_close),
+            patch("quarry.private_write.os.fdopen", side_effect=OSError("injected")),
+            patch("quarry.private_write.os.close", side_effect=fake_close),
             pytest.raises(OSError, match="injected"),
         ):
             _launchd_install()

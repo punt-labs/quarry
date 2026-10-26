@@ -66,7 +66,11 @@ class InstalledStopTimeout:
     the definition truly does not; an unusable one is reported, not replaced.
     """
 
-    _PLAIN_NUMBER: ClassVar[re.Pattern[str]] = re.compile(r"\d+(?:\.\d+)?")
+    # ASCII digits only: the daemon's own reading of the value (``float``) rejects
+    # anything else, so doctor must too.
+    _PLAIN_NUMBER: ClassVar[re.Pattern[str]] = re.compile(
+        r"[0-9]+(?:\.[0-9]+)?", re.ASCII
+    )
 
     __slots__ = ("_env_file", "_path")
 

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
+from quarry.config import Settings
 from quarry.daemon.bind_options import BindOptions
 from quarry.daemon.launcher import DaemonLauncher
 from quarry.doctor_daemon import DaemonDiagnostics
@@ -267,6 +268,8 @@ def test_the_last_env_file_assignment_wins(tmp_path: Path) -> None:
         ("1e2", "is not a plain number"),
         (" 30", "is not a plain number"),
         ("", "is not a plain number"),
+        ("\u0666\u0660\u0660", "is not a plain number"),  # Arabic-Indic 600
+        ("\uff13\uff10", "is not a plain number"),  # fullwidth 30
         (str(_LOW - 1), "outside"),
         (str(_HIGH + 1), "outside"),
     ],
@@ -758,3 +761,17 @@ def test_a_stale_env_file_with_no_unit_installed_passes_as_not_installed(
 
     assert check.passed
     assert check.message == "no installed service; not checked"
+
+
+def test_doctor_and_the_daemon_agree_that_non_ascii_digits_are_not_a_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = "\u0666\u0660\u0660"
+    plist = _with_env(tmp_path / "q.plist", **{ShutdownPolicy.ENV_NAME: raw})
+
+    with monkeypatch.context() as patched:
+        patched.setenv(ShutdownPolicy.ENV_NAME, raw)
+        with pytest.raises(ValueError, match="valid number"):
+            Settings()
+
+    assert InstalledStopTimeout(plist).budget().state is BudgetState.INVALID

@@ -1,11 +1,11 @@
-"""Hermetic tests for the WatchLoop producer (DES-045).
+"""Hermetic tests for the WatchLoop producer.
 
 The loop is driven by a synthetic :class:`FsEventSource` and a recording queue —
 no watchdog, no real ONNX, no LanceDB writes — so debounce coalescing, the bulk
 threshold, delete routing, register/deregister ordering, the single-writer
 route key, and the never-crash-the-loop contract are asserted deterministically.
 The recording queue captures the ``(RouteKey, IngestUnit)`` submissions the loop
-would hand to the real DES-042 queue.
+would hand to the real queue.
 """
 
 from __future__ import annotations
@@ -294,7 +294,7 @@ def test_start_does_not_warn_when_the_safety_scan_backstop_is_enabled(
 
 
 def test_watch_state_watched_for_a_live_handle(tmp_path: Path) -> None:
-    """A collection with a live observer handle reports "watched" (DES-045e)."""
+    """A collection with a live observer handle reports "watched"."""
 
     async def _run() -> None:
         queue = _RecordingQueue()
@@ -649,7 +649,7 @@ def test_request_scan_fails_umbrella_when_a_child_is_shed(tmp_path: Path) -> Non
 
     request_scan must reflect the children — a shed/failed child fails the
     umbrella with a count — never report silent success while collections go
-    unindexed (DES-045 djb fix 2).
+    unindexed.
     """
 
     async def _run() -> None:
@@ -1456,7 +1456,7 @@ def test_request_scan_skips_an_unresolvable_root(tmp_path: Path) -> None:
 
     ``root.resolve()`` can raise (symlink loop, permission).  An on-demand sync
     must skip that one bad registration and scan the good ones, never crash the
-    whole request_scan (Class-2 exception boundary).
+    whole request_scan.
     """
 
     async def _run() -> None:
@@ -1672,7 +1672,7 @@ def test_each_cleanup_failure_in_stop_is_logged_where_it_happens(
                 WatchRoster, "close", side_effect=OSError(errno.EIO, "close failed")
             ),
             caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"),
-            pytest.raises(OSError),
+            pytest.raises(RuntimeError),
         ):
             await loop.stop()
 

@@ -8,7 +8,7 @@ the POST and ``quarry backfill`` re-ingests it.  A ``remember`` (and a plain URL
 knowledge with no way to recover it.
 
 This spool closes that gap: an aborted job with no durable client copy writes a
-recoverable snapshot here — scrubbed at write time (DES-036), atomically — under
+recoverable snapshot here — scrubbed at write time, atomically — under
 the daemon's private data dir, so the knowledge is never *silently* lost.
 """
 
@@ -16,14 +16,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import uuid
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.private_write import PrivateWrite
 from quarry.redacted_failure import RedactedFailure
 
 if TYPE_CHECKING:
@@ -88,13 +87,15 @@ class JobSpool:
     def write(self, record: SpoolRecord) -> bool:
         """Persist *record* atomically and privately; return whether it stuck.
 
-        Returns ``True`` only when the atomic rename succeeded — i.e. the record
-        is durably on disk and recoverable.  A failure returns ``False`` (never
-        raises into shutdown) so the caller can record the truth instead of a
-        false recoverability claim: the content is lost, not spooled.
+        Returns ``True`` only when the atomic rename succeeded, i.e. the record
+        is in place and recoverable (it was synced first, and the directory after;
+        a failed directory sync is a warning, since the file is already there).
+        Any failure returns ``False`` and never raises into shutdown, so the
+        caller can record the truth instead of a false recoverability claim: the
+        content is lost, not spooled.
 
-        The spool holds best-effort-scrubbed content (DES-036 is regex redaction,
-        not a guarantee), so it is created private — the dir ``0o700`` and the
+        The spool holds best-effort-scrubbed content (regex redaction, not a
+        guarantee), so it is created private — the dir ``0o700`` and the
         file ``0o600`` from the start, never group/other-readable even for an
         instant.  A failure is logged (with the collection, so the loss stays
         visible) rather than propagated — the abort loop keeps failing the rest.
@@ -102,7 +103,7 @@ class JobSpool:
         try:
             self._ensure_private_dir()
             self._atomic_write(self._dir / record.filename(), record.as_json())
-        except OSError as exc:
+        except Exception as exc:
             logger.error(
                 "failed to spool aborted %s job for %s",
                 record.kind,
@@ -123,29 +124,7 @@ class JobSpool:
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
-        """Write *content* to a ``0o600`` temp file, then atomically rename it in.
-
-        ``os.open`` with ``O_CREAT|O_EXCL`` and mode ``0o600`` creates the file
-        private from the start — no chmod-after window.  ``os.fdopen`` can raise
-        before adopting the fd, so that path closes the fd explicitly (the
-        success path hands ownership to the ``with`` block, so the fd is closed
-        exactly once).  The temp file is removed on any failure, and the atomic
-        rename is inside the try so a rename failure leaves no temp behind.
-        """
-        tmp = path.with_name(path.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            handle = os.fdopen(fd, "w", encoding="utf-8")
-        except OSError:
-            os.close(fd)
-            with suppress(OSError):
-                tmp.unlink()
-            raise
-        try:
-            with handle:
-                handle.write(content)
-            tmp.replace(path)
-        except OSError:
-            with suppress(OSError):
-                tmp.unlink()
-            raise
+        """Write *content* privately and durably to *path*, via a sibling temp."""
+        PrivateWrite("spooled record").commit(
+            path.with_name(path.name + ".tmp"), path, content
+        )

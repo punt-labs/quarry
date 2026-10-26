@@ -297,7 +297,7 @@ class TestProbeTransportFallback:
 
 
 class TestFdWireContract:
-    """FdHealth is the single owner of the fd wire shape (bug-class-3).
+    """FdHealth is the single owner of the fd wire shape.
 
     The daemon serializes an ``FdHealth``; doctor parses the same model back, so
     a field added to the contract cannot drift between the two hand-sites.

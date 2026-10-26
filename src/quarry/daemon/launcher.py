@@ -1,6 +1,6 @@
 """The ``quarryd`` launcher: resolve bind options and start the engine daemon.
 
-Only the daemon process imports the engine (DES-031 v2.2 R3); this launcher is
+Only the daemon process imports the engine; this launcher is
 its entry point.  It refuses a remote-reachable bind that carries no operator
 key, mints a loopback ``serve.token`` when none is supplied, and hands a
 :class:`ServeConfig` to :class:`DaemonServer`.  The bind options are bundled in

@@ -125,13 +125,8 @@ class AbortTally:
         self._spooled += outcome.spooled and outcome.recoverable
         self._unrecoverable += outcome.spooled and not outcome.recoverable
 
-    @property
-    def aborted(self) -> int:
-        """Return how many jobs were aborted."""
-        return self._aborted
-
     def summary(self) -> str:
-        """Return the counts as words; the four terms sum to :attr:`aborted`."""
+        """Return the counts as words; the four terms sum to the job count."""
         unspooled = self._aborted - self._spooled - self._unrecoverable - self._lost
         return (
             f"{self._aborted} job(s): {self._spooled} spooled for recovery, "

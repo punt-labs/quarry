@@ -1,7 +1,7 @@
 {
-  "total": 194,
+  "total": 188,
   "by_category": {
-    "noqa": 156,
+    "noqa": 150,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -59,12 +59,15 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 49
+      "noqa": 42
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
     },
     "src/quarry/doctor_inference.py": {
+      "noqa": 1
+    },
+    "src/quarry/doctor_mcp.py": {
       "noqa": 1
     },
     "src/quarry/doctor_memory.py": {
@@ -181,5 +184,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-26T00:08:30Z"
+  "updated_at": "2026-10-26T00:49:38Z"
 }

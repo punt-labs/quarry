@@ -8,9 +8,9 @@ One recursive watch per registered root (this supersedes the earlier
 per-directory scheduling, which was structurally wrong on Linux: every
 ``ObservedWatch`` gets its own emitter, and each Linux emitter's ``Inotify``
 wrapper calls the libc ``inotify_init()`` — one kernel INSTANCE plus threads
-and fds per directory. ``fs.inotify.max_user_instances`` defaults to 128
-(per-user, shared with IDEs/editors), so per-directory scheduling exhausted
-it at ~120 directories).
+and fds per directory. ``fs.inotify.max_user_instances`` is a small per-user
+limit, shared with IDEs/editors, so per-directory scheduling exhausted it on
+a tree with only a modest number of directories).
 
 ``WatchdogSource`` instead picks the observer by platform (a module-scope
 ``platform.system()`` branch at the top of this file, so the import happens
@@ -25,7 +25,7 @@ in a quietly-larger fd/watch footprint.
   one inotify instance per root (comfortably inside
   ``max_user_instances``), whose internal directory walk skips ignored
   directories per the shared :mod:`~quarry.sync_discovery` ignore spec — so
-  the much larger ``max_user_watches`` budget (65,536, per-descriptor, no
+  the much larger ``max_user_watches`` budget (per-descriptor, with no
   per-user cap) is spent only on directories worth watching.
 * **macOS and other platforms** — watchdog's standard recursive observer
   (FSEvents on macOS: one stream per root, no per-directory kernel cost at

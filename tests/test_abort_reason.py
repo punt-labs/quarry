@@ -149,7 +149,6 @@ def test_a_tally_counts_each_aborted_job_exactly_once() -> None:
     ):
         tally.record(outcome)
 
-    assert tally.aborted == 4
     assert tally.summary() == (
         "4 job(s): 1 spooled for recovery, 1 spooled but not recoverable, "
         "1 lost (spool write failed), 1 needed no spool"
@@ -164,6 +163,6 @@ def test_tallies_combine_into_one_whose_terms_still_add_up() -> None:
 
     total = AbortTally.total([first, second])
 
-    assert total.aborted == 3
+    assert total.summary().startswith("3 job(s)")
     assert "1 spooled for recovery, 0 spooled but not recoverable" in total.summary()
     assert "1 lost (spool write failed), 1 needed no spool" in total.summary()

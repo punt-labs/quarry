@@ -9,6 +9,10 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
+# Whitespace as systemd skips it: ASCII only.
+_ASCII_SPACE = " \t\r\f\v"
+
+
 @final
 class SystemdText:
     """Read settings out of a unit or env file's text as systemd does.
@@ -19,11 +23,15 @@ class SystemdText:
     size.
     """
 
-    _NUMBER: ClassVar[str] = r"(?<!\d)\d{1,9}(?:\.\d{1,9})?(?!\d)"
-    _TERM: ClassVar[re.Pattern[str]] = re.compile(rf"({_NUMBER})\s*([a-z]*)")
+    # ASCII digits only: a Unicode digit is not a number to systemd.
+    _NUMBER: ClassVar[str] = r"(?<![0-9])[0-9]{1,9}(?:\.[0-9]{1,9})?(?![0-9])"
+    _TERM: ClassVar[re.Pattern[str]] = re.compile(
+        rf"({_NUMBER})[ \t\r\f\v]*([A-Za-z]*)", re.ASCII
+    )
     # The keys that set a unit's stop timeout, the last assignment of either wins.
     _STOP_KEYS: ClassVar[frozenset[str]] = frozenset({"TimeoutStopSec", "TimeoutSec"})
-    # systemd time-span units, in seconds; a bare number is seconds.
+    # systemd's time-span units, in seconds; a bare number is seconds.  Units are
+    # case-sensitive, as in systemd: ``m`` is a minute and ``M`` is a month.
     _UNITS: ClassVar[dict[str, float]] = {
         "": 1.0,
         "us": 1e-6,
@@ -45,6 +53,15 @@ class SystemdText:
         "d": 86400.0,
         "day": 86400.0,
         "days": 86400.0,
+        "w": 604800.0,
+        "week": 604800.0,
+        "weeks": 604800.0,
+        "M": 2629800.0,  # 30.44 days, as systemd defines a month
+        "month": 2629800.0,
+        "months": 2629800.0,
+        "y": 31557600.0,  # 365.25 days, as systemd defines a year
+        "year": 31557600.0,
+        "years": 31557600.0,
     }
 
     __slots__ = ()
@@ -77,7 +94,7 @@ class SystemdText:
         for line in cls._logical_lines(text):
             key, separator, value = line.partition("=")
             if separator and key.strip() == name:
-                found = value.strip().strip('"')
+                found = cls._unquoted(value.strip())
         return found
 
     @staticmethod
@@ -111,22 +128,28 @@ class SystemdText:
             ValueError: *text* is empty, has a term that is not a number and a
                 known unit, or has anything after the last term.
         """
-        lowered = text.lower()
-        position = cls._skip_space(lowered, 0)
+        position = cls._skip_space(text, 0)
         total, terms = 0.0, 0
-        while position < len(lowered):
-            seconds, end = cls._term(lowered, position)
+        while position < len(text):
+            seconds, end = cls._term(text, position)
             total, terms = total + seconds, terms + 1
-            position = cls._skip_space(lowered, end)
+            position = cls._skip_space(text, end)
         if terms == 0:
             msg = "not a systemd time span: empty"
             raise ValueError(msg)
         return total
 
     @staticmethod
+    def _unquoted(value: str) -> str:
+        """Return *value* without one pair of matching single or double quotes."""
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            return value[1:-1]
+        return value
+
+    @staticmethod
     def _skip_space(text: str, position: int) -> int:
         """Return the index of the first non-space character at or after *position*."""
-        while position < len(text) and text[position].isspace():
+        while position < len(text) and text[position] in _ASCII_SPACE:
             position += 1
         return position
 

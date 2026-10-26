@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 import secrets
-import stat
-import time
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from quarry.env_sweep import EnvSweep
 from quarry.failure_reason import FailureReason
+from quarry.private_write import PrivateWrite
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -29,14 +28,11 @@ class EnvFile:
     since the file is already in place.
 
     A crash leaves a temp behind, and it holds the key, so every write first
-    sweeps them: the old fixed name and the random ones, only regular files this
-    user owns and that are older than :attr:`STALE_AFTER_S` (a live concurrent
-    writer holds its temp for milliseconds), and never a symlink.  The config
-    directory is tightened to 0700 whether or not it already existed.
+    sweeps them (see :class:`EnvSweep`).  The config directory is tightened to
+    0700 whether or not it already existed.
     """
 
-    # Long past any live write: a temp this old belongs to a crashed one.
-    STALE_AFTER_S: ClassVar[float] = 600.0
+    STALE_AFTER_S: ClassVar[float] = EnvSweep.STALE_AFTER_S
 
     __slots__ = ("_path",)
 
@@ -52,26 +48,11 @@ class EnvFile:
         directory = self._path.parent
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._tighten(directory)
-        self._sweep()
+        EnvSweep(self._path).run()
         tmp_path = self._path.with_name(f"{self._path.name}.{secrets.token_hex(6)}.tmp")
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-        fd = os.open(str(tmp_path), flags, 0o600)
-        try:
-            f = os.fdopen(fd, "w")
-        except BaseException:
-            os.close(fd)
-            tmp_path.unlink(missing_ok=True)
-            raise
-        try:
-            with f:
-                f.write("".join(f"{line}\n" for line in lines))
-                f.flush()
-                os.fsync(f.fileno())
-            tmp_path.replace(self._path)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
-            raise
-        self._sync(directory)
+        PrivateWrite("env file").commit(
+            tmp_path, self._path, "".join(f"{line}\n" for line in lines)
+        )
 
     @staticmethod
     def _tighten(directory: Path) -> None:
@@ -82,50 +63,5 @@ class EnvFile:
             logger.warning(
                 "could not make %s owner-only (%s)",
                 directory,
-                FailureReason.os_name(exc),
-            )
-
-    def _sweep(self) -> None:
-        """Remove the stale temps a crashed write left; say how many, and refusals."""
-        name = self._path.name
-        removed = refused = 0
-        for pattern in (f"{name}.*.tmp", f"{name}.tmp"):
-            for leftover in self._path.parent.glob(pattern):
-                try:
-                    info = leftover.lstat()
-                    if not stat.S_ISREG(info.st_mode):
-                        refused += 1  # a symlink or anything else: not ours to unlink
-                    elif (
-                        info.st_uid == os.getuid()
-                        and time.time() - info.st_mtime >= self.STALE_AFTER_S
-                    ):
-                        leftover.unlink()
-                        removed += 1
-                except OSError as exc:
-                    refused += 1
-                    logger.debug(
-                        "env file: could not sweep a leftover: %s",
-                        FailureReason.os_name(exc),
-                    )
-        if removed or refused:
-            logger.warning(
-                "env file: swept %d leftover temp file(s), left %d it would not touch",
-                removed,
-                refused,
-            )
-
-    @staticmethod
-    def _sync(directory: Path) -> None:
-        """Sync *directory*; a failure is a warning, the file is already in place."""
-        try:
-            handle = os.open(str(directory), os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(handle)
-            finally:
-                os.close(handle)
-        except OSError as exc:
-            logger.warning(
-                "env file written; directory sync failed (%s); durability not "
-                "guaranteed",
                 FailureReason.os_name(exc),
             )

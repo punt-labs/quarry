@@ -159,7 +159,7 @@ def _launchd_plist_content() -> str:
     # so this matches the security posture of any other credential in a launchd plist.
     #
     # MALLOC_CONF is always set to tell jemalloc to return freed pages within
-    # 1 second — reduces RSS from ~5.4 GB to ~2.5 GB under Arrow buffer churn.
+    # a second, which keeps resident memory down under Arrow buffer churn.
     api_key = os.environ.get("QUARRY_API_KEY", "").strip()
     # Do NOT use textwrap.dedent here — the outer dedent computes minimum
     # indent across ALL lines including the substituted env_vars_block.

@@ -1,4 +1,4 @@
-"""Per-path debounce and bulk coalescing for the watch loop (DES-045 §5).
+"""Per-path debounce and bulk coalescing for the watch loop.
 
 An editor writes a file ten times in two seconds; the daemon wants ONE reindex,
 of the final bytes.  :class:`DebouncedDispatcher` keys pending changes by
