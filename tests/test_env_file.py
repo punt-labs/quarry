@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from quarry.env_file import EnvFile
+from quarry.env_sweep import EnvSweep
 
 
 def _leftover(directory: Path, name: str, *, age_s: float) -> Path:
@@ -39,7 +40,7 @@ _HEX = "0123456789ab"  # a name EnvFile itself would have made
 
 
 def _stale(directory: Path, name: str) -> Path:
-    return _leftover(directory, name, age_s=EnvFile.STALE_AFTER_S + 60)
+    return _leftover(directory, name, age_s=EnvSweep.STALE_AFTER_S + 60)
 
 
 def test_planted_stale_leftovers_are_removed_and_named(
@@ -69,12 +70,47 @@ def test_a_young_temp_file_is_kept_so_a_live_writer_is_not_hit(
     assert young.exists()
 
 
-def test_a_future_dated_temp_counts_as_stale(tmp_path: Path) -> None:
-    future = _leftover(tmp_path, f"quarry.env.{_HEX}.tmp", age_s=-86400)
+def test_a_temp_dated_far_ahead_of_the_clock_counts_as_stale(tmp_path: Path) -> None:
+    future = _leftover(
+        tmp_path, f"quarry.env.{_HEX}.tmp", age_s=-(EnvSweep.CLOCK_SKEW_S + 600)
+    )
 
     _write(tmp_path / "quarry.env")
 
     assert not future.exists()
+
+
+def test_a_temp_a_little_ahead_of_the_clock_is_a_live_writers(tmp_path: Path) -> None:
+    ahead = _leftover(
+        tmp_path, f"quarry.env.{_HEX}.tmp", age_s=-(EnvSweep.CLOCK_SKEW_S - 600)
+    )
+
+    _write(tmp_path / "quarry.env")
+
+    assert ahead.exists()
+
+
+@pytest.mark.parametrize(
+    ("age_s", "is_removed"),
+    [
+        (EnvSweep.STALE_AFTER_S - 1, False),
+        (EnvSweep.STALE_AFTER_S, True),
+        (-EnvSweep.CLOCK_SKEW_S, False),
+        (-EnvSweep.CLOCK_SKEW_S - 1, True),
+    ],
+)
+def test_the_staleness_boundaries_on_both_sides(
+    tmp_path: Path, age_s: float, *, is_removed: bool
+) -> None:
+    now = 2_000_000_000.0
+    leftover = tmp_path / f"quarry.env.{_HEX}.tmp"
+    leftover.write_text("k")
+    os.utime(leftover, (now - age_s, now - age_s))
+
+    with patch("quarry.env_sweep.time.time", return_value=now):
+        EnvSweep(tmp_path / "quarry.env").run()
+
+    assert leftover.exists() is not is_removed
 
 
 def test_a_symlink_that_looks_like_a_leftover_is_refused_not_followed(

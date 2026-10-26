@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from unittest.mock import patch
 from quarry.daemon import ingest_queue as iq
 from quarry.daemon.abort_reason import Aborted, AbortTally
 from quarry.daemon.ingest_queue import IngestQueue
-from quarry.daemon.job_spool import SpoolRecord
+from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.task_terminal import TaskTerminal
@@ -467,7 +468,7 @@ def test_the_wait_after_an_abort_is_bounded(
             self.task: asyncio.Task[None] | None = None
             self.release = asyncio.Event()
 
-        def abort(self) -> asyncio.Task[None]:
+        def abort_off_loop(self) -> asyncio.Task[None]:
             async def ignores() -> None:
                 while not self.release.is_set():
                     try:
@@ -619,6 +620,75 @@ def test_aborted_in_flight_job_without_durable_copy_is_spooled(tmp_path: Path) -
         assert json.loads(files[0].read_text())["payload"] == "in-flight content"
 
     asyncio.run(_run())
+
+
+def test_abort_time_spool_writes_run_off_the_event_loop(tmp_path: Path) -> None:
+    """Spooling syncs files, so no aborted job (queued or in flight) blocks the loop."""
+    threads: list[int] = []
+    real_write = JobSpool.write
+
+    def recording_write(self: JobSpool, record: SpoolRecord) -> bool:
+        threads.append(threading.get_ident())
+        return real_write(self, record)
+
+    async def _run() -> int:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()  # never set -> A is in flight, B stays queued
+        a = _StubUnit(
+            "c", "a", ledger, gate=gate, spool=SpoolRecord("remember", "c", "a", "pa")
+        )
+        b = _StubUnit(
+            "c", "b", ledger, gate=gate, spool=SpoolRecord("remember", "c", "b", "pb")
+        )
+        assert queue.try_submit(_rk("c"), a, _state("a"))
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(_rk("c"), b, _state("b"))
+        with patch.object(JobSpool, "write", recording_write):
+            await queue.aclose(drain_timeout=0.05)
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(_run())
+
+    assert len(threads) == 2  # both jobs spooled
+    assert loop_thread not in threads
+    assert len(list((tmp_path / "spool").glob("remember-*.json"))) == 2
+
+
+def test_a_second_cancel_while_spooling_never_skips_the_record(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> list[str]:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()
+        unit = _StubUnit(
+            "c", "a", ledger, gate=gate, spool=SpoolRecord("remember", "c", "a", "pa")
+        )
+        state = _state("a")
+        assert queue.try_submit(_rk("c"), unit, state)
+        await asyncio.sleep(0.02)
+        real_write = JobSpool.write
+        spooling = threading.Event()
+        release = threading.Event()
+
+        def slow_write(self: JobSpool, record: SpoolRecord) -> bool:
+            spooling.set()
+            release.wait(5)
+            return real_write(self, record)
+
+        with patch.object(JobSpool, "write", slow_write):
+            worker = next(iter(queue._pool._workers.values()))
+            worker._task.cancel()  # the drain timeout's cancel
+            while not spooling.is_set():
+                await asyncio.sleep(0.005)
+            worker._task.cancel()  # the abort's cancel, mid-spool
+            release.set()
+            await asyncio.wait({worker._task}, timeout=5)
+        return [state.status]
+
+    assert asyncio.run(_run()) == ["failed"]
+    assert len(list((tmp_path / "spool").glob("remember-*.json"))) == 1
 
 
 def test_aborted_queued_job_with_durable_copy_is_not_spooled(tmp_path: Path) -> None:
@@ -800,7 +870,7 @@ def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
     class _Dying:
         tally = AbortTally()
 
-        def abort(self) -> asyncio.Task[None]:
+        def abort_off_loop(self) -> asyncio.Task[None]:
             async def dies() -> None:
                 msg = "worker secret detail"
                 raise RuntimeError(msg)
@@ -828,7 +898,7 @@ def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
             for outcome in outcomes:
                 self.tally.record(outcome)
 
-        def abort(self) -> asyncio.Task[None]:
+        def abort_off_loop(self) -> asyncio.Task[None]:
             async def done() -> None:
                 return None
 

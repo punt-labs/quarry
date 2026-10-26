@@ -20,13 +20,7 @@ from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_mcp import (
-    check_claude_code_mcp,
-    check_claude_desktop_mcp,
-    check_mcp_proxy,
-    configure_claude_code,
-    configure_claude_desktop,
-)
+from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
 from quarry.doctor_memory import MemoryDiagnostics
 from quarry.doctor_recall import RecallDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
@@ -105,10 +99,23 @@ def _check_data_directory() -> CheckResult:
     )
 
 
+def _import_failure(module: str, exc: ImportError | OSError) -> str:
+    """Say which module could not be loaded and why (the class, not a path)."""
+    name = getattr(exc, "name", None) or module
+    return f"cannot load {name} ({type(exc).__name__}); reinstall quarry"
+
+
 def _check_embedding_model() -> CheckResult:
-    # Optional dependency (huggingface_hub): a broken install is a failed check,
-    # not an import error that takes the whole report down.
-    from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
+    # Imported here, inside a try: a broken install is a failed check, not an
+    # import error that takes the whole report down.
+    try:
+        from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
+    except (ImportError, OSError) as exc:
+        return CheckResult(
+            name="Embedding model",
+            passed=False,
+            message=_import_failure("huggingface_hub", exc),
+        )
 
     model_cached = try_to_load_from_cache(
         ONNX_MODEL_REPO,
@@ -183,9 +190,18 @@ def _human_size(nbytes: float) -> str:
 
 def _check_fts_health(db_path: Path) -> CheckResult:
     """Verify the Tantivy FTS index is queryable."""
-    # LanceDB and pyarrow are native: a broken one must fail this check only.
-    from quarry.db.facade import Database  # noqa: PLC0415
-    from quarry.db.schema import TABLE_NAME  # noqa: PLC0415
+    # LanceDB and pyarrow are native: a broken install is a failed check, not an
+    # import error that takes the whole report down.
+    try:
+        from quarry.db.facade import Database  # noqa: PLC0415
+        from quarry.db.schema import TABLE_NAME  # noqa: PLC0415
+    except (ImportError, OSError) as exc:
+        return CheckResult(
+            name="FTS index",
+            passed=False,
+            message=_import_failure("lancedb", exc),
+            required=False,
+        )
 
     if not db_path.exists():
         return CheckResult(
@@ -267,11 +283,11 @@ def _install_gpu_runtime() -> bool:
 def _run_optional_step(step: Callable[[], str], skip_note: str) -> None:
     """Run a best-effort install step, printing its result or a skip note.
 
-    Steps like mcp-proxy and daemon registration are optional: quarry works
-    without them. ``step`` is a zero-arg callable that performs BOTH the module
-    import AND the install, returning a status message. It runs entirely inside
-    the try so an import-time failure (``ImportError``, or any error raised while
-    the optional module is loaded) skips the step rather than aborting the whole
+    The daemon registration step is optional: quarry works without it.
+    ``step`` is a zero-arg callable that performs BOTH the module import AND
+    the install, returning a status message. It runs entirely inside the try so
+    an import-time failure (``ImportError``, or any error raised while the
+    optional module is loaded) skips the step rather than aborting the whole
     install — the module living behind the callable is the reason the import is
     here and not at call time. The broad catch is intentional: this IS the
     installer's optional-step boundary.
@@ -364,7 +380,7 @@ def run_install() -> int:
     print()  # noqa: T201
 
     # Step 1: data + logs directories
-    print("[1/8] Creating directories...")  # noqa: T201
+    print("[1/7] Creating directories...")  # noqa: T201
     failed = not _create_directories()
 
     # Step 2: headless OpenCV (rapidocr hard-requires the GUI opencv-python;
@@ -372,7 +388,7 @@ def run_install() -> int:
     # package-side equivalent of install.sh's resolver override). Best-effort:
     # a failure prints the exact reinstall command and OCR degrades cleanly via
     # the runtime guard.
-    print("[2/8] Ensuring headless OpenCV...")  # noqa: T201
+    print("[2/7] Ensuring headless OpenCV...")  # noqa: T201
     headless = HeadlessOpenCv(sys.executable)
     _run_optional_step(
         headless.enforce,
@@ -381,35 +397,22 @@ def run_install() -> int:
 
     # Step 3: GPU runtime (must run before model download so CUDA provider
     # detection can trigger FP16 model caching).
-    print("[3/8] Checking GPU runtime...")  # noqa: T201
+    print("[3/7] Checking GPU runtime...")  # noqa: T201
     if not _gpu_runtime_is_usable():
         failed = True
 
     # Step 4: embedding model
-    print("[4/8] Downloading embedding model...")  # noqa: T201
+    print("[4/7] Downloading embedding model...")  # noqa: T201
     if not _install_embedding_model():
         failed = True
 
-    # Step 5: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
-    # Installed before MCP client config so Desktop can resolve the absolute path.
-    print("[5/8] Installing mcp-proxy...")  # noqa: T201
-
-    def _proxy_step() -> str:
-        # Import INSIDE the callable so an import-time failure of quarry.proxy
-        # skips this optional step instead of aborting run_install.
-        from quarry.proxy import install as proxy_install  # noqa: PLC0415
-
-        return proxy_install()
-
-    _run_optional_step(_proxy_step, "mcp-proxy is optional — quarry works without it.")
-
-    # Step 6: MCP clients (uses mcp-proxy if step 5 succeeded, otherwise quarry mcp)
-    print("[6/8] Configuring MCP clients...")  # noqa: T201
-    for check in [configure_claude_code(), configure_claude_desktop()]:
+    # Step 5: MCP clients
+    print("[5/7] Configuring MCP clients...")  # noqa: T201
+    for check in [ClaudeCodeMcp().configure(), ClaudeDesktopMcp().configure()]:
         _print_check(check)
 
-    # Step 7: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[7/8] Registering quarry daemon...")  # noqa: T201
+    # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
+    print("[6/7] Registering quarry daemon...")  # noqa: T201
 
     def _svc_step() -> str:
         # Import INSIDE the callable so an import-time failure of quarry.service
@@ -425,8 +428,8 @@ def run_install() -> int:
     # quarry is repo-scoped for CLAUDE.md guidance: `quarry enable` registers the
     # per-repo @-import; `install` never edits ~/.claude/CLAUDE.md.
 
-    # Step 8: ethos ext session_context (best-effort)
-    print("[8/8] Configuring ethos identity extension...")  # noqa: T201
+    # Step 7: ethos ext session_context (best-effort)
+    print("[7/7] Configuring ethos identity extension...")  # noqa: T201
     _configure_ethos_extension()
 
     # Verification
@@ -446,9 +449,8 @@ def _run_checks() -> list[CheckResult]:
             _check_embedding_model(),
             InferenceDiagnostics.onnx_provider(),
             _check_imports(),
-            check_mcp_proxy(),
-            check_claude_code_mcp(),
-            check_claude_desktop_mcp(),
+            ClaudeCodeMcp().check(),
+            ClaudeDesktopMcp().check(),
             DaemonDiagnostics.reachability(),
             DaemonDiagnostics.serve_token(),
             DaemonDiagnostics.fd_headroom(),

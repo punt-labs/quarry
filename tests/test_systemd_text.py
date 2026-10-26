@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from quarry.systemd_text import SystemdText
@@ -92,3 +94,31 @@ def test_a_month_and_a_minute_are_told_apart_by_case() -> None:
 def test_unit_names_are_case_sensitive_as_in_systemd(text: str) -> None:
     with pytest.raises(ValueError, match="time span"):
         SystemdText.timespan(text)
+
+
+@pytest.mark.parametrize("text", ["30\fs", "30\u00a0s", "\u00a030", "30\f", "\f30"])
+def test_a_form_feed_or_no_break_space_is_not_whitespace(text: str) -> None:
+    with pytest.raises(ValueError, match="time span"):
+        SystemdText.timespan(text)
+
+
+def test_a_newline_or_carriage_return_inside_a_span_is_whitespace() -> None:
+    assert SystemdText.timespan("1m\r\n30s") == pytest.approx(90.0)
+
+
+def test_a_form_feed_around_a_unit_value_is_kept_not_stripped() -> None:
+    assert SystemdText.stop_timeout("[Service]\nTimeoutStopSec=\f30\n") == "\f30"
+
+
+def test_a_unit_directive_is_never_unquoted() -> None:
+    assert SystemdText.stop_timeout('[Service]\nTimeoutStopSec="30"\n') == '"30"'
+
+
+def test_a_large_continuation_file_is_read_in_linear_time() -> None:
+    text = "[Service]\nTimeoutStopSec=1 \\\n" + "1s \\\n" * 60_000 + "1s\n"
+    started = time.process_time()
+
+    value = SystemdText.stop_timeout(text)
+
+    assert time.process_time() - started < 2.0
+    assert value.count("1s") == 60_001

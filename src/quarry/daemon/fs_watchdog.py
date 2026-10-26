@@ -4,13 +4,12 @@ Everything else in the watch loop talks to the :class:`FsEventSource` Protocol
 (:mod:`~quarry.daemon.fs_events`), so watchdog stays confined to this module
 and its Linux collaborator :mod:`~quarry.daemon.inotify_prune_chain`.
 
-One recursive watch per registered root (this supersedes the earlier
-per-directory scheduling, which was structurally wrong on Linux: every
-``ObservedWatch`` gets its own emitter, and each Linux emitter's ``Inotify``
-wrapper calls the libc ``inotify_init()`` — one kernel INSTANCE plus threads
-and fds per directory. ``fs.inotify.max_user_instances`` is a small per-user
-limit, shared with IDEs/editors, so per-directory scheduling exhausted it on
-a tree with only a modest number of directories).
+One recursive watch per registered root (per-directory scheduling is wrong on
+Linux: every ``ObservedWatch`` gets its own emitter, and each Linux emitter's
+``Inotify`` wrapper calls the libc ``inotify_init()`` — one kernel INSTANCE plus
+threads and fds per directory. ``fs.inotify.max_user_instances`` is a small
+per-user limit, shared with IDEs/editors, so per-directory scheduling exhausts
+it on a tree with only a modest number of directories).
 
 ``WatchdogSource`` instead picks the observer by platform (a module-scope
 ``platform.system()`` branch at the top of this file, so the import happens
@@ -245,9 +244,9 @@ class WatchdogSource:
 
         ``schedule()`` returning a handle only proves the watch was
         installed at that moment — it says nothing about later: an
-        unhandled exception on the emitter's own thread (this module now
-        hardens the ignore-spec paths against that, but a future watchdog
-        internals change is exactly the kind of surprise
+        unhandled exception on the emitter's own thread (the ignore-spec paths
+        here are hardened against that, but a future watchdog internals change
+        is exactly the kind of surprise
         ``test_pins_the_watchdog_internals_this_module_subclasses`` exists
         to catch, not prevent) leaves the thread dead while the handle
         still looks "present" to every other check. Each scheduled tree

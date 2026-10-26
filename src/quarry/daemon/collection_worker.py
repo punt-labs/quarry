@@ -13,11 +13,11 @@ interrupt a non-cancellable threadpool ingest anyway.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.daemon.abort_reason import AbortReason, AbortTally
+from quarry.daemon.abort_reason import AbortTally
+from quarry.daemon.job_abort import JobAbort, QueuedJob
 from quarry.daemon.job_lifecycle import JobLifecycle
 
 if TYPE_CHECKING:
@@ -26,15 +26,6 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.tasks import TaskState
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class _Queued:
-    """One admitted job paired with the task state it reports through."""
-
-    job: IngestUnit
-    state: TaskState
 
 
 @final
@@ -50,6 +41,7 @@ class CollectionWorker:
     __slots__ = (
         "_ctx",
         "_embed_gate",
+        "_jobs",
         "_last_active",
         "_queue",
         "_release_admit",
@@ -60,8 +52,9 @@ class CollectionWorker:
 
     _ctx: DaemonContext
     _embed_gate: asyncio.Semaphore
+    _jobs: JobAbort
     _last_active: float
-    _queue: asyncio.Queue[_Queued | None]
+    _queue: asyncio.Queue[QueuedJob | None]
     _release_admit: Callable[[], None]
     _running: bool
     _tally: AbortTally
@@ -80,6 +73,7 @@ class CollectionWorker:
         self._release_admit = release_admit
         self._running = False
         self._tally = AbortTally()
+        self._jobs = JobAbort(ctx.settings, self._tally)
         self._last_active = monotonic()
         # Start the resident consumer now; try_submit only ever runs inside a
         # request handler, so a running loop is guaranteed at creation.
@@ -89,7 +83,7 @@ class CollectionWorker:
     def enqueue(self, job: IngestUnit, state: TaskState) -> None:
         """Append a job (with its task state) to this FIFO queue (never blocks)."""
         JobLifecycle(state).enqueue()
-        self._queue.put_nowait(_Queued(job, state))
+        self._queue.put_nowait(QueuedJob(job, state))
 
     def stop(self) -> None:
         """Enqueue the drain sentinel so the worker returns after its backlog."""
@@ -131,17 +125,40 @@ class CollectionWorker:
         and frees their admit slots.  A job with a durable client artifact (a
         capture's transcript ``.md``) is recoverable via ``quarry backfill``; one
         without (``remember``/``ingest``) is spooled so an admitted job — queued
-        OR in flight — is never *silently* dropped.  The cancelled task is
-        returned so a sync caller can retain it the way ``aclose`` awaits it.
+        OR in flight — is never *silently* dropped.  Synchronous, so the spool
+        syncs run in the caller: a teardown that can await uses
+        :meth:`abort_off_loop`.  The cancelled task is returned so a sync caller
+        can retain it the way ``aclose`` awaits it.
         """
         self._task.cancel()
+        doomed = self._take_queued()
+        self._jobs.fail(doomed)
+        return self._task
+
+    def abort_off_loop(self) -> asyncio.Task[None]:
+        """Do what :meth:`abort` does, with the spool syncs on a thread.
+
+        Spooling syncs files, which would stall the event loop for every other
+        worker.  The returned task ends only once the queued jobs are spooled and
+        recorded, and then the way the worker's own task does (the cancel, or
+        whatever the worker died of).
+        """
+        self._task.cancel()
+        doomed = self._take_queued()
+        if not doomed:
+            return self._task
+        return asyncio.ensure_future(self._aborted(doomed))
+
+    def _take_queued(self) -> list[QueuedJob]:
+        """Empty the queue of waiting jobs, freeing their admit slots."""
+        doomed: list[QueuedJob] = []
         while True:
             try:
                 item = self._queue.get_nowait()
             except asyncio.QueueEmpty:
-                return self._task
+                return doomed
             if item is not None:
-                self._fail(item)
+                doomed.append(item)
                 self._release_admit()
 
     @property
@@ -149,12 +166,10 @@ class CollectionWorker:
         """Return how this worker's aborted jobs ended."""
         return self._tally
 
-    def _fail(self, item: _Queued) -> None:
-        """Fail *item* with the truthful reason, spooling it first if it needs it."""
-        item.state.status = "failed"
-        aborted = AbortReason.for_settings(self._ctx.settings).of(item.job)
-        item.state.error = aborted.reason
-        self._tally.record(aborted)
+    async def _aborted(self, doomed: list[QueuedJob]) -> None:
+        """Spool *doomed* off the loop, record how each ended, then join the worker."""
+        await self._jobs.fail_off_loop(doomed)
+        await self._task  # the cancel, or whatever the worker died of
 
     async def _run(self) -> None:
         """Drain jobs FIFO, one at a time, each under the shared embed gate."""
@@ -182,7 +197,7 @@ class CollectionWorker:
                 # remember/ingest is never silently lost, then let the
                 # cancellation propagate.  This also covers a job cancelled while
                 # still awaiting the embed gate (its TaskTerminal never ran).
-                self._fail(item)
+                await self._jobs.fail_in_flight(item)
                 raise
             finally:
                 self._running = False

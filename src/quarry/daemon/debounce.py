@@ -173,10 +173,6 @@ class DebouncedDispatcher:
             pending.cancel_timer()
         self._pending.clear()
 
-    def pending_count(self) -> int:
-        """Return how many route keys currently have pending changes (tests)."""
-        return len(self._pending)
-
     def _arm(self, key: RouteKey, pending: _PendingDir) -> None:
         """Schedule the flush at ``debounce`` from now, capped by ``max_delay``."""
         now = self._loop.time()

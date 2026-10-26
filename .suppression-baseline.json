@@ -1,7 +1,7 @@
 {
-  "total": 188,
+  "total": 184,
   "by_category": {
-    "noqa": 150,
+    "noqa": 146,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -59,7 +59,7 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 42
+      "noqa": 40
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
@@ -146,9 +146,6 @@
     "src/quarry/opencv_headless.py": {
       "noqa": 1
     },
-    "src/quarry/proxy.py": {
-      "noqa": 2
-    },
     "src/quarry/registrar.py": {
       "noqa": 2
     },
@@ -184,5 +181,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-26T00:49:38Z"
+  "updated_at": "2026-10-26T01:26:43Z"
 }

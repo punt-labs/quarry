@@ -170,7 +170,10 @@ def test_infinity_is_never_short(tmp_path: Path) -> None:
     assert not verdict.is_problem
 
 
-@pytest.mark.parametrize("value", ["soon", "12 parsecs", "1,5min", "9" * 30])
+@pytest.mark.parametrize(
+    "value",
+    ["soon", "12 parsecs", "1,5min", "9" * 30, '"30"', "'30'", "30\u00a0s", "30\fs"],
+)
 def test_a_value_that_cannot_be_interpreted_is_unrecognized(
     tmp_path: Path, value: str
 ) -> None:

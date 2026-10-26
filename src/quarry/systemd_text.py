@@ -9,8 +9,9 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-# Whitespace as systemd skips it: ASCII only.
-_ASCII_SPACE = " \t\r\f\v"
+# Whitespace as systemd skips it: a space, tab, newline or carriage return.  A
+# form feed or a no-break space is not whitespace to systemd.
+_ASCII_SPACE = " \t\n\r"
 
 
 @final
@@ -26,7 +27,7 @@ class SystemdText:
     # ASCII digits only: a Unicode digit is not a number to systemd.
     _NUMBER: ClassVar[str] = r"(?<![0-9])[0-9]{1,9}(?:\.[0-9]{1,9})?(?![0-9])"
     _TERM: ClassVar[re.Pattern[str]] = re.compile(
-        rf"({_NUMBER})[ \t\r\f\v]*([A-Za-z]*)", re.ASCII
+        rf"({_NUMBER})[ \t\n\r]*([A-Za-z]*)", re.ASCII
     )
     # The keys that set a unit's stop timeout, the last assignment of either wins.
     _STOP_KEYS: ClassVar[frozenset[str]] = frozenset({"TimeoutStopSec", "TimeoutSec"})
@@ -80,21 +81,27 @@ class SystemdText:
                 section = line[1:-1]
                 continue
             key, separator, value = line.partition("=")
-            if section == "Service" and separator and key.strip() in cls._STOP_KEYS:
-                assigned = value.strip()
+            if (
+                section == "Service"
+                and separator
+                and key.strip(_ASCII_SPACE) in cls._STOP_KEYS
+            ):
+                assigned = value.strip(_ASCII_SPACE)
         return assigned
 
     @classmethod
     def assignment(cls, text: str, name: str) -> str | None:
-        """Return the last value *name* is given in *text*, unquoted, else ``None``.
+        """Return the last value *name* is given in an env file, else ``None``.
 
+        For env-file text only: an env file's value may be quoted, and the quotes
+        are removed.  A unit directive is never unquoted (see :meth:`stop_timeout`).
         ``None`` is the documented answer for a name the text never sets.
         """
         found: str | None = None
         for line in cls._logical_lines(text):
             key, separator, value = line.partition("=")
-            if separator and key.strip() == name:
-                found = cls._unquoted(value.strip())
+            if separator and key.strip(_ASCII_SPACE) == name:
+                found = cls._unquoted(value.strip(_ASCII_SPACE))
         return found
 
     @staticmethod
@@ -105,17 +112,20 @@ class SystemdText:
         break), a line ending in a backslash joined with the next, blank lines and
         ``#`` or ``;`` comments skipped.  One pass with no backtracking.
         """
-        pending = ""
+        parts: list[str] = []
         for physical in text.split("\n"):
-            line = pending + physical.strip()
-            if line.endswith("\\"):
-                pending = line[:-1] + " "
+            stripped = physical.strip(_ASCII_SPACE)
+            if stripped.endswith("\\"):
+                parts.append(stripped[:-1])
                 continue
-            pending = ""
+            line = " ".join([*parts, stripped]) if parts else stripped
+            parts.clear()
             if line and line[0] not in "#;":
                 yield line
-        if pending.strip():
-            yield pending.strip()
+        if parts:
+            line = " ".join(parts).strip(_ASCII_SPACE)
+            if line:
+                yield line
 
     @classmethod
     def timespan(cls, text: str) -> float:

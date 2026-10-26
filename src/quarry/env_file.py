@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import TYPE_CHECKING, ClassVar, Self, final
+from typing import TYPE_CHECKING, Self, final
 
 from quarry.env_sweep import EnvSweep
 from quarry.failure_reason import FailureReason
@@ -31,8 +31,6 @@ class EnvFile:
     sweeps them (see :class:`EnvSweep`).  The config directory is tightened to
     0700 whether or not it already existed.
     """
-
-    STALE_AFTER_S: ClassVar[float] = EnvSweep.STALE_AFTER_S
 
     __slots__ = ("_path",)
 

@@ -36,13 +36,16 @@ class EnvSweep:
     and the legacy ``<name>.tmp``.  Of those, a symlink or a directory is never
     touched (and is reported on its own, as it should not be there), neither is a
     file another user owns, and a regular file this user owns is removed once it
-    is :attr:`STALE_AFTER_S` old or dated in the future.  A leftover that vanishes
-    mid-sweep (a live writer renamed it) counts as nothing.  The names are safe to
-    log; an errno never quotes a path.
+    is :attr:`STALE_AFTER_S` old or dated more than :attr:`CLOCK_SKEW_S` ahead.
+    A leftover that vanishes mid-sweep (a live writer renamed it) counts as
+    nothing.  The names are safe to log; an errno never quotes a path.
     """
 
     # Long past any live write: a temp this old belongs to a crashed one.
     STALE_AFTER_S: ClassVar[float] = 600.0
+    # How far ahead of the clock an mtime may be before it is not a live writer's:
+    # a clock that was stepped back, or a shared filesystem a little ahead of us.
+    CLOCK_SKEW_S: ClassVar[float] = 3600.0
 
     __slots__ = ("_directory", "_name")
 
@@ -100,7 +103,7 @@ class EnvSweep:
     @classmethod
     def _is_young(cls, mtime: float) -> bool:
         """Return whether *mtime* is recent enough to belong to a live writer."""
-        return 0 <= time.time() - mtime < cls.STALE_AFTER_S
+        return -cls.CLOCK_SKEW_S <= time.time() - mtime < cls.STALE_AFTER_S
 
     @staticmethod
     def _report(outcome: dict[Leftover, list[str]]) -> None:

@@ -33,6 +33,8 @@ _TOKEN_BYTES = 32
 class DaemonLauncher:
     """Turn parsed :class:`BindOptions` into a running engine daemon."""
 
+    __slots__ = ("_options",)
+
     _options: BindOptions
 
     def __new__(cls, options: BindOptions) -> Self:
@@ -141,11 +143,10 @@ def entrypoint() -> None:
     Logging is configured HERE rather than inside :meth:`DaemonLauncher.launch`
     so it covers the whole process: argument parsing, the bind-key and TLS
     refusals that exit before any server exists, and the uncaught-exception
-    hooks.  Until this call the daemon had no logging configuration at all --
-    root had no handlers, so Python fell back to ``logging.lastResort``, a
-    bare stderr handler at WARNING with no formatter.  Every operational INFO
-    line was discarded, and what did escape reached the supervisor's stderr
-    file with no timestamp.
+    hooks.  Without it root has no handlers, so Python falls back to
+    ``logging.lastResort``, a bare stderr handler at WARNING with no formatter:
+    every operational INFO line is discarded, and what escapes reaches the
+    supervisor's stderr file with no timestamp.
 
     ``stderr_level="INFO"`` keeps the supervisor's stderr file readable as a
     live tail; the rotating file is the record.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-from contextlib import suppress
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.failure_reason import FailureReason
@@ -56,15 +55,24 @@ class PrivateWrite:
         except BaseException:
             self._discard(tmp)
             raise
-        self._sync(final_path.parent)
+        self.sync_directory(final_path.parent)
 
-    @staticmethod
-    def _discard(tmp: Path) -> None:
-        """Remove *tmp*; a failure to is not allowed to hide the real one."""
-        with suppress(OSError):
+    def _discard(self, tmp: Path) -> None:
+        """Remove *tmp*; a failure to is a warning, never the error that surfaces.
+
+        A temp left behind can hold the very secret this class exists to protect,
+        so the failure is named (by errno) rather than swallowed.
+        """
+        try:
             tmp.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "%s: could not remove its temp file (%s)",
+                self._label,
+                FailureReason.os_name(exc),
+            )
 
-    def _sync(self, directory: Path) -> None:
+    def sync_directory(self, directory: Path) -> None:
         """Sync *directory*; a failure is a warning, the file is already in place."""
         try:
             handle = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)

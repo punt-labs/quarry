@@ -193,7 +193,6 @@ def test_a_feed_after_cancel_all_arms_nothing() -> None:
         dispatcher.feed(_KEY, FsEvent(Path("/r/b.md"), deleted=False))
         await asyncio.sleep(0.15)
 
-        assert dispatcher.pending_count() == 0
         assert (
             sink.batches == []
         )  # nothing fired: the first was cancelled, the second refused

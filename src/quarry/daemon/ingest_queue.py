@@ -142,7 +142,7 @@ class IngestQueue:
 
     async def _abort(self, workers: list[CollectionWorker], window_s: float) -> None:
         """Abort *workers* after a drain outran its window; say what that cost."""
-        tasks = [worker.abort() for worker in workers]
+        tasks = [worker.abort_off_loop() for worker in workers]
         done, pending = await asyncio.wait(tasks, timeout=self.ABORT_WAIT_S)
         for task in done:
             # A worker that died of anything but the cancel would otherwise end as

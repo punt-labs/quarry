@@ -168,7 +168,7 @@ class WatchLoop:
         if roster is None:  # start() never ran
             return
         self._started = False
-        sequence = WatchStop(
+        sequence = WatchStop.for_loop(
             roster,
             self._source,
             self._safety_task,

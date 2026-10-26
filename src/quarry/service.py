@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import secrets
 import socket
 import subprocess
 import textwrap
@@ -25,6 +26,7 @@ from quarry.config import DEFAULT_PORT
 from quarry.env_file import EnvFile
 from quarry.fd_config import FdServiceLimits
 from quarry.net import LoopbackPolicy
+from quarry.private_write import PrivateWrite
 from quarry.shutdown_policy import ShutdownPolicy
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
@@ -240,23 +242,13 @@ def _launchd_install() -> None:
                 result.returncode,
             )
 
-    content = _launchd_plist_content()
-    tmp_path = _LAUNCHD_PLIST.with_name(_LAUNCHD_PLIST.name + ".tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(str(tmp_path), flags, 0o600)
-    try:
-        f = os.fdopen(fd, "w")
-    except BaseException:
-        os.close(fd)
-        tmp_path.unlink(missing_ok=True)
-        raise
-    try:
-        with f:
-            f.write(content)
-        tmp_path.replace(_LAUNCHD_PLIST)
-    except BaseException:
-        tmp_path.unlink(missing_ok=True)
-        raise
+    # A name of its own, so a leftover from a crashed install never blocks this one.
+    tmp_path = _LAUNCHD_PLIST.with_name(
+        f"{_LAUNCHD_PLIST.name}.{secrets.token_hex(6)}.tmp"
+    )
+    PrivateWrite("launchd plist").commit(
+        tmp_path, _LAUNCHD_PLIST, _launchd_plist_content()
+    )
     logger.info("Wrote %s", _LAUNCHD_PLIST)
 
     subprocess.run(

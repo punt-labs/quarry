@@ -62,8 +62,8 @@ class SpoolRecord:
         )
 
     def filename(self) -> str:
-        """Return a collision-free spool filename for this record."""
-        return f"{self.kind}-{uuid.uuid4().hex[:12]}.json"
+        """Return a spool filename no earlier record can share (a full UUID)."""
+        return f"{self.kind}-{uuid.uuid4().hex}.json"
 
 
 @final
@@ -87,18 +87,22 @@ class JobSpool:
     def write(self, record: SpoolRecord) -> bool:
         """Persist *record* atomically and privately; return whether it stuck.
 
-        Returns ``True`` only when the atomic rename succeeded, i.e. the record
-        is in place and recoverable (it was synced first, and the directory after;
-        a failed directory sync is a warning, since the file is already there).
-        Any failure returns ``False`` and never raises into shutdown, so the
-        caller can record the truth instead of a false recoverability claim: the
-        content is lost, not spooled.
+        Returns ``True`` only when the rename succeeded, so the record is in
+        place and recoverable.  What is durable, exactly: the file's bytes are
+        synced before the rename, and the spool directory is synced after it, so
+        the entry survives a crash; when this call created the spool directory,
+        its entry in the parent is synced too.  A failed directory sync is a
+        warning and still returns ``True``: the record is there, but a crash
+        before the filesystem flushes could lose its name.  Any other failure
+        returns ``False`` and never raises into shutdown, so the caller records
+        the truth instead of a false recoverability claim: the content is lost,
+        not spooled.  It is logged with the collection so the loss stays visible.
 
         The spool holds best-effort-scrubbed content (regex redaction, not a
-        guarantee), so it is created private — the dir ``0o700`` and the
+        guarantee), so it is created private: the directory ``0o700`` and the
         file ``0o600`` from the start, never group/other-readable even for an
-        instant.  A failure is logged (with the collection, so the loss stays
-        visible) rather than propagated — the abort loop keeps failing the rest.
+        instant.  The name carries a full UUID, so a record never replaces an
+        earlier one.
         """
         try:
             self._ensure_private_dir()
@@ -117,10 +121,15 @@ class JobSpool:
         """Create the spool dir ``0o700``, tightening it if it exists looser.
 
         ``<quarry_root>`` itself is not created restrictively, so an existing
-        spool dir left world-readable by an earlier run is re-tightened here.
+        spool dir left world-readable by an earlier run is re-tightened here.  A
+        directory this call creates is synced into its parent, or the records
+        written into it could outlive the directory's own name in a crash.
         """
+        created = not self._dir.exists()
         self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._dir.chmod(0o700)
+        if created:
+            PrivateWrite("spool directory").sync_directory(self._dir.parent)
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:

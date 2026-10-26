@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import platform
 import plistlib
 import stat
@@ -898,37 +897,43 @@ class TestLaunchdPlistAtomicWrite:
         assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
 
     @patch("quarry.service.subprocess.run")
-    def test_fd_closed_and_tmp_removed_when_fdopen_raises(
+    def test_the_plist_is_written_through_private_write(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """If os.fdopen raises during plist write, the raw fd is closed and tmp removed.
-
-        No temp file leaks and no fd leaks on fdopen failure.
-        """
+        """The write goes through PrivateWrite; its own tests own the file I/O."""
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
-        closed_fds: list[int] = []
-        real_close = os.close
-
-        def fake_close(fd: int) -> None:
-            closed_fds.append(fd)
-            real_close(fd)
-
-        mock_run.return_value = MagicMock(returncode=113)  # launchctl list: not found
-
+        mock_run.side_effect = [MagicMock(returncode=113), MagicMock(returncode=0)]
         with (
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
             patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
-            patch("quarry.private_write.os.fdopen", side_effect=OSError("injected")),
-            patch("quarry.private_write.os.close", side_effect=fake_close),
-            pytest.raises(OSError, match="injected"),
+            patch("quarry.service.PrivateWrite.commit") as commit,
         ):
             _launchd_install()
 
-        # No .tmp files should remain
-        assert not any(tmp_path.glob("*.tmp"))
-        # The raw fd must have been closed
-        assert closed_fds, "os.close was never called after os.fdopen failure"
+        [call] = commit.call_args_list
+        tmp, final, text = call.args
+        assert final == plist_path
+        assert tmp.parent == tmp_path
+        assert tmp != final
+        assert "com.punt-labs.quarry" in text
+
+    @patch("quarry.service.subprocess.run")
+    def test_a_leftover_plist_temp_does_not_block_the_install(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        leftover = tmp_path / "com.punt-labs.quarry.plist.tmp"
+        leftover.write_text("crashed")
+        mock_run.side_effect = [MagicMock(returncode=113), MagicMock(returncode=0)]
+        with (
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
+        ):
+            _launchd_install()
+
+        assert plist_path.exists()
 
 
 class TestWriteEnvFileBackslash:

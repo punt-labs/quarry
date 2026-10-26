@@ -1589,7 +1589,7 @@ def test_a_cancel_during_the_observer_join_still_tears_down_and_says_so(
                 await stopping
 
             assert _is_torn_down(loop)
-            assert "thread may still be running" in caplog.text
+            assert "joining the observer was in progress" in caplog.text
             release.set()
             await asyncio.sleep(0.2)
             assert source.stopped is True  # the shielded join ran to the end

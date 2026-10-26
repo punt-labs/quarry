@@ -166,7 +166,8 @@ def test_the_file_is_synced_before_the_rename_and_the_directory_after(
             SpoolRecord("remember", "c", "n", "p")
         )
 
-    assert events == ["fsync", "rename", "fsync-dir"]
+    # the new spool directory goes into its parent first, then the record's sync
+    assert events == ["fsync-dir", "fsync", "rename", "fsync-dir"]
 
 
 def test_a_failed_file_sync_loses_the_record_cleanly(
@@ -229,3 +230,49 @@ def test_the_temp_is_removed_when_the_sync_fails_partway(tmp_path: Path) -> None
         JobSpool(tmp_path / "spool").write(SpoolRecord("remember", "c", "n", "p"))
 
     assert not list((tmp_path / "spool").glob("*.tmp"))
+
+
+def test_filenames_carry_a_full_uuid_so_no_record_replaces_another() -> None:
+    record = SpoolRecord("remember", "c", "n", "p")
+
+    name = record.filename()
+
+    assert len(name.removeprefix("remember-").removesuffix(".json")) == 32
+    assert name != record.filename()
+
+
+def test_a_directory_the_write_creates_is_synced_into_its_parent(
+    tmp_path: Path,
+) -> None:
+    synced: list[int] = []
+    real_fsync = os.fsync
+    parent_inode = tmp_path.stat().st_ino
+
+    def fsync(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            synced.append(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    with patch("quarry.private_write.os.fsync", fsync):
+        JobSpool(tmp_path / "spool").write(SpoolRecord("remember", "c", "n", "p"))
+
+    assert parent_inode in synced  # the parent of the spool directory
+    assert (tmp_path / "spool").stat().st_ino in synced  # and the spool itself
+
+
+def test_an_existing_spool_directory_is_not_resynced_into_its_parent(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "spool").mkdir()
+    synced: list[int] = []
+    real_fsync = os.fsync
+
+    def fsync(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            synced.append(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    with patch("quarry.private_write.os.fsync", fsync):
+        JobSpool(tmp_path / "spool").write(SpoolRecord("remember", "c", "n", "p"))
+
+    assert tmp_path.stat().st_ino not in synced
