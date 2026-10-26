@@ -23,7 +23,9 @@ class TestCountUnmapped:
         (projects_dir / "unmapped-project").mkdir(parents=True)
         mappings = [ProjectMapping("mapped-project", "/p", "p")]
 
-        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+        with patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ):
             count = ProjectMappingResolver.count_unmapped(mappings)
 
         assert count == 1
@@ -33,14 +35,17 @@ class TestCountUnmapped:
         (projects_dir / "mapped-project").mkdir(parents=True)
         mappings = [ProjectMapping("mapped-project", "/p", "p")]
 
-        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+        with patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ):
             count = ProjectMappingResolver.count_unmapped(mappings)
 
         assert count == 0
 
     def test_zero_when_projects_dir_is_absent(self, tmp_path: Path) -> None:
         with patch(
-            "quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", tmp_path / "does-not-exist"
+            "quarry.home_paths.QuarryHome.claude_projects",
+            return_value=tmp_path / "does-not-exist",
         ):
             count = ProjectMappingResolver.count_unmapped([])
 

@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import ast
 import errno
+import fcntl
 import json
 import logging
 import os
 import stat
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
+import pytest
+
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 
 if TYPE_CHECKING:
-    import pytest
-
     from quarry.config import Settings
 
 
@@ -184,7 +186,8 @@ def test_a_failed_file_sync_loses_the_record_cleanly(
         )
 
     assert wrote is False
-    assert not list((tmp_path / "spool").glob("*"))
+    leftovers = [p for p in (tmp_path / "spool").glob("*") if p.name != ".lock"]
+    assert leftovers == []
     assert "failed to spool aborted remember job for c" in caplog.text
 
 
@@ -392,3 +395,53 @@ def test_sweep_of_a_spool_that_does_not_exist_yet_says_nothing(
         JobSpool(tmp_path / "spool").sweep()
 
     assert caplog.records == []
+
+
+def test_a_kind_the_sweep_could_not_match_is_refused_at_once() -> None:
+    for bad in ("", "Remember", "re_member", "ingest-", "-ingest", "in gest", "a/b"):
+        with pytest.raises(ValueError, match="spool kind"):
+            SpoolRecord(bad, "c", "n", "p")
+
+
+def test_a_write_holding_the_shared_lock_is_never_swept(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    live = spool / ("remember-" + "a" * 32 + ".json.tmp")
+    live.write_text("{}")
+    lock = os.open(spool / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(lock, fcntl.LOCK_SH)  # a writer, mid-write
+    sweeping = threading.Thread(target=JobSpool(spool).sweep, daemon=True)
+    sweeping.start()
+    time.sleep(0.3)
+
+    assert live.exists()  # the sweep is waiting for the writer, not unlinking
+    assert sweeping.is_alive()
+
+    os.close(lock)  # the writer is done
+    sweeping.join(5)
+
+    assert not sweeping.is_alive()
+    assert not live.exists()  # now it is a crash's, and is swept
+
+
+def test_a_write_waits_for_a_sweep_and_then_lands(tmp_path: Path) -> None:
+    spool = JobSpool(tmp_path / "spool")
+    assert spool.write(SpoolRecord("remember", "c", "first", "p"))
+    exclusive = os.open(tmp_path / "spool" / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(exclusive, fcntl.LOCK_EX)  # a sweep, mid-sweep
+    outcome: list[bool] = []
+    writing = threading.Thread(
+        target=lambda: outcome.append(
+            spool.write(SpoolRecord("remember", "c", "second", "p"))
+        ),
+        daemon=True,
+    )
+    writing.start()
+    time.sleep(0.3)
+
+    assert outcome == []  # waiting
+
+    os.close(exclusive)
+    writing.join(5)
+
+    assert outcome == [True]

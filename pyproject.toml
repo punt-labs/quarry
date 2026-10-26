@@ -124,7 +124,7 @@ eval = [
 ]
 
 [project.scripts]
-quarry = "quarry.__main__:app"
+quarry = "quarry._cli_entry:main"
 quarryd = "quarry.daemon.launcher:entrypoint"
 quarry-hook = "quarry._hook_entry:main"
 

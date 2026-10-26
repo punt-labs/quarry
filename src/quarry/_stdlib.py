@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
+from quarry._cli_entry import CliEntry
 from quarry._frontmatter import Frontmatter
 from quarry._hook_trace import HookTrace
 from quarry.logging_config import LoggingConfig
@@ -177,7 +178,9 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
         result = handler(payload)
         sys.stdout.write(json.dumps(result))
         sys.stdout.write("\n")
-    except Exception:
+    except Exception as exc:
+        if CliEntry.is_home_failure(exc):
+            raise  # one clean line from the entry point, never a traceback
         logger.exception("Hook %s failed (fail-open)", handler.__name__)
         sys.stdout.write("{}\n")
 

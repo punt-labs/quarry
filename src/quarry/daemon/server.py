@@ -26,8 +26,8 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.crash_logging import UncaughtExceptionLog
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
-from quarry.daemon.daemon_threads import DaemonThreads
 from quarry.daemon.job_spool import JobSpool
+from quarry.daemon.spool_sweep import StartupSweep
 from quarry.daemon.teardown import Teardown
 from quarry.fd_config import FdEnvelope
 from quarry.fd_telemetry import FdTelemetry
@@ -271,10 +271,11 @@ class DaemonServer:
         # nobody awaited fails silently into asyncio's default reporting.
         UncaughtExceptionLog.bind_loop(asyncio.get_running_loop())
         monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
+        # A task, not an await: a stalled disk must not hold startup.  Kept here, so
+        # it is not collected while the daemon runs; it logs its own end.
+        spool_sweep = StartupSweep.start(JobSpool.for_settings(ctx.settings))
         # Warm + queue are ready by now; start watching every roster database so
         # continuous indexing runs as a queue producer.
-        # Off the loop and on a daemon thread: a stalled disk must not hold startup.
-        await DaemonThreads.shared().run(JobSpool.for_settings(ctx.settings).sweep)
         await ctx.start_watch_loop()
         try:
             yield
@@ -285,6 +286,7 @@ class DaemonServer:
                 await Teardown(ctx).run()
             finally:
                 monitor.cancel()
+                spool_sweep.cancel()  # a sweep still waiting on a stalled disk
                 # Remove ONLY the sidecars this instance wrote after its own
                 # successful bind.  A second quarryd that fails to bind (port in
                 # use) must not delete a running peer's live serve.token / port

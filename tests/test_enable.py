@@ -25,7 +25,7 @@ from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
 from quarry.guidance import REPO_IMPORT_LINE
 from tests.conftest import FakeRegistryClient
 
-_NO_ETHOS = "quarry.ethos_memory._GLOBAL_IDENTITIES"
+_NO_ETHOS = "quarry.home_paths.QuarryHome.ethos_identities"
 
 
 class TestT1EnableNewDirectory:
@@ -34,7 +34,7 @@ class TestT1EnableNewDirectory:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
         assert isinstance(result, EnableResult)
@@ -51,7 +51,7 @@ class TestT2EnableIdempotent:
         project.mkdir()
         client = FakeRegistryClient([("foo", project)])
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
         assert result.collection == "foo"
@@ -68,7 +68,7 @@ class TestT3EnableChildRaisesValueError:
         client = FakeRegistryClient([("project", parent)])
 
         with (
-            patch(_NO_ETHOS, tmp_path / "no-ethos"),
+            patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"),
             pytest.raises(ValueError, match="already covered by the registration at"),
         ):
             enable_project(child, client)
@@ -80,7 +80,7 @@ class TestT4EnableCollectionOverride:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(project, client, collection_override="custom")
 
         assert result.collection == "custom"
@@ -106,7 +106,7 @@ class TestKeepDataArchiveNoMerge:
         dir_b.mkdir(parents=True)
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(dir_a, client)
             assert client.registered[-1].collection == "backend"
             disable_project(dir_a, client, keep_data=True)
@@ -130,7 +130,7 @@ class TestKeepDataArchiveNoMerge:
         dir_a.mkdir(parents=True)
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(dir_a, client)
             disable_project(dir_a, client, keep_data=True)
             result = enable_project(dir_a, client)
@@ -156,7 +156,7 @@ class TestKeepDataArchiveNoMerge:
         dir_b.mkdir(parents=True)
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(dir_a, client)
             disable_project(dir_a, client, keep_data=True)
             result = enable_project(dir_b, client)
@@ -179,7 +179,7 @@ class TestKeepDataArchiveNoMerge:
         dir_b.mkdir(parents=True)
         client = FakeRegistryClient(chunk_collections=["backend"])
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(dir_b, client)
 
         assert result.collection == "backend-other"  # disambiguated, no merge
@@ -193,7 +193,7 @@ class TestT5EnableCreatesConfig:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
         config_path = project / ".punt-labs" / "quarry" / "config.md"
@@ -213,7 +213,7 @@ class TestT6EnablePreservesExistingConfig:
         config_path.write_text(custom_content)
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, client)
 
         assert config_path.read_text() == custom_content
@@ -235,7 +235,7 @@ class TestEnableRefreshesVendoredEthosTree:
         (identities / "kpz.yaml").write_text("agent: kpz\n")  # no ext: stays without
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, unpinned_root / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=unpinned_root / "no-ethos"):
             result = enable_project(unpinned_root, client)
 
         assert result.ethos.vendored_updated == ["claude", "rmh"]
@@ -245,7 +245,7 @@ class TestEnableRefreshesVendoredEthosTree:
         )
         assert not (identities / "kpz.ext").exists()
 
-        with patch(_NO_ETHOS, unpinned_root / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=unpinned_root / "no-ethos"):
             again = enable_project(unpinned_root, client)
         assert again.ethos.vendored_updated == []
 
@@ -256,7 +256,7 @@ class TestT8EnableSkipsEthosWhenMissing:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "nonexistent-identities"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "nonexistent-identities"):
             result = enable_project(project, client)
 
         assert result.ethos.skipped is True
@@ -268,7 +268,7 @@ class TestT9EnableCapturesCollectionName:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
         assert result.captures_collection == f"{result.collection}-captures"
@@ -280,7 +280,7 @@ class TestT10DisableRemovesRegistration:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_result = enable_project(project, client)
             disable_result = disable_project(project, client)
 
@@ -296,7 +296,7 @@ class TestT11DisableRemovesConfig:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, client)
             config_path = project / ".punt-labs" / "quarry" / "config.md"
             assert config_path.exists()
@@ -325,7 +325,7 @@ class TestT11DisableRemovesConfig:
         (project / ".punt-labs").symlink_to(external)
         client = FakeRegistryClient([("myproject", project)])
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = disable_project(project, client)
 
         # The import was pruned (not stranded), the external config survives,
@@ -341,7 +341,7 @@ class TestT12DisableKeepData:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, client)
             result = disable_project(project, client, keep_data=True)
 
@@ -358,7 +358,7 @@ class TestT13DisablePurgesCapturesSibling:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, client)
             disable_project(project, client, keep_data=False)
 
@@ -394,7 +394,7 @@ class TestDisableIdempotentRetrySafe:
         # files. A retry (covering is None) must still clean them and succeed.
         project = tmp_path / "myproject"
         project.mkdir()
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, FakeRegistryClient())
         config_path = project / ".punt-labs" / "quarry" / "config.md"
         assert config_path.exists()
@@ -417,7 +417,7 @@ class TestDisableIdempotentRetrySafe:
 
         project = tmp_path / "myproject"
         project.mkdir()
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, FakeRegistryClient())
         config_path = project / ".punt-labs" / "quarry" / "config.md"
 
@@ -502,7 +502,7 @@ class TestT17EnableWithOverrideOnChildRaises:
         client = FakeRegistryClient([("project", parent)])
 
         with (
-            patch(_NO_ETHOS, tmp_path / "no-ethos"),
+            patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"),
             pytest.raises(ValueError, match="already covered by the registration"),
         ):
             enable_project(child, client, collection_override="custom")
@@ -517,7 +517,7 @@ class TestT18EnableResolvesRelativePath:
         monkeypatch.chdir(project)
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(Path(), client)
 
         assert result.directory == str(project)
@@ -533,7 +533,7 @@ class TestT19DisableResolvesRelativePath:
         monkeypatch.chdir(project)
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, client)
             result = disable_project(Path(), client)
 
@@ -598,7 +598,7 @@ class TestEnableRegistersImportAndMarker:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
         # The enabled marker and the repo @-import are the §2.11 biconditional:
@@ -619,7 +619,7 @@ class TestEnableEnsuresCapturesGitignore:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
         assert result.gitignore_ensured is True
@@ -632,7 +632,7 @@ class TestEnableEnsuresCapturesGitignore:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result1 = enable_project(project, client)
             result2 = enable_project(project, client)
 
@@ -647,7 +647,7 @@ class TestEnableEnsuresCapturesGitignore:
         (project / ".gitignore").write_text("node_modules/\n*.pyc\n")
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, client)
 
         content = (project / ".gitignore").read_text()
@@ -680,7 +680,7 @@ class TestEnableEnsuresCapturesGitignore:
         monkeypatch.setattr(enable_module, "_write_project_config", boom)
 
         with (
-            patch(_NO_ETHOS, tmp_path / "no-ethos"),
+            patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"),
             pytest.raises(OSError, match="config write failed"),
         ):
             enable_project(project, client)
@@ -699,7 +699,7 @@ class TestEnableImportIdempotent:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result1 = enable_project(project, client)
             result2 = enable_project(project, client)
 
@@ -717,7 +717,7 @@ class TestEnableAppendsToExistingClaudemd:
         claudemd.write_text("# My Project\n\nExisting content.\n")
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
         assert result.import_registered is True
@@ -732,7 +732,7 @@ class TestDisableRemovesImportAndMarker:
         project.mkdir()
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, client)
             result = disable_project(project, client)
 
@@ -753,7 +753,7 @@ class TestDisablePreservesOtherClaudemdContent:
         claudemd.write_text("# My Project\n\nKeep this.\n")
         client = FakeRegistryClient()
 
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(project, client)
             result = disable_project(project, client)
 

@@ -25,11 +25,12 @@ from xml.sax.saxutils import escape as _xml_escape
 from quarry.config import DEFAULT_PORT
 from quarry.env_file import EnvFile
 from quarry.fd_config import FdServiceLimits
+from quarry.home_paths import QuarryHome
 from quarry.net import LoopbackPolicy
 from quarry.private_write import PrivateWrite
 from quarry.shutdown_policy import ShutdownPolicy
 from quarry.temp_sweep import TempSweep
-from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
+from quarry.tls import cert_fingerprint, write_tls_files
 
 
 @runtime_checkable
@@ -56,7 +57,6 @@ class ServiceBackend(Protocol):
 logger = logging.getLogger(__name__)
 
 _LABEL = "com.punt-labs.quarry"
-_ENV_FILE: Path = Path.home() / ".punt-labs" / "quarry" / "quarry.env"
 
 
 _MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false"
@@ -79,7 +79,7 @@ def _write_env_file(api_key: str = "") -> None:
     if api_key:
         escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
         lines.insert(0, f'QUARRY_API_KEY="{escaped}"')
-    EnvFile(_ENV_FILE).write(lines)
+    EnvFile(QuarryHome.env_file()).write(lines)
 
 
 def _quarryd_exec_args() -> list[str]:
@@ -107,7 +107,7 @@ def _quarryd_exec_args() -> list[str]:
     an env file (``~/.punt-labs/quarry/quarry.env``) to keep it out of
     ``ps aux`` output and world-readable service files.
 
-    Appends ``--tls`` when TLS certificates are present in TLS_DIR.
+    Appends ``--tls`` when TLS certificates are present in QuarryHome.tls_dir().
     """
     # 1. Preferred: uv tool install symlink.
     local_bin = Path.home() / ".local" / "bin" / "quarryd"
@@ -130,15 +130,15 @@ def _quarryd_exec_args() -> list[str]:
         # here too would duplicate that single source of truth.
         base.extend(["--host", serve_host])
 
-    cert_path = TLS_DIR / "server.crt"
-    key_path = TLS_DIR / "server.key"
+    cert_path = QuarryHome.tls_dir() / "server.crt"
+    key_path = QuarryHome.tls_dir() / "server.key"
     if cert_path.exists() and key_path.exists():
         base.append("--tls")
     elif cert_path.exists() or key_path.exists():
         logger.warning(
             "Partial TLS state in %s — only one of server.crt / server.key exists. "
             "Run 'quarry install' to regenerate TLS files.",
-            TLS_DIR,
+            QuarryHome.tls_dir(),
         )
 
     return base
@@ -147,9 +147,6 @@ def _quarryd_exec_args() -> list[str]:
 # ---------------------------------------------------------------------------
 # macOS — launchd
 # ---------------------------------------------------------------------------
-
-_LAUNCHD_DIR = Path.home() / "Library" / "LaunchAgents"
-_LAUNCHD_PLIST = _LAUNCHD_DIR / f"{_LABEL}.plist"
 
 
 def _launchd_plist_content() -> str:
@@ -222,7 +219,7 @@ def _launchd_plist_content() -> str:
 
 
 def _launchd_install() -> None:
-    _LAUNCHD_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    QuarryHome.launchd_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
 
     # Unload any existing service first — handles upgrades where the
     # old plist pointed to a different binary (e.g. editable install).
@@ -231,7 +228,7 @@ def _launchd_install() -> None:
     # respawning via KeepAlive.
     if _launchd_status():
         result = subprocess.run(
-            ["launchctl", "unload", "-w", str(_LAUNCHD_PLIST)],
+            ["launchctl", "unload", "-w", str(QuarryHome.launchd_plist(_LABEL))],
             check=False,
         )
         if result.returncode == 0:
@@ -244,33 +241,36 @@ def _launchd_install() -> None:
             )
 
     # A crashed install can leave a temp holding the API key: sweep before writing.
-    TempSweep.beside(_LAUNCHD_PLIST, "launchd plist").run()
+    TempSweep.beside(QuarryHome.launchd_plist(_LABEL), "launchd plist").run()
     # A name of its own, so a leftover never blocks this install.
-    tmp_path = _LAUNCHD_PLIST.with_name(
-        f"{_LAUNCHD_PLIST.name}.{secrets.token_hex(6)}.tmp"
+    tmp_path = QuarryHome.launchd_plist(_LABEL).with_name(
+        f"{QuarryHome.launchd_plist(_LABEL).name}.{secrets.token_hex(6)}.tmp"
     )
     PrivateWrite("launchd plist").commit(
-        tmp_path, _LAUNCHD_PLIST, _launchd_plist_content()
+        tmp_path, QuarryHome.launchd_plist(_LABEL), _launchd_plist_content()
     )
-    logger.info("Wrote %s", _LAUNCHD_PLIST)
+    logger.info("Wrote %s", QuarryHome.launchd_plist(_LABEL))
 
     subprocess.run(
-        ["launchctl", "load", "-w", str(_LAUNCHD_PLIST)],
+        ["launchctl", "load", "-w", str(QuarryHome.launchd_plist(_LABEL))],
         check=True,
     )
     logger.info("Loaded %s into launchd", _LABEL)
 
 
 def _launchd_uninstall() -> None:
-    if _LAUNCHD_PLIST.exists():
+    if QuarryHome.launchd_plist(_LABEL).exists():
         subprocess.run(
-            ["launchctl", "unload", "-w", str(_LAUNCHD_PLIST)],
+            ["launchctl", "unload", "-w", str(QuarryHome.launchd_plist(_LABEL))],
             check=False,  # may already be unloaded
         )
-        _LAUNCHD_PLIST.unlink()
-        logger.info("Removed %s", _LAUNCHD_PLIST)
+        QuarryHome.launchd_plist(_LABEL).unlink()
+        logger.info("Removed %s", QuarryHome.launchd_plist(_LABEL))
     else:
-        logger.info("No plist found at %s — nothing to uninstall", _LAUNCHD_PLIST)
+        logger.info(
+            "No plist found at %s — nothing to uninstall",
+            QuarryHome.launchd_plist(_LABEL),
+        )
 
 
 def _launchd_status() -> bool:
@@ -285,9 +285,6 @@ def _launchd_status() -> bool:
 # ---------------------------------------------------------------------------
 # Linux — systemd user unit
 # ---------------------------------------------------------------------------
-
-_SYSTEMD_DIR = Path.home() / ".config" / "systemd" / "user"
-_SYSTEMD_UNIT = _SYSTEMD_DIR / "quarry.service"
 
 
 def _systemd_escape(arg: str) -> str:
@@ -305,7 +302,7 @@ def _systemd_escape(arg: str) -> str:
 def _systemd_unit_content() -> str:
     args = _quarryd_exec_args()
     exec_start = " ".join(_systemd_escape(a) for a in args)
-    env_file_path = str(_ENV_FILE)
+    env_file_path = str(QuarryHome.env_file())
     # Bake the descriptor ceiling into the unit: systemd raises the daemon's hard
     # limit above the login-session default so the in-daemon FdEnvelope lifts the
     # soft limit off it instead of clamping to it.
@@ -330,9 +327,9 @@ def _systemd_unit_content() -> str:
 
 
 def _systemd_install() -> None:
-    _SYSTEMD_DIR.mkdir(parents=True, exist_ok=True)
-    _SYSTEMD_UNIT.write_text(_systemd_unit_content())
-    logger.info("Wrote %s", _SYSTEMD_UNIT)
+    QuarryHome.systemd_dir().mkdir(parents=True, exist_ok=True)
+    QuarryHome.systemd_unit().write_text(_systemd_unit_content())
+    logger.info("Wrote %s", QuarryHome.systemd_unit())
 
     subprocess.run(
         ["systemctl", "--user", "daemon-reload"],
@@ -352,19 +349,21 @@ def _systemd_install() -> None:
 
 
 def _systemd_uninstall() -> None:
-    if _SYSTEMD_UNIT.exists():
+    if QuarryHome.systemd_unit().exists():
         subprocess.run(
             ["systemctl", "--user", "disable", "--now", "quarry"],
             check=False,  # may already be stopped
         )
-        _SYSTEMD_UNIT.unlink()
+        QuarryHome.systemd_unit().unlink()
         subprocess.run(
             ["systemctl", "--user", "daemon-reload"],
             check=False,
         )
-        logger.info("Removed %s", _SYSTEMD_UNIT)
+        logger.info("Removed %s", QuarryHome.systemd_unit())
     else:
-        logger.info("No unit found at %s — nothing to uninstall", _SYSTEMD_UNIT)
+        logger.info(
+            "No unit found at %s — nothing to uninstall", QuarryHome.systemd_unit()
+        )
 
 
 def _systemd_status() -> bool:
@@ -436,7 +435,7 @@ def install() -> str:
     # service file can include --tls in its exec args.
     hostname = _get_tls_hostname()
     write_tls_files(hostname)
-    ca_crt = TLS_DIR / "ca.crt"
+    ca_crt = QuarryHome.tls_dir() / "ca.crt"
     fingerprint = cert_fingerprint(ca_crt.read_bytes()) if ca_crt.exists() else ""
 
     args = _quarryd_exec_args()
@@ -452,7 +451,7 @@ def install() -> str:
     status = "running" if running else "installed (not yet running)"
     lines = [
         f"quarry daemon {status} on port {DEFAULT_PORT}.",
-        f"  Service: {_LAUNCHD_PLIST if plat == 'macos' else _SYSTEMD_UNIT}",
+        f"  Service: {_service_file(plat)}",
         f"  Command: {exec_display}",
     ]
     if fingerprint:
@@ -470,16 +469,23 @@ def install() -> str:
     return os.linesep.join(lines)
 
 
+def _service_file(plat: str) -> Path:
+    """Return the service definition file for *plat*."""
+    return (
+        QuarryHome.launchd_plist(_LABEL)
+        if plat == "macos"
+        else QuarryHome.systemd_unit()
+    )
+
+
 def uninstall() -> str:
     """Remove quarry system service.  Returns a status message."""
     plat = detect_platform()
     if plat == "macos":
         _launchd_uninstall()
-        path = _LAUNCHD_PLIST
     else:
         _systemd_uninstall()
-        path = _SYSTEMD_UNIT
-    return f"quarry daemon uninstalled. Removed {path}."
+    return f"quarry daemon uninstalled. Removed {_service_file(plat)}."
 
 
 def _has_linger() -> bool:

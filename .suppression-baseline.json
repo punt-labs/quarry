@@ -1,7 +1,7 @@
 {
-  "total": 184,
+  "total": 183,
   "by_category": {
-    "noqa": 146,
+    "noqa": 145,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -43,7 +43,7 @@
       "noqa": 1
     },
     "src/quarry/daemon/routes/meta.py": {
-      "noqa": 2
+      "noqa": 1
     },
     "src/quarry/daemon/routes/registrations.py": {
       "noqa": 1
@@ -181,5 +181,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-26T03:13:43Z"
+  "updated_at": "2026-10-26T04:14:30Z"
 }

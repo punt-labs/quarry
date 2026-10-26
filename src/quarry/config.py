@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import ClassVar, Final
+from typing import Final
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
+
+from quarry.home_paths import QuarryHome
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +28,18 @@ DEFAULT_FD_LIMIT = 8192
 INGEST_DRAIN_MIN_S: Final[float] = 5.0
 INGEST_DRAIN_MAX_S: Final[float] = 300.0
 
-# The data root when QUARRY_ROOT is unset.  One binding shared by the field
-# default and by data_root(), so the two can never disagree about where a
-# default deployment lives.
-_DEFAULT_QUARRY_ROOT: Final[Path] = Path.home() / ".punt-labs" / "quarry" / "data"
-
 
 class Settings(BaseSettings):
-    quarry_root: Path = _DEFAULT_QUARRY_ROOT
-    lancedb_path: Path = quarry_root / "default" / "lancedb"
-    registry_path: Path = quarry_root / "default" / "registry.db"
-    telemetry_path: Path = quarry_root / "default" / "telemetry.db"
+    quarry_root: Path = Field(default_factory=QuarryHome.data_root)
+    lancedb_path: Path = Field(
+        default_factory=QuarryHome.under_root("default", "lancedb")
+    )
+    registry_path: Path = Field(
+        default_factory=QuarryHome.under_root("default", "registry.db")
+    )
+    telemetry_path: Path = Field(
+        default_factory=QuarryHome.under_root("default", "telemetry.db")
+    )
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
 
@@ -176,8 +179,6 @@ class Settings(BaseSettings):
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
-    _DEFAULT_LANCEDB: ClassVar[Path] = quarry_root / "default" / "lancedb"
-
     def resolve_db_paths(self, db_name: str | None = None) -> Settings:
         """Return a copy with lancedb_path, registry_path, and telemetry_path resolved.
 
@@ -188,7 +189,7 @@ class Settings(BaseSettings):
         """
         self._reject_traversal(db_name)
 
-        if self.lancedb_path != Settings._DEFAULT_LANCEDB:
+        if "lancedb_path" in self.model_fields_set:
             return self
 
         name = db_name or "default"

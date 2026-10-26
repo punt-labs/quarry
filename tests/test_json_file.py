@@ -95,7 +95,7 @@ def test_an_operation_that_raises_still_closes_the_descriptor(
     with (
         patch("quarry.json_file.os.open", _recording_open(opened)),
         patch(f"quarry.json_file.os.{failing}", side_effect=OSError(errno.EIO, "x")),
-        pytest.raises(OSError, match=r"x|EIO"),
+        pytest.raises(ValueError, match=r"cfg\.json: OSError: EIO"),
     ):
         JsonFile.load(path)
 
@@ -124,7 +124,7 @@ def test_a_read_that_raises_still_closes_the_descriptor(tmp_path: Path) -> None:
     with (
         patch("quarry.json_file.os.open", _recording_open(opened)),
         patch("quarry.json_file.os.fdopen", return_value=_BrokenHandle()),
-        pytest.raises(OSError, match=r"read failed|EIO"),
+        pytest.raises(ValueError, match=r"cfg\.json: OSError: EIO"),
     ):
         JsonFile.load(path)
 

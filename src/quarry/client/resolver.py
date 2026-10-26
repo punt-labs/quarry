@@ -13,12 +13,12 @@ import logging
 import os
 import urllib.parse
 from collections.abc import Mapping
-from pathlib import Path
 from typing import final
 
 from quarry.client.client import QuarryClient
 from quarry.client.config import ClientConfig, ClientConfigError
 from quarry.client.errors import QuarryConnectionError
+from quarry.home_paths import QuarryHome
 from quarry.net import LoopbackPolicy
 from quarry.remote import read_proxy_config, ws_to_http
 
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 # The daemon's pinned CA (written by ``quarry install``); a managed daemon serves
 # ``--tls`` with it, so a loopback client verifies against it when present and
 # falls back to plaintext only for a bare ``quarryd`` with no CA on disk.
-_DAEMON_CA_PATH = Path.home() / ".punt-labs" / "quarry" / "tls" / "ca.crt"
 
 # The literal loopback the daemon binds and the client pins — never the ambiguous
 # name ``localhost``, which a dual-stack resolver could point at a co-tenant.
@@ -190,8 +189,8 @@ class TargetResolver:
         ca_env = (os.environ.get("QUARRY_CA_CERT") or "").strip()
         if ca_env:
             return ca_env
-        if LoopbackPolicy(host).is_literal_loopback and _DAEMON_CA_PATH.exists():
-            return str(_DAEMON_CA_PATH)
+        if LoopbackPolicy(host).is_literal_loopback and QuarryHome.daemon_ca().exists():
+            return str(QuarryHome.daemon_ca())
         return None
 
     @classmethod
@@ -200,10 +199,10 @@ class TargetResolver:
         port = cls._loopback_port()
         # A managed daemon serves --tls with the pinned CA; only a bare quarryd
         # with no CA on disk is plaintext.  Detection mirrors doctor_daemon.
-        tls = _DAEMON_CA_PATH.exists()
+        tls = QuarryHome.daemon_ca().exists()
         scheme = "wss" if tls else "ws"
         url = f"{scheme}://{_LOOPBACK_HOST}:{port}"
-        ca_cert = str(_DAEMON_CA_PATH) if tls else None
+        ca_cert = str(QuarryHome.daemon_ca()) if tls else None
         # The live serve.token is presented ONLY to the literal loopback IP built
         # above — never a name a resolver could redirect to a co-tenant.  serve.port
         # was already read above, so the daemon is UP: a None token here means its

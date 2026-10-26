@@ -15,15 +15,16 @@ from typing import Annotated, Self, final
 
 import typer
 
+from quarry._cli_entry import CliEntry
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.crash_logging import UncaughtExceptionLog
 from quarry.daemon.bind_options import BindOptions
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.db_pointer import SELECTION
+from quarry.home_paths import QuarryHome
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.logging_config import LoggingConfig
 from quarry.net import LoopbackPolicy
-from quarry.tls import TLS_DIR
 
 # 256-bit URL-safe token — the loopback bearer minted when no key is supplied.
 _TOKEN_BYTES = 32
@@ -84,15 +85,22 @@ class DaemonLauncher:
         """
         if not self._options.tls:
             return None, None
-        cert = TLS_DIR / "server.crt"
-        key = TLS_DIR / "server.key"
+        cert = QuarryHome.tls_dir() / "server.crt"
+        key = QuarryHome.tls_dir() / "server.key"
         if not cert.exists() or not key.exists():
             msg = (
-                f"TLS certificate files not found in {TLS_DIR}. "
+                f"TLS certificate files not found in {QuarryHome.tls_dir()}. "
                 "Run 'quarry install' first."
             )
             raise SystemExit(msg)
         return str(cert), str(key)
+
+    @staticmethod
+    def serve() -> None:
+        """Configure logging, then parse argv and launch the daemon."""
+        LoggingConfig.configure(stderr_level="INFO", log_file=LoggingConfig.DAEMON_LOG)
+        UncaughtExceptionLog.install()
+        typer.run(DaemonLauncher.cli)
 
     @staticmethod
     def cli(
@@ -151,6 +159,4 @@ def entrypoint() -> None:
     ``stderr_level="INFO"`` keeps the supervisor's stderr file readable as a
     live tail; the rotating file is the record.
     """
-    LoggingConfig.configure(stderr_level="INFO", log_file=LoggingConfig.DAEMON_LOG)
-    UncaughtExceptionLog.install()
-    typer.run(DaemonLauncher.cli)
+    CliEntry.run(DaemonLauncher.serve)

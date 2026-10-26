@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from quarry.daemon.spool_lock import SpoolLock
 from quarry.private_write import PrivateWrite
 from quarry.redacted_failure import RedactedFailure
 from quarry.temp_sweep import TempSweep
@@ -42,6 +43,9 @@ class SpoolRecord:
     the ingest URL's storage form), so the spooled file never holds secrets.
     """
 
+    # Lower-case words joined by hyphens: what the startup sweep matches in a name.
+    KIND: ClassVar[re.Pattern[str]] = re.compile(r"[a-z]+(?:-[a-z]+)*")
+
     kind: str
     collection: str
     name: str
@@ -49,6 +53,12 @@ class SpoolRecord:
     # False when the job's own text could not be persisted (an ingest URL whose query
     # was dropped): the file is then only a note, and recovery is by re-running it.
     recoverable: bool = True
+
+    def __post_init__(self) -> None:
+        """Refuse a kind the startup sweep could not recognise in a file name."""
+        if not self.KIND.fullmatch(self.kind):
+            msg = f"spool kind {self.kind!r} is not lower-case words joined by hyphens"
+            raise ValueError(msg)
 
     def as_json(self) -> str:
         """Return the record as a one-object JSON document for the spool file."""
@@ -73,9 +83,9 @@ class JobSpool:
     """Writes :class:`SpoolRecord`s atomically under the daemon's spool dir."""
 
     # ``<kind>-<32 hex>.json.tmp``: what ``SpoolRecord.filename`` plus the temp
-    # suffix make.  A kind is lower-case words joined by hyphens
+    # suffix make.
     _LEFTOVER: ClassVar[re.Pattern[str]] = re.compile(
-        r"[a-z]+(?:-[a-z]+)*-[0-9a-f]{32}\.json\.tmp"
+        rf"{SpoolRecord.KIND.pattern}-[0-9a-f]{{32}}\.json\.tmp"
     )
 
     __slots__ = ("_dir",)
@@ -95,10 +105,18 @@ class JobSpool:
     def sweep(self) -> None:
         """Remove every temp a crashed write left in the spool; blocking.
 
-        Called once at daemon start, when no spool writer is live, so every
-        matching temp is a crash's: none is young, whatever its age.
+        Called once at daemon start.  It holds the spool lock exclusively, so no
+        write is in flight, here or in another daemon on the same root; every
+        matching temp is therefore a crash's, and none is young, whatever its
+        age.  It waits for a write that holds the lock, which is why it runs as a
+        background task.
         """
-        TempSweep(self._dir, self._LEFTOVER, "spool", stale_after_s=0.0).run()
+        sweep = TempSweep(self._dir, self._LEFTOVER, "spool", stale_after_s=0.0)
+        if not self._dir.is_dir():
+            sweep.run()  # nothing written yet; it says nothing
+            return
+        with SpoolLock(self._dir).exclusive():
+            sweep.run()
 
     def write(self, record: SpoolRecord) -> bool:
         """Persist *record* atomically and privately; return whether it stuck.
@@ -122,7 +140,8 @@ class JobSpool:
         """
         try:
             PrivateWrite.ensure_directory(self._dir, "spool directory")
-            self._atomic_write(self._dir / record.filename(), record.as_json())
+            with SpoolLock(self._dir).shared():
+                self._atomic_write(self._dir / record.filename(), record.as_json())
         except Exception as exc:
             logger.error(
                 "failed to spool aborted %s job for %s",

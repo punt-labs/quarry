@@ -5,7 +5,7 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
-from typing import Self, final
+from typing import ClassVar, Self, final
 
 from quarry.doctor_failure import CheckFailure
 
@@ -25,6 +25,10 @@ class HeadlessOpenCv:
     package-side equivalent of the installer's resolver override, run once by
     ``quarry install`` so every install path gets working headless OCR.
     """
+
+    # One small wheel: long enough for a slow network, short enough that an
+    # install never hangs on it.
+    _TIMEOUT_S: ClassVar[float] = 300.0
 
     __slots__ = ("_python",)
 
@@ -46,12 +50,14 @@ class HeadlessOpenCv:
             self._reinstall_command(),
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=self._TIMEOUT_S,
         )
         if done.returncode != 0:
-            why = CheckFailure.because(done.stderr)
+            why = CheckFailure.because(done.stderr or "")
             msg = f"the reinstall exited {done.returncode}{why}"
             raise RuntimeError(msg)
         return f"{_PACKAGE} is the cv2 provider"
@@ -75,4 +81,13 @@ class HeadlessOpenCv:
         uv = shutil.which("uv")
         if uv is not None:
             return [uv, "pip", "install", "--python", self._python, *args]
-        return [self._python, "-m", "pip", "install", *args]
+        # pip must neither phone home for its own upgrade nor ask a question.
+        return [
+            self._python,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-input",
+            *args,
+        ]

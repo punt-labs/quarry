@@ -20,7 +20,6 @@ import json
 import ssl
 import stat
 from functools import partial
-from pathlib import Path
 from typing import final
 
 from pydantic import ValidationError
@@ -30,6 +29,7 @@ from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.doctor_stop_timeout import StopTimeoutDiagnostic
 from quarry.fd_headroom import FdHeadroom
+from quarry.home_paths import QuarryHome
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
 
@@ -38,9 +38,8 @@ from quarry.run_dir import RunDir
 _HEALTH_HOST = "127.0.0.1"
 _PROBE_TIMEOUT_SECONDS = 5.0
 _TOKEN_MODE = 0o600
-# The daemon's pinned CA, written by ``quarry install`` (mirrors tls.TLS_DIR);
+# The daemon's pinned CA, written by ``quarry install`` (mirrors tls_dir);
 # defined locally so this diagnostic never imports cryptography via quarry.tls.
-_CA_CERT_PATH = Path.home() / ".punt-labs" / "quarry" / "tls" / "ca.crt"
 # Reported when the daemon's fd headroom cannot be read: fd headroom is a
 # property of the resident daemon, so with no daemon there is nothing to sample
 # (never a local CLI fallback — that fallback is the observability bug itself).
@@ -250,9 +249,9 @@ class DaemonDiagnostics:
         the liveness probe still connects.
         """
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        if _CA_CERT_PATH.exists():
+        if QuarryHome.daemon_ca().exists():
             try:
-                ctx.load_verify_locations(str(_CA_CERT_PATH))
+                ctx.load_verify_locations(str(QuarryHome.daemon_ca()))
             except (OSError, ssl.SSLError):
                 pass
             else:

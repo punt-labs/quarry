@@ -14,8 +14,8 @@ from cryptography.hazmat.primitives.asymmetric import ec, mldsa, mlkem, x448, x2
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID
 
+from quarry.home_paths import QuarryHome
 from quarry.tls import (
-    TLS_DIR,
     _signing_public_key,
     _verify_ca_keypair,
     _write_file,
@@ -280,7 +280,7 @@ class TestCertFingerprint:
 class TestWriteTlsFiles:
     def test_creates_all_four_files(self, tmp_path: Path) -> None:
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("myhost.local")
         assert (tls_dir / "ca.crt").exists()
         assert (tls_dir / "ca.key").exists()
@@ -289,14 +289,14 @@ class TestWriteTlsFiles:
 
     def test_ca_crt_is_0644(self, tmp_path: Path) -> None:
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("myhost.local")
         mode = stat.S_IMODE((tls_dir / "ca.crt").stat().st_mode)
         assert mode == 0o644
 
     def test_private_files_are_0600(self, tmp_path: Path) -> None:
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("myhost.local")
         for name in ("ca.key", "server.crt", "server.key"):
             mode = stat.S_IMODE((tls_dir / name).stat().st_mode)
@@ -304,7 +304,7 @@ class TestWriteTlsFiles:
 
     def test_idempotent(self, tmp_path: Path) -> None:
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("myhost.local")
             mtime_ca = (tls_dir / "ca.crt").stat().st_mtime
             write_tls_files("myhost.local")
@@ -313,7 +313,7 @@ class TestWriteTlsFiles:
 
     def test_ca_cert_is_valid_pem(self, tmp_path: Path) -> None:
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("myhost.local")
         cert_pem = (tls_dir / "ca.crt").read_bytes()
         cert = x509.load_pem_x509_certificate(cert_pem)
@@ -322,7 +322,7 @@ class TestWriteTlsFiles:
 
     def test_server_san_includes_localhost(self, tmp_path: Path) -> None:
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("myhost.local")
         cert_pem = (tls_dir / "server.crt").read_bytes()
         cert = x509.load_pem_x509_certificate(cert_pem)
@@ -332,18 +332,18 @@ class TestWriteTlsFiles:
 
     def test_default_tls_dir_path(self) -> None:
         expected = Path.home() / ".punt-labs" / "quarry" / "tls"
-        assert expected == TLS_DIR
+        assert expected == QuarryHome.tls_dir()
 
     def test_reuses_existing_ca_when_server_certs_missing(self, tmp_path: Path) -> None:
         """Partial state: CA exists but server certs missing → reuses CA, no error."""
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("myhost.local")
         # Remove server certs to simulate partial state.
         (tls_dir / "server.crt").unlink()
         (tls_dir / "server.key").unlink()
         ca_crt_before = (tls_dir / "ca.crt").read_bytes()
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("myhost.local")
         # CA must not change — clients may have pinned it.
         assert (tls_dir / "ca.crt").read_bytes() == ca_crt_before
@@ -360,7 +360,7 @@ class TestWriteTlsFiles:
         (tls_dir / "ca.crt").write_bytes(ca_cert_pem_a)
         (tls_dir / "ca.key").write_bytes(ca_key_pem_b)
         with (
-            patch("quarry.tls.TLS_DIR", tls_dir),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir),
             pytest.raises(ValueError, match="do not match"),
         ):
             write_tls_files("myhost.local")
@@ -373,7 +373,7 @@ class TestWriteTlsFiles:
         (tls_dir / "ca.crt").write_bytes(ca_cert_pem)
         # ca.key intentionally absent
         with (
-            patch("quarry.tls.TLS_DIR", tls_dir),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir),
             pytest.raises(ValueError, match="Partial CA state"),
         ):
             write_tls_files("myhost.local")
@@ -398,13 +398,13 @@ class TestWriteTlsFiles:
     def test_write_tls_files_returns_true_on_generation(self, tmp_path: Path) -> None:
         """First call generates files and returns True."""
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             assert write_tls_files("localhost") is True
 
     def test_write_tls_files_returns_false_when_all_exist(self, tmp_path: Path) -> None:
         """Second call finds all files present and returns False."""
         tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             write_tls_files("localhost")
             assert write_tls_files("localhost") is False
 
@@ -416,7 +416,7 @@ class TestWriteTlsFiles:
         (tls_dir / "ca.key").write_bytes(ca_key_pem)
         # ca.crt intentionally absent
         with (
-            patch("quarry.tls.TLS_DIR", tls_dir),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir),
             pytest.raises(ValueError, match="Partial CA state"),
         ):
             write_tls_files("myhost.local")

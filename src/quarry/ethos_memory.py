@@ -9,10 +9,9 @@ from typing import Self, final
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.ethos_ext_scan import ExtScanOutcome
 from quarry.ethos_tree import EthosTree
+from quarry.home_paths import QuarryHome
 
 __all__ = ["EthosMemoryBootstrap", "EthosMemoryResult"]
-
-_GLOBAL_IDENTITIES = Path.home() / ".punt-labs" / "ethos" / "identities"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +60,9 @@ class EthosMemoryBootstrap:
         # None means "use the configured global identities dir" — read at call
         # time (not bound as a default) so a test can patch the module global.
         self = super().__new__(cls)
-        self._identities = identities if identities is not None else _GLOBAL_IDENTITIES
+        self._identities = (
+            identities if identities is not None else QuarryHome.ethos_identities()
+        )
         self._vendored = vendored
         return self
 

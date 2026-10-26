@@ -38,7 +38,11 @@ class JsonFile:
     @classmethod
     def load(cls, path: Path) -> dict[str, object]:
         """Return the object in *path*, or raise :class:`ConfigError` saying why."""
-        raw = cls._read(path)
+        try:
+            raw = cls._read(path)
+        except OSError as exc:
+            msg = f"{path.name}: {CheckFailure.detail(exc)}"
+            raise ConfigError(msg) from exc
         if not raw:
             return {}
         try:
@@ -80,7 +84,7 @@ class JsonFile:
         if isinstance(exc, ConfigError):
             return str(exc)
         if isinstance(exc, RecursionError):
-            return f"{path.name}: not JSON"
+            return f"{path.name}: nested too deeply to rewrite"
         return f"{path.name}: {CheckFailure.detail(exc)}"
 
     @classmethod

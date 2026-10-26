@@ -159,7 +159,9 @@ class TestBuildProjectMappings:
             registered_at="2025-01-01T00:00:00",
         )
 
-        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+        with patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ):
             mappings = ProjectMappingResolver.resolve_all([reg])
 
         assert len(mappings) == 1
@@ -177,7 +179,9 @@ class TestBuildProjectMappings:
             registered_at="2025-01-01T00:00:00",
         )
 
-        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+        with patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ):
             mappings = ProjectMappingResolver.resolve_all([reg])
 
         assert len(mappings) == 0
@@ -185,7 +189,9 @@ class TestBuildProjectMappings:
     def test_no_projects_dir(self, tmp_path: Path) -> None:
         projects_dir = tmp_path / "does-not-exist"
 
-        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+        with patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ):
             mappings = ProjectMappingResolver.resolve_all([])
 
         assert mappings == []
@@ -205,7 +211,9 @@ class TestListTranscriptFiles:
         (project / "bbb22222.jsonl").write_text("{}")
         (project / "not-jsonl.txt").write_text("ignore")
 
-        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+        with patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ):
             mapping = ProjectMapping("my-project", "", "")
             files = mapping.transcript_files()
 
@@ -217,7 +225,9 @@ class TestListTranscriptFiles:
         project = projects_dir / "empty"
         project.mkdir(parents=True)
 
-        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+        with patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ):
             mapping = ProjectMapping("empty", "", "")
             files = mapping.transcript_files()
 
@@ -227,7 +237,9 @@ class TestListTranscriptFiles:
         projects_dir = tmp_path / ".claude" / "projects"
         projects_dir.mkdir(parents=True)
 
-        with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
+        with patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ):
             mapping = ProjectMapping("nonexistent", "", "")
             files = mapping.transcript_files()
 
@@ -379,7 +391,9 @@ def _run(
     """Backfill *env* through *writer*, reading the env's (empty) database."""
     database = Database.connect(env["db_path"])
     runtime = runtime_over(database, writer, env["registry_path"], stop)
-    with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]):
+    with patch(
+        "quarry.home_paths.QuarryHome.claude_projects", return_value=env["projects_dir"]
+    ):
         return Backfill.sessions(config or BackfillConfig(), runtime)
 
 
@@ -1478,7 +1492,10 @@ class TestAHungWorkerStopsTheRun:
             ran.append(job.name)
 
         with (
-            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch(
+                "quarry.home_paths.QuarryHome.claude_projects",
+                return_value=env["projects_dir"],
+            ),
             patch.object(ScrubbedIngestJob, "run", hangs),
         ):
             stats = await asyncio.to_thread(
@@ -1509,7 +1526,10 @@ class TestAHungWorkerStopsTheRun:
             raise asyncio.CancelledError
 
         with (
-            patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", env["projects_dir"]),
+            patch(
+                "quarry.home_paths.QuarryHome.claude_projects",
+                return_value=env["projects_dir"],
+            ),
             patch.object(QueuedIngest, "run_tracked", cancelled),
         ):
             stats = await asyncio.to_thread(

@@ -231,7 +231,7 @@ class TestCaCertRoute:
 
     def test_returns_404_when_no_cert(self, client: TestClient, tmp_path: Path) -> None:
         empty_tls_dir = tmp_path / "tls"
-        with patch("quarry.tls.TLS_DIR", empty_tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=empty_tls_dir):
             resp = client.get("/ca.crt")
         assert resp.status_code == 404
         data = resp.json()
@@ -243,7 +243,7 @@ class TestCaCertRoute:
         tls_dir.mkdir()
         fake_pem = "-----BEGIN CERTIFICATE-----\nfakecert\n-----END CERTIFICATE-----\n"
         (tls_dir / "ca.crt").write_text(fake_pem)
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             resp = client.get("/ca.crt")
         assert resp.status_code == 200
         assert "BEGIN CERTIFICATE" in resp.text
@@ -261,7 +261,7 @@ class TestCaCertRoute:
         (tls_dir / "ca.crt").write_text(fake_pem)
 
         # No Authorization header -- should still get the cert.
-        with patch("quarry.tls.TLS_DIR", tls_dir):
+        with patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir):
             resp = auth_client.get("/ca.crt")
         assert resp.status_code == 200
 

@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.daemon_threads import DaemonThreads
-from quarry.daemon.watch_step_report import StepReport
+from quarry.daemon.thread_step import ThreadStep
+from quarry.daemon.watch_step_report import StepCancelledError, StepReport
 from quarry.redacted_failure import RedactedFailure
 from quarry.shutdown_policy import ShutdownPolicy
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
 
     from quarry.daemon.debounce import DebouncedDispatcher
     from quarry.daemon.fs_events import FsEventSource
@@ -24,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 # A cleanup: what it is called in the log, and what to run.
 type CleanupStep = tuple[str, Callable[[], Awaitable[None]]]
+
+_NO_QUEUE: Mapping[str, Callable[[], str | None]] = MappingProxyType({})
 
 
 @final
@@ -40,21 +44,38 @@ class WatchStop:
     running, named in a warning, and says how it ended when it does.  Steps still
     start in order, each after the previous finished or was given up on.
 
+    The three steps that run on a thread (unwatching, closing, joining the
+    observer) share ONE serial daemon pool, built for this stop.  That keeps them
+    from ever overlapping, even after the stop has given up on one, and it means
+    a stuck step leaves every later thread step QUEUED behind it, not started:
+    they are reported as "never started; queued behind <step>", and they run only
+    if the stuck one ever returns.  The pool is per stop, and so is its roster:
+    ``WatchLoop.stop`` forgets its collaborators before it runs and
+    ``WatchLoop.start`` builds a fresh roster, so two stops never share one.
+
     What is raised once every step has run, strongest first: a ``BaseException``
     that is not a cancel, the cancel, the first failure.  The one limit is that
     asyncio ends the whole event loop on a ``KeyboardInterrupt`` or ``SystemExit``
     raised inside a task, so a step that raises one cannot be survived here.
     """
 
-    __slots__ = ("_grace_s", "_steps")
+    __slots__ = ("_grace_s", "_queued", "_steps")
 
     _grace_s: float
+    # For a thread step: who it waits behind until it has begun.
+    _queued: Mapping[str, Callable[[], str | None]]
     _steps: tuple[CleanupStep, ...]
 
-    def __new__(cls, steps: Iterable[CleanupStep], grace_s: float) -> Self:
+    def __new__(
+        cls,
+        steps: Iterable[CleanupStep],
+        grace_s: float,
+        queued: Mapping[str, Callable[[], str | None]] = _NO_QUEUE,
+    ) -> Self:
         self = super().__new__(cls)
         self._steps = tuple(steps)
         self._grace_s = grace_s
+        self._queued = queued
         return self
 
     @classmethod
@@ -76,6 +97,7 @@ class WatchStop:
         teardown budget the grace after a cancel is a share of.
         """
         steps: list[CleanupStep] = []
+        queued: dict[str, Callable[[], str | None]] = {}
         if safety is not None:
             steps.append(("retiring the safety task", partial(cls.retire, safety)))
         if submitter is not None:
@@ -94,12 +116,18 @@ class WatchStop:
         # freeze neither the loop nor the process at exit, and they must never run
         # at the same time, even after the stop has given up on one.
         serial = DaemonThreads(max_threads=1, name="quarry-watch-stop")
-        steps.append(("unwatching the roster", partial(serial.run, roster.unwatch_all)))
-        # drop sibling conns so a restart cannot leak them
-        steps.append(("closing the roster", partial(serial.run, roster.close)))
-        if source is not None:
-            steps.append(("joining the observer", partial(serial.run, source.stop)))
-        return cls(steps, ShutdownPolicy(drain_timeout_s).watch_grace_s)
+        behind: str | None = None  # the name of the step before, on the serial pool
+        for name, call in (
+            ("unwatching the roster", roster.unwatch_all),
+            # drop sibling conns so a restart cannot leak them
+            ("closing the roster", roster.close),
+            *(() if source is None else (("joining the observer", source.stop),)),
+        ):
+            thread_step = ThreadStep(serial, call, behind)
+            steps.append((name, thread_step.run))
+            queued[name] = thread_step.queued_behind
+            behind = name
+        return cls(steps, ShutdownPolicy(drain_timeout_s).watch_grace_s, queued)
 
     @staticmethod
     def inline(call: Callable[[], None]) -> Callable[[], Awaitable[None]]:
@@ -129,6 +157,16 @@ class WatchStop:
                 outcome.failed(exc)
         outcome.raise_strongest()
 
+    def _abandon(
+        self,
+        name: str,
+        running: asyncio.Future[None],
+        remaining: float | None,  # None before any cancel; see _attempt
+    ) -> None:
+        """Leave *running* to finish, saying whether it had even begun."""
+        queued = self._queued.get(name)
+        StepReport.abandon(name, running, remaining, queued() if queued else None)
+
     @staticmethod
     def safety_ended(task: asyncio.Task[None]) -> None:
         """Done callback: name a safety-reconcile loop that crashed, when it does."""
@@ -155,10 +193,9 @@ class WatchStop:
                 "(see the earlier error)"
             )
 
-    @classmethod
     async def _attempt(
         # remaining is None before any cancel: wait as long as the step takes.
-        cls,
+        self,
         name: str,
         step: Callable[[], Awaitable[None]],
         remaining: float | None,
@@ -175,19 +212,15 @@ class WatchStop:
         try:
             done, _ = await asyncio.wait({running}, timeout=remaining)
         except asyncio.CancelledError:
-            StepReport.abandon(name, running, remaining)
+            self._abandon(name, running, remaining)
             raise
         if running not in done:
-            StepReport.abandon(name, running, remaining)
+            self._abandon(name, running, remaining)
         elif running.cancelled():
             msg = "the step was cancelled"
             raise StepCancelledError(msg)
         else:
             running.result()  # its failure, if any, propagates to be logged once
-
-
-class StepCancelledError(Exception):
-    """A cleanup step was cancelled by something other than the teardown's cancel."""
 
 
 @final

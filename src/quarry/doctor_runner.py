@@ -45,6 +45,20 @@ class CheckRunner:
     __slots__ = ()
 
     @staticmethod
+    def home() -> CheckResult:
+        """Return whether the home directory resolves (everything else needs it)."""
+        try:
+            Path.home()
+        except RuntimeError as exc:
+            return CheckResult(
+                name="Home directory",
+                passed=False,
+                message=f"cannot be determined ({CheckFailure.detail(exc)}); "
+                "set HOME, or give this user a passwd entry",
+            )
+        return CheckResult(name="Home directory", passed=True, message="resolved")
+
+    @staticmethod
     # None: the entry's diagnostic had nothing to report.
     def attempt(entry: CheckEntry) -> CheckResult | None:
         """Run one entry; whatever it raises becomes a failed result naming it.
@@ -56,7 +70,8 @@ class CheckRunner:
         try:
             return entry.call()
         except Exception as exc:
-            logger.warning(
+            # The report line names the cause; the frames go to the log file only.
+            logger.info(
                 "doctor: check %s failed", entry.name, exc_info=RedactedFailure.of(exc)
             )
             return CheckResult(
@@ -87,6 +102,9 @@ class SettingsChecks:
         except FileNotFoundError as exc:
             msg = "the current directory no longer exists"
             raise RuntimeError(msg) from exc
+        except PermissionError as exc:
+            msg = "the current directory is not accessible"
+            raise RuntimeError(msg) from exc
 
     @staticmethod
     def entries(fts: Callable[[Path], CheckResult]) -> list[CheckEntry]:
@@ -94,7 +112,7 @@ class SettingsChecks:
         try:
             settings = Settings()
         except Exception as exc:
-            logger.warning(
+            logger.info(
                 "doctor: settings are invalid", exc_info=RedactedFailure.of(exc)
             )
             failed = CheckResult(

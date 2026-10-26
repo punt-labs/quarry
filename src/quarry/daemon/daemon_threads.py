@@ -70,7 +70,14 @@ class DaemonThreads:
             return cls._shared
 
     async def run[T](self, call: Callable[[], T]) -> T:
-        """Run *call* on a daemon thread; return its result or raise its error."""
+        """Run *call* on a daemon thread; return its result or raise its error.
+
+        Whatever *call* raises reaches the caller as an exception it can hold: a
+        ``BaseException`` that is not an ``Exception`` (``SystemExit``, a cancel)
+        and ``StopIteration`` (which a future refuses) arrive as
+        :class:`DaemonThreadAbortedError`, chained to the original.  The thread then
+        ends on a ``BaseException``, and the pool starts another when it needs one.
+        """
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
 
@@ -78,16 +85,27 @@ class DaemonThreads:
             try:
                 result = call()
             except BaseException as exc:
-                # Whatever it was, the caller is told: the future never hangs.
+                # Hand back first: nothing after this can strand the caller.
+                self._hand_back(loop, partial(self._fail, future, self._holdable(exc)))
                 logger.debug(
                     "daemon thread call failed", exc_info=RedactedFailure.of(exc)
                 )
-                self._hand_back(loop, partial(self._fail, future, exc))
+                if not isinstance(exc, Exception):
+                    raise
             else:
                 self._hand_back(loop, partial(self._succeed, future, result))
 
         self._submit(work)
         return await future
+
+    @staticmethod
+    def _holdable(exc: BaseException) -> BaseException:
+        """Return what a future can carry for *exc*: itself, or an aborted wrapper."""
+        if isinstance(exc, Exception) and not isinstance(exc, StopIteration):
+            return exc
+        wrapper = DaemonThreadAbortedError(f"the call ended with {type(exc).__name__}")
+        wrapper.__cause__ = exc
+        return wrapper
 
     @staticmethod
     def _succeed[T](future: asyncio.Future[T], result: T) -> None:
@@ -112,34 +130,68 @@ class DaemonThreads:
             return
 
     def _submit(self, work: Callable[[], None]) -> None:
-        """Queue *work*; claim an idle thread for it, or start one if the bound allows.
+        """Run *work* on an idle thread, a new one if the bound allows, else queue it.
 
-        The claim is made here, under the lock, so two submits can never count on
-        the same idle thread.
+        The idle claim is made here, under the lock, so two submits can never
+        count on the same idle thread.  A new thread is counted only once it has
+        started, and gets *work* directly, so a failed start leaves nothing
+        queued and nothing counted: the error reaches the caller.
         """
         with self._lock:
-            self._work.put(work)
             if self._idle > 0:
                 self._idle -= 1
+                self._work.put(work)
             elif self._started < self._max:
-                self._started += 1
                 threading.Thread(
-                    target=self._serve, name=self._name, daemon=True
+                    target=self._serve, args=(work,), name=self._name, daemon=True
                 ).start()
+                self._started += 1
+            else:
+                self._work.put(work)
 
-    def _serve(self) -> None:
-        """Take work until the process ends; a thread is idle only between jobs."""
+    def _serve(self, work: Callable[[], None]) -> None:
+        """Run *work*, then whatever comes next, until the process ends."""
         try:
             while True:
-                with self._lock:
-                    try:
-                        work: Callable[[], None] | None = self._work.get_nowait()
-                    except queue.Empty:
-                        work = None
-                        self._idle += 1
-                if work is None:
-                    work = self._work.get()  # the submit that woke us claimed us
                 work()
+                work = self._next()
         finally:
             with self._lock:
                 self._started -= 1
+                self._replace_if_waiting()
+
+    def _replace_if_waiting(self) -> None:
+        """Start a thread for queued work a thread that just ended would have run.
+
+        Called with the lock held.  Work queued while every thread was busy is
+        served by whichever finishes; one that ends instead (``SystemExit``)
+        must hand it on.
+        """
+        if self._idle > 0 or self._started >= self._max:
+            return
+        try:
+            work = self._work.get_nowait()
+        except queue.Empty:
+            return
+        try:
+            threading.Thread(
+                target=self._serve, args=(work,), name=self._name, daemon=True
+            ).start()
+        except RuntimeError:
+            self._work.put(work)  # no thread to give it to; it stays queued
+            logger.warning("daemon threads: could not replace an ended thread")
+        else:
+            self._started += 1
+
+    def _next(self) -> Callable[[], None]:
+        """Return the next job; a thread is idle only while it waits for one."""
+        with self._lock:
+            try:
+                return self._work.get_nowait()
+            except queue.Empty:
+                self._idle += 1
+        return self._work.get()  # the submit that woke us has claimed us
+
+
+class DaemonThreadAbortedError(RuntimeError):
+    """A call on a daemon thread ended in a way a future cannot carry."""

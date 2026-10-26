@@ -15,12 +15,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.config import DEFAULT_PORT
+from quarry.home_paths import QuarryHome
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.service import (
     _LABEL,
-    _LAUNCHD_PLIST,
     _MALLOC_CONF,
-    _SYSTEMD_UNIT,
     ServiceBackend,
     _get_tls_hostname,
     _launchd_install,
@@ -102,7 +101,9 @@ class TestQuarrydExecArgs:
         local_bin.symlink_to(fake_bin)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             args = _quarryd_exec_args()
         # No TLS certs present → no --tls flag
@@ -113,7 +114,9 @@ class TestQuarrydExecArgs:
         """Raise RuntimeError when ~/.local/bin/quarryd is absent."""
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
             pytest.raises(RuntimeError, match="Cannot find quarryd binary"),
         ):
             _quarryd_exec_args()
@@ -126,7 +129,7 @@ class TestQuarrydExecArgs:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tls_dir),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir),
         ):
             args = _quarryd_exec_args()
         assert "--tls" in args
@@ -139,7 +142,7 @@ class TestQuarrydExecArgs:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tls_dir),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tls_dir),
         ):
             args = _quarryd_exec_args()
         assert "--tls" not in args
@@ -153,7 +156,9 @@ class TestQuarrydExecArgs:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             args = _quarryd_exec_args()
         assert "--host" in args
@@ -177,7 +182,9 @@ class TestQuarrydExecArgs:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             args = _quarryd_exec_args()
         host_idx = args.index("--host")
@@ -191,7 +198,9 @@ class TestQuarrydExecArgs:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             args = _quarryd_exec_args()
         assert "--host" not in args
@@ -204,7 +213,9 @@ class TestQuarrydExecArgs:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             args = _quarryd_exec_args()
         assert "--host" not in args
@@ -217,7 +228,9 @@ class TestQuarrydExecArgs:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             args = _quarryd_exec_args()
         assert "--api-key" not in args
@@ -231,7 +244,9 @@ class TestQuarrydExecArgs:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             args = _quarryd_exec_args()
         assert "--api-key" not in args
@@ -245,7 +260,7 @@ class TestWriteEnvFile:
         double-quoting prevents silent truncation.
         """
         env_file = tmp_path / "quarry.env"
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file("s3cr3t")
         content = env_file.read_text()
         assert 'QUARRY_API_KEY="s3cr3t"' in content
@@ -253,7 +268,7 @@ class TestWriteEnvFile:
     def test_writes_malloc_conf(self, tmp_path: Path) -> None:
         """_write_env_file writes MALLOC_CONF for jemalloc memory tuning."""
         env_file = tmp_path / "quarry.env"
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file("k1")
         content = env_file.read_text()
         assert f'MALLOC_CONF="{_MALLOC_CONF}"' in content
@@ -266,7 +281,7 @@ class TestWriteEnvFile:
         """
         env_file = tmp_path / "quarry.env"
         api_key = "abc#def"
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file(api_key)
         content = env_file.read_text()
         assert 'QUARRY_API_KEY="abc#def"' in content
@@ -275,7 +290,7 @@ class TestWriteEnvFile:
         """A key containing " must have the character escaped, not left raw."""
         env_file = tmp_path / "quarry.env"
         api_key = 'tok"en'
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file(api_key)
         content = env_file.read_text()
         assert r'QUARRY_API_KEY="tok\"en"' in content
@@ -283,7 +298,7 @@ class TestWriteEnvFile:
     def test_mode_0600(self, tmp_path: Path) -> None:
         """The env file must be created with mode 0600."""
         env_file = tmp_path / "quarry.env"
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file("k1")
         mode = stat.S_IMODE(env_file.stat().st_mode)
         assert mode == 0o600
@@ -291,14 +306,14 @@ class TestWriteEnvFile:
     def test_creates_parent_dir(self, tmp_path: Path) -> None:
         """_write_env_file creates the parent directory if absent."""
         env_file = tmp_path / "nested" / "quarry.env"
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file("k1")
         assert env_file.exists()
 
     def test_overwrites_existing(self, tmp_path: Path) -> None:
         """_write_env_file replaces a pre-existing env file atomically."""
         env_file = tmp_path / "quarry.env"
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file("first")
             _write_env_file("second")
         content = env_file.read_text()
@@ -315,7 +330,9 @@ class TestServiceFileApiKey:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             content = _launchd_plist_content()
         assert "EnvironmentVariables" in content
@@ -332,7 +349,9 @@ class TestServiceFileApiKey:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             content = _launchd_plist_content()
         assert "MALLOC_CONF" in content
@@ -346,7 +365,9 @@ class TestServiceFileApiKey:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             content = _launchd_plist_content()
         assert "MALLOC_CONF" in content
@@ -362,7 +383,9 @@ class TestServiceFileApiKey:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             content = _launchd_plist_content()
 
@@ -400,7 +423,9 @@ class TestServiceFileApiKey:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             result = _launchd_plist_content()
         assert result.startswith("<?xml"), (
@@ -415,7 +440,9 @@ class TestServiceFileApiKey:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             result = _launchd_plist_content()
         assert result.startswith("<?xml"), (
@@ -432,8 +459,13 @@ class TestServiceFileApiKey:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
         ):
             content = _systemd_unit_content()
         assert "EnvironmentFile=" in content
@@ -461,7 +493,9 @@ class TestLaunchdPlistArgEncoding:
                 return_value=[spacey_path, "--port", "8420"],
             ),
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             content = _launchd_plist_content()
 
@@ -522,8 +556,10 @@ class TestInstallHostKeyGuard:
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
         ):
             mock_run.side_effect = [
                 MagicMock(returncode=113),  # launchctl list: not found
@@ -558,8 +594,10 @@ class TestInstallHostKeyGuard:
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
         ):
             mock_run.side_effect = [
                 MagicMock(returncode=113),
@@ -589,9 +627,14 @@ class TestInstallHostKeyGuard:
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
         ):
             mock_run.side_effect = [
                 MagicMock(returncode=113),  # launchctl list: not found
@@ -615,9 +658,14 @@ class TestInstallMacOS:
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -661,9 +709,14 @@ class TestInstallMacOS:
         plist_path.write_text("<plist>old binary</plist>")
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -697,8 +750,10 @@ class TestInstallMacOS:
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         plist_path.write_text("<plist>test</plist>")
         with (
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
         ):
             msg = uninstall()
 
@@ -717,8 +772,10 @@ class TestInstallMacOS:
     ) -> None:
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
         ):
             msg = uninstall()
 
@@ -741,9 +798,14 @@ class TestInstallMacOS:
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -774,9 +836,12 @@ class TestInstallLinux:
         unit_path = tmp_path / "quarry.service"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._SYSTEMD_DIR", tmp_path),
-            patch("quarry.service._SYSTEMD_UNIT", unit_path),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch("quarry.home_paths.QuarryHome.systemd_dir", return_value=tmp_path),
+            patch("quarry.home_paths.QuarryHome.systemd_unit", return_value=unit_path),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -812,9 +877,12 @@ class TestInstallLinux:
         unit_path = tmp_path / "quarry.service"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._SYSTEMD_DIR", tmp_path),
-            patch("quarry.service._SYSTEMD_UNIT", unit_path),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch("quarry.home_paths.QuarryHome.systemd_dir", return_value=tmp_path),
+            patch("quarry.home_paths.QuarryHome.systemd_unit", return_value=unit_path),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
             _PATCH_TLS,
             _PATCH_CERT_FP,
         ):
@@ -833,8 +901,8 @@ class TestInstallLinux:
         unit_path = tmp_path / "quarry.service"
         unit_path.write_text("[Unit]\ntest\n")
         with (
-            patch("quarry.service._SYSTEMD_DIR", tmp_path),
-            patch("quarry.service._SYSTEMD_UNIT", unit_path),
+            patch("quarry.home_paths.QuarryHome.systemd_dir", return_value=tmp_path),
+            patch("quarry.home_paths.QuarryHome.systemd_unit", return_value=unit_path),
         ):
             msg = uninstall()
 
@@ -855,9 +923,12 @@ class TestSystemdInstallCallsRestart:
     ) -> None:
         unit_path = tmp_path / "quarry.service"
         with (
-            patch("quarry.service._SYSTEMD_DIR", tmp_path),
-            patch("quarry.service._SYSTEMD_UNIT", unit_path),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch("quarry.home_paths.QuarryHome.systemd_dir", return_value=tmp_path),
+            patch("quarry.home_paths.QuarryHome.systemd_unit", return_value=unit_path),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
             patch(
                 "quarry.service._quarryd_exec_args",
                 return_value=["quarryd", "--port", "8420"],
@@ -890,8 +961,10 @@ class TestLaunchdPlistAtomicWrite:
             MagicMock(returncode=0),  # launchctl load: success
         ]
         with (
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
             patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
         ):
             _launchd_install()
@@ -909,8 +982,10 @@ class TestLaunchdPlistAtomicWrite:
         leftover.write_text("crashed")
         mock_run.side_effect = [MagicMock(returncode=113), MagicMock(returncode=0)]
         with (
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
             patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
         ):
             _launchd_install()
@@ -927,8 +1002,13 @@ class TestLaunchdPlistSweep:
     def _install(plist_path: Path) -> None:
         with (
             patch("quarry.service.subprocess.run") as run,
-            patch("quarry.service._LAUNCHD_DIR", plist_path.parent),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_dir",
+                return_value=plist_path.parent,
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
             patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
         ):
             run.side_effect = [MagicMock(returncode=113), MagicMock(returncode=0)]
@@ -999,7 +1079,7 @@ class TestWriteEnvFileBackslash:
     def test_backslash_escaped(self, tmp_path: Path) -> None:
         """A backslash in the API key must be doubled in the env file."""
         env_file = tmp_path / "quarry.env"
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file("tok\\en")
         content = env_file.read_text()
         assert 'QUARRY_API_KEY="tok\\\\en"' in content
@@ -1008,7 +1088,7 @@ class TestWriteEnvFileBackslash:
         """Keys with both backslashes and double-quotes must have both escaped."""
         env_file = tmp_path / "quarry.env"
         api_key = 'value\\with\\backslashes"and"quotes'
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file(api_key)
         content = env_file.read_text()
         expected = r'QUARRY_API_KEY="value\\with\\backslashes\"and\"quotes"'
@@ -1074,7 +1154,10 @@ class TestSystemdEscape:
                 "quarry.service._quarryd_exec_args",
                 return_value=[single_quote_path, "--port", "8420"],
             ),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
         ):
             content = _systemd_unit_content()
 
@@ -1116,9 +1199,11 @@ class TestInstallMacOSSkipsEnvFile:
         env_file = tmp_path / "quarry.env"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._LAUNCHD_DIR", tmp_path),
-            patch("quarry.service._LAUNCHD_PLIST", plist_path),
-            patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.home_paths.QuarryHome.launchd_dir", return_value=tmp_path),
+            patch(
+                "quarry.home_paths.QuarryHome.launchd_plist", return_value=plist_path
+            ),
+            patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file),
         ):
             mock_run.side_effect = [
                 MagicMock(returncode=113),  # launchctl list: not found
@@ -1154,9 +1239,9 @@ class TestInstallMacOSSkipsEnvFile:
         env_file = tmp_path / "quarry.env"
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service._SYSTEMD_DIR", tmp_path),
-            patch("quarry.service._SYSTEMD_UNIT", unit_path),
-            patch("quarry.service._ENV_FILE", env_file),
+            patch("quarry.home_paths.QuarryHome.systemd_dir", return_value=tmp_path),
+            patch("quarry.home_paths.QuarryHome.systemd_unit", return_value=unit_path),
+            patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="active\n")
             install()
@@ -1179,7 +1264,9 @@ class TestPlistProcessType:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             content = _launchd_plist_content()
         assert "<key>ProcessType</key>" in content
@@ -1193,7 +1280,9 @@ class TestPlistProcessType:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             content = _launchd_plist_content()
         pt_idx = content.index("ProcessType")
@@ -1211,8 +1300,13 @@ class TestSystemdNice:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
         ):
             content = _systemd_unit_content()
         assert "Nice=-5" in content
@@ -1224,8 +1318,13 @@ class TestSystemdNice:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
         ):
             content = _systemd_unit_content()
         rs_idx = content.index("RestartSec=5")
@@ -1248,7 +1347,9 @@ class TestLaunchdPlistResourceLimits:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
         ):
             content = _launchd_plist_content()
         # A malformed resource-limits block would make the whole plist unparseable
@@ -1297,8 +1398,13 @@ class TestSystemdUnitResourceLimits:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
         ):
             return _systemd_unit_content()
 
@@ -1359,8 +1465,13 @@ class TestServiceStopTimeout:
         _make_local_bin_quarryd(tmp_path)
         with (
             patch("quarry.service.Path.home", return_value=tmp_path),
-            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
-            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+            patch(
+                "quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path / "tls"
+            ),
+            patch(
+                "quarry.home_paths.QuarryHome.env_file",
+                return_value=tmp_path / "quarry.env",
+            ),
         ):
             return _launchd_plist_content() if plist else _systemd_unit_content()
 
@@ -1394,7 +1505,7 @@ class TestServiceStopTimeout:
         monkeypatch.setenv(ShutdownPolicy.ENV_NAME, f"{self.BUDGET:g}")
         env_file = tmp_path / "quarry.env"
 
-        with patch("quarry.service._ENV_FILE", env_file):
+        with patch("quarry.home_paths.QuarryHome.env_file", return_value=env_file):
             _write_env_file("")
 
         assert (
@@ -1402,6 +1513,10 @@ class TestServiceStopTimeout:
         )
 
     def test_the_installed_path_is_the_one_the_service_writes(self) -> None:
-        expected = _LAUNCHD_PLIST if platform.system() == "Darwin" else _SYSTEMD_UNIT
+        expected = (
+            QuarryHome.launchd_plist(_LABEL)
+            if platform.system() == "Darwin"
+            else QuarryHome.systemd_unit()
+        )
 
         assert InstalledStopTimeout.installed().verdict(30.0).path == expected

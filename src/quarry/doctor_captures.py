@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 from quarry.captures_collection import CapturesCollection
+from quarry.doctor_failure import CheckFailure
 from quarry.results import CheckResult
 from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION
 
@@ -31,7 +32,13 @@ class CaptureDiagnostics:
         try:
             unlinked = CaptureDiagnostics._unlinked_names(registry_path, db_path)
         except Exception as exc:  # noqa: BLE001
-            return result(passed=False, message=f"check failed: {exc}")
+            return result(
+                passed=False,
+                message=(
+                    f"check failed ({registry_path.name}, {db_path.name}): "
+                    f"{CheckFailure.detail(exc)}"
+                ),
+            )
         if unlinked:
             return result(passed=False, message=f"unlinked: {', '.join(unlinked)}")
         return result(passed=True, message="all captures map to a registered base")
@@ -131,7 +138,10 @@ class CaptureDiagnostics:
                 name="Shadow repo",
                 passed=False,
                 required=True,
-                message=f"cannot verify parent-tracked captures (git error: {exc})",
+                message=(
+                    "cannot verify parent-tracked captures "
+                    f"(git error: {CheckFailure.detail(exc)})"
+                ),
             )
         if not tracked:
             return None

@@ -6,12 +6,15 @@ import errno
 import logging
 import re
 import subprocess
-from typing import ClassVar, final
+from typing import TYPE_CHECKING, ClassVar, final
 
 from pydantic import ValidationError
 
 from quarry.failure_reason import FailureReason
 from quarry.redacted_failure import RedactedFailure
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +55,30 @@ class CheckFailure:
         text = cls.line(cls._text(exc))
         return f"{name}: {text}" if text else name
 
-    @staticmethod
-    def is_missing(exc: OSError | ValueError) -> bool:
+    @classmethod
+    def is_missing(cls, exc: Exception) -> bool:
         """Return whether *exc* means "not there" rather than "cannot be read".
 
-        Only ``ENOENT`` is a thing that is not there; anything else (denied, I/O,
-        a bare ``OSError`` or ``ValueError``) is a fault whose cause is named.
+        ``ENOENT``, and LanceDB's refusal to search a table that has no full-text
+        (INVERTED) index yet, are things that are not there; anything else
+        (denied, I/O, a bare ``OSError`` or ``ValueError``) is a fault whose cause
+        is named.
         """
-        return isinstance(exc, OSError) and exc.errno == errno.ENOENT
+        if isinstance(exc, OSError):
+            return exc.errno == errno.ENOENT
+        return isinstance(
+            exc, ValueError | RuntimeError
+        ) and "INVERTED index" in cls._text(exc)
+
+    @classmethod
+    def index_message(cls, exc: Exception) -> str:
+        """Say what a failed index probe means: missing, stale, or unreadable."""
+        detail = cls.detail(exc)
+        if cls.is_missing(exc):
+            return f"missing — will be created on next sync ({detail})"
+        if isinstance(exc, RuntimeError):
+            return f"stale — run 'quarry sync' to rebuild ({detail})"
+        return f"cannot read the index ({detail})"
 
     @classmethod
     def settings_reason(cls, exc: Exception) -> str:
@@ -67,7 +86,10 @@ class CheckFailure:
         if isinstance(exc, ValidationError) and (errors := exc.errors()):
             first = errors[0]
             field = ".".join(str(part) for part in first["loc"])
-            return f"{cls.line(field)}: {cls.line(first['msg'])}"
+            # A ``value_error`` message quotes the value, which may be a secret.
+            kind = str(first["type"])
+            reason = kind if kind.startswith("value_error") else str(first["msg"])
+            return f"{cls.line(field)}: {cls.line(reason)}"
         return cls.detail(exc)
 
     @classmethod
@@ -78,10 +100,31 @@ class CheckFailure:
         return cls._CONTROL.sub("?", first)[: cls._MAX_LINE]
 
     @classmethod
-    def because(cls, output: str | None) -> str:  # None: the process wrote nothing
-        """Return ``: <last line of output>``, sanitized and bounded, or nothing."""
-        lines = (output or "").strip().splitlines()
-        return f": {cls.line(lines[-1])}" if lines else ""
+    def cause(cls, output: str) -> str:
+        """Pick the line of a process's *output* that says what went wrong.
+
+        The last ``ERROR:`` or ``error:`` line if there is one, else the last line
+        that is not a ``[notice]`` line (pip ends with advice about itself), else
+        the last line; sanitized and bounded.  Empty output has no cause.
+        """
+        lines = [line for line in output.strip().splitlines() if line.strip()]
+        chosen = (
+            cls._last(lines, lambda ln: "ERROR:" in ln or "error:" in ln)
+            or cls._last(lines, lambda ln: not ln.lstrip().startswith("[notice]"))
+            or cls._last(lines, lambda _ln: True)
+        )
+        return cls.line(chosen)
+
+    @staticmethod
+    def _last(lines: list[str], wanted: Callable[[str], bool]) -> str:
+        """Return the last of *lines* that *wanted* accepts, or an empty string."""
+        return next((line for line in reversed(lines) if wanted(line)), "")
+
+    @classmethod
+    def because(cls, output: str) -> str:
+        """Return ``: <the cause in output>``, or nothing when there is none."""
+        cause = cls.cause(output)
+        return f": {cause}" if cause else ""
 
     @classmethod
     def origin(cls, exc: BaseException) -> str | None:  # None: no frame names one

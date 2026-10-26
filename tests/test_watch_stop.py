@@ -17,7 +17,8 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.daemon.watch_stop import StepCancelledError, WatchStop
+from quarry.daemon.watch_step_report import StepCancelledError
+from quarry.daemon.watch_stop import WatchStop
 from quarry.redacted_failure import RedactedFailure
 
 if TYPE_CHECKING:
@@ -573,3 +574,52 @@ async def test_the_roster_steps_and_the_observer_join_never_run_at_once() -> Non
     await asyncio.sleep(0.5)
 
     assert peak == 1
+
+
+async def test_a_thread_step_stuck_behind_a_stuck_one_is_reported_as_never_started(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    release = threading.Event()
+    roster = cast(
+        "WatchRoster",
+        SimpleNamespace(unwatch_all=lambda: release.wait(5), close=lambda: None),
+    )
+    stopping = asyncio.create_task(
+        WatchStop.for_loop(roster, None, None, None, None, _DRAIN_TIMEOUT_S).run()
+    )
+    await asyncio.sleep(0.1)  # unwatching is stuck on its thread
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
+        stopping.cancel()  # abandons unwatching; closing is queued behind it
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        release.set()
+        await asyncio.sleep(0.3)
+
+    assert "stopped while unwatching the roster was in progress" in caplog.text
+    assert (
+        "closing the roster was started after the grace ran out and is not awaited"
+        not in caplog.text
+    )
+
+
+async def test_a_step_waiting_for_the_thread_says_who_it_is_queued_behind(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    release = threading.Event()
+    roster = cast(
+        "WatchRoster",
+        SimpleNamespace(unwatch_all=lambda: release.wait(5), close=lambda: None),
+    )
+    stop = WatchStop.for_loop(roster, None, None, None, None, 0.0)
+    stopping = asyncio.create_task(stop.run())
+    await asyncio.sleep(0.1)
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        release.set()
+        await asyncio.sleep(0.3)
+
+    assert "closing the roster never started; queued behind unwatching the roster" in (
+        caplog.text
+    )

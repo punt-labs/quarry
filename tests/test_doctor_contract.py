@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import BaseModel, ValidationError, field_validator
 
 from quarry import doctor as doctor_mod
 from quarry.doctor import check_environment, run_install
@@ -185,14 +186,19 @@ class TestClaudeCodeConfigure:
         self, tmp_path: Path, monkeypatch: MP
     ) -> None:
         noise = "x" * 500
-        _fake_claude(tmp_path, f"printf 'first\\033[31m line\\n{noise}' >&2; exit 1")
+        _fake_claude(
+            tmp_path,
+            "printf 'noise\\nERROR\\033[31m: "
+            f"{noise}\\n[notice] upgrade pip' >&2; exit 1",
+        )
         monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
 
         result = ClaudeCodeMcp().configure()
 
         assert "\x1b" not in result.message
         assert "x" * 200 not in result.message
-        assert "first" in result.message
+        assert "ERROR" in result.message  # the cause, not pip's closing advice
+        assert "[notice]" not in result.message
 
     def test_a_re_add_that_times_out_after_the_remove_is_the_loud_message(
         self, monkeypatch: MP
@@ -330,14 +336,37 @@ class TestDesktopCommand:
     def test_a_path_that_is_not_absolute_is_refused(
         self, tmp_path: Path, monkeypatch: MP
     ) -> None:
-        monkeypatch.setattr("quarry.doctor_mcp.shutil.which", lambda _n: "bin/quarry")
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which",
+            lambda _n, path=None: None if path is not None else "bin/quarry",
+        )
         config = tmp_path / "claude_desktop_config.json"
 
         result = ClaudeDesktopMcp(config).configure()
 
         assert result.passed is False
-        assert "not absolute" in result.message
+        assert "relative entry" in result.message
         assert not config.exists()
+
+    def test_a_later_absolute_path_entry_is_used_past_a_relative_one(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        relative = tmp_path / "rel"
+        relative.mkdir()
+        (relative / "quarry").write_text("#!/bin/sh\n")
+        (relative / "quarry").chmod(0o755)
+        absolute = tmp_path / "abs"
+        absolute.mkdir()
+        (absolute / "quarry").write_text("#!/bin/sh\n")
+        (absolute / "quarry").chmod(0o755)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", f"rel{os.pathsep}{absolute}")
+        config = tmp_path / "claude_desktop_config.json"
+
+        ClaudeDesktopMcp(config).configure()
+
+        server = json.loads(config.read_text())["mcpServers"]["quarry"]
+        assert server["command"] == str(absolute / "quarry")
 
     def test_a_symlinked_shim_is_kept_as_it_is(
         self, tmp_path: Path, monkeypatch: MP
@@ -393,7 +422,7 @@ class TestMessagesNameTheirFile:
 
         result = ClaudeDesktopMcp(config).configure()
 
-        assert "claude_desktop_config.json: not JSON" in result.message
+        assert "claude_desktop_config.json: nested too deeply" in result.message
         assert config.read_text() == "{}"
 
 
@@ -551,7 +580,13 @@ pwd.getpwuid = missing
 
 def _run_without_a_home(body: str) -> subprocess.CompletedProcess[str]:
     """Run *body* in a fresh interpreter with no HOME and no passwd entry."""
-    env = {k: v for k, v in os.environ.items() if k != "HOME"}
+    # QUARRY_* too: the suite redirects the data and log roots, which would make
+    # the home directory unnecessary.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k != "HOME" and not k.startswith(("QUARRY", "INGEST_"))
+    }
     return subprocess.run(
         [sys.executable, "-c", _NO_HOME_PRELUDE + textwrap.dedent(body)],
         capture_output=True,
@@ -562,46 +597,161 @@ def _run_without_a_home(body: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("command", ["doctor", "install"])
-def test_the_console_script_answers_when_home_cannot_be_resolved(
-    command: str,
-) -> None:
-    done = _run_without_a_home(
-        f"""
-        sys.argv = ["quarry", "{command}"]
-        from quarry.__main__ import app
-        app()
-        """
-    )
-
-    assert done.returncode == 1
-    assert "✗ Home directory" in done.stdout
-    assert "Traceback" not in done.stderr
-
-
-def test_python_dash_m_quarry_answers_when_home_cannot_be_resolved() -> None:
-    done = _run_without_a_home(
-        """
+_ENTRY_POINTS: dict[str, str] = {
+    "quarry doctor": """
+        sys.argv = ["quarry", "doctor"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry install": """
+        sys.argv = ["quarry", "install"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry find": """
+        sys.argv = ["quarry", "find", "x"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "python -m quarry doctor": """
         import runpy
         sys.argv = ["quarry", "doctor"]
         runpy.run_module("quarry", run_name="__main__", alter_sys=True)
-        """
-    )
+    """,
+    "quarryd": """
+        sys.argv = ["quarryd"]
+        from quarry.daemon.launcher import entrypoint
+        entrypoint()
+    """,
+    "quarry-hook": """
+        sys.argv = ["quarry-hook", "session-setup"]
+        from quarry._hook_entry import main
+        main()
+    """,
+}
+
+
+@pytest.mark.parametrize("entry", sorted(_ENTRY_POINTS))
+def test_every_entry_point_fails_cleanly_when_home_cannot_be_resolved(
+    entry: str,
+) -> None:
+    done = _run_without_a_home(_ENTRY_POINTS[entry])
 
     assert done.returncode == 1
-    assert "✗ Home directory" in done.stdout
-    assert "Traceback" not in done.stderr
+    if entry.endswith(("doctor", "install")):
+        # They finish and report it as a failed, required check.
+        assert "✗ Home directory" in done.stdout
+        assert "set HOME" in done.stdout
+    else:
+        assert "Traceback" not in done.stderr + done.stdout
+        assert done.stderr.count("\n") == 1  # one line
+        assert "cannot determine the home directory" in done.stderr
 
 
-def test_another_command_gets_one_line_on_stderr_and_exit_one() -> None:
+def test_every_quarry_module_imports_when_home_cannot_be_resolved() -> None:
+    """Proves nothing resolves the home directory at import."""
     done = _run_without_a_home(
         """
-        sys.argv = ["quarry", "find", "x"]
-        from quarry.__main__ import app
-        app()
+        import importlib, pkgutil
+        import quarry
+        failures = []
+        for info in pkgutil.walk_packages(quarry.__path__, "quarry."):
+            if info.name.endswith(".__main__"):
+                continue  # the entry point's own module is covered above
+            try:
+                importlib.import_module(info.name)
+            except RuntimeError as exc:
+                failures.append((info.name, str(exc)))
+        print(failures)
         """
     )
 
-    assert done.returncode == 1
-    assert done.stdout == ""
-    assert done.stderr.startswith("quarry: Home directory")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "[]", done.stdout
+
+
+def test_an_oserror_on_the_plugin_manifest_is_reported_under_the_manifest(
+    tmp_path: Path,
+) -> None:
+    install = tmp_path / "plugin"
+    manifest = install / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}")
+    manifest.chmod(0)
+    registry = tmp_path / "installed_plugins.json"
+    registry.write_text(
+        json.dumps({"plugins": {"quarry@punt-labs": [{"installPath": str(install)}]}})
+    )
+    try:
+        result = ClaudeCodeMcp(registry).check()
+    finally:
+        manifest.chmod(0o600)
+
+    assert "plugin.json: PermissionError: EACCES" in result.message
+    assert "installed_plugins.json" not in result.message
+
+
+def test_a_diagnostic_that_fails_names_its_file_and_never_echoes_the_message() -> None:
+    from quarry.doctor_memory import MemoryDiagnostics
+
+    private_path = "/home/someone/private"
+    with patch.object(
+        MemoryDiagnostics,
+        "_summarize",
+        side_effect=OSError(errno.EACCES, "x", private_path),
+    ):
+        result = MemoryDiagnostics.corpus(Path(__file__))
+
+    assert "test_doctor_contract.py: PermissionError: EACCES" in result.message
+    assert private_path not in result.message
+
+
+def test_the_fts_check_treats_a_table_without_an_index_as_missing(
+    tmp_path: Path,
+) -> None:
+    """Against a real LanceDB table, not a double."""
+    import lancedb
+
+    db_dir = tmp_path / "db"
+    lancedb.connect(str(db_dir)).create_table(
+        "chunks", data=[{"text": "hello", "vector": [0.1, 0.2, 0.3, 0.4]}]
+    )
+
+    result = doctor_mod._check_fts_health(db_dir)
+
+    assert result.passed is False
+    assert "missing — will be created on next sync" in result.message
+
+
+def test_a_settings_value_error_never_echoes_the_value() -> None:
+    class Holder(BaseModel):
+        token: str
+
+        @field_validator("token")
+        @classmethod
+        def reject(cls, value: str) -> str:
+            msg = f"bad token {value}"
+            raise ValueError(msg)
+
+    with pytest.raises(ValidationError) as raised:
+        Holder(token="hunter2")
+
+    reason = CheckFailure.settings_reason(raised.value)
+
+    assert reason == "token: value_error"
+    assert "hunter2" not in reason
+
+
+def test_a_working_directory_without_permission_says_so(
+    monkeypatch: MP, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def denied() -> Path:
+        raise PermissionError(errno.EACCES, "no")
+
+    monkeypatch.setattr(Path, "cwd", denied)
+
+    check_environment()
+
+    assert "the current directory is not accessible" in capsys.readouterr().out

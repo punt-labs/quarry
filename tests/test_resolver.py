@@ -173,7 +173,7 @@ class TestTier1EnvSecurity:
         monkeypatch.delenv("QUARRY_CA_CERT", raising=False)
         monkeypatch.setenv("QUARRY_URL", "wss://remote.example:9000")
         monkeypatch.setenv("QUARRY_TOKEN", "tok")
-        with patch("quarry.client.resolver._DAEMON_CA_PATH", local_ca):
+        with patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=local_ca):
             cfg = TargetResolver.resolve()
         assert cfg.ca_cert is None
 
@@ -212,7 +212,7 @@ class TestTier2StoredLogin:
                 "quarry.client.resolver.read_proxy_config",
                 side_effect=ValueError("bad toml"),
             ),
-            patch("quarry.client.resolver._DAEMON_CA_PATH", ca),
+            patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
             patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
             patch.object(ClientConfig, "loopback_token", return_value="live"),
         ):
@@ -238,7 +238,7 @@ class TestTier2StoredLogin:
                 "quarry.client.resolver.read_proxy_config",
                 side_effect=PermissionError("quarry.toml not readable"),
             ),
-            patch("quarry.client.resolver._DAEMON_CA_PATH", ca),
+            patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
             patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
             patch.object(ClientConfig, "loopback_token", return_value="live"),
         ):
@@ -311,7 +311,10 @@ class TestTier2StoredLogin:
         with (
             caplog.at_level(logging.WARNING, logger="quarry.client.resolver"),
             patch("quarry.client.resolver.read_proxy_config", return_value=login),
-            patch("quarry.client.resolver._DAEMON_CA_PATH", tmp_path / "absent.crt"),
+            patch(
+                "quarry.home_paths.QuarryHome.daemon_ca",
+                return_value=tmp_path / "absent.crt",
+            ),
             patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
             patch.object(ClientConfig, "loopback_token", return_value="live"),
         ):
@@ -331,7 +334,7 @@ class TestTier3Loopback:
         ca = tmp_path / "ca.crt"
         ca.write_text("x")
         with (
-            patch("quarry.client.resolver._DAEMON_CA_PATH", ca),
+            patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
             patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
             patch.object(ClientConfig, "loopback_token", return_value="live") as token,
         ):
@@ -349,7 +352,7 @@ class TestTier3Loopback:
         _no_env(monkeypatch)
         missing_ca = tmp_path / "absent.crt"
         with (
-            patch("quarry.client.resolver._DAEMON_CA_PATH", missing_ca),
+            patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=missing_ca),
             patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8500)),
             patch.object(ClientConfig, "loopback_token", return_value="live"),
         ):
@@ -396,7 +399,10 @@ class TestTrustBoundary:
         # The serve.token is never presented to a name a resolver could redirect.
         _no_env(monkeypatch)
         with (
-            patch("quarry.client.resolver._DAEMON_CA_PATH", tmp_path / "absent.crt"),
+            patch(
+                "quarry.home_paths.QuarryHome.daemon_ca",
+                return_value=tmp_path / "absent.crt",
+            ),
             patch.object(ClientConfig, "active_run_dir", return_value=_run_dir(8420)),
             patch.object(ClientConfig, "loopback_token", return_value="live"),
         ):

@@ -1267,7 +1267,7 @@ class TestCheckUnlinkedCaptures:
 
         assert result.passed is False
         assert "corrupt lance table" in result.message
-        assert result.message.startswith("check failed:")
+        assert result.message.startswith("check failed")
 
 
 class TestCheckShadowRepo:

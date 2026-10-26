@@ -16,7 +16,13 @@ logger = logging.getLogger(__name__)
 
 @final
 class StepReport:
-    """The words for a cleanup step the stop left running, or that ended with it."""
+    """The words for a cleanup step the stop left running, or that ended with it.
+
+    A step is one of: still running when the stop gave up on it; queued behind a
+    stuck step and never started (the serial thread pool runs one at a time); or
+    started with no grace left and not awaited.  One that ended in the same tick
+    as the cancel is reported as it ended, not as abandoned.
+    """
 
     __slots__ = ()
 
@@ -27,6 +33,8 @@ class StepReport:
         running: asyncio.Future[None],
         # None before any cancel: the step was given as long as it takes.
         remaining: float | None,
+        # The step it waits behind, if it has not begun; None if it has.
+        queued_behind: str | None = None,
     ) -> None:
         """Leave *running* to finish on its own, saying so now and when it ends.
 
@@ -37,7 +45,11 @@ class StepReport:
             cls._ended_with_the_cancel(name, running)
             return
         running.add_done_callback(partial(cls._ended_late, name))
-        if remaining is not None and remaining <= 0:
+        if queued_behind is not None:
+            logger.warning(
+                "watch: %s never started; queued behind %s", name, queued_behind
+            )
+        elif remaining is not None and remaining <= 0:
             logger.warning(
                 "watch: %s was started after the grace ran out and is not awaited",
                 name,
@@ -73,3 +85,7 @@ class StepReport:
             )
         else:
             logger.info("watch: %s finished after the stop gave up on it", name)
+
+
+class StepCancelledError(Exception):
+    """A cleanup step was cancelled by something other than the teardown's cancel."""

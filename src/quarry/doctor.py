@@ -230,30 +230,11 @@ def _check_fts_health(db_path: Path) -> CheckResult:
             message="healthy",
             required=False,
         )
-    except RuntimeError as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         return CheckResult(
             name="FTS index",
             passed=False,
-            message=(
-                f"stale — run 'quarry sync' to rebuild ({CheckFailure.detail(exc)})"
-            ),
-            required=False,
-        )
-    except (OSError, ValueError) as exc:
-        if CheckFailure.is_missing(exc):
-            return CheckResult(
-                name="FTS index",
-                passed=False,
-                message=(
-                    "missing — will be created on next sync "
-                    f"({CheckFailure.detail(exc)})"
-                ),
-                required=False,
-            )
-        return CheckResult(
-            name="FTS index",
-            passed=False,
-            message=f"cannot read the index ({CheckFailure.detail(exc)})",
+            message=CheckFailure.index_message(exc),
             required=False,
         )
     except Exception as exc:  # noqa: BLE001
@@ -469,6 +450,7 @@ def run_install() -> int:
 def _run_checks() -> list[CheckResult]:
     """Run every environment check with third-party logging quieted."""
     entries = [
+        CheckEntry("Home directory", CheckRunner.home, required=True),
         CheckEntry("Python", _check_python_version, required=True),
         CheckEntry("Data directory", _check_data_directory, required=True),
         CheckEntry("Embedding model", _check_embedding_model, required=True),

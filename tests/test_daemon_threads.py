@@ -9,10 +9,11 @@ import textwrap
 import threading
 import time
 from functools import partial
+from unittest.mock import patch
 
 import pytest
 
-from quarry.daemon.daemon_threads import DaemonThreads
+from quarry.daemon.daemon_threads import DaemonThreadAbortedError, DaemonThreads
 
 
 async def test_a_call_runs_on_a_daemon_thread_off_the_default_executor() -> None:
@@ -80,6 +81,7 @@ async def test_a_cancelled_caller_does_not_stop_the_work_or_the_pool() -> None:
     await asyncio.sleep(0.1)
 
     assert outcome == ["done"]
+    assert await asyncio.wait_for(threads.run(lambda: "later"), 2) == "later"
 
 
 def test_a_call_that_never_returns_does_not_keep_the_process_alive() -> None:
@@ -87,7 +89,7 @@ def test_a_call_that_never_returns_does_not_keep_the_process_alive() -> None:
     script = textwrap.dedent(
         """
         import asyncio, threading
-        from quarry.daemon.daemon_threads import DaemonThreads
+        from quarry.daemon.daemon_threads import DaemonThreadAbortedError, DaemonThreads
 
         async def main():
             try:
@@ -152,16 +154,52 @@ class _Fatal(BaseException):
     """A BaseException that is neither an Exception nor a cancel."""
 
 
-async def test_a_base_exception_completes_the_future_and_the_pool_survives() -> None:
+async def test_a_base_exception_reaches_the_caller_wrapped_and_the_loop_survives() -> (
+    None
+):
     threads = DaemonThreads(max_threads=1)
+
+    def exits() -> None:
+        sys.exit(3)
 
     def fatal() -> None:
         raise _Fatal
 
-    with pytest.raises(_Fatal):
-        await threads.run(fatal)
+    for call, original in ((exits, SystemExit), (fatal, _Fatal)):
+        with pytest.raises(DaemonThreadAbortedError) as raised:
+            await threads.run(call)
+        assert isinstance(raised.value.__cause__, original)
 
-    assert await asyncio.wait_for(threads.run(lambda: 7), 2) == 7  # same one thread
+    assert await asyncio.wait_for(threads.run(lambda: 7), 2) == 7  # a new thread
+
+
+async def test_stop_iteration_is_wrapped_because_a_future_refuses_it() -> None:
+    def stops() -> None:
+        raise StopIteration
+
+    with pytest.raises(DaemonThreadAbortedError) as raised:
+        await DaemonThreads(max_threads=1).run(stops)
+
+    assert isinstance(raised.value.__cause__, StopIteration)
+
+
+async def test_a_thread_that_cannot_start_fails_the_caller_and_leaves_nothing() -> None:
+    threads = DaemonThreads(max_threads=1)
+    ran: list[str] = []
+
+    def never() -> None:
+        ran.append("never")
+
+    with (
+        patch.object(threading.Thread, "start", side_effect=RuntimeError("no threads")),
+        pytest.raises(RuntimeError, match="no threads"),
+    ):
+        await threads.run(never)
+    result = await asyncio.wait_for(threads.run(lambda: "later"), 2)
+    await asyncio.sleep(0.05)
+
+    assert result == "later"  # the pool still serves the next call
+    assert ran == []  # and the failed call's work never runs later
 
 
 async def test_a_pool_of_one_runs_in_submission_order() -> None:

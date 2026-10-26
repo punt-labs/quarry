@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -186,7 +187,7 @@ class ClaudeCodeMcp:
     @staticmethod
     def _said(result: subprocess.CompletedProcess[str]) -> str:
         """Return what ``claude`` said (stderr, else stdout) as one bounded line."""
-        return CheckFailure.line(result.stderr) or CheckFailure.line(result.stdout)
+        return CheckFailure.cause(result.stderr) or CheckFailure.cause(result.stdout)
 
     @classmethod
     def _run(
@@ -297,12 +298,25 @@ class ClaudeDesktopMcp:
         Desktop cannot find a bare ``quarry``, so one that does not resolve is an
         error, never a registration that only looks configured.
         """
-        found = shutil.which("quarry")
-        if found is None:
+        first = shutil.which("quarry")
+        if first is None:
             msg = "quarry is not on PATH, so Claude Desktop cannot be pointed at it"
             raise ConfigError(msg)
-        if not Path(found).is_absolute():
-            msg = "quarry resolved to a path that is not absolute"
+        if Path(first).is_absolute():
+            return first  # symlinks are kept: a uv tool shim is a legitimate one
+        # A relative PATH entry won: look past it for an absolute match.
+        absolute = os.pathsep.join(
+            entry
+            for entry in os.environ.get("PATH", "").split(os.pathsep)
+            if Path(entry).is_absolute()
+        )
+        found = shutil.which("quarry", path=absolute)
+        if found is None:
+            msg = (
+                f"PATH has a relative entry; quarry resolved to {first!r} and no "
+                "absolute PATH entry has it (put quarry's directory on PATH by its "
+                "full path)"
+            )
             raise ConfigError(msg)
         # Symlinks are kept: a uv tool shim is a legitimate one.
         return found

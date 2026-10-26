@@ -310,7 +310,9 @@ def test_large_backfill_does_not_leak_descriptors(tmp_path: Path) -> None:
     embedder = _FdSamplingEmbedder(trajectory, dimension=_EMBEDDING_DIM)
 
     with (
-        patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir),
+        patch(
+            "quarry.home_paths.QuarryHome.claude_projects", return_value=projects_dir
+        ),
         patch(
             "quarry.ingestion.streaming.get_embedding_backend",
             return_value=embedder,
