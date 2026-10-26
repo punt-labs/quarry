@@ -77,7 +77,7 @@ that the code makes \emph{without} the claim is an operation that latches
 What the model cannot show is a check-then-write race inside such an unclaimed
 write, because the model makes each write atomic whether or not the code does.
 
-\subsection{Two builds, eight seeded faults, two switches}
+\subsection{Two builds, nine seeded faults, two switches}
 
 \field{fixed}~$=1$ is the lifecycle this design requires. \field{fixed}~$=0$ is
 the code at the commit the design starts from (eaa5118): the terminals write
@@ -86,13 +86,14 @@ without the claim and over any status, the abort's kept set lacks
 spools and counts a kept job anyway, a store that lands after the cancel is never
 observed, and a spool future that is cancelled while its thread runs is reported
 as a failed write; a cancel of the abort's gather escapes the queued path's
-record. \field{abl}$\,\in 1\upto8$ seeds one fault into the fixed build: the
+record. \field{abl}$\,\in 1\upto9$ seeds one fault into the fixed build: the
 observer moves a term and not the counter (1, I2), the late correction moves a
 term and not the reason (2, I5), the observer writes without the claim (3, I6), the
 abort's kept set lacks \field{aborted} (4, I7), the observer leaves the spool file
 (5, I11), a failed committing store leaves the term \emph{unconfirmed} (6, I9), and
 the observer leaves the failure reason on a completed job (7, I10), and the loop
-closes with no drain and no report (8, I12). The old build
+closes with no drain and no report (8, I12), and a settled job is counted \emph{kept}
+(9, I9). The old build
 never breaks I2 or I5, so faults 1 and 2 prove those witnesses can fire. The same witnesses are
 checked against every build: the fixed build, with \field{abl}$=0$, must reach
 none.
@@ -306,7 +307,7 @@ WIT ::= wTerm | wCount | wKept | wLost | wLate | wClaim | wOver | wDisk
 fixed, abl : \nat
 \where
 fixed \in 0 \upto 1 \\
-abl \in 0 \upto 8 \\
+abl \in 0 \upto 9 \\
 abl > 0 \implies fixed = 1 \\
 fixed = 1 \\
 abl = 0
@@ -328,7 +329,7 @@ TermOf : SP \pfun TERM \\
 RsOf : SP \pfun RS
 \where
 ReasonOf = \{ tpend \mapsto rprov, tunfin \mapsto rprov,
-  tspooled \mapsto rspooled, tnospool \mapsto rnospool,
+  tspooled \mapsto rspooled,
   tnotw \mapsto rnotw, tunb \mapsto runb \} \\
 TermOf = \{ sok \mapsto tspooled, sfail \mapsto tnotw, sunb \mapsto tunb \} \\
 RsOf = \{ sok \mapsto rspooled, sfail \mapsto rnotw, sunb \mapsto runb \}
@@ -413,7 +414,8 @@ wit' = wit \cup \{ w : WIT |
   (w = wLost \land (\exists j : JOB @ ts'~j = tstored \land st'~j = sfailed \land
      rp'~j = zfalse)) \lor
   (w = wLate \land (\exists j : JOB @ st'~j = sfailed \land
-     tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j))) \lor
+     ((tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j)) \lor
+      (tl'~j = tnospool \land rs'~j \notin \{ rnospool, rterm \})))) \lor
   (w = wDisk \land (\exists j : JOB @ st'~j = sfailed \land
      ((rs'~j = rspooled \land sp'~j \neq sok) \lor
       (rs'~j \in \{ rnotw, runb \} \land sp'~j \in \{ srun, sok \}) \lor
@@ -449,7 +451,8 @@ wit' = wit \cup \{ w : WIT |
   (w = wLost \land (\exists j : JOB @ ts'~j = tstored \land st'~j = sfailed \land
      rp'~j = zfalse)) \lor
   (w = wLate \land (\exists j : JOB @ st'~j = sfailed \land
-     tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j))) \lor
+     ((tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j)) \lor
+      (tl'~j = tnospool \land rs'~j \notin \{ rnospool, rterm \})))) \lor
   (w = wDisk \land (\exists j : JOB @ st'~j = sfailed \land
      ((rs'~j = rspooled \land sp'~j \neq sok) \lor
       (rs'~j \in \{ rnotw, runb \} \land sp'~j \in \{ srun, sok \}) \lor
@@ -1650,6 +1653,7 @@ under the claim, and counted pending.
 fixed = 1 \\
 ab~j? = atake \\
 st~j? \in \{ squeued, srunning, sfailed \} \\
+\lnot (st~j? = sfailed \land ts~j? = tstop) \\
 st' = st \oplus \{ j? \mapsto sfailed \} \\
 loc' = loc \\
 ts' = ts \\
@@ -1668,6 +1672,70 @@ bx' = bx
 
 \begin{zed}
 BeginFail \defs BeginFailCore \land Latch
+\end{zed}
+
+\emph{Fixed build.} A taken job whose own store has already ended without rows (it
+refused, failed, or stopped at the checkpoint) is \emph{settled}: it keeps the
+store's reason and is counted \emph{needs no spool}. It is not spooled (its content
+was refused or is rerunnable), and it is not counted \emph{kept}, because \emph{kept}
+with a \field{failed} status would break I9.
+
+\begin{schema}{BeginSettledCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 1 \\
+abl \neq 9 \\
+ab~j? = atake \\
+st~j? = sfailed \\
+ts~j? = tstop \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \oplus \{ j? \mapsto arec \} \\
+sp' = sp \\
+tl' = tl \oplus \{ j? \mapsto tnospool \} \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+rp' = rp \\
+cnt' = cnt \oplus \{ tnone \mapsto cnt~tnone - 1, tnospool \mapsto cnt~tnospool + 1 \} \\
+ph' = ph \\
+lc' = lc \\
+bx' = bx
+\end{schema}
+
+\begin{zed}
+BeginSettled \defs BeginSettledCore \land Latch
+\end{zed}
+
+\emph{Seeded fault 9.} The settled job is counted \emph{kept}.
+
+\begin{schema}{BeginSettledKeptCore}
+\Delta Run \\ j? : JOB
+\where
+fixed = 1 \\
+abl = 9 \\
+ab~j? = atake \\
+st~j? = sfailed \\
+ts~j? = tstop \\
+st' = st \\
+loc' = loc \\
+ts' = ts \\
+ab' = ab \oplus \{ j? \mapsto arec \} \\
+sp' = sp \\
+tl' = tl \oplus \{ j? \mapsto tkept \} \\
+rs' = rs \\
+fl' = fl \\
+fc' = fc \\
+rp' = rp \\
+cnt' = cnt \oplus \{ tnone \mapsto cnt~tnone - 1, tkept \mapsto cnt~tkept + 1 \} \\
+ph' = ph \\
+lc' = lc \\
+bx' = bx
+\end{schema}
+
+\begin{zed}
+BeginSettledKept \defs BeginSettledKeptCore \land Latch
 \end{zed}
 
 \emph{Seeded fault 4.} The fixed build's kept set lacks \field{aborted}.

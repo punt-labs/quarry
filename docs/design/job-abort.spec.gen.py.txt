@@ -62,7 +62,8 @@ WIT = r"""wit' = wit \cup \{ w : WIT |
   (w = wLost \land (\exists j : JOB @ ts'~j = tstored \land st'~j = sfailed \land
      rp'~j = zfalse)) \lor
   (w = wLate \land (\exists j : JOB @ st'~j = sfailed \land
-     tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j))) \lor
+     ((tl'~j \in \dom ReasonOf \land rs'~j \neq ReasonOf~(tl'~j)) \lor
+      (tl'~j = tnospool \land rs'~j \notin \{ rnospool, rterm \})))) \lor
   (w = wDisk \land (\exists j : JOB @ st'~j = sfailed \land
      ((rs'~j = rspooled \land sp'~j \neq sok) \lor
       (rs'~j \in \{ rnotw, runb \} \land sp'~j \in \{ srun, sok \}) \lor
@@ -381,10 +382,25 @@ counted \emph{unconfirmed} until its store thread ends.""",
 \emph{Fixed build.} Any other taken job is failed with the provisional reason,
 under the claim, and counted pending.""",
         ["fixed = 1", f"ab~{J} = atake",
-         f"st~{J} \\in \\{{ squeued, srunning, sfailed \\}}"],
+         f"st~{J} \\in \\{{ squeued, srunning, sfailed \\}}",
+         f"\\lnot (st~{J} = sfailed \\land ts~{J} = tstop)"],
         merge({"ab": upd("ab", (J, "abegun")),
                "st": upd("st", (J, "sfailed")), "rs": upd("rs", (J, "rprov"))},
               move("tnone", "tpend"))))
+    O.append(Op("BeginSettled", r"""
+\emph{Fixed build.} A taken job whose own store has already ended without rows (it
+refused, failed, or stopped at the checkpoint) is \emph{settled}: it keeps the
+store's reason and is counted \emph{needs no spool}. It is not spooled (its content
+was refused or is rerunnable), and it is not counted \emph{kept}, because \emph{kept}
+with a \field{failed} status would break I9.""",
+        ["fixed = 1", "abl \\neq 9", f"ab~{J} = atake", f"st~{J} = sfailed",
+         f"ts~{J} = tstop"],
+        merge({"ab": upd("ab", (J, "arec"))}, move("tnone", "tnospool"))))
+    O.append(Op("BeginSettledKept", r"""
+\emph{Seeded fault 9.} The settled job is counted \emph{kept}.""",
+        ["fixed = 1", "abl = 9", f"ab~{J} = atake", f"st~{J} = sfailed",
+         f"ts~{J} = tstop"],
+        merge({"ab": upd("ab", (J, "arec"))}, move("tnone", "tkept"))))
     O.append(Op("BeginAbortedOverwritten", r"""
 \emph{Seeded fault 4.} The fixed build's kept set lacks \field{aborted}.""",
         ["fixed = 1", "abl = 4", f"ab~{J} = atake", f"st~{J} = saborted"],
@@ -615,7 +631,7 @@ that the code makes \emph{without} the claim is an operation that latches
 What the model cannot show is a check-then-write race inside such an unclaimed
 write, because the model makes each write atomic whether or not the code does.
 
-\subsection{Two builds, eight seeded faults, two switches}
+\subsection{Two builds, nine seeded faults, two switches}
 
 \field{fixed}~$=1$ is the lifecycle this design requires. \field{fixed}~$=0$ is
 the code at the commit the design starts from (eaa5118): the terminals write
@@ -624,13 +640,14 @@ without the claim and over any status, the abort's kept set lacks
 spools and counts a kept job anyway, a store that lands after the cancel is never
 observed, and a spool future that is cancelled while its thread runs is reported
 as a failed write; a cancel of the abort's gather escapes the queued path's
-record. \field{abl}$\,\in 1\upto8$ seeds one fault into the fixed build: the
+record. \field{abl}$\,\in 1\upto9$ seeds one fault into the fixed build: the
 observer moves a term and not the counter (1, I2), the late correction moves a
 term and not the reason (2, I5), the observer writes without the claim (3, I6), the
 abort's kept set lacks \field{aborted} (4, I7), the observer leaves the spool file
 (5, I11), a failed committing store leaves the term \emph{unconfirmed} (6, I9), and
 the observer leaves the failure reason on a completed job (7, I10), and the loop
-closes with no drain and no report (8, I12). The old build
+closes with no drain and no report (8, I12), and a settled job is counted \emph{kept}
+(9, I9). The old build
 never breaks I2 or I5, so faults 1 and 2 prove those witnesses can fire. The same witnesses are
 checked against every build: the fixed build, with \field{abl}$=0$, must reach
 none.
@@ -844,7 +861,7 @@ WIT ::= wTerm | wCount | wKept | wLost | wLate | wClaim | wOver | wDisk
 fixed, abl : \nat
 \where
 fixed \in 0 \upto 1 \\
-abl \in 0 \upto 8 \\
+abl \in 0 \upto 9 \\
 abl > 0 \implies fixed = 1 \\
 fixed = 1 \\
 abl = 0
@@ -866,7 +883,7 @@ TermOf : SP \pfun TERM \\
 RsOf : SP \pfun RS
 \where
 ReasonOf = \{ tpend \mapsto rprov, tunfin \mapsto rprov,
-  tspooled \mapsto rspooled, tnospool \mapsto rnospool,
+  tspooled \mapsto rspooled,
   tnotw \mapsto rnotw, tunb \mapsto runb \} \\
 TermOf = \{ sok \mapsto tspooled, sfail \mapsto tnotw, sunb \mapsto tunb \} \\
 RsOf = \{ sok \mapsto rspooled, sfail \mapsto rnotw, sunb \mapsto runb \}
@@ -1013,7 +1030,7 @@ pending (\field{Begin}), decides what it needs (\field{Decide}), and records the
 outcome when its spool thread ends (\field{Record}), when the in-flight wait
 expires (\field{Deadline}), or later (\field{Late}).""",
          ["BeginOld", "BeginKept", "BeginUnconfirmed", "BeginFail",
-          "BeginAbortedOverwritten", "DecideRerun", "DecideSpool", "SpoolEnds",
+          "BeginSettled", "BeginSettledKept", "BeginAbortedOverwritten", "DecideRerun", "DecideSpool", "SpoolEnds",
           "Record", "Deadline", "Late", "LateNoReason", "SpoolCancelOld",
           "SpoolCancel", "QueueCancelOld", "QueueCancel", "Quiesce"]),
         ("The event loop closes", "sec:close",
