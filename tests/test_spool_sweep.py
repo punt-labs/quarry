@@ -7,20 +7,33 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Self, cast, final
 
 from quarry.daemon.job_spool import JobSpool
 from quarry.daemon.spool_sweep import StartupSweep
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import pytest
 
 
+@final
 class _Spool:
     """A spool double whose sweep does what the test says."""
 
-    def __init__(self, sweep: object) -> None:
-        self.sweep = sweep
+    __slots__ = ("_action",)
+
+    _action: Callable[[], object]
+
+    def __new__(cls, action: Callable[[], object]) -> Self:
+        self = super().__new__(cls)
+        self._action = action
+        return self
+
+    def sweep(self) -> None:
+        """Do what the test says the sweep does."""
+        self._action()
 
 
 async def test_a_sweep_that_never_returns_does_not_delay_the_caller() -> None:
@@ -66,3 +79,20 @@ async def test_a_failing_sweep_is_logged_not_left_unread(
 
     assert "the startup sweep failed" in caplog.text
     assert "disk detail" not in caplog.text
+
+
+async def test_a_cancelled_sweep_says_its_thread_is_still_running(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    release = threading.Event()
+    spool = cast("JobSpool", _Spool(lambda: release.wait(10)))
+
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
+        task = StartupSweep.start(spool)
+        await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.wait({task})
+        await asyncio.sleep(0.05)
+    release.set()
+
+    assert "cancelled; the sweep thread is still running" in caplog.text

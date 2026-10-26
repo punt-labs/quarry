@@ -89,7 +89,7 @@ def test_a_call_that_never_returns_does_not_keep_the_process_alive() -> None:
     script = textwrap.dedent(
         """
         import asyncio, threading
-        from quarry.daemon.daemon_threads import DaemonThreadAbortedError, DaemonThreads
+        from quarry.daemon.daemon_threads import DaemonThreads
 
         async def main():
             try:
@@ -200,6 +200,59 @@ async def test_a_thread_that_cannot_start_fails_the_caller_and_leaves_nothing() 
 
     assert result == "later"  # the pool still serves the next call
     assert ran == []  # and the failed call's work never runs later
+
+
+async def test_work_stranded_by_a_replacement_that_cannot_start_fails_in_order() -> (
+    None
+):
+    threads = DaemonThreads(max_threads=1)
+    release = threading.Event()
+    started = threading.Event()
+    real_start = threading.Thread.start
+    starts: list[str] = []
+
+    def start_once(self: threading.Thread) -> None:
+        if starts:
+            msg = "no thread for the replacement"
+            raise RuntimeError(msg)
+        starts.append(self.name)
+        real_start(self)
+
+    def dies() -> None:
+        started.set()
+        release.wait(5)
+        sys.exit(1)  # the only thread ends, with work queued behind it
+
+    ended: list[str] = []
+    died: list[threading.ExceptHookArgs] = []
+    with (
+        patch.object(threading.Thread, "start", start_once),
+        patch.object(threading, "excepthook", died.append),
+    ):
+        first = asyncio.ensure_future(threads.run(dies))
+        while not started.is_set():  # not to_thread: it would start a thread too
+            await asyncio.sleep(0.005)
+        second = asyncio.ensure_future(threads.run(lambda: "second"))
+        third = asyncio.ensure_future(threads.run(lambda: "third"))
+        second.add_done_callback(lambda _f: ended.append("second"))
+        third.add_done_callback(lambda _f: ended.append("third"))
+        await asyncio.sleep(0.05)
+        release.set()
+        results = await asyncio.wait_for(
+            asyncio.gather(first, second, third, return_exceptions=True), 5
+        )
+
+    for _ in range(200):  # the thread reports after its future has failed
+        if died:
+            break
+        await asyncio.sleep(0.01)
+    assert [args.exc_type for args in died] == [SystemExit]
+    assert isinstance(results[0], DaemonThreadAbortedError)
+    for stranded in results[1:]:
+        assert isinstance(stranded, RuntimeError)
+        assert "no thread for the replacement" in str(stranded)
+    assert ended == ["second", "third"]  # first in, first failed
+    assert await asyncio.wait_for(threads.run(lambda: "later"), 2) == "later"
 
 
 async def test_a_pool_of_one_runs_in_submission_order() -> None:

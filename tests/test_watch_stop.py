@@ -596,6 +596,7 @@ async def test_a_thread_step_stuck_behind_a_stuck_one_is_reported_as_never_start
         await asyncio.sleep(0.3)
 
     assert "stopped while unwatching the roster was in progress" in caplog.text
+    assert "closing the roster never started; queued behind unwatching" in caplog.text
     assert (
         "closing the roster was started after the grace ran out and is not awaited"
         not in caplog.text
@@ -623,3 +624,28 @@ async def test_a_step_waiting_for_the_thread_says_who_it_is_queued_behind(
     assert "closing the roster never started; queued behind unwatching the roster" in (
         caplog.text
     )
+
+
+async def test_every_step_queued_behind_a_stuck_one_names_the_stuck_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    release = threading.Event()
+    roster = cast(
+        "WatchRoster",
+        SimpleNamespace(unwatch_all=lambda: release.wait(5), close=lambda: None),
+    )
+    source = cast("FsEventSource", SimpleNamespace(stop=lambda: None))
+    stop = WatchStop.for_loop(roster, source, None, None, None, 0.0)
+    stopping = asyncio.create_task(stop.run())
+    await asyncio.sleep(0.1)
+    with caplog.at_level(logging.INFO, logger="quarry.daemon"):
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        release.set()
+        await asyncio.sleep(0.3)
+
+    assert "joining the observer never started; queued behind unwatching" in (
+        caplog.text
+    )
+    assert "queued behind closing the roster" not in caplog.text  # that one is idle

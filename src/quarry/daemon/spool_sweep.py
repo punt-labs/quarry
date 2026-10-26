@@ -39,7 +39,10 @@ class StartupSweep:
     def _ended(task: asyncio.Task[None]) -> None:
         """Done callback: log how the sweep ended."""
         if task.cancelled():
-            logger.info("spool: the startup sweep was cancelled")
+            logger.info(
+                "spool: the startup sweep was cancelled; "
+                "the sweep thread is still running"
+            )
         elif (failure := task.exception()) is not None:
             logger.error(
                 "spool: the startup sweep failed", exc_info=RedactedFailure.of(failure)

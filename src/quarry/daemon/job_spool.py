@@ -109,12 +109,12 @@ class JobSpool:
         write is in flight, here or in another daemon on the same root; every
         matching temp is therefore a crash's, and none is young, whatever its
         age.  It waits for a write that holds the lock, which is why it runs as a
-        background task.
+        background task.  A spool that does not exist has nothing to sweep and no
+        lock to take, and is never swept without one.
         """
-        sweep = TempSweep(self._dir, self._LEFTOVER, "spool", stale_after_s=0.0)
         if not self._dir.is_dir():
-            sweep.run()  # nothing written yet; it says nothing
             return
+        sweep = TempSweep(self._dir, self._LEFTOVER, "spool", stale_after_s=0.0)
         with SpoolLock(self._dir).exclusive():
             sweep.run()
 

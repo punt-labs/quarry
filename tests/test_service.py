@@ -779,7 +779,9 @@ class TestInstallMacOS:
         ):
             msg = uninstall()
 
-            assert "uninstalled" in msg
+            assert "nothing to remove" in msg
+            assert "Removed" not in msg
+            assert "uninstalled" not in msg
             mock_run.assert_not_called()
 
     @patch("quarry.service.subprocess.run")

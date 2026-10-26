@@ -110,7 +110,7 @@ def _quarryd_exec_args() -> list[str]:
     Appends ``--tls`` when TLS certificates are present in QuarryHome.tls_dir().
     """
     # 1. Preferred: uv tool install symlink.
-    local_bin = Path.home() / ".local" / "bin" / "quarryd"
+    local_bin = QuarryHome.home() / ".local" / "bin" / "quarryd"
     if local_bin.exists():
         resolved = local_bin.resolve()
         logger.info("Service binary: %s (uv tool)", resolved)
@@ -152,7 +152,7 @@ def _quarryd_exec_args() -> list[str]:
 def _launchd_plist_content() -> str:
     args = _quarryd_exec_args()
     program_args = "\n".join(f"        <string>{_xml_escape(a)}</string>" for a in args)
-    log_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
+    log_dir = QuarryHome.log_root()
     # launchd does not support EnvironmentFile — embed environment variables
     # directly in the plist EnvironmentVariables dict.  The plist is written at
     # install time (0700 LaunchAgents dir, 0600 plist) by the installing user,
@@ -258,7 +258,8 @@ def _launchd_install() -> None:
     logger.info("Loaded %s into launchd", _LABEL)
 
 
-def _launchd_uninstall() -> None:
+def _launchd_uninstall() -> bool:
+    """Remove the launchd plist; return whether there was one to remove."""
     if QuarryHome.launchd_plist(_LABEL).exists():
         subprocess.run(
             ["launchctl", "unload", "-w", str(QuarryHome.launchd_plist(_LABEL))],
@@ -266,11 +267,12 @@ def _launchd_uninstall() -> None:
         )
         QuarryHome.launchd_plist(_LABEL).unlink()
         logger.info("Removed %s", QuarryHome.launchd_plist(_LABEL))
-    else:
-        logger.info(
-            "No plist found at %s — nothing to uninstall",
-            QuarryHome.launchd_plist(_LABEL),
-        )
+        return True
+    logger.info(
+        "No plist found at %s — nothing to uninstall",
+        QuarryHome.launchd_plist(_LABEL),
+    )
+    return False
 
 
 def _launchd_status() -> bool:
@@ -348,7 +350,8 @@ def _systemd_install() -> None:
     logger.info("Enabled and restarted quarry.service")
 
 
-def _systemd_uninstall() -> None:
+def _systemd_uninstall() -> bool:
+    """Remove the systemd user unit; return whether there was one to remove."""
     if QuarryHome.systemd_unit().exists():
         subprocess.run(
             ["systemctl", "--user", "disable", "--now", "quarry"],
@@ -360,10 +363,9 @@ def _systemd_uninstall() -> None:
             check=False,
         )
         logger.info("Removed %s", QuarryHome.systemd_unit())
-    else:
-        logger.info(
-            "No unit found at %s — nothing to uninstall", QuarryHome.systemd_unit()
-        )
+        return True
+    logger.info("No unit found at %s — nothing to uninstall", QuarryHome.systemd_unit())
+    return False
 
 
 def _systemd_status() -> bool:
@@ -481,11 +483,12 @@ def _service_file(plat: str) -> Path:
 def uninstall() -> str:
     """Remove quarry system service.  Returns a status message."""
     plat = detect_platform()
-    if plat == "macos":
-        _launchd_uninstall()
-    else:
-        _systemd_uninstall()
-    return f"quarry daemon uninstalled. Removed {_service_file(plat)}."
+    removed = _launchd_uninstall() if plat == "macos" else _systemd_uninstall()
+    if removed:
+        return f"quarry daemon uninstalled. Removed {_service_file(plat)}."
+    return (
+        f"no quarry daemon service found at {_service_file(plat)}; nothing to remove."
+    )
 
 
 def _has_linger() -> bool:

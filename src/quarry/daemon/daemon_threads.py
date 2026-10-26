@@ -6,6 +6,7 @@ import asyncio
 import logging
 import queue
 import threading
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
@@ -50,7 +51,7 @@ class DaemonThreads:
     _max: int
     _name: str
     _started: int
-    _work: queue.SimpleQueue[Callable[[], None]]
+    _work: queue.SimpleQueue[_Work]
 
     def __new__(cls, max_threads: int = SHARED_THREADS, name: str = "quarry") -> Self:
         self = super().__new__(cls)
@@ -95,7 +96,10 @@ class DaemonThreads:
             else:
                 self._hand_back(loop, partial(self._succeed, future, result))
 
-        self._submit(work)
+        def abandon(failure: BaseException) -> None:
+            self._hand_back(loop, partial(self._fail, future, failure))
+
+        self._submit(_Work(work, abandon))
         return await future
 
     @staticmethod
@@ -129,7 +133,7 @@ class DaemonThreads:
         except RuntimeError:
             return
 
-    def _submit(self, work: Callable[[], None]) -> None:
+    def _submit(self, work: _Work) -> None:
         """Run *work* on an idle thread, a new one if the bound allows, else queue it.
 
         The idle claim is made here, under the lock, so two submits can never
@@ -149,11 +153,11 @@ class DaemonThreads:
             else:
                 self._work.put(work)
 
-    def _serve(self, work: Callable[[], None]) -> None:
+    def _serve(self, work: _Work) -> None:
         """Run *work*, then whatever comes next, until the process ends."""
         try:
             while True:
-                work()
+                work.call()
                 work = self._next()
         finally:
             with self._lock:
@@ -165,7 +169,10 @@ class DaemonThreads:
 
         Called with the lock held.  Work queued while every thread was busy is
         served by whichever finishes; one that ends instead (``SystemExit``)
-        must hand it on.
+        must hand it on.  If no thread can be started for it, its caller is told
+        why, first in, first failed, rather than left waiting on a queue nothing
+        serves; and when no thread is left at all, everything behind it is stranded
+        the same way (a later submit starts a thread, or fails, as usual).
         """
         if self._idle > 0 or self._started >= self._max:
             return
@@ -177,13 +184,25 @@ class DaemonThreads:
             threading.Thread(
                 target=self._serve, args=(work,), name=self._name, daemon=True
             ).start()
-        except RuntimeError:
-            self._work.put(work)  # no thread to give it to; it stays queued
+        except RuntimeError as exc:
             logger.warning("daemon threads: could not replace an ended thread")
+            work.abandon(exc)
+            self._abandon_all_if_unserved(exc)
         else:
             self._started += 1
 
-    def _next(self) -> Callable[[], None]:
+    def _abandon_all_if_unserved(self, failure: BaseException) -> None:
+        """Fail every queued call, in order, if no thread is left to serve them."""
+        if self._started > 0:
+            return
+        while True:
+            try:
+                stranded = self._work.get_nowait()
+            except queue.Empty:
+                return
+            stranded.abandon(failure)
+
+    def _next(self) -> _Work:
         """Return the next job; a thread is idle only while it waits for one."""
         with self._lock:
             try:
@@ -195,3 +214,12 @@ class DaemonThreads:
 
 class DaemonThreadAbortedError(RuntimeError):
     """A call on a daemon thread ended in a way a future cannot carry."""
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _Work:
+    """One queued call: what a thread runs, and how its caller is told it never will."""
+
+    call: Callable[[], None]
+    abandon: Callable[[BaseException], None]

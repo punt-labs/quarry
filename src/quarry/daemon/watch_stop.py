@@ -116,17 +116,17 @@ class WatchStop:
         # freeze neither the loop nor the process at exit, and they must never run
         # at the same time, even after the stop has given up on one.
         serial = DaemonThreads(max_threads=1, name="quarry-watch-stop")
-        behind: str | None = None  # the name of the step before, on the serial pool
+        earlier: list[ThreadStep] = []  # the steps before, on the serial pool
         for name, call in (
             ("unwatching the roster", roster.unwatch_all),
             # drop sibling conns so a restart cannot leak them
             ("closing the roster", roster.close),
             *(() if source is None else (("joining the observer", source.stop),)),
         ):
-            thread_step = ThreadStep(serial, call, behind)
+            thread_step = ThreadStep(serial, name, call, tuple(earlier))
             steps.append((name, thread_step.run))
             queued[name] = thread_step.queued_behind
-            behind = name
+            earlier.append(thread_step)
         return cls(steps, ShutdownPolicy(drain_timeout_s).watch_grace_s, queued)
 
     @staticmethod

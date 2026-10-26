@@ -398,6 +398,20 @@ def test_sweep_of_a_spool_that_does_not_exist_yet_says_nothing(
     assert caplog.records == []
 
 
+def test_sweep_of_a_spool_that_does_not_exist_yet_never_sweeps_unlocked(
+    tmp_path: Path,
+) -> None:
+    swept: list[str] = []
+
+    with patch(
+        "quarry.daemon.job_spool.TempSweep.run", lambda _self: swept.append("x")
+    ):
+        JobSpool(tmp_path / "spool").sweep()
+
+    assert swept == []
+    assert not (tmp_path / "spool").exists()  # and it made no directory for a lock
+
+
 def test_a_kind_the_sweep_could_not_match_is_refused_at_once() -> None:
     for bad in ("", "Remember", "re_member", "ingest-", "-ingest", "in gest", "a/b"):
         with pytest.raises(ValueError, match="spool kind"):
