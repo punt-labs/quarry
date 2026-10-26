@@ -59,7 +59,7 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 37
+      "noqa": 36
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
@@ -72,6 +72,9 @@
     },
     "src/quarry/doctor_memory.py": {
       "noqa": 2
+    },
+    "src/quarry/doctor_model.py": {
+      "noqa": 1
     },
     "src/quarry/doctor_recall.py": {
       "noqa": 1
@@ -184,5 +187,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-26T11:19:53Z"
+  "updated_at": "2026-10-26T12:29:16Z"
 }

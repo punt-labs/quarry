@@ -7,41 +7,41 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
-from pydantic import ValidationError
-
-from quarry.config import Settings
 from quarry.doctor_captures import CaptureDiagnostics
+from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_failure import CheckFailure
 from quarry.doctor_memory import MemoryDiagnostics
+from quarry.doctor_preconditions import Need
 from quarry.doctor_recall import RecallDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
-from quarry.home_paths import HomeUnresolvedError, QuarryHome
 from quarry.redacted_failure import RedactedFailure
 from quarry.results import CheckResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-logger = logging.getLogger(__name__)
+    from quarry.doctor_preconditions import Preconditions
 
-_MAX_CAUSES = 8  # a bound on how far to follow a chain of causes
-_PLACEHOLDER_ROOT = Path("/quarry-root-for-validation-only")
+logger = logging.getLogger(__name__)
 
 
 @final
 @dataclass(frozen=True, slots=True)
 class CheckEntry:
-    """One check: its report name, what to run, and whether its failure is fatal.
+    """One check: its report name, what to run, what it needs, and its weight.
 
     ``required`` is what a check that *crashes* counts as: the same as the
     result it would have returned, so a crash never downgrades a required check.
-    ``call`` returns ``None`` for a diagnostic that has nothing to say.
+    ``needs`` is what must hold before it can say anything true; when it does not,
+    the check is reported as skipped, never dropped.  ``call`` returns ``None``
+    for a diagnostic that has nothing to say.
     """
 
     name: str
     # None: the diagnostic has nothing to report
     call: Callable[[], CheckResult | None]
     required: bool = False
+    needs: Need = Need.NONE
 
 
 @final
@@ -51,22 +51,8 @@ class CheckRunner:
     __slots__ = ()
 
     @staticmethod
-    def home() -> CheckResult:
-        """Return whether the home directory resolves (everything else needs it)."""
-        try:
-            QuarryHome.home()
-        except HomeUnresolvedError as exc:
-            return CheckResult(
-                name="Home directory",
-                passed=False,
-                message=f"cannot be determined ({exc}); "
-                "set HOME, or give this user a passwd entry",
-            )
-        return CheckResult(name="Home directory", passed=True, message="resolved")
-
-    @classmethod
     # None: the entry's diagnostic had nothing to report.
-    def attempt(cls, entry: CheckEntry) -> CheckResult | None:
+    def attempt(entry: CheckEntry) -> CheckResult | None:
         """Run one entry; whatever it raises becomes a failed result naming it.
 
         The report must always complete, so no single check, whatever it hits,
@@ -80,13 +66,6 @@ class CheckRunner:
             logger.info(
                 "doctor: check %s failed", entry.name, exc_info=RedactedFailure.of(exc)
             )
-            if cls.is_missing_home(exc):
-                return CheckResult(
-                    name=entry.name,
-                    passed=False,
-                    message="skipped (needs the home directory)",
-                    required=False,  # the Home check is the one issue for this cause
-                )
             return CheckResult(
                 name=entry.name,
                 passed=False,
@@ -94,44 +73,35 @@ class CheckRunner:
                 required=entry.required,
             )
 
-    @staticmethod
-    def is_missing_home(failure: BaseException) -> bool:
-        """Return whether *failure* is, narrowly, the home directory not resolving.
+    @classmethod
+    def run(
+        cls, entries: Iterable[CheckEntry], pre: Preconditions
+    ) -> list[CheckResult]:
+        """Run every entry in order; return the results that have something to say.
 
-        It is a :class:`HomeUnresolvedError`, or a pydantic ``ValidationError``
-        every one of whose errors is one, found by following explicit ``from``
-        causes only (never the implicit context, which is whatever happened to be
-        in flight), each exception once and no more than a handful deep.
+        An entry whose needs do not hold is skipped, with a line saying what it
+        lacked; a skip is never an issue, because the Home and Settings checks
+        are where those faults are counted.
         """
-        seen: set[int] = set()
-        link: BaseException | None = failure
-        while link is not None and id(link) not in seen and len(seen) < _MAX_CAUSES:
-            seen.add(id(link))
-            if isinstance(link, HomeUnresolvedError):
-                return True
-            if isinstance(link, ValidationError) and CheckRunner._all_home(link):
-                return True
-            link = link.__cause__
-        return False
-
-    @staticmethod
-    def _all_home(failure: ValidationError) -> bool:
-        errors = failure.errors()
-        return bool(errors) and all(
-            isinstance(error.get("ctx", {}).get("error"), HomeUnresolvedError)
-            for error in errors
-        )
+        results = [cls._one(entry, pre) for entry in entries]
+        return [result for result in results if result is not None]
 
     @classmethod
-    def run(cls, entries: Iterable[CheckEntry]) -> list[CheckResult]:
-        """Run every entry in order; return the results that have something to say."""
-        results = [cls.attempt(entry) for entry in entries]
-        return [result for result in results if result is not None]
+    # None: the entry's diagnostic had nothing to report.
+    def _one(cls, entry: CheckEntry, pre: Preconditions) -> CheckResult | None:
+        if (lacks := pre.missing(entry.needs)) is not None:
+            return CheckResult(
+                name=entry.name,
+                passed=False,
+                message=f"skipped (needs {lacks})",
+                required=False,
+            )
+        return cls.attempt(entry)
 
 
 @final
 class SettingsChecks:
-    """The checks that read the settings, or the one failed check that says why not."""
+    """The checks that read the resolved settings or the daemon they describe."""
 
     __slots__ = ()
 
@@ -148,67 +118,84 @@ class SettingsChecks:
             raise RuntimeError(msg) from exc
 
     @staticmethod
-    def unreadable(failure: Exception) -> list[CheckEntry]:
-        """Return the failed Settings entry for *failure*, if more than the home.
-
-        A missing home is the Home check's issue, but it also stops the rest of
-        the settings from being read, so they are validated once more with a
-        placeholder root (for validation only): a malformed setting is still
-        reported.
-        """
-        if CheckRunner.is_missing_home(failure):
-            try:
-                Settings(quarry_root=_PLACEHOLDER_ROOT)
-            except ValidationError as again:
-                failure = again
-            else:
-                return []
-        failed = CheckResult(
-            name="Settings",
-            passed=False,
-            message=f"invalid settings ({CheckFailure.settings_reason(failure)})",
-        )
-        return [CheckEntry("Settings", lambda: failed, required=True)]
+    def entries(
+        pre: Preconditions, fts: Callable[[Path], CheckResult]
+    ) -> list[CheckEntry]:
+        """Return the entries that need the settings; *fts* is the index check."""
+        both = Need.HOME | Need.SETTINGS
+        return [
+            CheckEntry(
+                "Daemon",
+                lambda: DaemonDiagnostics.reachability(pre.settings),
+                needs=both,
+            ),
+            CheckEntry(
+                "Serve token",
+                lambda: DaemonDiagnostics.serve_token(pre.settings),
+                needs=both,
+            ),
+            CheckEntry(
+                "Fd headroom",
+                lambda: DaemonDiagnostics.fd_headroom(pre.settings),
+                needs=both,
+            ),
+            CheckEntry(
+                "Stop timeout",
+                lambda: DaemonDiagnostics.stop_timeout(pre.settings),
+                needs=both,
+            ),
+            *SettingsChecks._settings_entries(pre, fts),
+        ]
 
     @staticmethod
-    def entries(fts: Callable[[Path], CheckResult]) -> list[CheckEntry]:
-        """Return the settings-dependent entries; *fts* is the index check."""
-        try:
-            settings = Settings()
-        except Exception as exc:
-            logger.info(
-                "doctor: settings are invalid", exc_info=RedactedFailure.of(exc)
-            )
-            return SettingsChecks.unreadable(exc)
-        db, registry = settings.lancedb_path, settings.registry_path
+    def _settings_entries(
+        pre: Preconditions, fts: Callable[[Path], CheckResult]
+    ) -> list[CheckEntry]:
+        need = Need.SETTINGS
         return [
-            CheckEntry("FTS index", lambda: fts(db)),
+            CheckEntry("FTS index", lambda: fts(pre.settings.lancedb_path), needs=need),
             CheckEntry(
-                "Sync directories", lambda: SyncDiagnostics.directories(registry)
+                "Sync directories",
+                lambda: SyncDiagnostics.directories(pre.settings.registry_path),
+                needs=need,
             ),
             CheckEntry(
                 "Sync enable",
-                lambda: SyncDiagnostics.enable_status(registry, SettingsChecks.cwd()),
+                lambda: SyncDiagnostics.enable_status(
+                    pre.settings.registry_path, SettingsChecks.cwd()
+                ),
+                needs=need,
             ),
             CheckEntry(
                 "Unlinked captures",
-                lambda: CaptureDiagnostics.unlinked(registry, db),
+                lambda: CaptureDiagnostics.unlinked(
+                    pre.settings.registry_path, pre.settings.lancedb_path
+                ),
+                needs=need,
             ),
             CheckEntry(
                 "Shadow repo",
                 lambda: CaptureDiagnostics.shadow_repo(SettingsChecks.cwd()),
                 required=True,  # an unverifiable public repo is not "no leak"
             ),
-            CheckEntry("Memory corpus", lambda: MemoryDiagnostics.corpus(db)),
+            CheckEntry(
+                "Memory corpus",
+                lambda: MemoryDiagnostics.corpus(pre.settings.lancedb_path),
+                needs=need,
+            ),
             CheckEntry(
                 "Memory identity",
-                lambda: MemoryDiagnostics.identity_active(SettingsChecks.cwd(), db),
+                lambda: MemoryDiagnostics.identity_active(
+                    SettingsChecks.cwd(), pre.settings.lancedb_path
+                ),
+                needs=Need.HOME | need,
             ),
             CheckEntry(
                 "Recall activity",
                 lambda: RecallDiagnostics.recent_activity(
-                    settings.telemetry_path,
-                    telemetry_enabled=settings.telemetry_enabled,
+                    pre.settings.telemetry_path,
+                    telemetry_enabled=pre.settings.telemetry_enabled,
                 ),
+                needs=need,
             ),
         ]

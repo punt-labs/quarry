@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-from pydantic_core import InitErrorDetails
 
+from quarry.config import Settings
+from quarry.doctor_preconditions import Need, Preconditions
 from quarry.doctor_runner import CheckEntry, CheckRunner
 from quarry.home_paths import HomeUnresolvedError
 from quarry.results import CheckResult
+
+
+def _resolved() -> Preconditions:
+    return Preconditions(None, Settings(), None)
+
+
+def _no_home(*, invalid: Exception | None = None) -> Preconditions:
+    return Preconditions(HomeUnresolvedError("no home"), None, invalid)
+
+
+def _ran() -> CheckResult:
+    return CheckResult(name="probe", passed=True, message="ran")
 
 
 def _boom() -> CheckResult:
@@ -36,73 +48,78 @@ def test_a_diagnostic_with_nothing_to_say_is_left_out_and_the_rest_run_in_order(
         CheckEntry("two", lambda: CheckResult(name="two", passed=True, message="")),
     ]
 
-    names = [result.name for result in CheckRunner.run(entries)]
+    names = [result.name for result in CheckRunner.run(entries, _resolved())]
 
     assert names == ["one", "crash", "two"]
 
 
-def _validation_error(*causes: BaseException) -> ValidationError:
-    """Build a ValidationError whose errors each carry one of *causes*."""
-    return ValidationError.from_exception_data(
-        "Settings",
-        [
-            InitErrorDetails(
-                type="value_error", loc=(f"field{n}",), input=None, ctx={"error": cause}
-            )
-            for n, cause in enumerate(causes)
-        ],
-    )
+def test_an_entry_whose_home_is_missing_is_skipped_never_dropped() -> None:
+    entry = CheckEntry("Probe", _ran, required=True, needs=Need.HOME)
 
+    [result] = CheckRunner.run([entry], _no_home())
 
-def _home() -> HomeUnresolvedError:
-    return HomeUnresolvedError("no home")
-
-
-def test_a_missing_home_is_recognised_by_its_type() -> None:
-    assert CheckRunner.is_missing_home(_home())
-
-
-def test_a_validation_error_of_only_missing_homes_is_one() -> None:
-    assert CheckRunner.is_missing_home(_validation_error(_home(), _home()))
-
-
-def test_a_validation_error_with_any_other_cause_is_not() -> None:
-    assert not CheckRunner.is_missing_home(
-        _validation_error(_home(), ValueError("bad value"))
-    )
-
-
-def test_a_missing_home_behind_an_explicit_cause_is_found() -> None:
-    try:
-        raise RuntimeError("could not read") from _home()
-    except RuntimeError as wrapped:
-        assert CheckRunner.is_missing_home(wrapped)
-
-
-def test_a_missing_home_that_was_only_in_flight_is_not_the_cause() -> None:
-    try:
-        try:
-            raise _home()
-        except HomeUnresolvedError:
-            raise RuntimeError("something else") from None
-    except RuntimeError as unrelated:
-        assert unrelated.__context__ is not None
-        assert not CheckRunner.is_missing_home(unrelated)
-
-
-def test_a_cycle_of_causes_ends() -> None:
-    first, second = RuntimeError("a"), RuntimeError("b")
-    first.__cause__, second.__cause__ = second, first
-
-    assert not CheckRunner.is_missing_home(first)
-
-
-def test_a_missing_home_is_a_skipped_line_not_an_issue() -> None:
-    def needs_home() -> CheckResult:
-        raise _home()
-
-    result = CheckRunner.attempt(CheckEntry("Probe", needs_home, required=True))
-
-    assert result is not None
-    assert (result.passed, result.required) == (False, False)
+    assert (result.name, result.passed, result.required) == ("Probe", False, False)
     assert result.message == "skipped (needs the home directory)"
+
+
+def test_an_entry_whose_settings_are_invalid_is_skipped_for_valid_settings() -> None:
+    entry = CheckEntry("Probe", _ran, needs=Need.HOME | Need.SETTINGS)
+    pre = Preconditions(None, None, ValueError("bad"))
+
+    [result] = CheckRunner.run([entry], pre)
+
+    assert result.message == "skipped (needs valid settings)"
+
+
+def test_invalid_settings_are_named_before_a_missing_home() -> None:
+    entry = CheckEntry("Probe", _ran, needs=Need.HOME | Need.SETTINGS)
+
+    [result] = CheckRunner.run([entry], _no_home(invalid=ValueError("bad")))
+
+    assert result.message == "skipped (needs valid settings)"
+
+
+def test_the_home_is_named_when_it_alone_blocks_the_settings() -> None:
+    entry = CheckEntry("Probe", _ran, needs=Need.HOME | Need.SETTINGS)
+
+    [result] = CheckRunner.run([entry], _no_home())
+
+    assert result.message == "skipped (needs the home directory)"
+
+
+def test_settings_that_only_the_home_blocks_are_skipped_for_the_home() -> None:
+    entry = CheckEntry("Probe", _ran, needs=Need.SETTINGS)
+
+    [result] = CheckRunner.run([entry], _no_home())
+
+    assert result.message == "skipped (needs the home directory)"
+
+
+def test_an_entry_that_needs_nothing_runs_whatever_failed() -> None:
+    [result] = CheckRunner.run([CheckEntry("Probe", _ran)], _no_home())
+
+    assert result.message == "ran"
+
+
+def test_the_home_and_settings_checks_are_where_the_faults_are_counted() -> None:
+    pre = _no_home(invalid=ValueError("bad"))
+
+    home, settings = pre.home_check(), pre.settings_check()
+
+    assert (home.passed, home.required) == (False, True)
+    assert (settings.passed, settings.required) == (False, True)
+    assert "invalid settings" in settings.message
+
+
+def test_settings_only_the_home_blocks_are_a_skipped_line_not_a_second_issue() -> None:
+    settings = _no_home().settings_check()
+
+    assert (settings.passed, settings.required) == (False, False)
+    assert settings.message == "skipped (needs the home directory)"
+
+
+def test_resolved_preconditions_hold_the_settings_for_the_checks() -> None:
+    pre = _resolved()
+
+    assert pre.missing(Need.HOME | Need.SETTINGS) is None
+    assert pre.settings.lancedb_path.name == "lancedb"

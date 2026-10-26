@@ -21,13 +21,13 @@ import logging
 import ssl
 import stat
 from functools import partial
-from typing import final
+from typing import TYPE_CHECKING, final
 
 from pydantic import ValidationError
 
 from quarry.api.meta import FdHealth
-from quarry.config import Settings
 from quarry.daemon_ca_error import DaemonCaError
+from quarry.daemon_unready_error import DaemonUnreadyError
 from quarry.db_pointer import SELECTION
 from quarry.doctor_stop_timeout import StopTimeoutDiagnostic
 from quarry.failure_reason import FailureReason
@@ -35,6 +35,9 @@ from quarry.fd_headroom import FdHeadroom
 from quarry.home_paths import QuarryHome
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
+
+if TYPE_CHECKING:
+    from quarry.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -56,17 +59,17 @@ class DaemonDiagnostics:
     __slots__ = ()
 
     @classmethod
-    def reachability(cls) -> CheckResult:
+    def reachability(cls, settings: Settings) -> CheckResult:
         """Report whether quarryd is up and READY on the literal loopback.
 
-        Resolves the active-db run dir, reads ``serve.port``, and probes
+        Resolves the active-db run dir from *settings*, reads ``serve.port``, and probes
         ``/health`` for ``state == "ready"`` (mirrors install.sh's gate). Fail
         soft: a missing port file or an unreachable/unready daemon is a ``✗``
         report with a start-the-service hint, never a doctor crash.
         """
         result = partial(CheckResult, name="quarryd", required=False)
         try:
-            port = cls._run_dir().port_file.read()
+            port = cls._run_dir(settings).port_file.read()
         except (OSError, ValueError):
             return result(
                 passed=False,
@@ -76,6 +79,12 @@ class DaemonDiagnostics:
             is_ready = cls._probe_health(port)
         except DaemonCaError as exc:
             return result(passed=False, message=f"{exc}; run 'quarry install'")
+        except DaemonUnreadyError as exc:
+            return result(
+                passed=False,
+                message=f"not ready on {_HEALTH_HOST}:{port} — {exc}; "
+                "start or check the service",
+            )
         if is_ready:
             return result(
                 passed=True, message=f"running and ready on {_HEALTH_HOST}:{port}"
@@ -86,12 +95,12 @@ class DaemonDiagnostics:
         )
 
     @staticmethod
-    def stop_timeout() -> CheckResult:
+    def stop_timeout(settings: Settings) -> CheckResult:
         """Report whether the installed service gives the daemon time to drain."""
-        return StopTimeoutDiagnostic.check()
+        return StopTimeoutDiagnostic.check(settings)
 
     @classmethod
-    def serve_token(cls) -> CheckResult:
+    def serve_token(cls, settings: Settings) -> CheckResult:
         """Report whether ``serve.token`` is present, mode-0600, and non-empty.
 
         Checks the SAME run dir the loopback client reads, so a token outage the
@@ -101,7 +110,7 @@ class DaemonDiagnostics:
         """
         result = partial(CheckResult, name="serve.token", required=False)
         try:
-            token_path = cls._run_dir().token_file.path
+            token_path = cls._run_dir(settings).token_file.path
         except (OSError, ValueError):
             return result(
                 passed=False, message="run dir unresolved — quarryd not installed"
@@ -130,7 +139,7 @@ class DaemonDiagnostics:
         return result(passed=True, message=f"present, 0600 ({token_path})")
 
     @classmethod
-    def fd_headroom(cls) -> CheckResult:
+    def fd_headroom(cls, settings: Settings) -> CheckResult:
         """Report the DAEMON's open-fd headroom, read from its ``/health``.
 
         The resident daemon is the only long-lived process that accumulates
@@ -143,13 +152,15 @@ class DaemonDiagnostics:
         """
         result = partial(CheckResult, name="FD headroom", required=False)
         try:
-            port = cls._run_dir().port_file.read()
+            port = cls._run_dir(settings).port_file.read()
         except (OSError, ValueError):
             return result(passed=False, message=_FD_UNAVAILABLE)
         try:
             body = cls._fetch_health(port)
         except DaemonCaError as exc:
             return result(passed=False, message=f"{exc}; run 'quarry install'")
+        except DaemonUnreadyError as exc:
+            return result(passed=False, message=f"{_FD_UNAVAILABLE} ({exc})")
         if body is None:
             return result(passed=False, message=_FD_UNAVAILABLE)
         headroom = cls._fd_from_health(body)
@@ -181,15 +192,15 @@ class DaemonDiagnostics:
         return FdHeadroom(open_fds=health.open_fds, soft_limit=health.soft_limit)
 
     @staticmethod
-    def _run_dir() -> RunDir:
+    def _run_dir(settings: Settings) -> RunDir:
         """The active database's run dir — the SAME one ClientConfig reads.
 
         Mirrors the client's resolution (the CLI's ``--db`` override, else the
         persistent default) so doctor inspects the run dir the loopback client
         actually uses, not a hardcoded default.
         """
-        settings = Settings.load().resolve_db_paths(SELECTION.active())
-        return RunDir(settings.lancedb_path.parent)
+        paths = settings.resolve_db_paths(SELECTION.active())
+        return RunDir(paths.lancedb_path.parent)
 
     @classmethod
     def _probe_health(cls, port: int) -> bool:
@@ -245,7 +256,11 @@ class DaemonDiagnostics:
             http_conn = http.client.HTTPConnection(
                 _HEALTH_HOST, port, timeout=_PROBE_TIMEOUT_SECONDS
             )
-            return cls._read_health(http_conn)
+            body = cls._read_health(http_conn)
+            if body is None:
+                msg = f"the TLS attempt failed first ({type(exc).__name__})"
+                raise DaemonUnreadyError(msg) from exc
+            return body
 
     @classmethod
     def _read_health(
@@ -276,13 +291,15 @@ class DaemonDiagnostics:
     def _dropped_before_tls(conn: http.client.HTTPConnection, exc: Exception) -> bool:
         """Return whether *exc* dropped an HTTPS connection before TLS was up.
 
-        A reset, an abort or a broken pipe, which may arrive as the connection is
-        made (then there is no socket yet) or in the handshake; a refused
-        connection never reached the daemon, so it is not one of these.
+        A reset, an abort or a broken pipe once the TCP connection was made but
+        before it became an ``SSLSocket``: a refused connection never reached the
+        daemon, one with no socket at all never connected, and one that dropped
+        after TLS was up (a daemon restarting) is the daemon's, not the CA's.
         """
         return (
             isinstance(exc, ConnectionError)
             and not isinstance(exc, ConnectionRefusedError)
+            and conn.sock is not None
             and not isinstance(conn.sock, ssl.SSLSocket)
         )
 

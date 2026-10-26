@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.install_directories import InstallDirectories
 from tests.home_only import HomeOnly
@@ -64,13 +65,13 @@ class TestCheck:
         data_dir = tmp_path / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
         monkeypatch.setenv("QUARRY_ROOT", str(tmp_path / "data"))
-        result = InstallDirectories.check()
+        result = InstallDirectories.check(Settings())
         assert result.passed is True
         assert result.message == str(data_dir)
 
     def test_missing_directory(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setenv("QUARRY_ROOT", str(tmp_path / "data"))
-        result = InstallDirectories.check()
+        result = InstallDirectories.check(Settings())
         assert result.passed is False
         assert "does not exist" in result.message
 
@@ -81,7 +82,7 @@ class TestCheck:
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
 
-        assert InstallDirectories.check().message == str(data_dir)
+        assert InstallDirectories.check(Settings()).message == str(data_dir)
 
     def test_the_check_reads_the_selected_database(
         self, tmp_path: Path, monkeypatch: MP
@@ -91,4 +92,4 @@ class TestCheck:
         selected.mkdir(parents=True)
         SELECTION.override("work")
 
-        assert InstallDirectories.check().message == str(selected)
+        assert InstallDirectories.check(Settings()).message == str(selected)

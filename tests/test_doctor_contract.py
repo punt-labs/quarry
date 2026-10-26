@@ -587,7 +587,11 @@ pwd.getpwuid = missing
 
 
 def _run_without_a_home(
-    body: str, *, roots: Path | None = None, env_extra: dict[str, str] | None = None
+    body: str,
+    *,
+    roots: Path | None = None,
+    env_extra: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run *body* in a fresh interpreter with no HOME and no passwd entry.
 
@@ -611,6 +615,7 @@ def _run_without_a_home(
         capture_output=True,
         text=True,
         env=env,
+        cwd=cwd,
         timeout=60,
         check=False,
     )
@@ -882,18 +887,61 @@ def test_a_working_directory_without_permission_says_so(
     assert "the current directory is not accessible" in capsys.readouterr().out
 
 
+_CHECKS = (
+    "Home directory",
+    "Settings",
+    "Python version",
+    "Data directory",
+    "Embedding model",
+    "ONNX provider",
+    "Core imports",
+    "Claude Code MCP",
+    "Claude Desktop MCP",
+    "Daemon",
+    "Serve token",
+    "Fd headroom",
+    "Stop timeout",
+    "FTS index",
+    "Sync directories",
+    "Sync enable",
+    "Unlinked captures",
+    "Shadow repo",
+    "Memory corpus",
+    "Memory identity",
+    "Recall activity",
+)
+
+
+def _check_lines(stdout: str) -> dict[str, str]:
+    """Return each report line by the check it names (the marker is its first word)."""
+    lines = [
+        line.strip()
+        for line in stdout.splitlines()
+        if line.strip() and line.strip()[0] in "✓✗○"
+    ]
+    return {line[2:].split(":")[0]: line for line in lines}
+
+
 def test_a_missing_home_is_exactly_one_doctor_issue() -> None:
     done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"])
 
-    failing = [line for line in done.stdout.splitlines() if "✗" in line]
+    lines = _check_lines(done.stdout)
+    failing = [line for line in lines.values() if line.startswith("✗")]
     assert "1 issue(s) found" in done.stdout, done.stdout
+    assert list(lines) == list(_CHECKS), "a check vanished or appeared"
     assert len(failing) == 1, failing
     assert "Home directory" in failing[0]
-    skipped = [
-        line for line in done.stdout.splitlines() if "skipped (needs the" in line
-    ]
-    assert any("Daemon" in line for line in skipped), done.stdout
-    assert all("○" in line for line in skipped)
+    assert "skipped (needs the home directory)" in lines["Daemon"]
+    assert lines["Shadow repo"].startswith("✓"), lines["Shadow repo"]
+
+
+def test_memory_identity_is_a_skipped_line_when_only_the_roots_are_set(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"], roots=tmp_path)
+
+    identity = _check_lines(done.stdout)["Memory identity"]
+    assert identity == "○ Memory identity: skipped (needs the home directory)"
 
 
 def test_a_broken_root_is_reported_even_with_no_home(tmp_path: Path) -> None:
@@ -915,15 +963,6 @@ def test_a_broken_root_is_reported_even_with_no_home(tmp_path: Path) -> None:
     ] == ["Home directory", "Data directory", "Embedding model"]
 
 
-def test_memory_identity_is_skipped_not_crashed_when_only_the_roots_are_set(
-    tmp_path: Path,
-) -> None:
-    done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"], roots=tmp_path)
-
-    identity = [line for line in done.stdout.splitlines() if "Memory identity" in line]
-    assert all("could not run" not in line for line in identity), identity
-
-
 def test_a_malformed_setting_is_reported_beside_the_missing_home(
     tmp_path: Path,
 ) -> None:
@@ -933,9 +972,19 @@ def test_a_malformed_setting_is_reported_beside_the_missing_home(
         env_extra={"INGEST_DRAIN_TIMEOUT_S": "not-a-number"},
     )
 
-    failing = [line for line in done.stdout.splitlines() if "✗" in line]
-    assert any("Home directory" in line for line in failing), done.stdout
-    assert any("invalid settings (ingest_drain_timeout_s" in line for line in failing)
+    lines = _check_lines(done.stdout)
+    failing = [line for line in lines.values() if line.startswith("✗")]
+    assert "2 issue(s) found" in done.stdout, done.stdout
+    assert any("Home directory" in line for line in failing)
+    assert "invalid settings (ingest_drain_timeout_s" in lines["Settings"]
+    for name in (
+        "Data directory",
+        "Daemon",
+        "Fd headroom",
+        "FTS index",
+        "Recall activity",
+    ):
+        assert lines[name].endswith("skipped (needs valid settings)"), lines[name]
 
 
 def test_a_malformed_setting_is_reported_with_no_roots_either() -> None:
@@ -947,3 +996,34 @@ def test_a_malformed_setting_is_reported_with_no_roots_either() -> None:
     failing = [line for line in done.stdout.splitlines() if "✗" in line]
     assert any("Home directory" in line for line in failing), done.stdout
     assert any("invalid settings (ingest_drain_timeout_s" in line for line in failing)
+
+
+def test_a_shadow_leak_is_still_a_failure_without_a_home(tmp_path: Path) -> None:
+    repo = tmp_path / "project"
+    captures = repo / ".punt-labs" / "quarry" / "captures"
+    captures.mkdir(parents=True)
+    (captures / "session-old.md").write_text("a capture that must stay private\n")
+    for argv in (
+        ["git", "init", "-q"],
+        ["git", "add", "-f", "."],
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"],
+    ):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+
+    done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"], cwd=repo)
+
+    lines = _check_lines(done.stdout)
+    assert lines["Shadow repo"].startswith("✗"), done.stdout
+    assert "2 issue(s) found" in done.stdout, done.stdout
+
+
+def test_an_xdg_cache_root_lets_the_model_check_run_without_a_home(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS["quarry doctor"],
+        env_extra={"XDG_CACHE_HOME": str(tmp_path / "xdg")},
+    )
+
+    model = _check_lines(done.stdout)["Embedding model"]
+    assert model.startswith("✗ Embedding model: Not cached"), model

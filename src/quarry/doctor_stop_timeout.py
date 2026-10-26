@@ -6,9 +6,7 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, final
 
-from pydantic import ValidationError
-
-from quarry.config import Settings
+from quarry.home_paths import HomeUnresolvedError
 from quarry.installed_budget import BudgetState
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.redacted_failure import RedactedFailure
@@ -17,6 +15,8 @@ from quarry.stop_timeout_verdict import StopTimeoutState
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from quarry.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +37,13 @@ class StopTimeoutDiagnostic:
     __slots__ = ()
 
     @classmethod
-    def check(cls) -> CheckResult:
-        """Return the check's result."""
+    def check(cls, settings: Settings) -> CheckResult:
+        """Return the check's result, judged against *settings*' drain timeout."""
         result = partial(CheckResult, name="service stop timeout", required=False)
         try:
-            configured = Settings().ingest_drain_timeout_s
-        except ValidationError as exc:  # a settings fault, not the service's
-            fields = ", ".join(".".join(map(str, e["loc"])) for e in exc.errors())
-            return result(
-                passed=False,
-                message=f"the settings are invalid ({fields}); fix them to check "
-                "the service stop timeout",
-            )
-        try:
-            return cls._judge(result, configured)
+            return cls._judge(result, settings.ingest_drain_timeout_s)
+        except HomeUnresolvedError:
+            raise  # a precondition the runner declares, never a raw line
         except Exception as exc:
             logger.error(
                 "doctor: the stop timeout check failed",

@@ -10,19 +10,14 @@ from collections.abc import Callable, Generator
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from quarry.config import (
-    ONNX_MODEL_REPO,
-    ONNX_MODEL_REVISION,
-    ONNX_TOKENIZER_FILE,
-)
-from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_failure import CheckFailure
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.doctor_model import EmbeddingModel
+from quarry.doctor_preconditions import Need, Preconditions
 from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
 from quarry.gpu_runtime import GpuRuntime
-from quarry.home_paths import QuarryHome
 from quarry.install_directories import InstallDirectories
 from quarry.opencv_headless import HeadlessOpenCv
 from quarry.results import CheckResult
@@ -83,56 +78,6 @@ def _check_python_version() -> CheckResult:
     )
 
 
-def _check_embedding_model() -> CheckResult:
-    # Imported here, inside a try: a broken install is a failed check, not an
-    # import error that takes the whole report down.
-    try:
-        from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
-    except CheckFailure.BROKEN_STACK as exc:
-        return CheckResult(
-            name="Embedding model",
-            passed=False,
-            message=CheckFailure.import_message("huggingface_hub", exc),
-        )
-    if not (os.environ.get("HF_HOME") or os.environ.get("HF_HUB_CACHE")):
-        QuarryHome.home()  # the default model cache lives under it
-    try:
-        model_cached = try_to_load_from_cache(
-            ONNX_MODEL_REPO,
-            "onnx/model_int8.onnx",
-            revision=ONNX_MODEL_REVISION,
-        )
-        tokenizer_cached = try_to_load_from_cache(
-            ONNX_MODEL_REPO, ONNX_TOKENIZER_FILE, revision=ONNX_MODEL_REVISION
-        )
-        if (
-            isinstance(model_cached, str)
-            and Path(model_cached).exists()
-            and isinstance(tokenizer_cached, str)
-            and Path(tokenizer_cached).exists()
-        ):
-            model_size = Path(model_cached).stat().st_size
-            return CheckResult(
-                name="Embedding model",
-                passed=True,
-                message=(
-                    "snowflake-arctic-embed-m-v1.5 (ONNX INT8) cached"
-                    f" ({_human_size(model_size)})"
-                ),
-            )
-    except CheckFailure.BROKEN_STACK as exc:
-        return CheckResult(
-            name="Embedding model",
-            passed=False,
-            message=f"cannot read the model cache ({CheckFailure.detail(exc)})",
-        )
-    return CheckResult(
-        name="Embedding model",
-        passed=False,
-        message="Not cached (run 'quarry install')",
-    )
-
-
 def _check_imports() -> CheckResult:
     # OCR's modules (rapidocr, cv2) are deliberately absent: they are an optional
     # capability, and importing rapidocr can transitively load the GUI-linked cv2
@@ -163,15 +108,6 @@ def _check_imports() -> CheckResult:
         passed=False,
         message=f"Failed: {'; '.join(failed)}",
     )
-
-
-def _human_size(nbytes: float) -> str:
-    """Format byte count as human-readable string (float: /=1024 stays in-type)."""
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if nbytes < 1024 or unit == "TB":
-            return f"{nbytes:.1f} {unit}" if nbytes >= 10 else f"{nbytes:.2f} {unit}"
-        nbytes /= 1024
-    return f"{nbytes:.1f} TB"  # unreachable but satisfies type checker
 
 
 def _check_fts_health(db_path: Path) -> CheckResult:
@@ -416,23 +352,33 @@ def run_install() -> int:
 
 def _run_checks() -> list[CheckResult]:
     """Run every environment check with third-party logging quieted."""
+    pre = Preconditions.resolve()
     entries = [
-        CheckEntry("Home directory", CheckRunner.home, required=True),
+        CheckEntry("Home directory", pre.home_check, required=True),
+        CheckEntry("Settings", pre.settings_check, required=True),
         CheckEntry("Python", _check_python_version, required=True),
-        CheckEntry("Data directory", InstallDirectories.check, required=True),
-        CheckEntry("Embedding model", _check_embedding_model, required=True),
+        CheckEntry(
+            "Data directory",
+            lambda: InstallDirectories.check(pre.settings),
+            required=True,
+            needs=Need.SETTINGS,
+        ),
+        CheckEntry(
+            "Embedding model",
+            EmbeddingModel.check,
+            required=True,
+            needs=EmbeddingModel.needs(),
+        ),
         CheckEntry("ONNX provider", InferenceDiagnostics.onnx_provider),
         CheckEntry("Core imports", _check_imports, required=True),
-        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().check()),
-        CheckEntry("Claude Desktop MCP", lambda: ClaudeDesktopMcp().check()),
-        CheckEntry("Daemon", DaemonDiagnostics.reachability),
-        CheckEntry("Serve token", DaemonDiagnostics.serve_token),
-        CheckEntry("Fd headroom", DaemonDiagnostics.fd_headroom),
-        CheckEntry("Stop timeout", DaemonDiagnostics.stop_timeout),
-        *SettingsChecks.entries(_check_fts_health),
+        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().check(), needs=Need.HOME),
+        CheckEntry(
+            "Claude Desktop MCP", lambda: ClaudeDesktopMcp().check(), needs=Need.HOME
+        ),
+        *SettingsChecks.entries(pre, _check_fts_health),
     ]
     with _quiet_logging():
-        return CheckRunner.run(entries)
+        return CheckRunner.run(entries, pre)
 
 
 def check_environment(*, _skip_header: bool = False) -> int:

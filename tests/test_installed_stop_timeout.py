@@ -15,6 +15,8 @@ from quarry.config import Settings
 from quarry.daemon.bind_options import BindOptions
 from quarry.daemon.launcher import DaemonLauncher
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_preconditions import Need, Preconditions
+from quarry.doctor_runner import CheckEntry, CheckRunner
 from quarry.installed_budget import BudgetState
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.shutdown_policy import ShutdownPolicy
@@ -461,7 +463,7 @@ def test_doctor_flags_an_old_installed_service_and_says_where_the_budget_is_from
     with patch.object(
         InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(old)
     ):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert not check.passed
     assert "quarry install" in check.message
@@ -483,7 +485,7 @@ def test_doctor_prefers_the_installed_definitions_own_budget(
     with patch.object(
         InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(plist)
     ):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert check.passed
     assert "the installed service definition" in check.message
@@ -498,7 +500,7 @@ def test_doctor_passes_a_current_installed_service(
     with patch.object(
         InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(current)
     ):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert check.passed
 
@@ -507,7 +509,7 @@ def test_doctor_passes_when_no_service_is_installed(tmp_path: Path) -> None:
     absent = InstalledStopTimeout(tmp_path / "none.plist")
 
     with patch.object(InstalledStopTimeout, "installed", return_value=absent):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert check.passed
     assert check.message == "no installed service; not checked"
@@ -523,14 +525,14 @@ def test_doctor_reports_a_corrupt_plist_instead_of_raising(
     with patch.object(
         InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(broken)
     ):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert not check.passed
 
 
 def test_doctor_reports_a_failing_check_instead_of_raising() -> None:
     with patch.object(InstalledStopTimeout, "installed", side_effect=OSError("boom")):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert not check.passed
     assert "OSError" in check.message
@@ -615,7 +617,7 @@ def test_doctor_names_an_invalid_installed_budget_instead_of_saying_settings(
     with patch.object(
         InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(bad)
     ):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert not check.passed
     assert "outside" in check.message
@@ -647,7 +649,7 @@ def test_doctor_reports_the_reason_for_an_unusable_installed_definition(
     with patch.object(
         InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(path)
     ):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert not check.passed
     assert reason in check.message
@@ -662,30 +664,29 @@ def test_doctor_says_from_settings_only_when_the_installed_budget_is_absent(
     with patch.object(
         InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(plist)
     ):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert check.passed
     assert f"budget {_BUDGET:g}s from settings" in check.message
 
 
-def test_doctor_names_the_settings_when_they_are_what_is_wrong(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_doctor_skips_the_check_when_the_settings_are_what_is_wrong(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plist = _plist(tmp_path / "quarry.plist", ExitTimeOut=_NEEDED)
-
-    with (
-        monkeypatch.context() as scoped,
-        patch.object(
-            InstalledStopTimeout, "installed", return_value=InstalledStopTimeout(plist)
-        ),
-    ):
+    with monkeypatch.context() as scoped:
         scoped.setenv(ShutdownPolicy.ENV_NAME, "nonsense")
-        check = DaemonDiagnostics.stop_timeout()
+        pre = Preconditions.resolve()
+    entry = CheckEntry(
+        "Stop timeout",
+        lambda: DaemonDiagnostics.stop_timeout(pre.settings),
+        needs=Need.HOME | Need.SETTINGS,
+    )
+
+    [check] = CheckRunner.run([entry], pre)
 
     assert not check.passed
-    assert "settings are invalid" in check.message
-    assert "ingest_drain_timeout_s" in check.message
-    assert "installed service" not in check.message
+    assert check.message == "skipped (needs valid settings)"
+    assert not check.required
 
 
 def test_a_unit_is_read_the_way_systemd_reads_it(tmp_path: Path) -> None:
@@ -760,7 +761,7 @@ def test_a_stale_env_file_with_no_unit_installed_passes_as_not_installed(
     absent = InstalledStopTimeout(tmp_path / "gone.service", env_file)
 
     with patch.object(InstalledStopTimeout, "installed", return_value=absent):
-        check = DaemonDiagnostics.stop_timeout()
+        check = DaemonDiagnostics.stop_timeout(Settings())
 
     assert check.passed
     assert check.message == "no installed service; not checked"

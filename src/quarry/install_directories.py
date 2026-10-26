@@ -23,14 +23,14 @@ class InstallDirectories:
     __slots__ = ()
 
     @staticmethod
-    def data_dir() -> Path:
+    def data_dir(settings: Settings) -> Path:
         """Return the selected database's directory, as the daemon checks read it."""
-        return Settings().resolve_db_paths(SELECTION.active()).lancedb_path
+        return settings.resolve_db_paths(SELECTION.active()).lancedb_path
 
     @classmethod
-    def check(cls) -> CheckResult:
+    def check(cls, settings: Settings) -> CheckResult:
         """Report whether the selected database's directory exists and is writable."""
-        data_dir = cls.data_dir()
+        data_dir = cls.data_dir(settings)
         is_usable = data_dir.exists() and os.access(data_dir, os.W_OK)
         if is_usable:
             message = str(data_dir)
@@ -49,7 +49,7 @@ class InstallDirectories:
         create it names its path too.
         """
         results = [
-            cls._make("data", cls.data_dir),
+            cls._make("data", lambda: cls.data_dir(Settings())),
             cls._make("logs", LoggingConfig.log_dir),
         ]
         return all(results)

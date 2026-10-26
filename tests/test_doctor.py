@@ -26,11 +26,9 @@ from quarry import (
 )
 from quarry.doctor import (
     _QUIETED_LOGGERS,
-    _check_embedding_model,
     _check_fts_health,
     _check_imports,
     _check_python_version,
-    _human_size,
     _quiet_logging,
     check_environment,
     run_install,
@@ -39,6 +37,7 @@ from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
 from quarry.results import CheckResult
@@ -75,7 +74,7 @@ class TestCheckEmbeddingModel:
             "huggingface_hub.try_to_load_from_cache",
             side_effect=_mock_cache,
         ):
-            result = _check_embedding_model()
+            result = EmbeddingModel.check()
         assert result.passed is True
         assert "ONNX" in result.message
 
@@ -84,7 +83,7 @@ class TestCheckEmbeddingModel:
             "huggingface_hub.try_to_load_from_cache",
             return_value=None,
         ):
-            result = _check_embedding_model()
+            result = EmbeddingModel.check()
         assert result.passed is False
         assert "Not cached" in result.message
 
@@ -101,7 +100,7 @@ class TestCheckEmbeddingModel:
             "huggingface_hub.try_to_load_from_cache",
             side_effect=_mock_cache,
         ):
-            result = _check_embedding_model()
+            result = EmbeddingModel.check()
         assert result.passed is False
         assert "Not cached" in result.message
 
@@ -351,19 +350,19 @@ class TestCheckClaudeDesktopMcp:
 
 class TestHumanSize:
     def test_bytes(self):
-        assert "500" in _human_size(500)
-        assert "B" in _human_size(500)
+        assert "500" in EmbeddingModel.human_size(500)
+        assert "B" in EmbeddingModel.human_size(500)
 
     def test_kilobytes(self):
-        result = _human_size(2048)
+        result = EmbeddingModel.human_size(2048)
         assert "KB" in result
 
     def test_megabytes(self):
-        result = _human_size(5 * 1024 * 1024)
+        result = EmbeddingModel.human_size(5 * 1024 * 1024)
         assert "MB" in result
 
     def test_gigabytes(self):
-        result = _human_size(2 * 1024 * 1024 * 1024)
+        result = EmbeddingModel.human_size(2 * 1024 * 1024 * 1024)
         assert "GB" in result
 
 
@@ -486,9 +485,11 @@ class TestCheckEnvironment:
             lambda: _ok(name="Core imports", passed=True, message="mocked"),
         )
         monkeypatch.setattr(
-            doctor_mod,
-            "_check_embedding_model",
-            lambda: _ok(name="Embedding model", passed=True, message="mocked"),
+            EmbeddingModel,
+            "check",
+            staticmethod(
+                lambda: _ok(name="Embedding model", passed=True, message="mocked")
+            ),
         )
         monkeypatch.setattr(
             InferenceDiagnostics,
@@ -1409,7 +1410,7 @@ class TestImportIsolation:
     ) -> None:
         self._break(monkeypatch, "huggingface_hub")
 
-        result = _check_embedding_model()
+        result = EmbeddingModel.check()
 
         assert result.passed is False
         assert "huggingface_hub" in result.message
@@ -1559,7 +1560,7 @@ class TestDoctorNeverCrashes:
             builtins, "__import__", _importer_that_raises("huggingface_hub", exc)
         )
 
-        result = _check_embedding_model()
+        result = EmbeddingModel.check()
 
         assert result.passed is False
         assert type(exc).__name__ in result.message
@@ -1573,7 +1574,7 @@ class TestDoctorNeverCrashes:
             builtins, "__import__", _importer_that_raises("huggingface_hub", exc)
         )
 
-        result = _check_embedding_model()
+        result = EmbeddingModel.check()
 
         assert "libfoo" in result.message
         assert "reinstall quarry" in result.message
@@ -1602,7 +1603,7 @@ class TestDoctorNeverCrashes:
 
         monkeypatch.setattr("huggingface_hub.try_to_load_from_cache", boom)
 
-        result = _check_embedding_model()
+        result = EmbeddingModel.check()
 
         assert result.passed is False
         assert "cannot read the model cache" in result.message
@@ -1761,7 +1762,8 @@ class TestEveryCheckRuns:
     ) -> None:
         HomeOnly.apply(monkeypatch, tmp_path)
 
-        def boom() -> CheckResult:
+        def boom(settings: object) -> CheckResult:
+            del settings
             msg = "daemon probe exploded"
             raise RuntimeError(msg)
 
@@ -1786,6 +1788,21 @@ class TestEveryCheckRuns:
         assert code == 1
         assert "invalid settings" in out
         assert "Core imports" in out
+
+    def test_the_daemon_checks_are_skipped_not_reported_down_when_settings_are_bad(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        HomeOnly.apply(monkeypatch, tmp_path)
+        with monkeypatch.context() as bad:
+            bad.setenv("INGEST_DRAIN_TIMEOUT_S", "not-a-number")
+            check_environment()
+
+        lines = capsys.readouterr().out.splitlines()
+        for name in ("Daemon", "Serve token", "Fd headroom", "Stop timeout"):
+            [line] = [candidate for candidate in lines if name in candidate]
+            assert line.endswith("skipped (needs valid settings)"), line
+        assert not any("not running" in line for line in lines)
+        assert not any("not reachable" in line for line in lines)
 
 
 def test_a_missing_package_version_is_unknown_not_a_crash(
