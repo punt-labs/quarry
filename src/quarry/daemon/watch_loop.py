@@ -1,33 +1,32 @@
-"""The always-on filesystem watch loop: a producer onto the DES-042 queue.
+"""The always-on filesystem watch loop: a producer onto the ingest queue.
 
 One ``WatchLoop`` per daemon watches every registered directory across every
-database in the roster (DES-045).  It owns the *lifecycle* (start/stop, per-tree
+database in the roster.  It owns the *lifecycle* (start/stop, per-tree
 scheduling, roster startup) and marshals observer-thread events onto the event
 loop; the *producer* half — turning a debounced batch or a scan into IngestUnits
 on the per-``(database, collection)`` queue — lives in
 :class:`~quarry.daemon.watch_submit.WatchSubmitter`.  It writes no LanceDB table
 itself and invents no second queue, inheriting the whole serialization stack
-(DES-042 FIFO → DES-034 progressive commit → DES-026 WAL).
+(the FIFO, the progressive commit, the write-ahead log).
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self, final
 
-from starlette.concurrency import run_in_threadpool
-
 from quarry.daemon.debounce import DebouncedDispatcher
 from quarry.daemon.fs_events import NullFsEventSource
 from quarry.daemon.fs_watchdog import WatchdogSource
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.tasks import TERMINAL_STATUSES
+from quarry.daemon.terminal import Terminal
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
+from quarry.daemon.watch_stop import WatchStop
 from quarry.daemon.watch_submit import WatchSubmitter
 from quarry.scratch_paths import ScratchGuard
 
@@ -39,7 +38,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL = frozenset({"completed", "failed"})
 
 # request_scan polls its child jobs to completion.  The deadline bounds the poll
 # so a wedged threadpool child cannot spin the umbrella (and the CLI's poll)
@@ -99,8 +97,8 @@ class WatchLoop:
 
         The roster + submitter are built unconditionally so an explicit ``quarry
         sync`` enqueues scans regardless of ``watch_enabled`` — the queue is
-        always up; only the always-on fs-watch observer is gated (DES-045:
-        watch_enabled gates the observer, not on-demand sync).
+        always up; only the always-on fs-watch observer is gated
+        (``watch_enabled`` gates the observer, not on-demand sync).
         """
         settings = self._ctx.settings
         self._loop = asyncio.get_running_loop()
@@ -149,6 +147,8 @@ class WatchLoop:
             self._safety_task = self._loop.create_task(
                 self._reconciler.run_safety_loop()
             )
+            # A crash of the loop is named when it happens, not only at shutdown.
+            self._safety_task.add_done_callback(WatchStop.safety_ended)
         else:
             logger.warning(
                 "watch: watch_safety_scan_s=0 disables the periodic reconcile "
@@ -158,31 +158,32 @@ class WatchLoop:
             )
 
     async def stop(self) -> None:
-        """Tear down the observer + roster before the queue drain (any watch state)."""
-        if self._roster is None:  # start() never ran
+        """Tear down the observer + roster before the queue drain (any watch state).
+
+        Safe to cancel: the loop forgets its collaborators before the teardown
+        begins, so whatever the teardown meets (a failure, a cancel) a later
+        ``start()`` rebuilds cleanly.  The sequence itself is :class:`WatchStop`.
+        """
+        roster = self._roster
+        if roster is None:  # start() never ran
             return
         self._started = False
-        if self._safety_task is not None:
-            self._safety_task.cancel()
-            # Await so the task is fully retired (a bare cancel() can leave
-            # "Task was destroyed but it is pending").
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._safety_task
-        if self._submitter is not None:
-            self._submitter.cancel_pending()  # cancel outstanding backoff re-arms
-        if self._dispatcher is not None:
-            self._dispatcher.cancel_all()
-        self._roster.unwatch_all()
-        self._roster.close()  # drop sibling conns so a restart can't leak them
-        if self._source is not None:
-            # stop() joins the observer thread — off the loop so shutdown never blocks.
-            await run_in_threadpool(self._source.stop)
-        # Drop the built collaborators so a subsequent start() rebuilds cleanly —
-        # a joined watchdog observer cannot be restarted (reusing it watches
-        # nothing).  A fresh start() reconstructs source + roster.
+        sequence = WatchStop.for_loop(
+            roster,
+            self._source,
+            self._safety_task,
+            self._submitter,
+            self._dispatcher,
+            self._ctx.settings.ingest_drain_timeout_s,
+        )
+        # A joined watchdog observer cannot be restarted (reusing it watches
+        # nothing): a fresh start() reconstructs source + roster.  The teardown
+        # holds its own references, and an event that arrives meanwhile finds no
+        # dispatcher and is dropped.
         self._safety_task = None
         self._reconciler = None
         self._source = self._roster = self._dispatcher = self._submitter = None
+        await sequence.run()
 
     def start_watching(self, collection: str, resolved_root: Path) -> None:
         """Begin watching *collection* in the active database + submit its scan."""
@@ -207,7 +208,7 @@ class WatchLoop:
         ``quarry sync``. ``"degraded"`` — tracked, but either the last
         ``schedule()`` returned no handle (e.g. an exhausted inotify
         budget) or a handle exists but its background thread has since
-        died (djb minor) — either way the same reliance on the safety
+        died — either way the same reliance on the safety
         scan, but silently, unlike a collection that was never registered.
         ``"watched"`` — a live observer handle backs it, with a live
         thread behind it.
@@ -250,7 +251,7 @@ class WatchLoop:
         when all reach ``completed``, and fails (with a count) if any child was
         shed/failed or the poll deadline hit — no silent success.
         """
-        with task_terminal(umbrella):
+        with Terminal.for_task(umbrella).recording():
             sweep = self._sweep_all_scans()
             children = sweep.finish() if sweep is not None else []
             scanned = sweep.collections if sweep is not None else 0
@@ -309,7 +310,7 @@ class WatchLoop:
         ``resolve()`` raised (ELOOP symlink cycle, permission) — a root the
         daemon cannot resolve is not one it should walk.  Both fail closed so a
         single bad registration skips-and-continues, never aborting an on-demand
-        sync or the roster start (Class-2 exception boundary).
+        sync or the roster start (an exception boundary).
         """
         try:
             resolved = root.resolve()
@@ -344,11 +345,14 @@ class WatchLoop:
         """Observer-thread callback: filter, then marshal onto the event loop.
 
         Never propagates: a raising marshal (loop closed mid-shutdown) is logged,
-        so the observer thread survives (bug-class 2).
+        so the observer thread survives.
         """
-        if self._loop is None or self._dispatcher is None or self._roster is None:
+        # One snapshot: stop() on the loop thread nulls these at any moment, so the
+        # observer thread decides and acts on the locals alone.
+        loop, dispatcher, roster = self._loop, self._dispatcher, self._roster
+        if loop is None or dispatcher is None or roster is None:
             return
-        root = self._roster.resolved_root(key)
+        root = roster.resolved_root(key)
         # Observer thread stays cheap: only a lexical dot-segment reject here (no
         # resolve, no .gitignore reads), so a hot writer never backs up the
         # observer queue.  The authoritative filter — suffix (at the source),
@@ -356,7 +360,7 @@ class WatchLoop:
         if root is None or self._has_hidden_segment(root, event.path):
             return
         try:
-            self._loop.call_soon_threadsafe(self._dispatcher.feed, key, event)
+            loop.call_soon_threadsafe(dispatcher.feed, key, event)
         except RuntimeError as exc:
             logger.debug("watch: dropped event after loop close: %s", exc)
 
@@ -377,7 +381,7 @@ class WatchLoop:
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _SCAN_DEADLINE_S
-        while any(child.status not in _TERMINAL for child in children):
+        while any(child.status not in TERMINAL_STATUSES for child in children):
             if loop.time() >= deadline:
                 return True
             await asyncio.sleep(_SCAN_POLL_S)

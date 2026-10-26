@@ -140,6 +140,26 @@ class TestPartition:
         assert to_ingest == [(HttpUrl("https://example.com/new"), None)]
         assert skipped == 0
 
+    def test_entries_that_store_under_one_name_are_fetched_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Workers replace by name, so two pages for one name must not race."""
+        _existing_docs(monkeypatch, [])
+        entries = [
+            SitemapEntry(loc="https://example.com/a", lastmod=None),
+            SitemapEntry(loc="https://example.com/b", lastmod=None),
+            SitemapEntry(loc="https://example.com/a#section", lastmod=None),
+            SitemapEntry(loc="https://EXAMPLE.com:443/a", lastmod=None),
+        ]
+
+        to_ingest, skipped = SafeEntrySelector().partition(entries, _context())
+
+        assert [url.document_name for url, _ in to_ingest] == [
+            "https://example.com/a",
+            "https://example.com/b",
+        ]
+        assert skipped == 0
+
     def test_stale_entry_is_skipped_without_overwrite(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

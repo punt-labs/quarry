@@ -8,7 +8,7 @@ the POST and ``quarry backfill`` re-ingests it.  A ``remember`` (and a plain URL
 knowledge with no way to recover it.
 
 This spool closes that gap: an aborted job with no durable client copy writes a
-recoverable snapshot here — scrubbed at write time (DES-036), atomically — under
+recoverable snapshot here — scrubbed at write time, atomically — under
 the daemon's private data dir, so the knowledge is never *silently* lost.
 """
 
@@ -16,13 +16,17 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+import re
 import time
 import uuid
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, ClassVar, Self, final
+
+from quarry.daemon.spool_lock import SpoolLock
+from quarry.private_write import PrivateWrite
+from quarry.redacted_failure import RedactedFailure
+from quarry.temp_sweep import TempSweep
 
 if TYPE_CHECKING:
     from quarry.config import Settings
@@ -39,10 +43,22 @@ class SpoolRecord:
     the ingest URL's storage form), so the spooled file never holds secrets.
     """
 
+    # Lower-case words joined by hyphens: what the startup sweep matches in a name.
+    KIND: ClassVar[re.Pattern[str]] = re.compile(r"[a-z]+(?:-[a-z]+)*")
+
     kind: str
     collection: str
     name: str
     payload: str
+    # False when the job's own text could not be persisted (an ingest URL whose query
+    # was dropped): the file is then only a note, and recovery is by re-running it.
+    recoverable: bool = True
+
+    def __post_init__(self) -> None:
+        """Refuse a kind the startup sweep could not recognise in a file name."""
+        if not self.KIND.fullmatch(self.kind):
+            msg = f"spool kind {self.kind!r} is not lower-case words joined by hyphens"
+            raise ValueError(msg)
 
     def as_json(self) -> str:
         """Return the record as a one-object JSON document for the spool file."""
@@ -52,18 +68,25 @@ class SpoolRecord:
                 "collection": self.collection,
                 "name": self.name,
                 "payload": self.payload,
+                "recoverable": self.recoverable,
                 "spooled_at": time.time(),
             }
         )
 
     def filename(self) -> str:
-        """Return a collision-free spool filename for this record."""
-        return f"{self.kind}-{uuid.uuid4().hex[:12]}.json"
+        """Return a spool filename no earlier record can share (a full UUID)."""
+        return f"{self.kind}-{uuid.uuid4().hex}.json"
 
 
 @final
 class JobSpool:
     """Writes :class:`SpoolRecord`s atomically under the daemon's spool dir."""
+
+    # ``<kind>-<32 hex>.json.tmp``: what ``SpoolRecord.filename`` plus the temp
+    # suffix make.
+    _LEFTOVER: ClassVar[re.Pattern[str]] = re.compile(
+        rf"{SpoolRecord.KIND.pattern}-[0-9a-f]{{32}}\.json\.tmp"
+    )
 
     __slots__ = ("_dir",)
 
@@ -79,64 +102,60 @@ class JobSpool:
         """Return the spool rooted at ``<quarry_root>/spool`` for *settings*."""
         return cls(settings.quarry_root / "spool")
 
-    def write(self, record: SpoolRecord) -> bool:
-        """Persist *record* atomically and privately; return whether it stuck.
+    def sweep(self) -> None:
+        """Remove every temp a crashed write left in the spool; blocking.
 
-        Returns ``True`` only when the atomic rename succeeded — i.e. the record
-        is durably on disk and recoverable.  A failure returns ``False`` (never
-        raises into shutdown) so the caller can record the truth instead of a
-        false recoverability claim: the content is lost, not spooled.
+        Called once at daemon start.  It holds the spool lock exclusively, so no
+        write is in flight, here or in another daemon on the same root; every
+        matching temp is therefore a crash's, and none is young, whatever its
+        age.  It waits for a write that holds the lock, which is why it runs as a
+        background task.  A spool that does not exist has nothing to sweep and no
+        lock to take, and is never swept without one.
+        """
+        if not self._dir.is_dir():
+            return
+        sweep = TempSweep(self._dir, self._LEFTOVER, "spool", stale_after_s=0.0)
+        with SpoolLock(self._dir).exclusive():
+            sweep.run()
 
-        The spool holds best-effort-scrubbed content (DES-036 is regex redaction,
-        not a guarantee), so it is created private — the dir ``0o700`` and the
+    def write(self, record: SpoolRecord) -> Path | None:
+        """Persist *record* atomically and privately; return where it stuck.
+
+        Returns the record's path only when the rename succeeded, so the record
+        is in place and recoverable.  What is durable, exactly: the file's bytes are
+        synced before the rename, and the spool directory is synced after it, so
+        the entry survives a crash; when this call created the spool directory,
+        its entry in the parent is synced too.  A failed directory sync is a
+        warning and still returns the path: the record is there, but a crash
+        before the filesystem flushes could lose its name.  Any other failure
+        returns ``None`` and never raises into shutdown, so the caller records
+        the truth instead of a false recoverability claim: the content is lost,
+        not spooled.  It is logged with the collection so the loss stays visible.
+
+        The spool holds best-effort-scrubbed content (regex redaction, not a
+        guarantee), so it is created private: the directory ``0o700`` and the
         file ``0o600`` from the start, never group/other-readable even for an
-        instant.  A failure is logged (with the collection, so the loss stays
-        visible) rather than propagated — the abort loop keeps failing the rest.
+        instant.  The name carries a full UUID, so a record never replaces an
+        earlier one.
         """
+        path = self._dir / record.filename()
         try:
-            self._ensure_private_dir()
-            self._atomic_write(self._dir / record.filename(), record.as_json())
-        except OSError:
-            logger.exception(
-                "failed to spool aborted %s job for %s", record.kind, record.collection
+            PrivateWrite.ensure_directory(self._dir, "spool directory")
+            with SpoolLock(self._dir).shared():
+                self._atomic_write(path, record.as_json())
+        except Exception as exc:
+            logger.error(
+                "failed to spool aborted %s job for %s",
+                record.kind,
+                record.collection,
+                exc_info=RedactedFailure.of(exc),
             )
-            return False
-        return True
-
-    def _ensure_private_dir(self) -> None:
-        """Create the spool dir ``0o700``, tightening it if it exists looser.
-
-        ``<quarry_root>`` itself is not created restrictively, so an existing
-        spool dir left world-readable by an earlier run is re-tightened here.
-        """
-        self._dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._dir.chmod(0o700)
+            return None
+        return path
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
-        """Write *content* to a ``0o600`` temp file, then atomically rename it in.
-
-        ``os.open`` with ``O_CREAT|O_EXCL`` and mode ``0o600`` creates the file
-        private from the start — no chmod-after window.  ``os.fdopen`` can raise
-        before adopting the fd, so that path closes the fd explicitly (the
-        success path hands ownership to the ``with`` block, so the fd is closed
-        exactly once).  The temp file is removed on any failure, and the atomic
-        rename is inside the try so a rename failure leaves no temp behind.
-        """
-        tmp = path.with_name(path.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            handle = os.fdopen(fd, "w", encoding="utf-8")
-        except OSError:
-            os.close(fd)
-            with suppress(OSError):
-                tmp.unlink()
-            raise
-        try:
-            with handle:
-                handle.write(content)
-            tmp.replace(path)
-        except OSError:
-            with suppress(OSError):
-                tmp.unlink()
-            raise
+        """Write *content* privately and durably to *path*, via a sibling temp."""
+        PrivateWrite("spooled record").commit(
+            path.with_name(path.name + ".tmp"), path, content
+        )

@@ -32,6 +32,7 @@ from quarry.types import LanceDB
 from tests.fakes import FakeEmbeddingBackend, FakeResolver
 from tests.hermetic_env import ENV, ProductionTreeGuard
 from tests.inproc_daemon import InProcessDaemon
+from tests.job_abort_world import WRITES, World
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -173,6 +174,14 @@ class GitSandbox:
             check=True,
         )
         return result.stdout
+
+
+@pytest.fixture
+def world(tmp_path: Path) -> Iterator[World]:
+    """Yield a queue whose stores and spool writes the test holds, and releases."""
+    with World(tmp_path) as w:
+        WRITES.clear()
+        yield w
 
 
 @pytest.fixture()

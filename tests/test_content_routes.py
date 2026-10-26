@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import re
 import time
+from datetime import UTC, datetime
 from http.client import HTTPMessage, HTTPResponse
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -17,8 +19,8 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry.client import QuarryClient, TargetResolver
 from quarry.content_guard import BinaryContent
-from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.daemon.tasks import TaskState
 from quarry.mcp_server import McpTools
 from tests.inproc_daemon import InProcessDaemon
@@ -536,9 +538,7 @@ class TestOversizedLabels:
     ) -> None:
         resp = http.post("/v1/ingest", json={"source": "https://e.test/" + self._BIG})
         assert resp.status_code == 400
-        assert resp.json() == {
-            "error": "row budget exceeded: source 8,208 bytes > 8,192"
-        }
+        assert resp.json() == {"error": "URL rejected: malformed URL"}
         assert len(daemon.ctx.tasks) == 0
 
     def test_an_oversized_label_is_logged_once_at_warning(
@@ -748,3 +748,128 @@ class TestACaptureIsUrlSourcedOnlyWhenItIsAPageCapture:
         with caplog.at_level(logging.INFO, logger="quarry.capture_naming"):
             self._filed(http, tmp_path, document_name=self._URL, source_url=self._URL)
         assert [r for r in caplog.records if r.name == "quarry.capture_naming"] == []
+
+
+class TestTheRoutesCheckTheNamesThatAreStored:
+    @staticmethod
+    def _submitted(http: TestClient, path: str, body: dict[str, object]) -> int:
+        with (
+            patch("quarry.url_admission.UrlAdmission.reject_reason", return_value=None),
+            patch(
+                "quarry.daemon.routes.base.RouteGroup.submit",
+                autospec=True,
+                return_value=JSONResponse({}),
+            ),
+        ):
+            return http.post(path, json=body).status_code
+
+    def test_a_long_query_with_a_short_stored_name_is_accepted(
+        self, http: TestClient
+    ) -> None:
+        source = "https://example.com/p?token=" + "x" * 7_000
+        assert self._submitted(http, "/v1/ingest", {"source": source}) == 200
+
+    def test_a_short_url_whose_stored_name_is_over_the_cap_is_refused(
+        self, http: TestClient
+    ) -> None:
+        # Percent-encoding makes the stored name longer than the URL as sent.
+        source = "https://example.com/" + "\u00e9" * 2_000
+        assert self._submitted(http, "/v1/ingest", {"source": source}) == 400
+
+    def test_a_captures_name_over_the_cap_only_after_its_suffix_is_refused(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        name = SimpleNamespace(name="r" * 8_190 + "-captures")
+        with patch(
+            "quarry.daemon.routes.captures.CapturesCollection.for_registry_path",
+            return_value=name,
+        ):
+            status = self._submitted(
+                http,
+                "/v1/capture",
+                {"content": _CLEAN, "session_id": "abcd1234ef", "cwd": str(tmp_path)},
+            )
+        assert status == 400
+
+    def test_a_lessons_name_over_the_cap_only_after_its_suffix_is_refused(
+        self, http: TestClient
+    ) -> None:
+        name = SimpleNamespace(name="r" * 8_190 + "-lessons")
+        with patch(
+            "quarry.daemon.routes.ingestion.LessonsCollection.for_registry_path",
+            return_value=name,
+        ):
+            status = self._submitted(http, "/v1/learn", {"lesson": "short"})
+        assert status == 400
+
+
+class TestACaptureSnapshotTime:
+    @staticmethod
+    def _filed(
+        http: TestClient, tmp_path: Path, **fields: object
+    ) -> tuple[int, object]:
+        body = {"content": "x", "session_id": "abcd1234ef", "cwd": str(tmp_path)}
+        with patch(
+            "quarry.daemon.routes.captures.CaptureRoutes.submit",
+            autospec=True,
+            return_value=JSONResponse({}),
+        ) as submit:
+            resp = http.post("/v1/capture", json={**body, **fields})
+        job = submit.call_args.args[1] if submit.call_args else None
+        return resp.status_code, job
+
+    def test_a_valid_instant_reaches_the_job(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        status, job = self._filed(http, tmp_path, captured_at="2026-01-02T03:04:05Z")
+        assert status == 200
+        assert isinstance(job, CaptureIngestJob)
+        assert job.inline.captured_at is not None
+        assert job.inline.captured_at.isoformat() == "2026-01-02T03:04:05+00:00"
+
+    def test_an_absent_instant_is_queue_time(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        _, job = self._filed(http, tmp_path)
+        assert isinstance(job, CaptureIngestJob)
+        assert job.inline.captured_at is None
+
+    def test_a_future_instant_is_clamped_to_now_not_refused(
+        self, http: TestClient, tmp_path: Path
+    ) -> None:
+        status, job = self._filed(http, tmp_path, captured_at="2999-01-01T00:00:00Z")
+        assert status == 200
+        assert isinstance(job, CaptureIngestJob)
+        assert job.inline.captured_at is not None
+        assert abs((datetime.now(UTC) - job.inline.captured_at).total_seconds()) < 60
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"captured_at": 123},
+            {"captured_at": ["2026-01-01T00:00:00Z"]},
+            {"session_id": 5},
+        ],
+    )
+    def test_a_non_string_captured_at_or_session_id_is_a_400(
+        self, body: dict[str, object], http: TestClient, tmp_path: Path
+    ) -> None:
+        status, job = self._filed(http, tmp_path, **body)
+        assert status == 400
+        assert job is None
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "yesterday",
+            "1999-01-01T00:00:00Z",
+            "0001-01-01T00:00:00+05:00",
+            "9999-12-31T23:59:59-05:00",
+        ],
+    )
+    def test_a_bad_or_out_of_bounds_instant_is_a_400(
+        self, raw: str, http: TestClient, tmp_path: Path
+    ) -> None:
+        status, job = self._filed(http, tmp_path, captured_at=raw)
+        assert status == 400
+        assert job is None

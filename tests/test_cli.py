@@ -322,6 +322,13 @@ class TestRememberCollectionSentinel:
             assert value in result.output
 
 
+class TestIngestHelp:
+    def test_overwrite_help_says_a_stored_url_is_skipped_without_it(self) -> None:
+        result = runner.invoke(app, ["ingest", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "else skip it" in " ".join(result.output.split())
+
+
 class TestLearn:
     """CLI ``learn`` param parity (bug class 3) -- shape matches C2's ratified
     signature: lesson positional, --topic/--name trailing, no --agent-handle

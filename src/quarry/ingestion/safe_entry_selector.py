@@ -43,17 +43,18 @@ class SafeEntrySelector:
         timestamp of the same document in *context*'s collection.  Only a
         document fetched from a URL counts: a label that merely looks like one
         (``remember``) has no URL ``document_path`` and never suppresses a fetch.
+        Entries that store as one name keep the first.
         """
         stored = self._stored_timestamps(context)
-        to_ingest: list[tuple[HttpUrl, str | None]] = []
+        by_name: dict[str, tuple[HttpUrl, str | None]] = {}
         skipped = 0
         for entry in filtered:
             url = HttpUrl(entry.loc)
             if self._is_current(entry, stored.get(url.document_name), context):
                 skipped += 1
             else:
-                to_ingest.append((url, None))
-        return to_ingest, skipped
+                by_name.setdefault(url.document_name, (url, None))
+        return list(by_name.values()), skipped
 
     @staticmethod
     def _stored_timestamps(context: IngestContext) -> dict[str, str]:

@@ -128,9 +128,9 @@ class TestLinearTime:
     )
     def test_the_cost_scales_linearly(self, unit: str) -> None:
         def seconds(count: int) -> float:
-            started = time.perf_counter()
+            started = time.process_time()
             AuthorityMask.mask(unit * count)
-            return time.perf_counter() - started
+            return time.process_time() - started
 
         small = min(seconds(1000) for _ in range(3))
         large = min(seconds(4000) for _ in range(3))

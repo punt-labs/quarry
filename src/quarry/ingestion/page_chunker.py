@@ -33,6 +33,7 @@ class ChunkLabels:
     agent_handle: str = ""
     memory_type: MemoryType = ""
     summary: str = ""
+    ingested_at: datetime | None = None
     source_version: str = ""
 
     def require_within(self, budget: RowBudget) -> None:
@@ -103,7 +104,7 @@ class PageChunker:
             RowBudgetError: A page, chunk or label exceeds the row budget.
         """
         self._guard.require_document([page.text for page in pages])
-        now = datetime.now(tz=UTC)
+        now = self._labels.ingested_at or datetime.now(tz=UTC)
         chunks: list[Chunk] = []
         for page in self._splitter.expand(pages):
             text = page.text.strip()

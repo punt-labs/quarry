@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import Self, final
 
+from quarry.transcript_records import ParsedRecords, TranscriptRecords
 from quarry.transcript_turns import TurnText
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -25,62 +22,84 @@ class TranscriptReader:
     The transcript file is untrusted, possibly-large local input: unparseable
     lines are skipped, an over-budget conversation is front-truncated to keep the
     newest turns, and a read failure degrades to empty rather than raising — a
-    capture must never block compaction.
+    capture must never block compaction.  The records kept are bounded to the
+    newest :attr:`~quarry.transcript_records.TranscriptRecords.MAX`.
     """
 
     _MAX_CHARS = 500_000
     _RETENTION_DAYS = 90
 
-    __slots__ = ("_path", "_records")
+    __slots__ = ("_parsed", "_path")
 
+    _parsed: ParsedRecords
     _path: Path
-    _records: tuple[dict[str, object], ...]
 
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
         self._path = path
-        # Read once, here: a SubagentStop asks one reader for the conversation
-        # text and for the final turn, and a 500 KB transcript must not be
-        # parsed again per question.
-        self._records = tuple(cls._parse(path))
+        self._parsed = TranscriptRecords.parse(cls._read_leniently(path))
+        self._parsed.warn_if_truncated(path)
         return self
 
-    @staticmethod
-    def _parse(path: Path) -> Iterator[dict[str, object]]:
-        """Yield each parsed JSON object in *path*, in file order.
+    @classmethod
+    def from_text(cls, path: Path, raw: str) -> Self:
+        """Return the reader for *path*'s conversation, given the *raw* text it held.
 
-        The one read every extraction shares: a missing or unreadable file
-        yields nothing, and a line that is not a JSON object is skipped, so
-        no extraction ever sees a partial or malformed record.
+        The one parse every extraction shares, done once, here: a SubagentStop
+        asks one reader for the conversation text and for the final turn, and a
+        large transcript must not be parsed again per question.  A caller that
+        must tell a read fault from an empty conversation reads the file
+        itself, strictly, and hands the text it got to this.
         """
+        reader = super().__new__(cls)
+        reader._path = path
+        reader._parsed = TranscriptRecords.parse(raw)
+        reader._parsed.warn_if_truncated(path)
+        return reader
+
+    @property
+    def truncated(self) -> int:
+        """Return how many records or entries the record and character bounds cost."""
+        return self._parsed.dropped + self._parsed.fit(self._MAX_CHARS).cost
+
+    @staticmethod
+    def _read_leniently(path: Path) -> str:
+        """Return *path*'s text; a missing or unreadable file yields ``""``."""
         if not path.is_file():
-            return
+            return ""
         try:
-            raw = path.read_text()
+            return path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             logger.warning("transcript: could not read %s", path)
-            return
-        for line in raw.splitlines():
-            try:
-                obj = json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            if isinstance(obj, dict):
-                yield obj
+            return ""
 
     def text(self) -> str:
         """Return the transcript's conversation text, newest-first truncated.
 
         Extracts user and assistant messages, prefixing each with the role, and
         skips tool-use content blocks, file snapshots, and system messages.  A
-        missing or unreadable file yields ``""``.
+        missing or unreadable file yields ``""``; a transcript with any message
+        never does: the newest entry is always kept, cut to its tail if it alone
+        exceeds the budget.
         """
-        parts = [
-            entry
-            for record in self._records
-            if (entry := TurnText.message_text(record))
-        ]
-        return self._join_within_budget(parts)
+        fitted = self._parsed.fit(self._MAX_CHARS)
+        if fitted.cost:
+            what = [
+                part
+                for part in (
+                    f"dropped {fitted.dropped} oldest entries"
+                    if fitted.dropped
+                    else "",
+                    "cut the newest to its tail" if fitted.cut else "",
+                )
+                if part
+            ]
+            logger.warning(
+                "transcript: %s: %s past the character budget",
+                self._path.name,
+                " and ".join(what),
+            )
+        return fitted.text
 
     def last_assistant_text(self) -> str:
         """Return the final assistant turn's text without its role prefix, or ``""``.
@@ -89,28 +108,12 @@ class TranscriptReader:
         tool-use blocks are not text, so a turn holding only those is skipped.
         """
         last = ""
-        for record in self._records:
+        for record in self._parsed.records:
             if record.get("type") == "assistant" and (
                 text := TurnText.turn_text(record)
             ):
                 last = text
         return last.strip()
-
-    @classmethod
-    def _join_within_budget(cls, parts: list[str]) -> str:
-        """Drop the oldest entries until the joined text fits the char budget."""
-        total_chars = sum(len(p) for p in parts)
-        start = 0
-        while start < len(parts) and total_chars > cls._MAX_CHARS:
-            total_chars -= len(parts[start])
-            start += 1
-        if start > 0:
-            logger.debug(
-                "transcript: dropped %d oldest entries from transcript",
-                start,
-            )
-            parts = parts[start:]
-        return "\n\n".join(parts)
 
     def archive(self, session_id: str, sessions_dir: Path) -> None:
         """Copy the raw JSONL to *sessions_dir*, dedup priors, prune retention.

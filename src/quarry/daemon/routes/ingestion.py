@@ -126,15 +126,9 @@ class IngestionRoutes(ContentRouteGroup):
         lesson = self._require_text(body, "lesson")
         if isinstance(lesson, JSONResponse):
             return lesson
-        rejection = self._reject_oversized(body, "learn") or self._reject_binary(
-            lesson, "learn"
-        )
+        rejection = self._reject_lesson(body, lesson)
         if rejection is not None:
             return rejection
-        try:
-            LessonComposer.check_length(lesson)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
         topic = self._str_field(body, "topic", "")
         name = self._str_field(body, "name", "")
         collection = await run_in_threadpool(
@@ -142,6 +136,10 @@ class IngestionRoutes(ContentRouteGroup):
             self._str_field(body, "cwd", ""),
             self.ctx.settings.registry_path,
         )
+        # The resolved name carries the ``-lessons`` suffix the request did not.
+        refused = self._reject_oversized({"collection": collection.name}, "learn")
+        if refused is not None:
+            return refused
         labels = self._labels(
             self._narrow(LessonComposer.memory_type()),
             {"summary": topic},
@@ -151,6 +149,22 @@ class IngestionRoutes(ContentRouteGroup):
         return ScrubbedIngestJob(
             LessonComposer.document_name(name, topic), lesson, labels, "auto", "learn"
         )
+
+    @classmethod
+    def _reject_lesson(
+        cls, body: dict[str, object], lesson: str
+    ) -> JSONResponse | None:
+        """Return a 400 if a label is oversized, or the lesson is binary or too long."""
+        rejection = cls._reject_oversized(body, "learn") or cls._reject_binary(
+            lesson, "learn"
+        )
+        if rejection is not None:
+            return rejection
+        try:
+            LessonComposer.check_length(lesson)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return None
 
     @staticmethod
     def _resolve_memory_collection(raw_collection: str, agent_handle: str) -> str:
@@ -174,19 +188,28 @@ class IngestionRoutes(ContentRouteGroup):
         memory_type = self._require_memory_type(body)
         if isinstance(memory_type, JSONResponse):
             return memory_type
-        collection = (
-            await self._captures_collection(body)
-            if scrub
-            else self._str_field(body, "collection", "")
-        )
         # Key the queue on the ACTUAL table: the explicit/captures name if set,
         # else the URL hostname — the SAME resolver the pipeline applies, so the
         # queue key never diverges from the table the job writes (single writer).
-        collection = IngestCollection.resolve(source, collection).name
+        collection = await self._ingest_collection(body, source, scrub=scrub)
+        if isinstance(collection, JSONResponse):
+            return collection
         labels = self._labels(
             memory_type, body, overwrite=overwrite, collection=collection
         )
         return IngestJob(source, labels, scrub)
+
+    async def _ingest_collection(
+        self, body: dict[str, object], source: HttpUrl, *, scrub: bool
+    ) -> str | JSONResponse:
+        """Return the table an ingest writes, or a 400 if its name is over the cap."""
+        named = (
+            await self._captures_collection(body)
+            if scrub
+            else self._str_field(body, "collection", "")
+        )
+        name = IngestCollection.resolve(source, named).name
+        return self._reject_oversized({"collection": name}, "ingest") or name
 
     async def _captures_collection(self, body: dict[str, object]) -> str:
         """Return the ``<repo>-captures`` collection derived from ``body['cwd']``.

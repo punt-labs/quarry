@@ -31,6 +31,8 @@ class IngestResult(TypedDict):
     sheets: NotRequired[int]
     slides: NotRequired[int]
     format: NotRequired[str]
+    # ``"exists"`` for a create-if-absent skip: the document was already stored.
+    skipped: NotRequired[str]
 
 
 @dataclass(frozen=True, slots=True)

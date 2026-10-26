@@ -10,6 +10,7 @@ from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.chunk_search import ChunkSearch
 from quarry.db.chunk_store import ChunkStore
 from quarry.db.connection import LanceConnection
+from quarry.db.name_prefix import NamePrefix
 from quarry.db.optimizer import TableOptimizer
 from quarry.db.schema import SchemaManager
 from quarry.db.storage import get_db
@@ -67,6 +68,11 @@ class Database:
     def optimizer(self) -> TableOptimizer:
         """Table compaction, FTS rebuild, and collection indexing."""
         return self._optimizer
+
+    @property
+    def url_names(self) -> NamePrefix:
+        """List the URL-sourced document names under a ``scheme://host`` prefix."""
+        return NamePrefix(self._db)
 
     def ensure_schema(self) -> None:
         """Delegate to SchemaManager to ensure the chunks table exists."""

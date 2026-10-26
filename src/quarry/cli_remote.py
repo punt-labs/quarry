@@ -20,9 +20,8 @@ import typer
 
 from quarry.client import ClientConfig, QuarryConnectionError, TargetResolver
 from quarry.config import DEFAULT_PORT
+from quarry.home_paths import QuarryHome
 from quarry.remote import (
-    CA_CERT_PATH,
-    MCP_PROXY_CONFIG_PATH,
     PermissionWarning,
     delete_proxy_config,
     fetch_ca_cert,
@@ -202,13 +201,15 @@ class RemoteCli:
         reverse order has no recovery path.
         """
         try:
-            write_proxy_config(target.ws_url, target.stored_key, str(CA_CERT_PATH))
+            write_proxy_config(
+                target.ws_url, target.stored_key, str(QuarryHome.proxy_ca())
+            )
         except PermissionWarning as exc:
             self._p.err_console.print(f"Warning: {exc}", style="yellow")
         except OSError as exc:
             self._p.err_console.print(
                 f"Error: connection succeeded but could not write config to "
-                f"{MCP_PROXY_CONFIG_PATH}: {exc}",
+                f"{QuarryHome.proxy_config()}: {exc}",
                 style="red",
             )
             raise typer.Exit(code=1) from exc

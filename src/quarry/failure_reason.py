@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import sqlite3
 import traceback
 from typing import ClassVar, final
@@ -54,6 +55,15 @@ class FailureReason:
         The message is where a URL or a path hides; the frames name only code.
         """
         return "".join(traceback.format_tb(exc.__traceback__))
+
+    @staticmethod
+    def os_name(exc: BaseException) -> str:
+        """Return *exc*'s errno name (``EMFILE``), else its class name.
+
+        An errno never quotes a path, so it is safe for a log line.
+        """
+        code = exc.errno if isinstance(exc, OSError) else None
+        return errno.errorcode.get(code or 0, type(exc).__name__)
 
     @classmethod
     def line(cls, name: str, exc: Exception) -> str:

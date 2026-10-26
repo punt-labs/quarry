@@ -280,15 +280,15 @@ replaced for both the append and the splice paths. DES-019's "raw text, never
 
 **Targets and entry points.** Two writers exist today and neither runs from
 `quarry doctor`: `EthosExtDiagnostics.configure()` runs **only** as
-`quarry install` step 8 (`doctor.py:630-637`; `check_environment` at
-`doctor.py:645-` never calls it), and `EthosMemoryBootstrap().run()` runs from
+`quarry install` step 7 (`run_install` in `doctor.py`; `check_environment`
+never calls it), and `EthosMemoryBootstrap().run()` runs from
 `quarry enable` (`enable.py:135,149`). Both touch only the global tree
 (`doctor_ethos.py:53-54`; `ethos_memory.py:15`). The design keeps that split
 and adds the vendored layer on the per-repo side:
 
 | Entry point | Tree | Creates ext files? | Refreshes stale blocks? |
 |---|---|---|---|
-| `quarry install` (step 8, `configure()`) | global only — install has no repo context | no (unchanged) | yes (new) |
+| `quarry install` (step 7, `configure()`) | global only — install has no repo context | no (unchanged) | yes (new) |
 | `quarry enable <dir>` (`EthosMemoryBootstrap.for_repo(dir).run()`) | global, **then** the nearest vendored `.punt-labs/ethos/identities/` above `dir` (`EthosTree.vendored_identities`) | global: yes (unchanged); vendored: **never** — its roster is curated by `ethos vendor` (CLAUDE.md "Ethos & Delegation") | yes, both trees (new) |
 | `quarry doctor` | — | no | no — doctor stays read-only; it does not write ext files today and this design does not make it start |
 
@@ -311,8 +311,7 @@ One scanner serves both callers: `EthosExtDiagnostics.refresh(identities_dir)
 five-parameter `_write_context` list-threading (`ethos_memory.py:95-115`) and
 narrows `_scan`'s `except Exception  # noqa: BLE001` (`doctor_ethos.py:154`)
 to the `(OSError, YAMLError, UnicodeDecodeError)` tuple the bootstrap already
-uses — install's step 8 wraps `configure()` in its own best-effort `try`
-(`doctor.py:632-637`), so nothing depended on the broad catch. One suppression
+uses — install's step 7 wraps `configure()` in its own best-effort `try`, so nothing depended on the broad catch. One suppression
 retired.
 
 **Other guidance surfaces, aligned in the same PR:** MCP `remember` docstring
@@ -677,7 +676,7 @@ internal; `mcp_missions.py` imports `mcp_guard`, `mission_memory`, and
 | `src/quarry/lesson.py` | `LessonComposer.MAX_CHARS`, `memory_type()`, `check_length()` | +14 | module_size ↑ (relax R6); coupling 1→2 |
 | `src/quarry/retrieval/fusion.py` | import `DECAYABLE_MEMORY_TYPES`/`MemoryType.LESSON`; delete the two local constants | −4 | module_size ↓ |
 | `src/quarry/doctor_memory.py` | same replacement; `identity_active`'s zero-rows remedy text (`:139-143`, "check that ethos config resolves and PreCompact fires") names the real remedies now that other handles' rows are the expected state — `… has zero memory rows while other agents have {n}; the leader's next PreCompact, or 'quarry remember --agent-handle {handle}', populates it` (§h demo step f) | −4 | module_size ↓ |
-| `src/quarry/doctor_ethos.py` | template moves to `ethos_ext_block.py`; `write_session_context` = `SessionContextBlock` + `AtomicFile`; new public `refresh(identities_dir) -> ExtScanOutcome` (frozen: four buckets + `message()`) replaces `_scan`'s 4-tuple and `_message`; `configure(identities_dir=None)` keeps its signature and **stays global-only** (it runs from `quarry install` step 8, `doctor.py:630-637`, where there is no repo), wrapping `refresh`; the `except Exception  # noqa: BLE001` at `:154` narrows to `(OSError, YAMLError, UnicodeDecodeError)` | −30 | **avg_params ↓** (4-list threading gone), module_size ↓, **one suppression retired**; classes 1→2 |
+| `src/quarry/doctor_ethos.py` | template moves to `ethos_ext_block.py`; `write_session_context` = `SessionContextBlock` + `AtomicFile`; new public `refresh(identities_dir) -> ExtScanOutcome` (frozen: four buckets + `message()`) replaces `_scan`'s 4-tuple and `_message`; `configure(identities_dir=None)` keeps its signature and **stays global-only** (it runs from `quarry install` step 7, where there is no repo), wrapping `refresh`; the `except Exception  # noqa: BLE001` at `:154` narrows to `(OSError, YAMLError, UnicodeDecodeError)` | −30 | **avg_params ↓** (4-list threading gone), module_size ↓, **one suppression retired**; classes 1→2 |
 | `src/quarry/ethos_memory.py` | `EthosMemoryBootstrap.for_repo(directory)` classmethod (global tree + `EthosTree.vendored_identities(directory)`); `run()` = ensure global ext files (unchanged, `_ensure_ext`) → `refresh(global)` → `refresh(vendored)` refresh-only; `_write_context` (5 params, `:95-115`) **deleted** — its bucketing is `ExtScanOutcome`'s; `EthosMemoryResult.vendored_updated: list[str]` | ±0 | **avg_params ↓** (5→≤2 on the worst method), max_complexity ↓; coupling 1→2 (C7) |
 | `src/quarry/enable.py` | `EthosMemoryBootstrap.for_repo(directory).run()` (`:149`); `EnableResult.ethos_vendored_updated` | +3 | unchanged (lazy import at `:135` is not scored) |
 | `src/quarry/enable_report.py` | `_ethos_lines` adds `Ethos guide refreshed (vendored — commit via PR): …` when `ethos_vendored_updated` is non-empty (`:63-81`) | +4 | unchanged |
@@ -888,7 +887,7 @@ modules that had none (`_hook_trace.py`, `doctor_ethos.py`) gain one.
 
 - **D1** — unknown `memory_type` becomes a 400 on `/remember`, `/ingest`, `/capture` (b.5). Recommend: proceed; a misfiled type is a silent bug today.
 - **D2** — non-identity subagents (`general-purpose`, reviewers) are filed unattributed instead of as `general-purpose` (b.2). Recommend: proceed.
-- **D3** — `quarry enable <dir>` refreshes the *vendored* `.punt-labs/ethos/identities/*.ext/quarry.yaml` blocks above `dir` (refresh-only, never creating), producing a working-tree diff the operator commits via PR; `quarry install` step 8 keeps refreshing the global tree; `quarry doctor` stays read-only (b.4). Recommend: proceed; `enable` is already the per-repo write step that deposits and upgrades the repo guide (`enable.py:127-149`), and it is the only way a `repo-only` repo ever sees the v2 guide. (Round 1 had attributed this to `doctor`; `EthosExtDiagnostics.configure()` is in fact called only from install, `doctor.py:630-637`.)
+- **D3** — `quarry enable <dir>` refreshes the *vendored* `.punt-labs/ethos/identities/*.ext/quarry.yaml` blocks above `dir` (refresh-only, never creating), producing a working-tree diff the operator commits via PR; `quarry install` step 7 keeps refreshing the global tree; `quarry doctor` stays read-only (b.4). Recommend: proceed; `enable` is already the per-repo write step that deposits and upgrades the repo guide (`enable.py:127-149`), and it is the only way a `repo-only` repo ever sees the v2 guide. (Round 1 had attributed this to `doctor`; `EthosExtDiagnostics.configure()` is in fact called only from install.)
 - **D4** — the six scoped module_size relaxes (R1–R6) and seven +1 coupling relaxes (C1–C7) in e.5. R1–R6 and C1–C6 are pre-authorized by kpz's round-1 reflection; **C7** (`ethos_memory.py` 1→2, the `EthosTree` import that D3 needs) is new this round and needs the leader's nod. R7 is withdrawn — `mcp_server.py` shrinks. Anything beyond the list returns to the leader.
 
 ### g.2 Rejected alternatives (consolidated)
@@ -898,7 +897,7 @@ modules that had none (`_hook_trace.py`, `doctor_ethos.py`) gain one.
 | Server-side `agent_handle` auto-resolve on `remember`/`learn` | no `cwd` on the wire; cwd → leader for subagents; remote daemon has no repo (b.1) |
 | Attribute non-identity subagents to the leader | inflates the leader's counts, pollutes `find(agent_handle=leader)` (b.2) |
 | Keep `already_set` as terminal (no refresh) | v2 would never reach any existing identity (b.4) |
-| Refresh the vendored ext from `quarry doctor` | doctor is read-only and never calls the ext writer today (`check_environment`, `doctor.py:645-`); making a diagnostic write working-tree files is a category change, and `enable` is already the per-repo write step (b.4, D3) |
+| Refresh the vendored ext from `quarry doctor` | doctor is read-only and never calls the ext writer today (`check_environment`); making a diagnostic write working-tree files is a category change, and `enable` is already the per-repo write step (b.4, D3) |
 | A read-only doctor check "guide v1 (stale) — run `quarry enable`" | useful, but it lands in `doctor.py` (687 lines, over the limit), so the one-line registration would force an unrelated `doctor.py` extraction into this PR; `enable`'s report line is the signal for now, and the check is a follow-on once `doctor.py` is decomposed |
 | Fold `contract.created_at` into the Loop 2 document name | closes the same-basename/same-day/same-sequence residual, at the price of unreadable names; the page-1 header comparison catches the collision without it (c.3) |
 | Grow `mcp_server.py` with the new tool (round-1 R7) | the module is over the 500-line limit; CLAUDE.md requires extraction on the next touch. Sibling `mcp_missions.py` + shared `mcp_guard.py` instead (e.2) |

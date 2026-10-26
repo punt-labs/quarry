@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-10-25T21:00:00+00:00",
+  "spec": "atomic-page-write.spec.tex",
+  "note": "Written by hand from direct probcli runs. `z-spec test` stops probcli at 600 s and this model needs about 900 s and -p MAX_INITIALISATIONS 400 (108 initial states), so its own report records states_analysed 0. Commands: probcli atomic-page-write.spec.tex -model_check -goal <witnesses> -check_goal -p MAX_OPERATIONS 20000000 -p TIME_OUT 60000 -p MAX_INITIALISATIONS 400; probcli ... -ctlformula <AG(EF(clean))> (same -p flags). Mode 1 runs: the spec with `mode = 1`, -nodead.",
+  "fuzz": "OK",
+  "setsize": 2,
+  "mode": 0,
+  "states_analysed": 233893,
+  "transitions_fired": 2523482,
+  "checks": [
+    {"name": "init", "status": "passed", "detail": "108 initial states"},
+    {"name": "model_check", "status": "passed", "detail": "all states visited; no deadlock; no invariant violation"},
+    {"name": "witness_goal", "status": "passed", "detail": "partialVisible, lost, unsafeDelete, skippedOnPartial, inversion, syncTouched, syncClash, labelLost: none reached (No counter example found. ALL states visited.)"},
+    {"name": "ctl_convergence", "status": "passed", "detail": "AG(EF(quiescent & card(complete)<=1 & (card(complete)=1 => no damaged funnel generation and no future-key generation))) TRUE, 549 s"},
+    {"name": "coverage", "status": "expected", "detail": "the Old* operations are enabled only in mode 1 and do not fire in mode 0"},
+    {"name": "cbc_deadlock", "status": "expected", "detail": "constraint-based probe returns a degenerate state (pc = {} and every function empty), not reachable; the reachable-state search found no deadlock"}
+  ],
+  "mode1_witnesses_reached": ["partialVisible", "lost", "unsafeDelete", "skippedOnPartial", "inversion", "syncTouched", "syncClash", "labelLost"]
+}

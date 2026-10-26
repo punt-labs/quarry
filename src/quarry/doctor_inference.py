@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import final
 
+from quarry.doctor_failure import CheckFailure
 from quarry.ingestion.provider import ProviderSelection
 from quarry.results import CheckResult
 
@@ -27,7 +28,10 @@ class InferenceDiagnostics:
             selection = ProviderSelection.from_environment()
         except Exception as exc:  # noqa: BLE001
             return CheckResult(
-                name="ONNX provider", passed=False, message=str(exc), required=False
+                name="ONNX provider",
+                passed=False,
+                message=f"cannot select a provider ({CheckFailure.detail(exc)})",
+                required=False,
             )
         return CheckResult(
             name="ONNX provider",

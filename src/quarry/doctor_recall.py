@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import final
 
+from quarry.doctor_failure import CheckFailure
 from quarry.query_log import QueryLog
 from quarry.results import CheckResult
 
@@ -39,7 +40,12 @@ class RecallDiagnostics:
         try:
             summary = RecallDiagnostics._summarize(telemetry_path)
         except Exception as exc:  # noqa: BLE001 -- doctor must degrade, never crash
-            return result(passed=False, message=f"check failed: {exc}")
+            return result(
+                passed=False,
+                message=(
+                    f"check failed: {telemetry_path.name}: {CheckFailure.detail(exc)}"
+                ),
+            )
         return result(passed=True, message=summary)
 
     @staticmethod

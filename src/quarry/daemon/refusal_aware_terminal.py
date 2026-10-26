@@ -7,7 +7,8 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
 from quarry.content_guard import UnindexableContentError
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.settlement import Settlement
+from quarry.daemon.terminal import Terminal
 from quarry.refusal import RefusalError
 
 if TYPE_CHECKING:
@@ -22,12 +23,12 @@ logger = logging.getLogger(__name__)
 class RefusalAwareTerminal:
     """Bind a task's state to the way its body is allowed to end.
 
-    :func:`task_terminal` logs every exception with a traceback.  A refusal
+    :meth:`Terminal.recording` logs every exception with a traceback.  A refusal
     (:class:`RefusalError`: binary content, a refused media type, a failed or
     refused fetch, a refused registration) is an expected answer, so it ends the task
     ``failed`` with the reason and one WARN naming the task, no traceback.  Any
     other exception fails closed: the task error is client-visible and such a
-    message can quote a URL, a path or a credential, so :func:`task_terminal`
+    message can quote a URL, a path or a credential, so :meth:`Terminal.recording`
     records ``internal error: <Class>`` and logs the detail, redacted.  This class
     is the single owner of the refusal write.
 
@@ -39,21 +40,31 @@ class RefusalAwareTerminal:
     stop the task from reaching a terminal state, and it must be safe to log.
     """
 
-    __slots__ = ("_state", "_subject")
+    __slots__ = ("_subject", "_terminal")
 
     NO_PAGES: ClassVar[str] = "nothing was stored: no pages were selected for ingest"
     NOTHING_STORED: ClassVar[str] = (
         "nothing was stored: the content produced no indexable text"
     )
 
-    _state: TaskState
     _subject: Callable[[], str]
+    _terminal: Terminal
 
-    def __new__(cls, state: TaskState, subject: Callable[[], str] = lambda: "") -> Self:
+    def __new__(cls, terminal: Terminal, subject: Callable[[], str]) -> Self:
         self = super().__new__(cls)
-        self._state = state
         self._subject = subject
+        self._terminal = terminal
         return self
+
+    @classmethod
+    def for_job(cls, state: TaskState, subject: Callable[[], str] = str) -> Self:
+        """Return the terminal of a queued job's body."""
+        return cls(Terminal.for_job(state), subject)
+
+    @classmethod
+    def for_task(cls, state: TaskState, subject: Callable[[], str] = str) -> Self:
+        """Return the terminal of a polled task that is not a queued job."""
+        return cls(Terminal.for_task(state), subject)
 
     @staticmethod
     def is_stored(results: Mapping[str, object]) -> bool:
@@ -65,36 +76,44 @@ class RefusalAwareTerminal:
         """
         return any(results.get(key) for key in ("chunks", "ingested", "skipped"))
 
-    def complete(self, results: Mapping[str, object]) -> None:
-        """Record the task as completed with *results*, or refused if none stored.
+    @classmethod
+    def settlement(cls, results: Mapping[str, object]) -> Settlement:
+        """Return how a store with *results* ended: stored, or refused if none stored.
 
         A job that wrote no rows did not do what was asked, so reporting
-        ``completed`` would claim a store that never happened: it ends ``failed``
-        with a fixed reason that follows the result's shape (a crawl selected no
-        pages; a single document had no indexable text), the way a refused fetch
-        does.
+        ``completed`` would claim a store that never happened: it fails with a
+        fixed reason that follows the result's shape (a crawl selected no pages;
+        a single document had no indexable text), the way a refused fetch does.
         """
-        if not self.is_stored(results):
-            is_blank_crawl = "ingested" not in results or results.get("empty")
-            reason = self.NOTHING_STORED if is_blank_crawl else self.NO_PAGES
-            self._fail(UnindexableContentError(reason))
-            return
-        self._state.status = "completed"
-        self._state.results = dict(results)
+        if cls.is_stored(results):
+            return Settlement.done(results)
+        is_blank_crawl = "ingested" not in results or results.get("empty")
+        return Settlement.failed(cls.NOTHING_STORED if is_blank_crawl else cls.NO_PAGES)
+
+    def apply(self, settlement: Settlement) -> None:
+        """Record how the store ended: completed, or refused with its reason."""
+        if settlement.is_stored:
+            self._terminal.settle_stored(settlement.results)
+        else:
+            self._fail(UnindexableContentError(settlement.reason))
 
     @contextmanager
     def record(self) -> Generator[None]:
         """Run the body, recording the task's terminal state when it exits."""
-        with task_terminal(self._state):
+        with self._terminal.recording():
             try:
                 yield
             except RefusalError as exc:
                 self._fail(exc)
 
     def _fail(self, exc: RefusalError) -> None:
-        """Record the failure first, then log it: naming the task cannot undo it."""
-        self._state.status = "failed"
-        self._state.error = str(exc)
+        """Record the failure first, then log it: naming the task cannot undo it.
+
+        A failure the task's status refused (the producer withdrew the job, or its
+        store already settled it) is not logged as a rejection: it was not one.
+        """
+        if not self._terminal.settle_failed(str(exc)):
+            return
         subject = "(unnamed)"
         # The subject only decorates a log line, so whatever naming it raises must
         # not stop the failure from being logged; it is reported, not swallowed.
@@ -103,14 +122,14 @@ class RefusalAwareTerminal:
         except Exception:
             logger.warning(
                 "Background %s (task %s): naming the subject failed",
-                self._state.kind,
-                self._state.task_id,
+                self._terminal.kind,
+                self._terminal.task_id,
                 exc_info=True,
             )
         logger.warning(
             "Background %s %s (task %s) rejected: %s",
-            self._state.kind,
+            self._terminal.kind,
             subject,
-            self._state.task_id,
+            self._terminal.task_id,
             f"{exc} [{exc.detail}]" if exc.detail else exc,
         )

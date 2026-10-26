@@ -1,7 +1,7 @@
 {
-  "total": 198,
+  "total": 182,
   "by_category": {
-    "noqa": 160,
+    "noqa": 144,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -21,9 +21,6 @@
     "src/quarry/active_session_context.py": {
       "noqa": 1
     },
-    "src/quarry/backfill_session.py": {
-      "noqa": 1
-    },
     "src/quarry/captures_collection.py": {
       "noqa": 1
     },
@@ -39,9 +36,6 @@
     "src/quarry/daemon/content_jobs.py": {
       "noqa": 3
     },
-    "src/quarry/daemon/ingest_jobs.py": {
-      "noqa": 3
-    },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
     },
@@ -49,7 +43,7 @@
       "noqa": 1
     },
     "src/quarry/daemon/routes/meta.py": {
-      "noqa": 2
+      "noqa": 1
     },
     "src/quarry/daemon/routes/registrations.py": {
       "noqa": 1
@@ -65,7 +59,7 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 49
+      "noqa": 36
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
@@ -73,8 +67,14 @@
     "src/quarry/doctor_inference.py": {
       "noqa": 1
     },
+    "src/quarry/doctor_mcp.py": {
+      "noqa": 1
+    },
     "src/quarry/doctor_memory.py": {
       "noqa": 2
+    },
+    "src/quarry/doctor_model.py": {
+      "noqa": 1
     },
     "src/quarry/doctor_recall.py": {
       "noqa": 1
@@ -140,6 +140,9 @@
     "src/quarry/ingestion/web_fetch.py": {
       "noqa": 1
     },
+    "src/quarry/install_directories.py": {
+      "noqa": 2
+    },
     "src/quarry/lesson.py": {
       "noqa": 1
     },
@@ -148,9 +151,6 @@
     },
     "src/quarry/opencv_headless.py": {
       "noqa": 1
-    },
-    "src/quarry/proxy.py": {
-      "noqa": 2
     },
     "src/quarry/registrar.py": {
       "noqa": 2
@@ -187,5 +187,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-10-25T20:30:01Z"
+  "updated_at": "2026-10-26T13:13:24Z"
 }

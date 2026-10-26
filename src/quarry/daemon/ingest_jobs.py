@@ -10,19 +10,28 @@ does.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
-from starlette.concurrency import run_in_threadpool
-
-from quarry.daemon.captured_body_ingest import CapturedBodyIngest, IngestLabels
+from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
+from quarry.daemon.store_run import StoreRun
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
+    from quarry.daemon.ingest_labels import IngestLabels
     from quarry.daemon.tasks import TaskState
     from quarry.http_url import HttpUrl
+
+
+logger = logging.getLogger(__name__)
+
+# What an unrecoverable record is named: the host, path and digest of a URL whose
+# query was dropped can be as sensitive as the query, so none of them is written.
+_UNRECORDED_NAME = "(url not recorded)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,23 +65,34 @@ class IngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Fetch and index the URL in a background thread, updating task state."""
-        terminal = RefusalAwareTerminal(state, self._captured().subject)
+        terminal = RefusalAwareTerminal.for_job(state, self._captured().subject)
         with terminal.record():
-            terminal.complete(await run_in_threadpool(self._ingest, ctx))
+            store = StoreRun.start(
+                self, state, partial(self._ingest, ctx), RefusalAwareTerminal.settlement
+            )
+            terminal.apply(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return a snapshot of the source URL; an ``ingest`` has no client copy.
 
         The source is the recoverable unit — re-issuing the ingest re-fetches it.
-        It is spooled in its stored form, never verbatim: the spool is on disk, so
-        a query secret is kept only as its digest and userinfo and fragment are
-        dropped.  A URL that carried a query must be re-issued by the operator.
+        A URL with no query and no ``;params`` fetches the same resource under its
+        stored name (host case, default port and encoding are equivalent), so that
+        name is spooled.  Otherwise the query is never written to disk: the record
+        says the job is not recoverable, and it is logged.
         """
+        if not self.source.has_query_or_params:
+            name = self.source.document_name
+            return SpoolRecord(
+                kind="ingest", collection=self.collection, name=name, payload=name
+            )
+        logger.warning("ingest of %s is not recoverable from the spool", self.source)
         return SpoolRecord(
-            kind="ingest",
+            kind="ingest-unrecoverable",
             collection=self.collection,
-            name=self.source.document_name,
-            payload=self.source.document_name,
+            name=_UNRECORDED_NAME,
+            payload="not recoverable: the URL's query or parameters are never written",
+            recoverable=False,
         )
 
     def _captured(self) -> CapturedBodyIngest:
@@ -90,20 +110,21 @@ class IngestJob:
         layer replaces their messages before they can reach a log or a task).
         """
         if self.scrub:
-            return self._captured().run(ctx)
+            return self._capture_unless_held(ctx)
         return self._ingest_plain(ctx)
+
+    def _capture_unless_held(self, ctx: DaemonContext) -> dict[str, object]:
+        """Re-fetch the capture, unless ``overwrite`` is off and it is stored.
+
+        Without ``overwrite`` a single-URL ingest is create-if-absent: a capture
+        already stored under its name is reported as skipped, the way the content
+        jobs do, not fetched and written on top of itself.
+        """
+        captured = self._captured()
+        if existing := captured.existing(ctx):
+            return dict(existing.skip())
+        return captured.run(ctx)
 
     def _ingest_plain(self, ctx: DaemonContext) -> dict[str, object]:
         """Run a plain, unscrubbed ``quarry ingest``: sitemap-aware, byte-for-byte."""
-        from quarry.ingestion.bulk_ingest import BulkOptions  # noqa: PLC0415
-        from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
-        from quarry.ingestion.sitemap_ingest import ingest_auto  # noqa: PLC0415
-
-        return dict(
-            ingest_auto(
-                self.source,
-                Progress(None),
-                self.labels.context(ctx),
-                BulkOptions(),
-            )
-        )
+        return self.labels.plain_ingest(ctx, self.source)

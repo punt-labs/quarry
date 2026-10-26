@@ -87,6 +87,48 @@ class TestWirePayload:
         assert req.session_id == "s1"
         assert "hello there" in req.content
 
+    def test_the_request_carries_the_instant_the_transcript_was_read(
+        self, tmp_path: Path
+    ) -> None:
+        from datetime import UTC, datetime
+
+        transcript = _write_transcript(tmp_path / "s.jsonl", "hello there")
+        capture = SessionTranscriptCapture(
+            _source(path=transcript), TranscriptReader(transcript)
+        )
+        before = datetime.now(UTC)
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
+        ) as sender:
+            capture.capture()
+        after = datetime.now(UTC)
+        req = sender.call_args[0][0]
+        assert before <= datetime.fromisoformat(req.captured_at) <= after
+
+    def test_the_snapshot_is_taken_before_the_transcript_is_read(
+        self, tmp_path: Path
+    ) -> None:
+        from datetime import UTC, datetime
+
+        seen: list[datetime] = []
+
+        def read() -> str:
+            seen.append(datetime.now(UTC))
+            return "hello"
+
+        reader = MagicMock()
+        reader.text.side_effect = read
+        capture = SessionTranscriptCapture(
+            _source(path=tmp_path), cast("TranscriptReader", reader)
+        )
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
+        ) as sender:
+            capture.capture()
+        assert datetime.fromisoformat(sender.call_args[0][0].captured_at) <= seen[0]
+
     def test_empty_transcript_sends_nothing(self, tmp_path: Path) -> None:
         empty = tmp_path / "e.jsonl"
         empty.write_text("")
@@ -97,6 +139,26 @@ class TestWirePayload:
         assert outcome.text_captured is False
         assert outcome.sent is False
         sender.assert_not_called()
+
+
+class TestAnOversizedMessageIsNeverEmptyText:
+    """The hook paths keep the tail of a message over the budget, not nothing."""
+
+    def test_one_message_over_the_budget_is_captured_from_its_tail(
+        self, tmp_path: Path
+    ) -> None:
+        budget = TranscriptReader._MAX_CHARS
+        big = _write_transcript(tmp_path / "big.jsonl", "a" * budget + "TAIL")
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
+        ) as sender:
+            outcome = SessionTranscriptCapture(
+                _source(path=big), TranscriptReader(big)
+            ).capture()
+
+        assert outcome.text_captured is True
+        assert sender.call_args[0][0].content.endswith("TAIL")
 
 
 class TestUnreachableText:

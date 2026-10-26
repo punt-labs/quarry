@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+
 from quarry.content_guard import UnindexableContentError
 from quarry.db.row_budget import RowBudgetError
 from quarry.failure_reason import FailureReason
@@ -54,3 +56,15 @@ def test_frames_name_the_code_and_not_the_message() -> None:
     assert "test_failure_reason" in frames
     assert "SECRET" not in frames
     assert "boom" not in frames
+
+
+def test_an_os_fault_is_named_by_its_errno_and_never_quotes_a_path() -> None:
+    exc = OSError(errno.EMFILE, "Too many open files", "/home/jane/secret.jsonl")
+
+    assert FailureReason.os_name(exc) == "EMFILE"
+
+
+def test_a_fault_without_an_errno_is_named_by_its_class() -> None:
+    exc = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad")
+
+    assert FailureReason.os_name(exc) == "UnicodeDecodeError"

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import subprocess
-from typing import TYPE_CHECKING
 
+import pytest
+
+from quarry.doctor_failure import CheckFailure
 from quarry.opencv_headless import HeadlessOpenCv
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def test_command_prefers_uv_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -26,6 +25,8 @@ def test_command_falls_back_to_pip_when_no_uv(monkeypatch: pytest.MonkeyPatch) -
         "-m",
         "pip",
         "install",
+        "--disable-pip-version-check",
+        "--no-input",
         "--force-reinstall",
         "--no-deps",
         "opencv-python-headless",
@@ -39,7 +40,7 @@ def test_remediation_is_the_reinstall_command_as_a_string(
     monkeypatch.setattr("quarry.opencv_headless.shutil.which", lambda _: None)
     hint = HeadlessOpenCv("/venv/bin/python").remediation()
     assert hint == (
-        "/venv/bin/python -m pip install "
+        "/venv/bin/python -m pip install --disable-pip-version-check --no-input "
         "--force-reinstall --no-deps opencv-python-headless"
     )
 
@@ -58,15 +59,95 @@ def test_enforce_runs_the_command(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "opencv-python-headless" in msg
 
 
-def test_enforce_propagates_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_run(cmd: list[str], **_kwargs: object) -> object:
-        raise subprocess.CalledProcessError(1, cmd)
+def test_enforce_never_blocks_on_input_or_runs_unbounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> object:
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr("quarry.opencv_headless.shutil.which", lambda _: None)
     monkeypatch.setattr(subprocess, "run", fake_run)
-    try:
+
+    HeadlessOpenCv("/venv/bin/python").enforce()
+
+    assert seen["stdin"] is subprocess.DEVNULL
+    assert seen["timeout"] == 300.0
+
+
+def test_a_failed_reinstall_names_the_error_line_not_the_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr = (
+        "Collecting opencv-python-headless\n"
+        "ERROR: no matching distribution found\n"
+        "[notice] A new release of pip is available\n"
+    )
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> object:
+        return subprocess.CompletedProcess(cmd, 1, "", stderr)
+
+    monkeypatch.setattr("quarry.opencv_headless.shutil.which", lambda _: None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="exited 1: ERROR: no matching") as raised:
         HeadlessOpenCv("/venv/bin/python").enforce()
-    except subprocess.CalledProcessError:
-        return
-    msg = "enforce did not propagate the reinstall failure"
-    raise AssertionError(msg)
+
+    assert "[notice]" not in str(raised.value)
+
+
+def test_without_an_error_line_the_last_non_notice_line_is_the_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(cmd: list[str], **_kwargs: object) -> object:
+        return subprocess.CompletedProcess(cmd, 1, "", "disk full\n[notice] upgrade\n")
+
+    monkeypatch.setattr("quarry.opencv_headless.shutil.which", lambda _: None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="exited 1: disk full"):
+        HeadlessOpenCv("/venv/bin/python").enforce()
+
+
+def test_a_reinstall_that_says_nothing_on_stderr_is_explained_by_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(cmd: list[str], **_kwargs: object) -> object:
+        return subprocess.CompletedProcess(cmd, 2, "uv: no such interpreter\n", "  \n")
+
+    monkeypatch.setattr("quarry.opencv_headless.shutil.which", lambda _: "/bin/uv")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="exited 2: uv: no such interpreter"):
+        HeadlessOpenCv("/venv/bin/python").enforce()
+
+
+def test_the_specific_error_beats_pips_generic_one() -> None:
+    pip = (
+        "ERROR: Could not find a version that satisfies opencv-python-headless\n"
+        "error: subprocess-exited-with-error\n"
+        "[notice] A new release of pip is available\n"
+    )
+
+    assert CheckFailure.cause(pip).startswith("ERROR: Could not find a version")
+
+
+def test_pips_generic_error_is_still_the_cause_when_it_is_all_there_is() -> None:
+    assert CheckFailure.cause("error: subprocess-exited-with-error\n") == (
+        "error: subprocess-exited-with-error"
+    )
+
+
+def test_a_reinstall_that_times_out_is_a_timeout_not_a_hang(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(cmd: list[str], **_kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd, 300)
+
+    monkeypatch.setattr("quarry.opencv_headless.shutil.which", lambda _: None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        HeadlessOpenCv("/venv/bin/python").enforce()

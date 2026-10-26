@@ -152,8 +152,8 @@ class HttpUrl:
 
         Only for names read back from the store, or built by this class: a URL a
         user or a page supplied goes through ``HttpUrl(raw)``, which never
-        recognises the marker.  ``DisplayName.stored`` and ``LegacyUrlNames`` are
-        the only callers; a test pins that.
+        recognises the marker.  ``LegacyUrlNames`` is the only caller; a test pins
+        that.
 
         Raises:
             ValueError: *name* is not an admissible HTTP(S) URL.
@@ -186,6 +186,12 @@ class HttpUrl:
     def fetch_url(self) -> str:
         """Return the admitted raw URL, the one form a fetch or a parser may use."""
         return self._fetch_url
+
+    @property
+    def has_query_or_params(self) -> bool:
+        """Return whether the URL carries a query or ``;params`` (a fragment is not)."""
+        parts = urlsplit(self._fetch_url)
+        return bool(parts.query) or ";" in parts.path
 
     @property
     def host(self) -> str:

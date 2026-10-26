@@ -32,6 +32,7 @@ from quarry.client import QuarryClient, QuarryConnectionError
 from quarry.client.transport import HttpxTransport, Response
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.daemon.task_drain import TaskDrain
 from quarry.db_pointer import SELECTION
 from quarry.mcp_catalog import ResourceCatalog
 from quarry.mcp_documents import DocumentTools
@@ -180,7 +181,7 @@ class _ToolHarness:
 _TEARDOWN_DRAIN_TIMEOUT_S = 10.0
 
 
-async def _aclose_ingest_queue(ctx: DaemonContext) -> None:
+async def _drain_and_close_queue(ctx: DaemonContext) -> None:
     """Drain the ingest queue with the teardown timeout (keyword-only ``aclose``)."""
     await ctx.ingest_queue.aclose(drain_timeout=_TEARDOWN_DRAIN_TIMEOUT_S)
 
@@ -207,9 +208,11 @@ def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
             # be skipped -- that queue is the OTHER leak vector this teardown
             # guards, tracked independently of ``TaskRegistry._refs``.
             try:
-                portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
+                portal.call(
+                    TaskDrain(ctx.tasks.tracked()).run, _TEARDOWN_DRAIN_TIMEOUT_S
+                )
             finally:
-                portal.call(_aclose_ingest_queue, ctx)
+                portal.call(_drain_and_close_queue, ctx)
 
 
 class TestSurfaceComplete:
@@ -222,6 +225,10 @@ class TestSurfaceComplete:
     def test_every_tool_has_a_description(self) -> None:
         for tool in asyncio.run(mcp.list_tools()):
             assert tool.description, f"{tool.name} has no description"
+
+    def test_ingest_says_a_stored_url_is_skipped_without_overwrite(self) -> None:
+        [ingest] = [t for t in asyncio.run(mcp.list_tools()) if t.name == "ingest"]
+        assert "if false, skip it" in (ingest.description or "")
 
 
 class TestFind:
@@ -632,6 +639,17 @@ class TestRegisterDeregister:
         ):
             result = harness.documents.register_directory(str(target))
         assert result.startswith("Error:")
+
+    @pytest.mark.parametrize("home", ["", "relative/home"])
+    def test_register_with_an_unusable_home_is_a_clean_error(
+        self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch, home: str
+    ) -> None:
+        monkeypatch.setenv("HOME", home)
+
+        result = harness.documents.register_directory("~/proj")
+
+        assert result.startswith("Error:")
+        assert "home directory" in result
 
     def test_deregister_unknown_is_clean_error(self, harness: _ToolHarness) -> None:
         result = harness.documents.deregister_directory("ghost")

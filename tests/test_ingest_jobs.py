@@ -6,8 +6,10 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-from quarry.daemon.captured_body_ingest import IngestLabels
+import pytest
+
 from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.daemon.tasks import TaskState
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
@@ -16,8 +18,6 @@ from tests.inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def test_ingest_spool_record_carries_the_source_url() -> None:
@@ -139,3 +139,72 @@ async def test_a_binary_body_behind_a_text_media_type_stores_nothing(
     assert daemon.ctx.database.store.count() == 0
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.exc_info is None
+
+
+def _plain_job_for(url: str) -> IngestJob:
+    return IngestJob(
+        source=HttpUrl(url),
+        scrub=False,
+        labels=IngestLabels(
+            overwrite=False,
+            collection="x.test",
+            agent_handle="",
+            memory_type="",
+            summary="",
+        ),
+    )
+
+
+class TestSpoolingAUrl:
+    def test_a_query_is_never_written_and_the_record_says_it_is_unrecoverable(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        job = _plain_job_for("https://x.test/a?token=SECRET#frag")
+        with caplog.at_level("WARNING"):
+            record = job.spool_record()
+        assert record is not None
+        assert record.recoverable is False
+        assert record.kind == "ingest-unrecoverable"  # never replayable as a URL
+        blob = record.as_json()
+        assert "SECRET" not in blob
+        assert "token" not in blob
+        assert '"recoverable": false' in blob
+        assert "not recoverable" in caplog.text
+        assert "SECRET" not in caplog.text
+
+    def test_an_unrecoverable_record_names_no_host_and_no_path(self) -> None:
+        record = _plain_job_for("https://x.test/private/a?token=SECRET").spool_record()
+        assert record is not None
+        assert record.name == "(url not recorded)"
+        assert "x.test" not in record.payload  # the collection is a label, not a name
+        assert "private" not in record.as_json()
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://example.com",
+            "https://Example.com/a",
+            "https://x.test/caf\u00e9",
+            "https://x.test:443/a/b#frag",
+        ],
+    )
+    def test_a_url_with_no_query_or_params_is_recoverable_by_its_stored_name(
+        self, url: str
+    ) -> None:
+        job = _plain_job_for(url)
+        record = job.spool_record()
+        assert record is not None
+        assert record.recoverable is True
+        assert record.kind == "ingest"
+        assert record.payload == job.source.document_name
+        assert "?" not in record.payload
+
+    @pytest.mark.parametrize(
+        "url", ["https://x.test/a?a=1", "https://x.test/a;jsessionid=SECRET"]
+    )
+    def test_a_query_or_params_make_it_unrecoverable(self, url: str) -> None:
+        record = _plain_job_for(url).spool_record()
+        assert record is not None
+        assert record.recoverable is False
+        assert record.kind == "ingest-unrecoverable"
+        assert "SECRET" not in record.as_json()

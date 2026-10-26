@@ -70,7 +70,7 @@ class IngestCli:
         self,
         source: Annotated[str, typer.Argument(help="URL to ingest (http/https)")],
         overwrite: Annotated[
-            bool, typer.Option("--overwrite", help="Replace existing data")
+            bool, typer.Option("--overwrite", help="Replace a stored URL, else skip it")
         ] = False,
         collection: Annotated[
             str, typer.Option("--collection", "-c", help="Collection name")

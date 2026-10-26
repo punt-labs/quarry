@@ -256,6 +256,36 @@ across `transform`, `index`, and `connector`).
 - tool: add the `missions_sync` tool to `scripts/mcpb-manifest.template.json`
   — it was never added when the tool shipped, so the Claude Desktop bundle's
   tool list silently omitted it.
+- index: `quarry backfill-sessions` no longer races live ingests. Backfill
+  runs through the same per-collection ingest queue as captures and
+  `remember`.
+- tool (daemon): a shutdown accounts for every queued and running ingest job.
+  Each job ends in a status that matches what reached disk. A job whose
+  content was not stored is spooled for recovery, and a store that finishes
+  after its cancel completes its job and removes its spool record. The
+  shutdown summary counts every job once. Stores still running when the
+  daemon exits are named in a warning. Spool writes run on daemon threads, so
+  a stalled disk cannot hold the process past its stop timeout. The model is
+  in `docs/design/job-abort.spec.tex`.
+- infra: `INGEST_DRAIN_TIMEOUT_S` (the daemon's shutdown budget, default 30 s)
+  is now bounded to 5-300 s and must be finite. `quarry install` bakes it into
+  the service's stop timeout (the budget plus a 12 s margin). `quarry doctor`
+  and daemon start report an installed service whose stop timeout or budget is
+  missing, unreadable or out of range, with `quarry install` as the fix.
+- tool: `quarry doctor` and `quarry install` always complete. A check that
+  crashes is a failed check that names its cause and file, and a required
+  check that fails makes the run fail. With no resolvable home directory,
+  every entry point prints one line instead of a traceback. Doctor reports the
+  missing home once and marks the checks that need it as skipped.
+- security: with a pinned CA installed, `quarry doctor` never falls back to
+  plain HTTP. A certificate that fails verification is reported against
+  `ca.crt`.
+- infra: requires `pydantic>=2.10` and `pydantic-settings>=2.7`.
+- infra: `Settings(quarry_root=X)` places the database, registry and telemetry
+  files under `X`. Previously they stayed under the default root until
+  `resolve_db_paths` ran.
+- tool: `quarry install` no longer installs `mcp-proxy`. The retired proxy
+  step and `check_mcp_proxy` are removed.
 
 ## [3.4.0] - 2026-09-21
 

@@ -14,9 +14,11 @@ Daemon running, plugin installed, doctor clean:
 quarry doctor       # all checks pass, including FTS index: healthy
 ```
 
-Expected: Python, data directory, OCR, embedding model, ONNX provider,
-core imports, mcp-proxy, Claude Code MCP, storage, FTS index, and
-sync directories all pass. No timeouts.
+Expected: Python, data directory, embedding model, ONNX provider, core
+imports, Claude Code MCP, the daemon checks (reachability, serve token, fd
+headroom, stop timeout), FTS index, and sync directories all pass. Claude
+Desktop MCP is configured, or reports that Desktop is not installed. No
+timeouts.
 
 ## Phase 1: MCP Tools
 
@@ -239,11 +241,12 @@ quarry doctor
 
 **Verify all checks pass:**
 
-- Python version, data directory, local OCR, embedding model
+- Python version, data directory, embedding model
 - ONNX provider (CUDA on GPU hosts, CPU on others)
-- Core imports, mcp-proxy
+- Core imports
 - Claude Code MCP: configured (not "timed out")
-- Storage size reported
+- Claude Desktop MCP: configured, or not installed
+- Daemon: reachable, serve token present, fd headroom, stop timeout
 - FTS index: healthy (not "stale" or "missing")
 - Sync directories: N directories OK (no missing)
 

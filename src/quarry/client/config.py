@@ -1,10 +1,10 @@
 """Resolve a client's daemon target: URL, pinned CA, and loopback bearer.
 
-The daemon now requires ``serve.token`` on every request, including loopback
-(DES-031 v2.2 R4).  A client logged in to a loopback URL must therefore present
-that token — and because the daemon mints a fresh token on every restart, the
-token is read *live* from the run dir, never trusted from the stored login
-config (which would go stale the moment the supervisor respawns the daemon).
+The daemon requires ``serve.token`` on every request, including loopback.  A
+client logged in to a loopback URL must therefore present that token — and
+because the daemon mints a fresh token on every restart, the token is read
+*live* from the run dir, never trusted from the stored login config (which
+would go stale the moment the supervisor respawns the daemon).
 
 Presentation is gated on a LITERAL loopback IP, never a name: the client hands
 the live serve.token only to a literal loopback address (127.0.0.0/8, ::1), so a

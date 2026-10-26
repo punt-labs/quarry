@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from quarry.content_guard import BinaryContent, UnindexableContentError
-from quarry.daemon.captured_body_ingest import IngestLabels
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.daemon.routes.base import RouteGroup
 from quarry.db.row_budget import RowBudget, RowBudgetError
 from quarry.http_guards import RequestGuards
@@ -46,7 +46,6 @@ class ContentRouteGroup(RouteGroup):
         "document_name",
         "summary",
         "topic",
-        "source",
         "agent_handle",
         "collection",
     )
@@ -116,7 +115,10 @@ class ContentRouteGroup(RouteGroup):
         reason = await run_in_threadpool(UrlAdmission.reject_reason, raw)
         if reason is not None:
             return JSONResponse({"error": f"URL rejected: {reason}"}, status_code=400)
-        return HttpUrl(raw)
+        url = HttpUrl(raw)
+        # What is stored is the name, not the raw URL: a long query is a digest.
+        refused = self._reject_oversized({"document_name": url.document_name}, "url")
+        return url if refused is None else refused
 
     def _accept(self, kind: str, job: IngestUnit | JSONResponse) -> JSONResponse:
         """Queue a validated *job* as a *kind* task, or pass its 400 through."""

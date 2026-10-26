@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse
 from quarry.collection_marker_store import RetainedMarker
 from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.routes.base import RouteGroup
+from quarry.home_paths import QuarryHome
 from quarry.http_guards import RequestGuards
 from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
@@ -264,7 +265,7 @@ class RegistrationRoutes(RouteGroup):
         if ".." in Path(directory).parts:
             return None, "directory must not contain '..'"
         try:
-            resolved = Path(directory).expanduser().resolve()
+            resolved = QuarryHome.expanded(Path(directory)).resolve()
         except (OSError, RuntimeError) as exc:
             return None, f"cannot resolve directory: {exc}"
 

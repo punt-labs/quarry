@@ -25,7 +25,7 @@ class IngestUnit(Protocol):
     ``collection`` is the routing key: two units naming the same collection run
     on one worker in submission order, restoring the single-writer-per-table
     precondition ``DocumentStreamer.insert`` assumes (DES-034).  ``run`` records its
-    own terminal state (``task_terminal``; ``RefusalAwareTerminal`` for content jobs).
+    own terminal state (``Terminal``; ``RefusalAwareTerminal`` for content jobs).
     """
 
     @property

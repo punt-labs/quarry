@@ -16,9 +16,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.content_guard import UnindexableContentError
-from quarry.daemon.captured_body_ingest import IngestLabels
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.ingest_labels import IngestLabels
 from quarry.daemon.tasks import TaskState
 from quarry.http_url import HttpUrl
 
