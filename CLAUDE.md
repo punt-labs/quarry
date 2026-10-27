@@ -107,7 +107,7 @@ CI injects `--base-ref <merge-base> --require-base` (with `fetch-depth: 0`) on P
 
 **The ratchet is debt amortization, not a limbo bar.** Its purpose is to pay the codebase's OO debt down incrementally: every commit should *fund a medium-scale improvement* — to the file you're touching or to unrelated code nearby — the way you amortize a loan a chunk at a time. This deliberately takes on additional scope, and that is intended. Do **not** treat the ratchet as a constraint to squeak under. Offsetting a two-line addition with a micro-simplification, hunting for `module_size` headroom to avoid an extraction, or gaming a single metric by the minimum all satisfy the letter and waste the intent — and they burn time. When you open a file, make a *real* improvement sized to the opportunity (extract a class, split a god module, internalize public attributes, cut a complex function down), not the smallest change that clears the gate. Bias toward making the improvement, never toward avoiding it. **The test is simple: if the file you touched is meaningfully cleaner than you found it, the ratchet did its job — if you spent that time trying to change as little as possible (or worse, editing comments to move a number), you used it wrong.** This philosophy is org-wide; see the fuller statement in `../vox/CLAUDE.md` and the workspace rule `../.claude/rules/python-oo-adoption.md`.
 
-**Org standards override review tools.** Copilot, Bugbot, and Cursor are advisory. When a review suggestion conflicts with rules in `../.claude/rules/python-*.md`, the rules win. Read the rules before accepting a reviewer's suggestion. PY-CC-1 (`__new__` as constructor) is the most common conflict.
+**Org standards override review tools.** Qodo, Bugbot, and Copilot are advisory. When a review suggestion conflicts with rules in `../.claude/rules/python-*.md`, the rules win. Read the rules before accepting a reviewer's suggestion. PY-CC-1 (`__new__` as constructor) is the most common conflict.
 
 **Verify outputs, not just metrics.** After writing a file, open it and read the content. After backfilling transcripts, search them and confirm the results make sense. `make check` passing does not mean the feature works — it means the code compiles and tests pass. Those are necessary but not sufficient.
 
@@ -230,7 +230,7 @@ Quarry spans four technical domains that require distinct expertise: (1) **ML/nu
 
 ### Pipeline selection
 
-Use `standard` pipeline (design → implement → test → review) for any change touching `/search`, the embedding pipeline, TLS, or work that crosses the local/remote boundary. Use `quick` (implement → review) only for documented bugfixes inside a single module that don't cross boundaries. Apply the five bug classes from the Testing section as evaluator checklists on every review. Review-cycle fix rounds (Copilot/Bugbot findings) use bare `Agent()`, not missions.
+Use `standard` pipeline (design → implement → test → review) for any change touching `/search`, the embedding pipeline, TLS, or work that crosses the local/remote boundary. Use `quick` (implement → review) only for documented bugfixes inside a single module that don't cross boundaries. Apply the five bug classes from the Testing section as evaluator checklists on every review. Review-cycle fix rounds (Qodo/Bugbot findings) use bare `Agent()`, not missions.
 
 ## Development Loop
 
@@ -254,14 +254,16 @@ Level 1 — Backlog loop   one iteration = one work batch     (beads)
   architectural units, `designRatified` before code); full-diff local review to
   a zero-findings round; the **demo gate** — build + install the wheel, restart
   the daemon, exercise the real entry point, observe real output; then PR, a
-  **boolean merge gate** (bots are advisory — the leader owns the stop
-  decision), squash-merge without asking, close-out with the recap.
-  `EnterPR`/`ExitPR`.
+  **boolean merge gate** (CI green, Qodo and Bugbot in, every finding
+  answered, zero unresolved threads), squash-merge without asking, close-out
+  with the recap. `EnterPR`/`ExitPR`.
 - **Level 3 (mission)** is one delegated piece of work, a do-while: the worker
   codes/tests, a *different* specialist evaluates, reflect-and-fix until a round
   is clean. The leader owns every git/GitHub operation and monitors by the
   filesystem, never by commit activity; concurrency-class work gets a djb
   adversarial pass before acceptance. `EnterMission`/`ExitMission`.
+
+PR review follows punt-kit/standards/pr-review.md: local review (qodo review + silent-failure-hunter + code-reviewer) before the PR, then Qodo and Bugbot once at open, at most two rounds, Copilot only on request.
 
 Two directives that govern all three and are the most-corrected failures here:
 **defects flow inward, scope flows outward** — a reviewer-flagged defect in an
