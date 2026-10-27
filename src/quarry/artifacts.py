@@ -97,17 +97,27 @@ class SessionArtifacts:
             hits.extend(int(m) for m in pat.findall(text))
         return tuple(dict.fromkeys(hits))
 
+    def _fields(self) -> tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...]:
+        """Return (header label, frontmatter key, values, header values) per field."""
+        return (
+            ("Commits", "commits", self.commit_shas, self.commit_shas),
+            (
+                "PRs",
+                "prs",
+                tuple(str(n) for n in self.pr_numbers),
+                tuple(f"#{n}" for n in self.pr_numbers),
+            ),
+            ("Branches", "branches", self.branch_names, self.branch_names),
+            ("Beads", "beads", self.bead_ids, self.bead_ids),
+        )
+
     def format_header(self) -> str:
         """Format extracted artifacts as a structured text header."""
-        lines: list[str] = []
-        if self.commit_shas:
-            lines.append(f"Commits: {', '.join(self.commit_shas)}")
-        if self.pr_numbers:
-            lines.append(f"PRs: {', '.join(f'#{n}' for n in self.pr_numbers)}")
-        if self.branch_names:
-            lines.append(f"Branches: {', '.join(self.branch_names)}")
-        if self.bead_ids:
-            lines.append(f"Beads: {', '.join(self.bead_ids)}")
+        lines = [
+            f"{label}: {', '.join(shown)}"
+            for label, _key, _values, shown in self._fields()
+            if shown
+        ]
         if not lines:
             return ""
         return "## Session Artifacts\n" + "\n".join(lines)
@@ -121,18 +131,10 @@ class SessionArtifacts:
             f"session_id: {session_id}",
             f'timestamp: "{timestamp}"',
         ]
-        if self.commit_shas:
-            lines.append("commits:")
-            lines.extend(f"  - {sha}" for sha in self.commit_shas)
-        if self.pr_numbers:
-            lines.append("prs:")
-            lines.extend(f"  - {n}" for n in self.pr_numbers)
-        if self.branch_names:
-            lines.append("branches:")
-            lines.extend(f"  - {b}" for b in self.branch_names)
-        if self.bead_ids:
-            lines.append("beads:")
-            lines.extend(f"  - {bid}" for bid in self.bead_ids)
+        for _label, key, values, _shown in self._fields():
+            if values:
+                lines.append(f"{key}:")
+                lines.extend(f"  - {value}" for value in values)
         lines.append("---")
         return "\n".join(lines)
 
@@ -142,12 +144,3 @@ class SessionArtifacts:
 # Direct aliases -- parameter order matches the method signatures.
 extract_artifacts = SessionArtifacts.from_text
 format_artifacts_header = SessionArtifacts.format_header
-
-
-def format_artifacts_frontmatter(
-    session_id: str,
-    timestamp: str,
-    artifacts: SessionArtifacts,
-) -> str:
-    """Format artifacts as YAML frontmatter for the capture file."""
-    return artifacts.format_frontmatter(session_id, timestamp)
