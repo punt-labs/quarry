@@ -305,10 +305,11 @@ function pr_loop(unit):
 #                  or not bugbot_in(round(pr)))) or not copilot_in
 #                  # a requested Copilot review counts on a skipped
 #                  # (bot-authored) PR too
-#   finding      = any unresolved review thread, from any author, or any
-#                  Medium in Qodo's summary — whenever it arrives, late ones
-#                  included. Read ALL threads via the graphql reviewThreads
-#                  list.
+#   finding      = any unresolved review thread, from any author, any
+#                  Medium in Qodo's summary, or a finding reopened after a
+#                  force-push or rebase (answered(f)) — whenever it arrives,
+#                  late ones included. Read ALL threads via the graphql
+#                  reviewThreads list.
 #   answered(f)  = one path per source, never both:
 #                  - a finding with a Qodo id (from the CLI read): its
 #                    attribution_status is closed (implemented, dismissed,
@@ -329,10 +330,13 @@ function pr_loop(unit):
 #                  After a force-push or rebase, a finding answered by a
 #                  fix, from any source, is reopened, unanswered, only if
 #                  that fix's change is no longer in the branch; new commit
-#                  ids alone do not reopen it. A Qodo finding is answered
-#                  again by a ledger line naming its Qodo id and a new fix
-#                  sha, which is its recorded fix; any other by a new fix
-#                  commit; both under the fix rule above.
+#                  ids alone do not reopen it. The leader unresolves a
+#                  reopened finding's review thread; a local finding with
+#                  no thread is recorded by a ledger line
+#                  `reopened: <finding> <fix sha>`. A Qodo finding is
+#                  answered again by a ledger line naming its Qodo id and
+#                  a new fix sha, which is its recorded fix; any other by
+#                  a new fix commit; both under the fix rule above.
 #                  A finding repeated from an earlier round keeps its
 #                  answer, unless it was reopened.
 #   new High     = a High raised by a round-2 review (one that started at
