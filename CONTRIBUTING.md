@@ -104,8 +104,10 @@ Input -> Pages -> Chunks -> Vectors -> LanceDB
 
 ## Pull Request Process
 
-1. Push branch, open PR
-2. Request Copilot review
+1. Review the change locally before opening the PR
+2. Push branch, open PR; Qodo and Bugbot review it once at open
 3. Address feedback
 4. Ensure CI passes
 5. Merge when all feedback is resolved and quality gates pass
+
+The full sequence is in [`docs/WORKFLOW.md`](docs/WORKFLOW.md).

@@ -1,0 +1,39 @@
+# Qodo v2 review config, from punt-kit's pr_agent.toml template. One review on open,
+# no per-push re-review, only High findings inline (they become blocking threads).
+# Only bot-authored PRs are skipped; no title or label lets an author opt out.
+[github_app]
+ignore_bot_pr = true
+pr_commands = ["/agentic_describe", "/agentic_review"]
+handle_push_trigger = false
+
+[review_agent]
+enable_incremental_review = true
+# comments_routing below is authoritative; the threshold restates it (High only inline).
+inline_comments_severity_threshold = 3
+issues_user_guidelines = """
+quarry is a Python 3.13 package (quarryd daemon, FastAPI wire API, CLI, MCP stdio server, ONNX embeddings, LanceDB storage) plus bash plugin hooks and install.sh.
+Targets: macOS (launchd) and Ubuntu 24.04 (systemd), CPU and NVIDIA CUDA. Nothing else.
+Report every finding in this one pass; do not hold findings back for a later pass.
+Flag only defects reachable by a real caller of the changed code: logic errors, None paths, security, API contract breaks, concurrency, resource leaks.
+Do not flag hypothetical environments (exotic env vars such as CDPATH or GIT_TRACE, control bytes in paths, tests run as root).
+Do not flag what CI enforces: ruff format/lint, mypy and pyright strict, import-linter (the client/engine boundary), shellcheck, markdownlint, the OpenAPI freshness check, the OO ratchet (tools/oo_ratchet), coupling and suppression ratchets.
+Do not flag lines the PR did not change.
+Never suggest suppressions (# noqa, # type: ignore, xfail) or replacing __new__ with __init__; __new__ is the constructor by design.
+"""
+compliance_user_guidelines = """
+Apply code rules only: correctness, typing, error handling, security, and the coding standards for the changed files.
+Do not grade PR titles, PR descriptions, commit messages, or CHANGELOG wording.
+Do not grade agent process rules from CLAUDE.md, AGENTS.md, or WORKFLOW.md (missions, beads, review cycles, delegation).
+"""
+smart_router_extra_instructions = """
+High risk: src/quarry/tls.py (certificates and pinned-CA contexts), src/quarry/url_safety.py, src/quarry/url_admission.py, src/quarry/http_guards.py,
+src/quarry/path_guard.py, src/quarry/safe_paths.py, src/quarry/scrub.py, src/quarry/scrub_rules.py, src/quarry/log_redaction.py (write-time PII and secret redaction),
+src/quarry/private_write.py, src/quarry/atomic_file.py, src/quarry/file_lock.py, src/quarry/content_guard.py, src/quarry/daemon/ (daemon, ingest queue, routes), src/quarry/api/ (the wire API),
+plugin/hooks/*.sh, install.sh, and scripts/*.sh.
+Low risk: docs-only diffs (*.md, docs/, research/, prfaq.tex), docs/openapi.json (generated), test-only diffs (tests/), and benchmarks/.
+"""
+
+[review_agent.comments_routing]
+action_required = "both"
+remediation_recommended = "summary"
+informational = "drop"
