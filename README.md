@@ -255,7 +255,7 @@ independently toggleable in `.punt-labs/quarry/config.md`.
 
 **Permissions.** The plugin never edits a Claude settings file on its own.
 Running `quarry enable` is your consent: it adds quarry's allow rules
-(`mcp__quarry__*` plus `Skill(find)`, `Skill(ingest)`, and the other quarry
+(`mcp__quarry__*`, `Bash(quarry:*)` for the CLI, plus `Skill(find)`, `Skill(ingest)`, and the other quarry
 commands) to that project's `.claude/settings.json`, so Claude calls quarry
 without a prompt in that project only, and prints each rule it added. Every
 other setting and rule in the file is kept. `quarry disable` removes exactly
