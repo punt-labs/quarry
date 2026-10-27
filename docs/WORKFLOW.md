@@ -246,7 +246,8 @@ function pr_loop(unit):
     # D. SHIP
     bd close the bead(s)                   # Phase 6, before the push
     push; create the PR via the GitHub MCP tools (not gh, where MCP suffices)
-    comment "demo confirmed: <head sha>"   # the demo gate passed (step C)
+    if the PR changes a file that is not demo_exempt:
+        comment "demo confirmed: <head sha>"   # the demo gate passed (step C)
         # Qodo reviews once, on open (.pr_agent.toml); Bugbot reviews once,
         #   on its own, at open (Cursor dashboard: once per PR) — no
         #   "bugbot run" comment for round 1
