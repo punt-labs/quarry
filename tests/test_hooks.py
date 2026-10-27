@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
+import shlex
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -14,14 +16,23 @@ import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
+from quarry._hook_trace import HookPayload
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
+from quarry.active_session_context import ActiveSessionContext
+from quarry.client import (
+    ClientConfigError,
+    HttpError,
+    QuarryConnectionError,
+    QuarryError,
+)
 from quarry.enabled_marker import EnabledMarker
 from quarry.hooks import (
-    _as_dir,
     handle_post_web_fetch,
     handle_pre_compact,
     handle_session_start,
 )
+from quarry.refusal import RegistrationRefusedError
+from quarry.send_outcome import SendOutcome
 from quarry.sync_registry import SyncRegistry
 
 
@@ -233,131 +244,6 @@ class TestLoadHookConfig:
 
 
 # ---------------------------------------------------------------------------
-# _sync_in_background tests
-# ---------------------------------------------------------------------------
-
-
-class TestSyncInBackground:
-    def test_returns_launched_on_success(self, tmp_path: Path) -> None:
-        import subprocess as _subprocess
-
-        from quarry.hooks import _sync_in_background
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 99999
-        lockfile = tmp_path / "sync.pid"
-        with (
-            patch.object(_subprocess, "Popen", return_value=mock_proc),
-            patch("quarry.hooks._is_sync_running", return_value=False),
-            patch("quarry.hooks._sync_lockfile", return_value=lockfile),
-        ):
-            assert _sync_in_background() == "launched"
-            assert lockfile.exists()
-            assert lockfile.read_text() == "99999"
-
-    def test_returns_failed_on_oserror(self, tmp_path: Path) -> None:
-        import subprocess as _subprocess
-
-        from quarry.hooks import _sync_in_background
-
-        lockfile = tmp_path / "sync.pid"
-        with (
-            patch.object(_subprocess, "Popen", side_effect=OSError("No such file")),
-            patch("quarry.hooks._is_sync_running", return_value=False),
-            patch("quarry.hooks._sync_lockfile", return_value=lockfile),
-        ):
-            assert _sync_in_background() == "failed"
-            assert not lockfile.exists()  # Lock cleaned up on failure
-
-    def test_returns_running_when_already_running(self) -> None:
-        from quarry.hooks import _sync_in_background
-
-        with patch("quarry.hooks._is_sync_running", return_value=True):
-            assert _sync_in_background() == "running"
-
-    def test_returns_running_when_lock_held(self, tmp_path: Path) -> None:
-        """Atomic lock prevents TOCTOU race — second caller gets 'running'."""
-        from quarry.hooks import _sync_in_background
-
-        lockfile = tmp_path / "sync.pid"
-        lockfile.write_text("12345")  # Pre-existing lock file
-        with (
-            patch("quarry.hooks._is_sync_running", return_value=False),
-            patch("quarry.hooks._sync_lockfile", return_value=lockfile),
-        ):
-            assert _sync_in_background() == "running"
-
-    def test_pidfile_write_failure_still_returns_launched(self, tmp_path: Path) -> None:
-        """If Popen succeeds but PID write fails, sync is running — return launched."""
-        import subprocess as _subprocess
-
-        from quarry.hooks import _sync_in_background
-
-        lockfile = tmp_path / "sync.pid"
-        mock_proc = MagicMock()
-        mock_proc.pid = 99999
-
-        # Create lock atomically, then make os.write fail.
-        with (
-            patch.object(_subprocess, "Popen", return_value=mock_proc),
-            patch("quarry.hooks._is_sync_running", return_value=False),
-            patch("quarry.hooks._sync_lockfile", return_value=lockfile),
-            patch("os.write", side_effect=OSError("disk full")),
-        ):
-            # Sync launched despite write failure.
-            assert _sync_in_background() == "launched"
-
-
-class TestIsSyncRunning:
-    def test_no_pidfile_returns_false(self, tmp_path: Path) -> None:
-        from quarry.hooks import _is_sync_running
-
-        with patch("quarry.hooks._sync_lockfile", return_value=tmp_path / "sync.pid"):
-            assert _is_sync_running() is False
-
-    def test_stale_pid_returns_false(self, tmp_path: Path) -> None:
-        from quarry.hooks import _is_sync_running
-
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text("999999999")  # PID that doesn't exist
-        with patch("quarry.hooks._sync_lockfile", return_value=pidfile):
-            assert _is_sync_running() is False
-            assert not pidfile.exists()  # Stale file cleaned up
-
-    def test_live_pid_returns_true(self, tmp_path: Path) -> None:
-        import os
-
-        from quarry.hooks import _is_sync_running
-
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text(str(os.getpid()))  # Current process — definitely alive
-        with patch("quarry.hooks._sync_lockfile", return_value=pidfile):
-            assert _is_sync_running() is True
-
-    def test_eperm_treated_as_running(self, tmp_path: Path) -> None:
-        """PermissionError (EPERM) means process exists but not ours."""
-        from quarry.hooks import _is_sync_running
-
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text("1")  # PID 1 (init) — will get EPERM
-        with (
-            patch("quarry.hooks._sync_lockfile", return_value=pidfile),
-            patch("os.kill", side_effect=PermissionError("EPERM")),
-        ):
-            assert _is_sync_running() is True
-            assert pidfile.exists()  # Not cleaned up — process is alive
-
-    def test_negative_pid_treated_as_stale(self, tmp_path: Path) -> None:
-        from quarry.hooks import _is_sync_running
-
-        pidfile = tmp_path / "sync.pid"
-        pidfile.write_text("-1")
-        with patch("quarry.hooks._sync_lockfile", return_value=pidfile):
-            assert _is_sync_running() is False
-            assert not pidfile.exists()
-
-
-# ---------------------------------------------------------------------------
 # Handler tests
 # ---------------------------------------------------------------------------
 
@@ -374,7 +260,10 @@ class _ReachableDaemonEmptyCatalog:
 
     @pytest.fixture(autouse=True)
     def _daemon_up_empty_catalog(self) -> Iterator[None]:
-        with patch("quarry.hooks._daemon_chunk_collections", return_value=frozenset()):
+        with patch(
+            "quarry.hooks._SessionStartContext._daemon_chunk_collections",
+            return_value=frozenset(),
+        ):
             yield
 
 
@@ -401,9 +290,12 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         settings.lancedb_path = tmp_path / "lancedb"
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
             patch(
-                "quarry.hooks._sync_in_background",
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
                 return_value="launched",
             ) as mock_sync,
         ):
@@ -436,15 +328,21 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         settings.lancedb_path = tmp_path / "lancedb"
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value="failed"),
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="failed",
+            ),
         ):
             result = handle_session_start({"cwd": str(project)})
 
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert "Background sync failed to launch." in ctx
+        assert "Background sync failed to launch; see the quarry log" in ctx
 
     def test_context_reflects_sync_already_running(self, tmp_path: Path) -> None:
         project = tmp_path / "runningproject"
@@ -456,8 +354,14 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         settings.lancedb_path = tmp_path / "lancedb"
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value="running"),
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="running",
+            ),
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -481,8 +385,13 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         conn.close()
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background") as mock_sync,
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as mock_sync,
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -506,10 +415,13 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         settings.lancedb_path = tmp_path / "lancedb"
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background"),
             patch(
-                "quarry.hooks._session_coverage",
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch("quarry.active_session_context.SyncLock.launch_background_sync"),
+            patch(
+                "quarry.active_session_context.ActiveSessionContext._session_coverage",
                 return_value={
                     "documents_indexed": 0,
                     "transcripts_captured": 0,
@@ -555,8 +467,11 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         _opt_in(project)
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background"),
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch("quarry.active_session_context.SyncLock.launch_background_sync"),
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -576,7 +491,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         assert "myproject-mine" in collections
 
     def test_context_includes_recall_hint(self, tmp_path: Path) -> None:
-        """Active-mode context leads with the identity line plus R1/R2/R3."""
+        """Active-mode context leads with the identity line plus the skill pointers."""
         project = tmp_path / "hintproject"
         project.mkdir()
         _opt_in(project)
@@ -586,10 +501,16 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         settings.lancedb_path = tmp_path / "lancedb"
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value="launched"),
             patch(
-                "quarry.hooks._session_coverage",
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
+            patch(
+                "quarry.active_session_context.ActiveSessionContext._session_coverage",
                 return_value={
                     "documents_indexed": 0,
                     "transcripts_captured": 0,
@@ -604,21 +525,17 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         ctx = str(output["additionalContext"])
         assert ctx.startswith("Quarry semantic search is active")
         assert (
-            "Use find before WebSearch or WebFetch for research, or before "
-            "answering a why/how/what-did-we-decide question." in ctx
+            "Understanding code, a project decision, or a memory? See the "
+            "quarry-recall skill." in ctx
         )
         assert (
-            "Prefer grep for symbol and value lookups; prefer find for meaning." in ctx
-        )
-        assert (
-            "Use remember when you learn something durable — a decision, a gotcha, "
-            "a non-obvious fact, a procedure — so it survives context compaction."
-            in ctx
+            "Remembering, learning, or ingesting something? See the "
+            "quarry-capture skill." in ctx
         )
 
 
 class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
-    """SessionStart context carries the three canonical R1/R2/R3 sentences.
+    """SessionStart context carries the two canonical skill-pointer sentences.
 
     Each surface — reachable-coverage, unreachable-coverage, subsumption,
     daemon-unreachable-auto-register — must emit the sentences verbatim so an
@@ -626,14 +543,10 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
     """
 
     _R1 = (
-        "Use find before WebSearch or WebFetch for research, or before "
-        "answering a why/how/what-did-we-decide question."
+        "Understanding code, a project decision, or a memory? See the "
+        "quarry-recall skill."
     )
-    _R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
-    _R3 = (
-        "Use remember when you learn something durable — a decision, a gotcha, "
-        "a non-obvious fact, a procedure — so it survives context compaction."
-    )
+    _R2 = "Remembering, learning, or ingesting something? See the quarry-capture skill."
 
     @staticmethod
     def _settings(tmp_path: Path) -> MagicMock:
@@ -645,7 +558,6 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
     def _assert_trailer(self, ctx: str) -> None:
         assert self._R1 in ctx
         assert self._R2 in ctx
-        assert self._R3 in ctx
 
     def test_active_reachable_coverage_line_and_trailer(self, tmp_path: Path) -> None:
         project = tmp_path / "reachable"
@@ -653,12 +565,15 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
         _opt_in(project)
         with (
             patch(
-                "quarry.hooks._resolve_settings",
+                "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=self._settings(tmp_path),
             ),
-            patch("quarry.hooks._sync_in_background", return_value="launched"),
             patch(
-                "quarry.hooks._session_coverage",
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
+            patch(
+                "quarry.active_session_context.ActiveSessionContext._session_coverage",
                 return_value={
                     "documents_indexed": 42,
                     "transcripts_captured": 7,
@@ -685,11 +600,17 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
         _opt_in(project)
         with (
             patch(
-                "quarry.hooks._resolve_settings",
+                "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=self._settings(tmp_path),
             ),
-            patch("quarry.hooks._sync_in_background", return_value="launched"),
-            patch("quarry.hooks._session_coverage", return_value=None),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
+            patch(
+                "quarry.active_session_context.ActiveSessionContext._session_coverage",
+                return_value=None,
+            ),
         ):
             result = handle_session_start({"cwd": str(project)})
         output = result["hookSpecificOutput"]
@@ -710,8 +631,13 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
         conn.register_directory(child, "child")
         conn.close()
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background") as sync,
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
         ):
             result = handle_session_start({"cwd": str(parent)})
         sync.assert_not_called()
@@ -722,8 +648,52 @@ class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
         self._assert_trailer(ctx)
 
 
+class TestSessionStartAutoRegisterRefusal:
+    """A registration the registry refuses is stated, not a hook crash."""
+
+    def test_a_refusal_is_logged_with_its_detail_and_stated_in_the_envelope(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        project = tmp_path / "solo"
+        project.mkdir()
+        _opt_in(project)
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        refusal = RegistrationRefusedError(
+            "collection name already in use; choose another collection name"
+        ).about(directory=str(project), collection="solo", detail="held by 'other'")
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.hooks._SessionStartContext._daemon_chunk_collections",
+                return_value=frozenset(),
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
+            patch.object(SyncRegistry, "register_directory", side_effect=refusal),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+        sync.assert_not_called()
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "auto-register" in ctx
+        assert "refused" in ctx
+        assert "collection name already in use" in ctx
+        [record] = [r for r in caplog.records if "refused" in r.getMessage()]
+        assert record.levelno == logging.WARNING
+        assert record.exc_info is None
+        assert "held by 'other'" in record.getMessage()
+
+
 class TestSessionStartDaemonUnreachableCarriesTrailer:
-    """R2b: a daemon-unreachable auto-register defer still emits R1/R2/R3.
+    """R2b: a daemon-unreachable auto-register defer still emits the trailer.
 
     The design body proposed withholding the trailer here on the reasoning
     that ``find``/``remember`` would fail at the client boundary. R2b reverses
@@ -732,14 +702,10 @@ class TestSessionStartDaemonUnreachableCarriesTrailer:
     """
 
     _R1 = (
-        "Use find before WebSearch or WebFetch for research, or before "
-        "answering a why/how/what-did-we-decide question."
+        "Understanding code, a project decision, or a memory? See the "
+        "quarry-recall skill."
     )
-    _R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
-    _R3 = (
-        "Use remember when you learn something durable — a decision, a gotcha, "
-        "a non-obvious fact, a procedure — so it survives context compaction."
-    )
+    _R2 = "Remembering, learning, or ingesting something? See the quarry-capture skill."
 
     def test_unreachable_defer_carries_r1_r2_r3_and_restart_hint(
         self, tmp_path: Path
@@ -753,8 +719,11 @@ class TestSessionStartDaemonUnreachableCarriesTrailer:
         settings.registry_path = tmp_path / "registry.db"
         settings.lancedb_path = tmp_path / "lancedb"
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background"),
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch("quarry.active_session_context.SyncLock.launch_background_sync"),
             patch(
                 "quarry.client.TargetResolver.connect",
                 side_effect=QuarryConnectionError("down", "url"),
@@ -768,7 +737,6 @@ class TestSessionStartDaemonUnreachableCarriesTrailer:
         assert "systemctl --user restart quarry" in ctx
         assert self._R1 in ctx
         assert self._R2 in ctx
-        assert self._R3 in ctx
 
 
 class TestSessionStartReadopt:
@@ -793,8 +761,11 @@ class TestSessionStartReadopt:
         conn.close()
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background"),
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch("quarry.active_session_context.SyncLock.launch_background_sync"),
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -842,8 +813,13 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
         settings = self._settings(tmp_path)
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background") as mock_sync,
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as mock_sync,
             patch(
                 "quarry.client.TargetResolver.connect",
                 side_effect=QuarryConnectionError("down", "url"),
@@ -884,8 +860,13 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
         conn.close()
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background") as mock_sync,
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as mock_sync,
             patch(
                 "quarry.client.TargetResolver.connect",
                 side_effect=QuarryConnectionError("down", "url"),
@@ -916,8 +897,13 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
         client.list_registrations.return_value.chunk_collections = []
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background") as mock_sync,
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as mock_sync,
             patch("quarry.client.TargetResolver.connect", return_value=client),
         ):
             handle_session_start({"cwd": str(project)})
@@ -946,7 +932,7 @@ class TestHandlePostWebFetch:
             "cwd": str(project),
             "tool_input": {"url": "https://example.com/page"},
         }
-        with patch("quarry.ingestion.pipeline.ingest_content") as mock_ingest:
+        with patch("quarry.ingestion.web_ingest.ingest_content") as mock_ingest:
             result = handle_post_web_fetch(payload)
         assert result == {}
         mock_ingest.assert_not_called()
@@ -961,7 +947,7 @@ class TestHandlePostWebFetch:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
             patch("quarry.daemon_capture.DaemonCaptureSender.send_ingest_url") as ing,
         ):
@@ -975,6 +961,37 @@ class TestHandlePostWebFetch:
         # userinfo/query must be redacted from the stored document name.
         assert "token=secret" not in req.document_name
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://u:SECRET@example.com/page?token=SECRET",
+            "http://example.com:99999/page",
+            "http://example.com/a b?token=SECRET",
+        ],
+        ids=["userinfo", "port", "space"],
+    )
+    def test_an_unstorable_url_is_skipped_quietly(
+        self, url: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No daemon call, no log line, no exception: nothing to capture."""
+        payload: dict[str, object] = {
+            "tool_input": {"url": url},
+            "tool_response": json.dumps({"result": "<html>Page</html>"}),
+        }
+        with (
+            caplog.at_level(logging.DEBUG),
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_ingest_url") as ing,
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        cap.assert_not_called()
+        ing.assert_not_called()
+        # Only the hook's own trace lines; nothing else logs, and none names the URL.
+        assert {r.name for r in caplog.records} <= {"quarry.hooks"}
+        assert "SECRET" not in caplog.text
+
     def test_falls_back_to_ingest_url_without_content(self) -> None:
         """No usable content -> the daemon re-fetches via the SSRF-checked route."""
         payload: dict[str, object] = {
@@ -985,7 +1002,7 @@ class TestHandlePostWebFetch:
             patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as ing,
         ):
             result = handle_post_web_fetch(payload)
@@ -1010,11 +1027,11 @@ class TestHandlePostWebFetch:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as ing,
         ):
             handle_post_web_fetch(content_payload)
@@ -1123,7 +1140,7 @@ class TestHandlePostWebFetch:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
             caplog.at_level(logging.INFO, logger="quarry.hooks"),
         ):
@@ -1151,7 +1168,7 @@ class TestHandlePostWebFetch:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
             caplog.at_level(logging.INFO, logger="quarry.hooks"),
         ):
@@ -1183,9 +1200,28 @@ class TestWebFetchLoopCloser:
         assert isinstance(output, dict)
         assert output["hookEventName"] == "PostToolUse"
         context = str(output["additionalContext"])
-        assert "https://example.com/docs/guide" in context
-        assert "'guide'" in context
-        assert "https://example.com/docs/guide" in context.split("Indexed as ")[1]
+        assert "https://example.com/…(segments=2)" in context
+        assert "search its content with find" in context
+        assert "guide" not in context
+        assert "Indexed as" not in context
+
+    def test_a_legacy_spelling_is_said_to_be_older_and_never_named(self) -> None:
+        from quarry.api import CapturesLookupResponse
+
+        client = MagicMock()
+        client.captures_lookup.return_value = CapturesLookupResponse(
+            matched=True, document_name="https://example.com/p", legacy=True
+        )
+        raw = "https://example.com/p?token=SECRETQ"
+        with patch("quarry.client.TargetResolver.connect", return_value=client):
+            result = handle_post_web_fetch({"tool_input": {"url": raw}})
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        context = str(output["additionalContext"])
+        assert "SECRETQ" not in context
+        assert "token" not in context
+        assert "older spelling" in context
+        assert "quarry find" in context
 
     def test_matched_true_without_document_name_still_nudges(self) -> None:
         from quarry.api import CapturesLookupResponse
@@ -1235,7 +1271,7 @@ class TestWebFetchLoopCloser:
 
         assert result == {}
 
-    def test_matched_context_redacts_query_fragment_and_userinfo(self) -> None:
+    def test_matched_context_redacts_query_and_fragment(self) -> None:
         """The URL echoed into additionalContext must never carry secrets.
 
         additionalContext lands in the session transcript, so a query-string
@@ -1245,7 +1281,7 @@ class TestWebFetchLoopCloser:
 
         client = MagicMock()
         client.captures_lookup.return_value = CapturesLookupResponse(matched=True)
-        raw_url = "https://user:pass@example.com/reset?api_key=secret123#frag"
+        raw_url = "https://example.com/reset?api_key=secret123#frag"
         payload: dict[str, object] = {"tool_input": {"url": raw_url}}
         with patch("quarry.client.TargetResolver.connect", return_value=client):
             result = handle_post_web_fetch(payload)
@@ -1254,24 +1290,28 @@ class TestWebFetchLoopCloser:
         assert isinstance(output, dict)
         context = str(output["additionalContext"])
         assert "secret123" not in context
-        assert "user:pass" not in context
-        assert "?" not in context
+        assert "api_key" not in context
         assert "#" not in context
         assert "@" not in context
-        assert "https://example.com/reset" in context
+        # Only the log form is shown: no path, no query, not even its digest.
+        assert "https://example.com/…(segments=1)" in context
+        assert "?q" not in context
 
-    def test_suggested_query_falls_back_to_host_for_bare_path(self) -> None:
+    def test_the_nudge_never_carries_a_path_token(self) -> None:
         from quarry.api import CapturesLookupResponse
 
         client = MagicMock()
         client.captures_lookup.return_value = CapturesLookupResponse(matched=True)
-        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/"}}
+        url = "https://example.com/reset/7Qp4mT9v2Lk6rX8s"
+        payload: dict[str, object] = {"tool_input": {"url": url}}
         with patch("quarry.client.TargetResolver.connect", return_value=client):
             result = handle_post_web_fetch(payload)
 
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
-        assert "'example.com'" in str(output["additionalContext"])
+        context = str(output["additionalContext"])
+        assert "7Qp4mT9v2Lk6rX8s" not in context
+        assert "reset" not in context
 
 
 class TestHookImportsNoEngine:
@@ -1305,7 +1345,7 @@ class TestHookImportsNoEngine:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as pre_cap,
         ):
             handle_pre_compact(
@@ -1316,11 +1356,11 @@ class TestHookImportsNoEngine:
         with (
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as web_cap,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_post_web_fetch(
@@ -1434,7 +1474,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             result = handle_pre_compact(
@@ -1464,7 +1504,7 @@ class TestHandlePreCompact:
             patch("quarry.capture.CaptureWriter.write"),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -1508,12 +1548,12 @@ class TestHandlePreCompact:
                 "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
             ),
             patch(
-                "quarry.hooks._resolve_settings",
+                "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=_mock_settings(),
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_pre_compact(
@@ -1548,12 +1588,12 @@ class TestHandlePreCompact:
                 "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
             ),
             patch(
-                "quarry.hooks._resolve_settings",
+                "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=_mock_settings(),
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_pre_compact(
@@ -1584,7 +1624,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -1615,12 +1655,12 @@ class TestHandlePreCompact:
                 "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
             ),
             patch(
-                "quarry.hooks._resolve_settings",
+                "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=_mock_settings(),
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_pre_compact(
@@ -1652,12 +1692,12 @@ class TestHandlePreCompact:
                 "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
             ),
             patch(
-                "quarry.hooks._resolve_settings",
+                "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=_mock_settings(),
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             handle_pre_compact(
@@ -1681,7 +1721,7 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             result = handle_pre_compact(
@@ -1708,11 +1748,12 @@ class TestHandlePreCompact:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=False,
+                return_value=SendOutcome.unreachable("down"),
             ),
         ):
             result = handle_pre_compact(
                 {
+                    "cwd": str(tmp_path),
                     "transcript_path": str(transcript),
                     "session_id": "abc12345-full-id",
                 }
@@ -1732,12 +1773,12 @@ class TestHandlePreCompact:
                 "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
             ),
             patch(
-                "quarry.hooks._resolve_settings",
+                "quarry.hooks._SessionStartContext._resolve_settings",
                 return_value=_mock_settings(),
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ),
         ):
             result = handle_pre_compact(
@@ -1752,36 +1793,62 @@ class TestHandlePreCompact:
         assert "background" in msg
 
 
-class TestHookCLI:
-    """The CLI dispatcher reads stdin JSON, calls the handler, writes stdout."""
+class TestHookEntryDispatch:
+    """``quarry-hook <event>`` reads stdin JSON, calls the handler, writes stdout.
 
-    def test_session_start_no_cwd_returns_empty_json(self) -> None:
-        result = runner.invoke(app, ["hooks", "session-start"], input="")
-        assert result.exit_code == 0
-        assert json.loads(result.stdout) == {}
+    The hidden ``quarry hooks`` typer sub-app is gone: ``quarry._hook_entry``
+    is the one dispatcher, and it must stay fail-open (exit 0, ``{}``) on
+    every malformed input so Claude Code is never blocked.
+    """
 
-    def test_post_web_fetch_accepts_json_stdin(self) -> None:
+    @staticmethod
+    def _run(
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        event: str,
+        stdin: str,
+    ) -> str:
+        from quarry._hook_entry import main
+
+        monkeypatch.setattr(sys, "argv", ["quarry-hook", event])
+        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+        main()
+        return capsys.readouterr().out
+
+    def test_session_start_no_cwd_returns_empty_json(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = self._run(monkeypatch, capsys, "session-start", "")
+        assert json.loads(out) == {}
+
+    def test_post_web_fetch_accepts_json_stdin(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         payload = json.dumps({"tool_input": {"url": "https://example.com"}})
-        result = runner.invoke(app, ["hooks", "post-web-fetch"], input=payload)
-        assert result.exit_code == 0
-        assert json.loads(result.stdout) == {}
+        out = self._run(monkeypatch, capsys, "post-web-fetch", payload)
+        assert json.loads(out) == {}
 
-    def test_pre_compact_accepts_empty_stdin(self) -> None:
-        result = runner.invoke(app, ["hooks", "pre-compact"], input="")
-        assert result.exit_code == 0
-        assert json.loads(result.stdout) == {}
+    def test_pre_compact_accepts_empty_stdin(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = self._run(monkeypatch, capsys, "pre-compact", "")
+        assert json.loads(out) == {}
 
-    def test_hooks_help(self) -> None:
+    def test_invalid_json_is_fail_open(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = self._run(monkeypatch, capsys, "session-start", "not json{{{")
+        assert json.loads(out) == {}
+
+    def test_unknown_event_exits_with_usage(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit, match="Unknown hook event: nope"):
+            self._run(monkeypatch, capsys, "nope", "")
+
+    def test_cli_no_longer_carries_a_hooks_sub_app(self) -> None:
         result = runner.invoke(app, ["hooks", "--help"])
-        assert result.exit_code == 0
-        assert "session-start" in result.output
-        assert "post-web-fetch" in result.output
-        assert "pre-compact" in result.output
-
-    def test_invalid_json_is_fail_open(self) -> None:
-        result = runner.invoke(app, ["hooks", "session-start"], input="not json{{{")
-        assert result.exit_code == 0
-        assert json.loads(result.stdout) == {}
+        assert result.exit_code != 0
 
 
 # ---------------------------------------------------------------------------
@@ -1947,8 +2014,14 @@ class TestT15SessionStartChildUsesParentCollection:
         conn.close()
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value="launched"),
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
         ):
             result = handle_session_start({"cwd": str(child)})
 
@@ -1960,7 +2033,7 @@ class TestT15SessionStartChildUsesParentCollection:
         # Path A active flow, not Path C drift-surfacing: the marker lives at
         # the parent root, not the child cwd, and must still be honored.
         assert ctx.startswith("Quarry semantic search is active for this project.")
-        assert 'Collection: "proj"' in ctx
+        assert "Collection: 'proj'" in ctx
 
         # Verify no new registration was created.
         conn = SyncRegistry(settings.registry_path)
@@ -1987,8 +2060,14 @@ class TestT16SessionStartAutoRegisters(_ReachableDaemonEmptyCatalog):
         conn.close()
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value="launched"),
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -2031,8 +2110,14 @@ class TestT16bSessionStartParentOfChildrenSkipsAutoRegister:
         conn.close()
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value="launched"),
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
             caplog.at_level(logging.WARNING, logger="quarry.hooks"),
         ):
             result = handle_session_start({"cwd": str(parent)})
@@ -2091,8 +2176,14 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         conn.close()
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value="launched") as sync,
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ) as sync,
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -2117,9 +2208,16 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         settings = self._settings(tmp_path)
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background") as sync,
-            patch("quarry.hooks._daemon_chunk_collections") as daemon,
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
+            patch(
+                "quarry.hooks._SessionStartContext._daemon_chunk_collections"
+            ) as daemon,
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -2127,7 +2225,7 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
         assert "not enabled" in ctx
-        assert f"quarry enable {project}" in ctx
+        assert f"quarry enable {shlex.quote(str(project))}" in ctx
         assert "quarry deregister" not in ctx
 
         conn = SyncRegistry(settings.registry_path)
@@ -2148,8 +2246,13 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         conn.close()
 
         with (
-            patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background") as sync,
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
             caplog.at_level(logging.WARNING, logger="quarry.hooks"),
         ):
             result = handle_session_start({"cwd": str(project)})
@@ -2157,8 +2260,8 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert f"quarry enable {project}" in ctx
-        assert "quarry deregister drifted" in ctx
+        assert f"quarry enable {shlex.quote(str(project))}" in ctx
+        assert "quarry deregister --keep-data -- drifted" in ctx
 
         conn = SyncRegistry(settings.registry_path)
         regs = conn.list_registrations()
@@ -2208,18 +2311,18 @@ class TestAsDir:
     """A payload cwd is honored only when it names an absolute path."""
 
     def test_absolute_path_is_returned(self) -> None:
-        assert _as_dir("/projects/myapp") == "/projects/myapp"
+        assert HookPayload.as_dir("/projects/myapp") == "/projects/myapp"
 
     def test_relative_path_is_unregistered(self) -> None:
-        assert _as_dir("src") == ""
-        assert _as_dir("..") == ""
+        assert HookPayload.as_dir("src") == ""
+        assert HookPayload.as_dir("..") == ""
 
     def test_non_string_is_unregistered(self) -> None:
-        assert _as_dir(None) == ""
-        assert _as_dir(123) == ""
+        assert HookPayload.as_dir(None) == ""
+        assert HookPayload.as_dir(123) == ""
 
     def test_blank_string_is_unregistered(self) -> None:
-        assert _as_dir("") == ""
+        assert HookPayload.as_dir("") == ""
 
 
 class TestCwdHardeningSessionStart:
@@ -2232,8 +2335,10 @@ class TestCwdHardeningSessionStart:
 
     def test_relative_cwd_does_not_register(self, tmp_path: Path) -> None:
         with (
-            patch("quarry.hooks._resolve_settings") as settings,
-            patch("quarry.hooks._sync_in_background") as sync,
+            patch("quarry.hooks._SessionStartContext._resolve_settings") as settings,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
         ):
             result = handle_session_start({"cwd": "src"})
         assert result == {}
@@ -2242,8 +2347,10 @@ class TestCwdHardeningSessionStart:
 
     def test_non_string_cwd_does_not_register(self, tmp_path: Path) -> None:
         with (
-            patch("quarry.hooks._resolve_settings") as settings,
-            patch("quarry.hooks._sync_in_background") as sync,
+            patch("quarry.hooks._SessionStartContext._resolve_settings") as settings,
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync"
+            ) as sync,
         ):
             result = handle_session_start({"cwd": 123})
         assert result == {}
@@ -2261,7 +2368,8 @@ class TestCwdHardeningPostWebFetch:
             "tool_response": json.dumps({"result": "<p>Some docs</p>"}),
         }
         with patch(
-            "quarry.daemon_capture.DaemonCaptureSender.send_capture", return_value=True
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
         ) as cap:
             handle_post_web_fetch(payload)
         # cwd is blanked, so the daemon files into default-captures, not a
@@ -2275,7 +2383,8 @@ class TestCwdHardeningPostWebFetch:
             "tool_response": json.dumps({"result": "<p>Some docs</p>"}),
         }
         with patch(
-            "quarry.daemon_capture.DaemonCaptureSender.send_capture", return_value=True
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=SendOutcome(sent=True),
         ) as cap:
             handle_post_web_fetch(payload)
         assert cap.call_args[0][0].cwd == ""
@@ -2294,7 +2403,7 @@ class TestCwdHardeningPreCompact:
             patch("quarry.ethos_handle.EthosConfig.agent_handle_at") as ethos,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -2321,7 +2430,7 @@ class TestCwdHardeningPreCompact:
             patch("quarry.ethos_handle.EthosConfig.agent_handle_at") as ethos,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -2334,3 +2443,32 @@ class TestCwdHardeningPreCompact:
         write_local.assert_not_called()
         ethos.assert_not_called()
         assert cap.call_args[0][0].cwd == ""
+
+
+class TestSessionCoverageFailure:
+    """A coverage lookup that fails is logged by class and falls back to None."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            QuarryConnectionError("refused https://u:SECRET@h:1/", "http://h:1"),
+            HttpError("unauthorized https://u:SECRET@h/", 401, ""),
+            ClientConfigError("bad QUARRY_URL https://u:SECRET@h/"),
+        ],
+        ids=["connection", "http", "config"],
+    )
+    def test_the_failure_is_logged_with_its_class_and_none_is_returned(
+        self, error: QuarryError, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = MagicMock()
+        client.coverage.side_effect = error
+        with (
+            patch("quarry.client.TargetResolver.connect", return_value=client),
+            caplog.at_level(logging.WARNING, logger="quarry.hooks"),
+        ):
+            counts = ActiveSessionContext._session_coverage("repo")
+        assert counts is None
+        [record] = caplog.records
+        assert record.levelno == logging.WARNING
+        assert type(error).__name__ in record.getMessage()
+        assert "SECRET" not in caplog.text

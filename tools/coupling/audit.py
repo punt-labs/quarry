@@ -138,8 +138,10 @@ class CouplingAudit:
             msg = f"unreadable coupling audit log {self._path}: {exc}"
             raise CouplingAuditError(msg) from exc
         lines = [
-            f"\n{'Timestamp':<22} {'Commit':<10} {'Scored':>7} "
-            f"{'Improved':>9} {'Regressed':>10} {'Verdict':>12}",
+            (
+                f"\n{'Timestamp':<22} {'Commit':<10} {'Scored':>7} "
+                f"{'Improved':>9} {'Regressed':>10} {'Verdict':>12}"
+            ),
             "-" * 74,
         ]
         for raw in text.splitlines():

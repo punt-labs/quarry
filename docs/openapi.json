@@ -1,8 +1,27 @@
 {
   "components": {
     "schemas": {
+      "AgentRecallCount": {
+        "description": "One agent handle's query volume.",
+        "properties": {
+          "agent_handle": {
+            "title": "Agent Handle",
+            "type": "string"
+          },
+          "query_count": {
+            "title": "Query Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_handle",
+          "query_count"
+        ],
+        "title": "AgentRecallCount",
+        "type": "object"
+      },
       "CapturesLookupResponse": {
-        "description": "Whether a URL is already indexed under a project's captures collection.\n\n``document_name`` names the stored capture when ``matched`` is true; it is\nabsent (``None``) on a miss \u2014 there is nothing to name, not a lookup\nfailure.",
+        "description": "Whether a URL is already indexed under a project's captures collection.\n\n``document_name`` is the URL's canonical name when ``matched`` (``None`` on a\nmiss, not a failure).  ``legacy``: stored under an older spelling, never returned.",
         "properties": {
           "document_name": {
             "anyOf": [
@@ -14,6 +33,11 @@
               }
             ],
             "title": "Document Name"
+          },
+          "legacy": {
+            "default": false,
+            "title": "Legacy",
+            "type": "boolean"
           },
           "matched": {
             "title": "Matched",
@@ -42,6 +66,25 @@
           "results"
         ],
         "title": "CapturesPushResponse",
+        "type": "object"
+      },
+      "CollectionHitCount": {
+        "description": "One collection's share of recorded hits.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "hit_count": {
+            "title": "Hit Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection",
+          "hit_count"
+        ],
+        "title": "CollectionHitCount",
         "type": "object"
       },
       "CollectionInfo": {
@@ -156,6 +199,25 @@
         "title": "DatabaseList",
         "type": "object"
       },
+      "DecayBandCount": {
+        "description": "One recency band's share of recorded hits, by chunk ingestion age.",
+        "properties": {
+          "band": {
+            "title": "Band",
+            "type": "string"
+          },
+          "hit_count": {
+            "title": "Hit Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "band",
+          "hit_count"
+        ],
+        "title": "DecayBandCount",
+        "type": "object"
+      },
       "DeregisterAccepted": {
         "description": "The 202 body for a deregister \u2014 carries the removed-file count.\n\nDistinct from the plain ``TaskAccepted`` because deregister reports\n``removed`` synchronously (the registry rows are gone before the chunk\npurge task runs).",
         "properties": {
@@ -247,6 +309,25 @@
         "title": "DocumentList",
         "type": "object"
       },
+      "EmptyQueryCount": {
+        "description": "One scrubbed query text that returned zero hits, and how often.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "query_scrubbed": {
+            "title": "Query Scrubbed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query_scrubbed",
+          "count"
+        ],
+        "title": "EmptyQueryCount",
+        "type": "object"
+      },
       "ErrorBody": {
         "additionalProperties": true,
         "description": "The wire error shape: ``{\"error\": \"...\"}`` plus any endpoint extras.\n\n``extra=\"allow\"`` preserves the richer error payloads some routes emit \u2014\ne.g. the sync-conflict 409 adds ``status`` and ``task_id`` \u2014 so the\nenvelope stays a faithful superset of every current error response.",
@@ -325,6 +406,82 @@
           "quarry_version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "InsightsResponse": {
+        "description": "The aggregate recall-telemetry snapshot behind ``quarry insights``.",
+        "properties": {
+          "empty_result_rate": {
+            "title": "Empty Result Rate",
+            "type": "number"
+          },
+          "hit_decay_bands": {
+            "items": {
+              "$ref": "#/components/schemas/DecayBandCount"
+            },
+            "title": "Hit Decay Bands",
+            "type": "array"
+          },
+          "knowledge_queries": {
+            "title": "Knowledge Queries",
+            "type": "integer"
+          },
+          "memory_queries": {
+            "title": "Memory Queries",
+            "type": "integer"
+          },
+          "p50_latency_ms": {
+            "title": "P50 Latency Ms",
+            "type": "number"
+          },
+          "p95_latency_ms": {
+            "title": "P95 Latency Ms",
+            "type": "number"
+          },
+          "per_agent_recall": {
+            "items": {
+              "$ref": "#/components/schemas/AgentRecallCount"
+            },
+            "title": "Per Agent Recall",
+            "type": "array"
+          },
+          "per_collection_hits": {
+            "items": {
+              "$ref": "#/components/schemas/CollectionHitCount"
+            },
+            "title": "Per Collection Hits",
+            "type": "array"
+          },
+          "telemetry_enabled": {
+            "title": "Telemetry Enabled",
+            "type": "boolean"
+          },
+          "top_empty_queries": {
+            "items": {
+              "$ref": "#/components/schemas/EmptyQueryCount"
+            },
+            "title": "Top Empty Queries",
+            "type": "array"
+          },
+          "total_queries": {
+            "title": "Total Queries",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "telemetry_enabled",
+          "total_queries",
+          "empty_result_rate",
+          "p50_latency_ms",
+          "p95_latency_ms",
+          "top_empty_queries",
+          "per_collection_hits",
+          "per_agent_recall",
+          "memory_queries",
+          "knowledge_queries",
+          "hit_decay_bands"
+        ],
+        "title": "InsightsResponse",
         "type": "object"
       },
       "RegistrationInfo": {
@@ -758,6 +915,11 @@
                     "title": "Agent Handle",
                     "type": "string"
                   },
+                  "captured_at": {
+                    "default": "",
+                    "title": "Captured At",
+                    "type": "string"
+                  },
                   "content": {
                     "title": "Content",
                     "type": "string"
@@ -830,7 +992,7 @@
     },
     "/v1/captures/lookup": {
       "post": {
-        "description": "Answer whether a URL is already indexed under the caller's captures.\n\nBody: {url, cwd} \u2014 POST, not a ``?url=`` query string: a query-string\ntoken (an API key, a session id) rides the URL itself and can leak into\nproxy/WAF/browser logs even on a loopback hop (CWE-598).  Shares\n``POST /capture``'s ``cwd``-derived collection contract\n(:meth:`_capture_job`), so this thin client never opens the sync\nregistry itself or spells the ``<repo>-captures`` naming rule.  The\nstored ``document_name`` for a WebFetch capture is the URL with\nuserinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``), so this\nrecomputes the identical normalization before comparing: two URLs\ndiffering only by query string or fragment collapse to the SAME\ndocument and match; a trailing-slash difference does NOT normalize and\nwill not match.",
+        "description": "Answer whether a URL is already indexed under the caller's captures.\n\nBody: {url, cwd} \u2014 POST, not a ``?url=`` query string: a query-string\ntoken (an API key, a session id) rides the URL itself and can leak into\nproxy/WAF/browser logs even on a loopback hop (CWE-598).  Shares\n``POST /capture``'s ``cwd``-derived collection contract\n(:meth:`_capture_job`), so this thin client never opens the sync\nregistry itself or spells the ``<repo>-captures`` naming rule.  The\nstored ``document_name`` for a WebFetch capture is\n``HttpUrl.document_name`` (``WebFetchName.maybe``), so this recomputes the\nidentical normalization before comparing: the fragment and ``;params`` are\ndropped, the query becomes a digest of its sorted parameters, the host is\nlower-cased with its trailing dot and default port removed, and an empty\npath becomes ``/``, so URLs that differ only in those parts collapse to the\nSAME document and match, while pages that differ by query stay apart.  A\ndocument an older build stored under a former spelling of the URL matches\ntoo; ``legacy`` says so, and the older name is never returned.  A\ntrailing-slash difference on a non-empty path does NOT normalize and\nwill not match, and a URL that cannot be stored matches nothing.",
         "operationId": "lookup_v1_captures_lookup_post",
         "requestBody": {
           "content": {
@@ -1084,6 +1246,25 @@
         "summary": "Ingest"
       }
     },
+    "/v1/insights": {
+      "get": {
+        "description": "Return the recall-telemetry snapshot behind ``quarry insights``.\n\nA disabled toggle short-circuits before ``get_query_log`` -- opening\n(and so creating) the telemetry database file for a store the operator\nturned off would surprise a \"disabled means untouched\" reading of the\nsetting.",
+        "operationId": "insights_v1_insights_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsightsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Insights"
+      }
+    },
     "/v1/learn": {
       "post": {
         "description": "Save a distilled lesson as a background task.\n\nremember = a specific durable fact, ingest = a URL, learn = a\ndistilled lesson that gets retrieval preference. Body: {lesson,\ntopic?, name?, cwd?}. Always writes memory_type=\"lesson\" with no\nagent_handle -- a lesson is project-scoped, deliberately-curated\nknowledge, never a personal, decaying memory (fusion.py's decay gate\nexempts empty-handle rows already). Returns 202 with a task_id.",
@@ -1264,7 +1445,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for indexing inline text content.\n\n``collection`` is the empty-string sentinel: the daemon decides the effective\ncollection at ``_remember_job``. Explicit values pass through unchanged; an\nempty value with an ``agent_handle`` routes to ``memory-<handle>``, and an\nempty value with no handle falls back to ``default``.",
+                "description": "Body for indexing inline text content.\n\n``collection`` is the empty-string sentinel: the daemon decides the effective\ncollection at ``_remember_job``. Explicit values pass through unchanged; an\nempty value with an ``agent_handle`` routes to ``memory-<handle>``, and an\nempty value with no handle falls back to ``default``.\n\n``overwrite`` true replaces a document already stored under ``name`` in that\ncollection; false is create-if-absent \u2014 an existing document is left\nuntouched and the task completes with ``skipped: exists``. The daemon decides\non the collection's serialized writer, so two clients that both saw the name\nabsent cannot both land.",
                 "properties": {
                   "agent_handle": {
                     "default": "",

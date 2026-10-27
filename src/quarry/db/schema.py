@@ -20,6 +20,7 @@ _MIGRATION_COLUMNS: dict[str, str] = {
     "agent_handle": "''",
     "memory_type": "''",
     "summary": "''",
+    "source_version": "''",
 }
 
 
@@ -55,6 +56,7 @@ class SchemaManager:
                 pa.field("agent_handle", pa.utf8()),
                 pa.field("memory_type", pa.utf8()),
                 pa.field("summary", pa.utf8()),
+                pa.field("source_version", pa.utf8()),
             ]
         )
 

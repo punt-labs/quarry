@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -9,6 +10,7 @@ import pytest
 
 from quarry.config import Settings
 from quarry.db import Database
+from quarry.http_url import HttpUrl
 from quarry.models import Chunk, PageAnalysis, PageContent, PageType
 
 
@@ -39,7 +41,7 @@ def _mock_ocr_backend(
     if ocr_document_return is not None:
         backend.ocr_document.return_value = ocr_document_return
     monkeypatch.setattr(
-        "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+        "quarry.ingestion.format_strategies.get_ocr_backend", lambda _settings: backend
     )
     return backend
 
@@ -56,6 +58,30 @@ def _mock_embedding_backend(
         "quarry.ingestion.streaming.get_embedding_backend", lambda _settings: backend
     )
     return backend
+
+
+def _capture_build_chunks(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """Patch ``DocumentStreamer.build_chunks`` to record each call's args.
+
+    ``build_chunks`` is the funnel's boundary collaborator — not
+    ``_chunk_embed_store`` itself — so intercepting it observes exactly what
+    reached chunking (post-scrub, post-extraction pages; the redacted summary)
+    without patching a DES-036 internal. Returns zero chunks per call, which
+    keeps the funnel on its fail-closed "no chunks" branch.
+    """
+    from quarry.ingestion.page_chunker import ChunkLabels
+    from quarry.ingestion.streaming import DocumentStreamer
+
+    calls: list[dict[str, object]] = []
+
+    def _capture(
+        _self: DocumentStreamer, pages: list[PageContent], labels: ChunkLabels
+    ) -> list[Chunk]:
+        calls.append({"pages": pages, **asdict(labels)})
+        return []
+
+    monkeypatch.setattr(DocumentStreamer, "build_chunks", _capture)
+    return calls
 
 
 class TestIngestDocument:
@@ -108,8 +134,8 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -165,8 +191,8 @@ class TestIngestDocument:
         )
         _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -201,8 +227,8 @@ class TestIngestDocument:
         )
         _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -251,8 +277,8 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: text_pages,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
         monkeypatch.setattr(
@@ -303,8 +329,8 @@ class TestIngestDocument:
         )
         # Pages extract, but chunking yields nothing.
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         deleted: list[str] = []
@@ -340,8 +366,8 @@ class TestIngestDocument:
             lambda _path, _pages, _total, **_kw: [_make_page_content(1, PageType.TEXT)],
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -375,8 +401,8 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -417,8 +443,8 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -436,6 +462,27 @@ class TestIngestDocument:
         sections = result.get("sections")
         assert sections is not None
         assert sections == 1
+
+    def test_a_spreadsheet_row_over_the_page_budget_is_chunked_not_refused(
+        self, tmp_path: Path
+    ):
+        """One row wider than a page is a logical section, split like any other."""
+        from quarry.db.row_budget import RowBudget
+        from quarry.ingestion.pipeline import plan_file_chunks
+
+        csv_file = tmp_path / "wide.csv"
+        header = ",".join(f"c{n}" for n in range(12))
+        cell = "word " * 20_000  # under the csv module's 128 KiB field limit
+        csv_file.write_text(header + "\n" + ",".join([cell] * 12) + "\n")
+        assert csv_file.stat().st_size > RowBudget().max_page_bytes
+
+        chunks, _ = plan_file_chunks(csv_file, _settings(), collection="c")
+
+        assert chunks
+        assert {c.page_type for c in chunks} == {"spreadsheet"}
+        for chunk in chunks:
+            RowBudget().require_chunk(chunk.text)
+            RowBudget().require_page(chunk.page_raw_text)
 
     def test_dispatches_html_file(self, monkeypatch, tmp_path: Path):
         html_file = tmp_path / "article.html"
@@ -459,8 +506,8 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -507,8 +554,8 @@ class TestIngestText:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
@@ -516,10 +563,16 @@ class TestIngestText:
             lambda _db, _chunks, _vectors: 1,
         )
 
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
         db = Database(MagicMock())
-        result = ingest_content("Hello world", "clip.txt", db, _settings())
+        result = ingest_content(
+            InlineIngest("Hello world"),
+            "clip.txt",
+            Progress(None),
+            IngestContext(db, _settings()),
+        )
 
         assert result["document_name"] == "clip.txt"
         assert result["chunks"] == 1
@@ -545,8 +598,8 @@ class TestIngestText:
             )
         ]
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
         monkeypatch.setattr(
@@ -564,18 +617,24 @@ class TestIngestText:
             "quarry.db.chunk_store.ChunkStore.delete_document", _mock_delete
         )
 
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
         db = Database(MagicMock())
-        ingest_content("text", "doc.txt", db, _settings(), overwrite=True)
+        ingest_content(
+            InlineIngest("text"),
+            "doc.txt",
+            Progress(None),
+            IngestContext(db, _settings(), overwrite=True),
+        )
 
         assert delete_called == ["doc.txt"]
 
     def test_overwrite_keeps_prior_when_chunks_empty(self, monkeypatch) -> None:
         """Inline content that chunks to zero must not delete the prior document."""
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         deleted: list[str] = []
@@ -584,24 +643,36 @@ class TestIngestText:
             lambda _db, name, **_kw: deleted.append(name),
         )
 
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
         db = Database(MagicMock())
-        result = ingest_content("text", "doc.txt", db, _settings(), overwrite=True)
+        result = ingest_content(
+            InlineIngest("text"),
+            "doc.txt",
+            Progress(None),
+            IngestContext(db, _settings(), overwrite=True),
+        )
 
         assert deleted == []  # prior document preserved on empty chunk set
         assert result["chunks"] == 0
 
     def test_empty_text_returns_zero_chunks(self, monkeypatch):
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
         db = Database(MagicMock())
-        result = ingest_content("", "empty.txt", db, _settings())
+        result = ingest_content(
+            InlineIngest(""),
+            "empty.txt",
+            Progress(None),
+            IngestContext(db, _settings()),
+        )
 
         assert result["chunks"] == 0
 
@@ -627,42 +698,32 @@ class TestIngestUrlScrubbing:
             lambda _self, _html, _name, _url: pages,
         )
 
-    def _capture_stored_pages(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> list[PageContent]:
-        from quarry.ingestion import pipeline
-
-        captured: list[PageContent] = []
-
-        def _capture(
-            pages_arg: list[PageContent], *_a: object, **_k: object
-        ) -> dict[str, object]:
-            captured.extend(pages_arg)
-            return {"document_name": "u", "collection": "web-captures", "chunks": 0}
-
-        monkeypatch.setattr(pipeline, "_chunk_embed_store", _capture)
-        return captured
-
     def test_scrubber_redacts_page_text_before_store(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
         from quarry.scrub import scrub_and_log
 
         self._patch_fetch_and_extract(monkeypatch)
-        captured = self._capture_stored_pages(monkeypatch)
+        calls = _capture_build_chunks(monkeypatch)
 
         ingest_url(
-            "https://example.com/p",
-            Database(MagicMock()),
-            _settings(),
-            collection="web-captures",
-            content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
+            UrlIngest(
+                HttpUrl("https://example.com/p"),
+                content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
+            ),
+            Progress(None),
+            IngestContext(
+                Database(MagicMock()), _settings(), collection="web-captures"
+            ),
         )
 
-        assert captured
-        assert "jdoe@example.com" not in captured[0].text
-        assert "[REDACTED:email]" in captured[0].text
+        assert calls
+        pages = calls[0]["pages"]
+        assert isinstance(pages, list)
+        assert "jdoe@example.com" not in pages[0].text
+        assert "[REDACTED:email]" in pages[0].text
 
     def test_scrubber_redacts_document_name_and_summary(
         self, monkeypatch: pytest.MonkeyPatch
@@ -673,41 +734,39 @@ class TestIngestUrlScrubbing:
         summary are redacted when a scrubber is present, so the capture callers
         forward them raw and the pipeline redacts once.
         """
-        from quarry.ingestion import pipeline
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
         from quarry.scrub import scrub_and_log
 
         self._patch_fetch_and_extract(monkeypatch)
-        seen: dict[str, object] = {}
+        calls = _capture_build_chunks(monkeypatch)
 
-        def _capture(
-            _pages: object, document_name: str, *_a: object, **kw: object
-        ) -> dict[str, object]:
-            seen["name"] = document_name
-            seen["summary"] = kw["summary"]
-            return {"document_name": document_name, "collection": "c", "chunks": 0}
-
-        monkeypatch.setattr(pipeline, "_chunk_embed_store", _capture)
-        ingest_url(
-            "https://example.com/p",
-            Database(MagicMock()),
-            _settings(),
-            collection="c",
-            document_name="note jdoe@example.com",
-            content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
-            summary="contact jdoe@example.com",
+        result = ingest_url(
+            UrlIngest(
+                HttpUrl("https://example.com/p"),
+                document_name="note jdoe@example.com",
+                content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
+            ),
+            Progress(None),
+            IngestContext(
+                Database(MagicMock()),
+                _settings(),
+                collection="c",
+                summary="contact jdoe@example.com",
+            ),
         )
 
-        assert "jdoe@example.com" not in str(seen["name"])
-        assert "[REDACTED:email]" in str(seen["name"])
-        assert "jdoe@example.com" not in str(seen["summary"])
-        assert "[REDACTED:email]" in str(seen["summary"])
+        assert "jdoe@example.com" not in str(result["document_name"])
+        assert "[REDACTED:email]" in str(result["document_name"])
+        assert "jdoe@example.com" not in str(calls[0]["summary"])
+        assert "[REDACTED:email]" in str(calls[0]["summary"])
 
     def test_empty_extraction_keeps_prior_and_stores_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A re-fetch whose HTML extracts to zero pages must not delete the prior."""
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         monkeypatch.setattr(
             "quarry.ingestion.web_fetch.WebFetcher.fetch",
@@ -722,25 +781,26 @@ class TestIngestUrlScrubbing:
             "quarry.db.chunk_store.ChunkStore.delete_document",
             lambda _self, name, **_k: deleted.append(name),
         )
-        captured = self._capture_stored_pages(monkeypatch)
+        calls = _capture_build_chunks(monkeypatch)
 
         result = ingest_url(
-            "https://example.com/p",
-            Database(MagicMock()),
-            _settings(),
-            overwrite=True,
-            collection="c",
+            UrlIngest(HttpUrl("https://example.com/p")),
+            Progress(None),
+            IngestContext(
+                Database(MagicMock()), _settings(), overwrite=True, collection="c"
+            ),
         )
 
         assert deleted == []  # prior document not deleted on empty extraction
-        assert captured == []  # nothing stored
+        assert calls[0]["pages"] == []  # nothing to chunk
         assert result["chunks"] == 0
 
     def test_scrub_raise_keeps_prior_and_stores_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A scrub that raises aborts before the overwrite-delete on ingest_url."""
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         self._patch_fetch_and_extract(monkeypatch)
         deleted: list[str] = []
@@ -748,41 +808,42 @@ class TestIngestUrlScrubbing:
             "quarry.db.chunk_store.ChunkStore.delete_document",
             lambda _self, name, **_k: deleted.append(name),
         )
-        stored = self._capture_stored_pages(monkeypatch)
+        calls = _capture_build_chunks(monkeypatch)
 
         def _boom(_text: str) -> str:
             raise ValueError("scrub failed")
 
         with pytest.raises(ValueError, match="scrub failed"):
             ingest_url(
-                "https://example.com/p",
-                Database(MagicMock()),
-                _settings(),
-                overwrite=True,
-                collection="c",
-                content_scrubber=_boom,
+                UrlIngest(HttpUrl("https://example.com/p"), content_scrubber=_boom),
+                Progress(None),
+                IngestContext(
+                    Database(MagicMock()), _settings(), overwrite=True, collection="c"
+                ),
             )
 
         assert deleted == []  # prior document preserved
-        assert stored == []  # never reached the store
+        assert calls == []  # never reached chunking
 
     def test_no_scrubber_leaves_text_byte_unchanged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         self._patch_fetch_and_extract(monkeypatch)
-        captured = self._capture_stored_pages(monkeypatch)
+        calls = _capture_build_chunks(monkeypatch)
 
         ingest_url(
-            "https://example.com/p",
-            Database(MagicMock()),
-            _settings(),
-            collection="default",
+            UrlIngest(HttpUrl("https://example.com/p")),
+            Progress(None),
+            IngestContext(Database(MagicMock()), _settings(), collection="default"),
         )
 
-        assert captured
-        assert captured[0].text == self._RAW
+        assert calls
+        pages = calls[0]["pages"]
+        assert isinstance(pages, list)
+        assert pages[0].text == self._RAW
 
 
 class TestIngestContentScrubbing:
@@ -796,57 +857,28 @@ class TestIngestContentScrubbing:
 
     _RAW = "reach me at jdoe@example.com"
 
-    def _capture_stored_pages(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> list[PageContent]:
-        from quarry.ingestion import pipeline
-
-        captured: list[PageContent] = []
-
-        def _capture(
-            pages_arg: list[PageContent], *_a: object, **_k: object
-        ) -> dict[str, object]:
-            captured.extend(pages_arg)
-            return {"document_name": "note", "collection": "memory-x", "chunks": 0}
-
-        monkeypatch.setattr(pipeline, "_chunk_embed_store", _capture)
-        return captured
-
     def test_scrubber_redacts_inline_text_before_store(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
         from quarry.scrub import scrub_and_log
 
-        captured = self._capture_stored_pages(monkeypatch)
+        calls = _capture_build_chunks(monkeypatch)
         ingest_content(
-            self._RAW,
+            InlineIngest(
+                self._RAW, content_scrubber=lambda t: scrub_and_log(t, "remember")
+            ),
             "note",
-            Database(MagicMock()),
-            _settings(),
-            content_scrubber=lambda t: scrub_and_log(t, "remember"),
+            Progress(None),
+            IngestContext(Database(MagicMock()), _settings()),
         )
 
-        assert captured
-        assert "jdoe@example.com" not in captured[0].text
-        assert "[REDACTED:email]" in captured[0].text
-
-    def _capture_stored_metadata(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> dict[str, object]:
-        from quarry.ingestion import pipeline
-
-        seen: dict[str, object] = {}
-
-        def _capture(
-            _pages: object, document_name: str, *_a: object, **kw: object
-        ) -> dict[str, object]:
-            seen["name"] = document_name
-            seen["summary"] = kw["summary"]
-            return {"document_name": document_name, "collection": "c", "chunks": 0}
-
-        monkeypatch.setattr(pipeline, "_chunk_embed_store", _capture)
-        return seen
+        assert calls
+        pages = calls[0]["pages"]
+        assert isinstance(pages, list)
+        assert "jdoe@example.com" not in pages[0].text
+        assert "[REDACTED:email]" in pages[0].text
 
     def test_scrubber_redacts_document_name_and_summary(
         self, monkeypatch: pytest.MonkeyPatch
@@ -858,41 +890,46 @@ class TestIngestContentScrubbing:
         itself — every caller (daemon, stdio MCP, backfill) inherits it and none
         can forget it.
         """
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
         from quarry.scrub import scrub_and_log
 
-        seen = self._capture_stored_metadata(monkeypatch)
-        ingest_content(
-            "body",
+        calls = _capture_build_chunks(monkeypatch)
+        result = ingest_content(
+            InlineIngest(
+                "body", content_scrubber=lambda t: scrub_and_log(t, "remember")
+            ),
             "note jdoe@example.com",
-            Database(MagicMock()),
-            _settings(),
-            content_scrubber=lambda t: scrub_and_log(t, "remember"),
-            summary="contact jdoe@example.com",
+            Progress(None),
+            IngestContext(
+                Database(MagicMock()), _settings(), summary="contact jdoe@example.com"
+            ),
         )
 
-        assert "jdoe@example.com" not in str(seen["name"])
-        assert "[REDACTED:email]" in str(seen["name"])
-        assert "jdoe@example.com" not in str(seen["summary"])
-        assert "[REDACTED:email]" in str(seen["summary"])
+        assert "jdoe@example.com" not in str(result["document_name"])
+        assert "[REDACTED:email]" in str(result["document_name"])
+        assert "jdoe@example.com" not in str(calls[0]["summary"])
+        assert "[REDACTED:email]" in str(calls[0]["summary"])
 
     def test_no_scrubber_keeps_document_name_and_summary(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A plain ingest (no scrubber) stores metadata byte-for-byte."""
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
-        seen = self._capture_stored_metadata(monkeypatch)
-        ingest_content(
-            "body",
+        calls = _capture_build_chunks(monkeypatch)
+        result = ingest_content(
+            InlineIngest("body"),
             "note jdoe@example.com",
-            Database(MagicMock()),
-            _settings(),
-            summary="contact jdoe@example.com",
+            Progress(None),
+            IngestContext(
+                Database(MagicMock()), _settings(), summary="contact jdoe@example.com"
+            ),
         )
 
-        assert seen["name"] == "note jdoe@example.com"
-        assert seen["summary"] == "contact jdoe@example.com"
+        assert result["document_name"] == "note jdoe@example.com"
+        assert calls[0]["summary"] == "contact jdoe@example.com"
 
     def test_failed_scrub_writes_zero_chunks_and_keeps_prior(
         self, monkeypatch: pytest.MonkeyPatch
@@ -901,36 +938,31 @@ class TestIngestContentScrubbing:
 
         The security property (nothing half-redacted is stored) and the
         availability property (the last good document is not traded for nothing)
-        are locked together: neither ``_chunk_embed_store`` nor the overwrite
-        delete may run when the scrubber raises.
+        are locked together: neither the chunker nor the overwrite delete may
+        run when the scrubber raises.
         """
-        from quarry.ingestion import pipeline
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
-        stored: list[int] = []
         deleted: list[str] = []
-        monkeypatch.setattr(
-            pipeline, "_chunk_embed_store", lambda *_a, **_k: stored.append(1)
-        )
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.delete_document",
             lambda _self, name, **_k: deleted.append(name),
         )
+        calls = _capture_build_chunks(monkeypatch)
 
         def _boom(_text: str) -> str:
             raise ValueError("scrub failed")
 
         with pytest.raises(ValueError, match="scrub failed"):
             ingest_content(
-                self._RAW,
+                InlineIngest(self._RAW, content_scrubber=_boom),
                 "note",
-                Database(MagicMock()),
-                _settings(),
-                overwrite=True,
-                content_scrubber=_boom,
+                Progress(None),
+                IngestContext(Database(MagicMock()), _settings(), overwrite=True),
             )
 
-        assert stored == []  # never reached the store — zero chunks written
+        assert calls == []  # never reached the chunker — zero chunks written
         assert deleted == []  # prior scrubbed copy preserved (fail-closed delete)
 
     def test_empty_extraction_keeps_prior_and_stores_nothing(
@@ -942,68 +974,67 @@ class TestIngestContentScrubbing:
         (already-markdown, JS-only, non-HTML) must keep the prior good capture
         and report zero chunks — never delete it and falsely report a fresh one.
         """
-        from quarry.ingestion import pipeline
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
         deleted: list[str] = []
-        seen_pages: list[int] = []
-
-        def _store(
-            pages_arg: list[PageContent], *_a: object, **_k: object
-        ) -> dict[str, object]:
-            seen_pages.append(len(pages_arg))
-            return {
-                "document_name": "note",
-                "collection": "c",
-                "chunks": len(pages_arg),
-            }
-
-        monkeypatch.setattr(pipeline, "_chunk_embed_store", _store)
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.delete_document",
             lambda _self, name, **_k: deleted.append(name),
         )
+        calls = _capture_build_chunks(monkeypatch)
 
         result = ingest_content(
-            "<html><body></body></html>",
+            InlineIngest("<html><body></body></html>", format_hint="html"),
             "note",
-            Database(MagicMock()),
-            _settings(),
-            overwrite=True,
-            format_hint="html",
+            Progress(None),
+            IngestContext(Database(MagicMock()), _settings(), overwrite=True),
         )
 
-        assert seen_pages == [0]  # the extraction really was empty
+        assert calls[0]["pages"] == []  # the extraction really was empty
         assert deleted == []  # prior document NOT deleted on an empty extraction
         assert result["chunks"] == 0  # honest zero, not a bogus fresh capture
 
     def test_no_scrubber_leaves_inline_text_unchanged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
-        captured = self._capture_stored_pages(monkeypatch)
-        ingest_content(self._RAW, "note", Database(MagicMock()), _settings())
+        calls = _capture_build_chunks(monkeypatch)
+        ingest_content(
+            InlineIngest(self._RAW),
+            "note",
+            Progress(None),
+            IngestContext(Database(MagicMock()), _settings()),
+        )
 
-        assert captured
-        assert captured[0].text == self._RAW
+        assert calls
+        pages = calls[0]["pages"]
+        assert isinstance(pages, list)
+        assert pages[0].text == self._RAW
 
     def test_html_hint_extracts_markdown_not_raw_tags(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
-        captured = self._capture_stored_pages(monkeypatch)
+        calls = _capture_build_chunks(monkeypatch)
         ingest_content(
-            "<html><body><h1>Title</h1><p>Body text.</p></body></html>",
+            InlineIngest(
+                "<html><body><h1>Title</h1><p>Body text.</p></body></html>",
+                format_hint="html",
+            ),
             "page",
-            Database(MagicMock()),
-            _settings(),
-            format_hint="html",
+            Progress(None),
+            IngestContext(Database(MagicMock()), _settings()),
         )
 
-        assert captured
-        stored = "\n".join(p.text for p in captured)
+        assert calls
+        pages = calls[0]["pages"]
+        assert isinstance(pages, list)
+        stored = "\n".join(p.text for p in pages)
         assert "Body text." in stored
         assert "<h1>" not in stored
 
@@ -1018,7 +1049,8 @@ class TestSingleDocProgressiveInsert:
 
         from quarry.db.chunk_store import ChunkStore
         from quarry.db.storage import get_db
-        from quarry.ingestion.pipeline import ingest_content
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 
         settings = Settings(
             quarry_root=tmp_path / "data",
@@ -1041,7 +1073,9 @@ class TestSingleDocProgressiveInsert:
         with (
             patch.object(ChunkStore, "insert_records", counting),
         ):
-            result = ingest_content(text, "big", db, settings)
+            result = ingest_content(
+                InlineIngest(text), "big", Progress(None), IngestContext(db, settings)
+            )
 
         total = db.store.count()
         assert result["chunks"] == total

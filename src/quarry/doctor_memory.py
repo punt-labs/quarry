@@ -13,18 +13,10 @@ from functools import partial
 from pathlib import Path
 from typing import Self, final
 
+from quarry.doctor_failure import CheckFailure
 from quarry.ethos_handle import EthosConfig
+from quarry.memory_types import DECAYABLE_MEMORY_TYPES, MemoryType
 from quarry.results import CheckResult
-
-# The four memory_type values RrfFusion decays; the same set names the types
-# the corpus check counts (see quarry.retrieval.fusion._DECAYABLE_TYPES).
-_MEMORY_TYPES: frozenset[str] = frozenset(
-    {"fact", "observation", "opinion", "procedure"}
-)
-# A quarry-learn lesson row always has an empty agent_handle by design (it is
-# project-scoped, not agent-scoped), so it would otherwise be invisible to
-# both the handle and type tallies below -- counted separately here.
-_LESSON_TYPE = "lesson"
 
 
 @final
@@ -58,7 +50,10 @@ class _CorpusTally:
         collection = str(row.get("collection") or "")
         if handle:
             self._add_owned(handle, memory_type)
-        if memory_type == _LESSON_TYPE:
+        # A lesson row always has an empty agent_handle by design (it is
+        # project-scoped, not agent-scoped), so it would otherwise be invisible
+        # to both the handle and type tallies -- counted separately here.
+        if memory_type == MemoryType.LESSON:
             self._lessons += 1
         if collection:
             self._collections[collection] += 1
@@ -66,7 +61,7 @@ class _CorpusTally:
     def _add_owned(self, handle: str, memory_type: str) -> None:
         """Tally an agent-owned row's handle and (if decayable) its type."""
         self._handles[handle] += 1
-        if memory_type in _MEMORY_TYPES:
+        if memory_type in DECAYABLE_MEMORY_TYPES:
             self._types[memory_type] += 1
 
     @property
@@ -107,7 +102,10 @@ class MemoryDiagnostics:
         try:
             summary = MemoryDiagnostics._summarize(db_path)
         except (RuntimeError, OSError, ValueError) as exc:
-            return result(passed=False, message=f"check failed: {exc}")
+            return result(
+                passed=False,
+                message=f"check failed: {db_path.name}: {CheckFailure.detail(exc)}",
+            )
         return result(passed=True, message=summary)
 
     @staticmethod
@@ -130,7 +128,10 @@ class MemoryDiagnostics:
                 db_path, handle
             )
         except (RuntimeError, OSError, ValueError) as exc:
-            return result(passed=False, message=f"check failed: {exc}")
+            return result(
+                passed=False,
+                message=f"check failed: {db_path.name}: {CheckFailure.detail(exc)}",
+            )
         if total_rows == 0:
             return result(passed=True, message=f"identity '{handle}' active")
         if rows_for_handle == 0:
@@ -138,8 +139,9 @@ class MemoryDiagnostics:
                 passed=False,
                 message=(
                     f"identity '{handle}' active in this repo but has zero "
-                    "memory rows; check that ethos config resolves and "
-                    "PreCompact fires"
+                    f"memory rows while other agents have {total_rows}; the "
+                    "leader's next PreCompact, or 'quarry remember "
+                    f"--agent-handle {handle}', populates it"
                 ),
             )
         return result(

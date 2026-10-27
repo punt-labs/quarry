@@ -97,6 +97,11 @@ class InProcessDaemon:
         settings = Settings(
             lancedb_path=data_dir / "lancedb",
             registry_path=data_dir / "registry.db",
+            # Without this, telemetry_path stays at its class-wide default and
+            # every InProcessDaemon in the session -- across every test file --
+            # shares one recall-telemetry connection (DES-056), leaking query
+            # counts between tests that never opted into it.
+            telemetry_path=data_dir / "telemetry.db",
         )
         # With api_key set the routes enforce bearer auth — the TLS smoke uses it
         # to exercise the authenticated wire; None (default) leaves routes open.

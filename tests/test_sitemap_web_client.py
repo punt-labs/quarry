@@ -8,6 +8,7 @@ fetched — the bypass a leaf-only test would hide.
 from __future__ import annotations
 
 import io
+import logging
 import threading
 import urllib.request
 from collections.abc import Generator
@@ -16,15 +17,18 @@ from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 from usp.web_client.abstract_client import WebClientErrorResponse
 
 import quarry.sitemap_web_client as swc
+from quarry.http_url import HttpUrl
+from quarry.ingestion.fetch_refused import FetchRefusedError
 from quarry.ingestion.ssrf_redirect import SsrfGuardedRedirectHandler
 from quarry.sitemap import SitemapDiscovery
 from quarry.sitemap_web_client import GatedSitemapWebClient
+from quarry.url_admission import UrlAdmission
 
 _GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
 _PUBLIC = "93.184.216.34"
@@ -324,7 +328,7 @@ class TestGatedClientGet:
         assert isinstance(resp, WebClientErrorResponse)
         # Readable with no "I/O operation on closed file" -- values were captured
         # before exc.close().
-        assert resp.message() == "HTTP 404"
+        assert resp.message() == "404 Not Found"
         assert resp.retryable() is False
 
     @pytest.mark.parametrize("code", [500, 503, 429])
@@ -380,7 +384,7 @@ class TestUspRecursionGated:
             _resolver({"safe.example": _PUBLIC, "internal.example": "10.0.0.9"}),
         )
 
-        entries = SitemapDiscovery.discover_urls(index)
+        entries = SitemapDiscovery.discover_urls(HttpUrl(index))
 
         locs = [e.loc for e in entries]
         assert "https://safe.example/page1" in locs
@@ -405,7 +409,7 @@ class TestUspRecursionGated:
             _resolver({"safe.example": _PUBLIC, "internal.example": "10.0.0.9"}),
         )
 
-        entries = SitemapDiscovery.discover_pages("https://safe.example/docs")
+        entries = SitemapDiscovery.discover_pages(HttpUrl("https://safe.example/docs"))
 
         locs = [e.loc for e in entries]
         assert evil_sm not in opener.opened  # robots-listed internal never fetched
@@ -427,7 +431,7 @@ class TestUspRecursionGated:
         monkeypatch.setattr(swc, "GUARDED_OPENER", opener)
         monkeypatch.setattr(_GETADDRINFO, _resolver({}))
 
-        entries = SitemapDiscovery.discover_urls(top)
+        entries = SitemapDiscovery.discover_urls(HttpUrl(top))
 
         assert [e.loc for e in entries] == ["https://safe.example/final"]
 
@@ -596,3 +600,551 @@ def test_failing_fetches_do_not_leak_real_fds(
         f"fd leak across 200 failing fetches: {before} -> {after} "
         f"(delta {after - before}); a failed fetch is not releasing its fd"
     )
+
+
+class TestErrorMessagesAreUrlFree:
+    """USP logs the error response message, so it must not quote the URL."""
+
+    _URL = "https://safe.example/s.xml?token=SECRET"
+
+    def test_an_unreachable_host_is_reported_by_class(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from urllib.error import URLError
+
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise URLError(f"refused {self._url}")
+
+            _url = TestErrorMessagesAreUrlFree._URL
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        resp = GatedSitemapWebClient().get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == "fetch failed: cannot reach the host"
+
+    def test_a_transport_failure_is_reported_by_class(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                return _BrokenReadResp(TestErrorMessagesAreUrlFree._URL)
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        resp = GatedSitemapWebClient().get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == "fetch failed: IncompleteRead"
+
+
+class TestFailureClassification:
+    """Only the fetch refusals are answered; any other exception is a bug."""
+
+    _URL = "https://safe.example/sitemap.xml?token=SECRET"
+
+    def _client_with_opener_raising(
+        self, monkeypatch: pytest.MonkeyPatch, failure: BaseException
+    ) -> GatedSitemapWebClient:
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise failure
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        return GatedSitemapWebClient()
+
+    def test_a_value_error_from_the_opener_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client_with_opener_raising(monkeypatch, ValueError("a bug"))
+        with pytest.raises(ValueError, match="a bug"):
+            client.get(self._URL)
+
+    def test_an_os_error_is_an_error_response_and_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = self._client_with_opener_raising(
+            monkeypatch, ConnectionResetError(f"reset {self._URL}")
+        )
+        with caplog.at_level("WARNING"):
+            resp = client.get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == "fetch failed: ConnectionResetError"
+        assert "ConnectionResetError" in caplog.text
+        assert "https://safe.example/…(segments=1)" in caplog.text
+        assert "SECRET" not in caplog.text
+
+    def test_a_policy_rejection_is_an_error_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.url_safety import UrlRejectedError
+
+        client = self._client_with_opener_raising(
+            monkeypatch, UrlRejectedError("host resolves to a blocked address")
+        )
+        resp = client.get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == "URL rejected: host resolves to a blocked address"
+
+
+class TestInternationalizedUrl:
+    def test_an_iri_reaches_the_opener_as_ascii(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str] = []
+
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                seen.append(request.full_url)
+                raise OSError
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        GatedSitemapWebClient().get("https://safe.example/caf\u00e9/\u65e5")
+        assert seen == ["https://safe.example/caf%C3%A9/%E6%97%A5"]
+        assert seen[0].isascii()
+
+
+class TestEveryBranchIsClassifiedOnce:
+    """HTTPError, timeout and unreachable go through FetchRefusedError too."""
+
+    _URL = "https://safe.example/sitemap.xml?token=SECRET"
+
+    @pytest.mark.parametrize(
+        ("failure", "message", "retryable"),
+        [
+            (
+                HTTPError("https://safe.example/x", 503, "boom", HTTPMessage(), None),
+                "fetch failed: HTTP 503",
+                True,
+            ),
+            (
+                HTTPError("https://safe.example/x", 429, "slow", HTTPMessage(), None),
+                "fetch failed: HTTP 429",
+                True,
+            ),
+            (
+                HTTPError("https://safe.example/x", 404, "gone", HTTPMessage(), None),
+                "404 Not Found",
+                False,
+            ),
+            (TimeoutError("slow"), "fetch failed: timed out", True),
+            (
+                URLError("dns"),
+                "fetch failed: cannot reach the host",
+                True,
+            ),
+            (
+                ConnectionResetError("reset"),
+                "fetch failed: ConnectionResetError",
+                False,
+            ),
+        ],
+        ids=["503", "429", "404", "timeout", "unreachable", "reset"],
+    )
+    def test_message_retryability_and_one_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        failure: BaseException,
+        message: str,
+        *,
+        retryable: bool,
+    ) -> None:
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise failure
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        with caplog.at_level("DEBUG"):
+            resp = GatedSitemapWebClient().get(self._URL)
+        assert isinstance(resp, WebClientErrorResponse)
+        assert resp.message() == message
+        assert resp.retryable() is retryable
+        [record] = [r for r in caplog.records if r.name.endswith("fetch_refused")]
+        assert "fetch refused" in record.getMessage()
+        assert "https://safe.example/…(segments=1)" in record.getMessage()
+        assert "SECRET" not in caplog.text
+
+
+class TestWhoDecidesHowLoudAProbeMissIs:
+    """USP knows which fetches are speculative; its ``quiet_404`` decides, not us."""
+
+    _HOME = "https://safe.example/"
+
+    @staticmethod
+    def _discover(monkeypatch: pytest.MonkeyPatch, routes: dict[str, bytes]) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import SitemapReader
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _FakeOpener(routes))
+        SitemapReader().discover(HttpUrl("https://safe.example/"))
+
+    def test_a_well_known_path_miss_is_below_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            self._discover(monkeypatch, {})
+        probes = [r for r in caplog.records if "robots.txt" not in r.getMessage()]
+        assert [r for r in probes if r.levelno >= logging.WARNING] == []
+
+    def test_only_the_robots_fetch_is_a_usp_warning_on_an_ordinary_miss(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # USP fetches robots.txt without quiet_404, so it reports that miss itself.
+        with caplog.at_level(logging.DEBUG):
+            self._discover(monkeypatch, {})
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert [r.name for r in warnings] == ["usp.helpers"]
+        assert "robots.txt" in warnings[0].getMessage()
+
+    def test_a_listed_sub_sitemap_that_is_missing_is_a_usp_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        routes = {
+            "https://safe.example/robots.txt": (
+                b"Sitemap: https://safe.example/listed.xml\n"
+            )
+        }
+        with caplog.at_level(logging.DEBUG):
+            self._discover(monkeypatch, routes)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert [r.name for r in warnings] == ["usp.helpers"]
+        assert "404 Not Found" in warnings[0].getMessage()
+
+    def test_our_own_layer_logs_a_sitemap_status_at_debug_only(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG):
+            self._discover(monkeypatch, {})
+        ours = [r for r in caplog.records if r.name.endswith("fetch_refused")]
+        assert ours
+        assert {r.levelno for r in ours} == {logging.DEBUG}
+
+
+class TestAnSsrfBlockIsLoggedByOurLayer:
+    def test_a_blocked_entry_is_one_warning_from_the_fetch_layer(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("10.0.0.9"))
+        with caplog.at_level(logging.DEBUG):
+            GatedSitemapWebClient().get("https://internal.example/x.xml?token=SECRET")
+        ours = [r for r in caplog.records if r.name.endswith("fetch_refused")]
+        assert [r.levelno for r in ours] == [logging.WARNING]
+        assert "SSRF-blocked URL" in ours[0].getMessage()
+        assert "SECRET" not in caplog.text
+
+    def test_a_blocked_final_url_after_a_redirect_is_logged_too(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def resolve(host: str, *a: Any, **k: Any) -> Any:
+            return _addrinfo(
+                "10.0.0.9" if host == "internal.example" else "93.184.216.34"
+            )
+
+        monkeypatch.setattr(_GETADDRINFO, resolve)
+        monkeypatch.setattr(
+            swc, "GUARDED_OPENER", _LandingOpener("http://internal.example/x")
+        )
+        with caplog.at_level(logging.DEBUG):
+            GatedSitemapWebClient().get("https://safe.example/x.xml")
+        ours = [r for r in caplog.records if r.name.endswith("fetch_refused")]
+        assert [r.levelno for r in ours] == [logging.WARNING]
+        assert "SSRF-blocked final URL" in ours[0].getMessage()
+
+
+class TestUspsGunzipWarningReachesTheLog:
+    def test_a_gz_url_with_a_plain_body_warns_from_usp_helpers(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import SitemapReader
+
+        url = "https://safe.example/s.xml.gz"
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(
+            swc,
+            "GUARDED_OPENER",
+            _FakeOpener({url: _urlset_xml("https://safe.example/a")}),
+        )
+        with caplog.at_level(logging.DEBUG):
+            SitemapReader().read(HttpUrl(url))
+        gunzip = [
+            r
+            for r in caplog.records
+            if r.name == "usp.helpers" and "Unable to gunzip" in r.getMessage()
+        ]
+        assert [r.levelno for r in gunzip] == [logging.WARNING]
+
+
+class _BuggyOpener(_FakeOpener):
+    """Serve the routes, but raise a bug (not a fetch failure) for one URL."""
+
+    def __init__(self, routes: dict[str, bytes], bug_url: str) -> None:
+        super().__init__(routes)
+        self._bug_url = bug_url
+
+    def open(
+        self, request: urllib.request.Request, timeout: float | None = None
+    ) -> _FakeResp:
+        if request.full_url == self._bug_url:
+            msg = "kaboom-text"
+            raise ValueError(msg)
+        return super().open(request, timeout)
+
+
+class TestABugInASubSitemapFetchIsNotPartialSuccess:
+    def test_the_read_fails_with_an_error_record(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import (
+            SitemapReader,
+            UnexpectedSitemapError,
+        )
+
+        index = "https://safe.example/index.xml"
+        good = "https://safe.example/good.xml"
+        bad = "https://safe.example/bad.xml"
+        routes = {
+            index: _index_xml(good, bad),
+            good: _urlset_xml("https://safe.example/page"),
+        }
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BuggyOpener(routes, bad))
+        with caplog.at_level(logging.DEBUG), pytest.raises(UnexpectedSitemapError):
+            SitemapReader().read(HttpUrl(index))
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("unexpected error" in r.getMessage() for r in errors)
+
+
+class TestTheClientRecordsABugAndReRaises:
+    def test_it_records_the_class_logs_frames_without_the_message_and_re_raises(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        url = "https://safe.example/bad.xml?token=SECRET"
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BuggyOpener({}, url))
+        client = GatedSitemapWebClient()
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(ValueError, match="kaboom-text"),
+        ):
+            client.get(url)
+        assert client.take_bug() == "ValueError"
+        assert client.take_bug() == ""
+        [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert "ValueError" in record.getMessage()
+        assert "File " in record.getMessage()
+        assert "kaboom-text" not in record.getMessage()
+        assert "SECRET" not in record.getMessage()
+
+    def test_a_refusal_is_not_a_bug(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _FakeOpener({}))
+        client = GatedSitemapWebClient()
+        client.get("https://safe.example/missing.xml")
+        assert client.take_bug() == ""
+
+
+class TestDocumentDefectsAreNotBugs:
+    @staticmethod
+    def _read(
+        monkeypatch: pytest.MonkeyPatch, routes: dict[str, bytes], index: str
+    ) -> list[str]:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import SitemapReader
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _FakeOpener(routes))
+        return [p.url for p in SitemapReader().read(HttpUrl(index))]
+
+    def test_a_self_listing_index_keeps_the_other_pages_with_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        index = "https://safe.example/index.xml"
+        good = "https://safe.example/good.xml"
+        routes = {
+            index: _index_xml(index, good),
+            good: _urlset_xml("https://safe.example/page"),
+        }
+        with caplog.at_level(logging.DEBUG):
+            urls = self._read(monkeypatch, routes, index)
+        assert urls == ["https://safe.example/page"]
+        quarry = [r for r in caplog.records if r.name.startswith("quarry")]
+        assert not [r for r in quarry if r.levelno >= logging.ERROR]
+        nodes = [r for r in quarry if r.getMessage().startswith("sitemap node failed")]
+        assert [r.levelno for r in nodes] == [logging.WARNING]
+
+    def test_a_corrupt_gz_sub_sitemap_keeps_the_other_pages_with_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        index = "https://safe.example/index.xml"
+        good = "https://safe.example/good.xml"
+        bad = "https://safe.example/bad.xml.gz"
+        routes = {
+            index: _index_xml(good, bad),
+            good: _urlset_xml("https://safe.example/page"),
+            bad: b"\x1f\x8b\x08\x00 corrupt, not gzip",
+        }
+        with caplog.at_level(logging.DEBUG):
+            urls = self._read(monkeypatch, routes, index)
+        assert urls == ["https://safe.example/page"]
+        quarry = [r for r in caplog.records if r.name.startswith("quarry")]
+        assert not [r for r in quarry if r.levelno >= logging.ERROR]
+        # USP treats the corrupt gzip as plain text, warns, and finds no pages in it.
+        gunzip = [r for r in caplog.records if "Unable to gunzip" in r.getMessage()]
+        assert [r.levelno for r in gunzip] == [logging.WARNING]
+
+
+class TestDiscoverFollowsTheSameRule:
+    _ROBOTS = "https://safe.example/robots.txt"
+
+    @staticmethod
+    def _robots(*sitemaps: str) -> bytes:
+        return "".join(f"Sitemap: {url}\n" for url in sitemaps).encode()
+
+    def test_a_bug_in_a_listed_sub_sitemap_fails_discovery(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import (
+            SitemapReader,
+            UnexpectedSitemapError,
+        )
+
+        bad = "https://safe.example/bad.xml"
+        routes = {self._ROBOTS: self._robots(bad)}
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BuggyOpener(routes, bad))
+        with pytest.raises(UnexpectedSitemapError) as e:
+            SitemapReader().discover(HttpUrl("https://safe.example/"))
+        assert e.value.reported_as == "ValueError"
+
+    def test_a_listed_sub_sitemap_that_is_missing_is_debug(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.sitemap_reader import SitemapReader
+
+        routes = {self._ROBOTS: self._robots("https://safe.example/missing.xml")}
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _FakeOpener(routes))
+        with caplog.at_level(logging.DEBUG):
+            SitemapReader().discover(HttpUrl("https://safe.example/"))
+        nodes = [
+            r
+            for r in caplog.records
+            if r.getMessage().startswith("sitemap node failed")
+        ]
+        assert nodes
+        assert {r.levelno for r in nodes} == {logging.DEBUG}
+
+
+class TestABugAnywhereInGetIsRecorded:
+    def test_a_fault_while_classifying_a_refusal_is_a_bug_and_fails_the_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.http_url import HttpUrl
+        from quarry.ingestion.fetch_refused import FetchRefusedError
+        from quarry.ingestion.sitemap_reader import (
+            SitemapReader,
+            UnexpectedSitemapError,
+        )
+
+        index = "https://safe.example/index.xml"
+        good = "https://safe.example/good.xml"
+        forbidden = "https://safe.example/forbidden.xml"
+
+        class _ForbiddenOpener(_FakeOpener):
+            def open(
+                self, request: urllib.request.Request, timeout: float | None = None
+            ) -> _FakeResp:
+                if request.full_url == forbidden:
+                    raise HTTPError(forbidden, 403, "no", Message(), None)
+                return super().open(request, timeout)
+
+        routes = {
+            index: _index_xml(good, forbidden),
+            good: _urlset_xml("https://safe.example/page"),
+        }
+
+        def boom(*_a: Any, **_k: Any) -> Any:
+            msg = "classifier bug"
+            raise TypeError(msg)
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _ForbiddenOpener(routes))
+        monkeypatch.setattr(FetchRefusedError, "from_transfer_failure", boom)
+        client = GatedSitemapWebClient()
+        with pytest.raises(UnexpectedSitemapError) as e:
+            SitemapReader(client).read(HttpUrl(index))
+        assert e.value.reported_as == "TypeError"
+
+    def test_a_bug_in_the_admission_check_is_recorded_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(_url: str) -> Any:
+            msg = "admission bug"
+            raise KeyError(msg)
+
+        monkeypatch.setattr(UrlAdmission, "reject_reason", staticmethod(boom))
+        client = GatedSitemapWebClient()
+        with pytest.raises(KeyError):
+            client.get("https://safe.example/x.xml")
+        assert client.take_bug() == "KeyError"
+
+    def test_a_fault_in_building_the_subject_does_not_replace_the_bug(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        url = "https://safe.example/bad.xml"
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _BuggyOpener({}, url))
+
+        def broken(_url: str) -> str:
+            msg = "shown fault"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(UrlAdmission, "shown", staticmethod(broken))
+        client = GatedSitemapWebClient()
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(ValueError, match="kaboom-text"),
+        ):
+            client.get(url)
+        assert client.take_bug() == "ValueError"
+        [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert "(url not shown: RuntimeError)" in record.getMessage()
+        assert "safe.example" not in record.getMessage()
+        assert "shown fault" not in record.getMessage()
+
+
+class TestAnHttpErrorSocketIsReleasedEvenWhenClassifyingFails:
+    def test_the_socket_is_closed_and_the_bug_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://safe.example/forbidden.xml"
+        fp = io.BytesIO(b"")
+
+        class _Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise HTTPError(url, 403, "no", Message(), fp)
+
+        def boom(*_a: Any, **_k: Any) -> Any:
+            msg = "classifier bug"
+            raise TypeError(msg)
+
+        monkeypatch.setattr(_GETADDRINFO, _resolver({}))
+        monkeypatch.setattr(swc, "GUARDED_OPENER", _Opener())
+        monkeypatch.setattr(FetchRefusedError, "from_transfer_failure", boom)
+        client = GatedSitemapWebClient()
+        # The raised bug keeps the HTTPError alive (its context), so a close that
+        # only happened when the error was garbage collected would show here.
+        with pytest.raises(TypeError) as info:
+            client.get(url)
+        assert info.value.__context__ is not None
+        assert fp.closed
+        assert client.take_bug() == "TypeError"

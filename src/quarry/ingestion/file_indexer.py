@@ -19,38 +19,39 @@ instead of duplicating the delete-tail/overwrite and resume-watermark logic.
 from __future__ import annotations
 
 import logging
-import os
-import sqlite3
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.db.chunk_table import DocumentRef
+from quarry.db.document_ref import DocumentRef
+from quarry.failure_reason import FailureReason
 from quarry.ingestion.file_flush_target import SingleFileFlushTarget
 from quarry.ingestion.pipeline import plan_file_chunks
-from quarry.ingestion.progressive import ProgressiveIndexer
+from quarry.ingestion.settled_file import SettledFile
 from quarry.ingestion.streaming import DocumentStreamer
-from quarry.sync_change import FileChange, FileChangeDetector
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_messages import FileMeta
 from quarry.sync_resume import ResumePolicy
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
+
+    import numpy as np
+    from numpy.typing import NDArray
 
     from quarry.config import Settings
     from quarry.db.chunk_store import ChunkStore
-    from quarry.ingestion.progressive import FlushCheckpoint
+    from quarry.ingestion.progressive import (
+        FlushCheckpoint,
+        FlushTarget,
+        ProgressiveIndexer,
+    )
     from quarry.models import Chunk
     from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
-
-# The same recoverable failures ``CollectionIngestor`` tolerates per file: a
-# vanished/unreadable file or an unsupported format is one file's error, never a
-# crash of the surrounding sync or watch job.
-_RECOVERABLE = (sqlite3.Error, OSError, ValueError, RuntimeError, TimeoutError)
 
 
 @final
@@ -165,7 +166,7 @@ class SingleFileIndexer:
         document_name, watermark = meta.record.document_name, meta.resume_watermark
         if watermark > 0:
             self._store.delete_document_tail(
-                DocumentRef(document_name, self._collection, watermark)
+                DocumentRef.tail(document_name, self._collection, watermark)
             )
         else:
             self._store.delete_document(
@@ -192,6 +193,18 @@ class SingleFileIndexer:
                 record.document_name, collection=self._collection, count=False
             )
 
+    def windows(
+        self, plan: FilePlan
+    ) -> Iterator[tuple[list[Chunk], NDArray[np.float32]]]:
+        """Yield the plan's ``(chunks, vectors)`` windows from its resume point."""
+        return DocumentStreamer(self._settings).stream_batches(
+            plan.chunks, start_index=plan.meta.resume_watermark
+        )
+
+    def progressive(self, target: FlushTarget) -> ProgressiveIndexer:
+        """Return an indexer flushing *target* at the configured byte budget."""
+        return DocumentStreamer(self._settings).progressive(target)
+
     def index_one(self, file_path: Path) -> FileIndexOutcome:
         """Fully (re-)index one file, committing its registry row on flush.
 
@@ -199,22 +212,19 @@ class SingleFileIndexer:
         reconcile the store, stream+embed in bounded windows, then drain.  A file
         that vanished or cannot be read since the event is a graceful per-file
         error (its stale chunks are dropped when the content no longer matches),
-        never a raised exception (bug-class 1: filesystem TOCTOU).
+        never a raised exception (the file can change between the event and the read).
         """
         document_name = str(file_path.relative_to(self._resolved))
         file_id = str(file_path)
         record = self._registry.files.get_file(file_id)
-        settled = self._settled_without_embedding(record, file_path, document_name)
-        if settled is not None:
-            return settled
+        if SettledFile(self._registry).is_current(record, file_path):
+            return FileIndexOutcome(document_name, 0, error=None)
         try:
             plan = self.plan_file(file_path, record)
-        except _RECOVERABLE as exc:
+        except FailureReason.RECOVERABLE as exc:
             return self._plan_failed(document_name, record, file_path, exc)
         target = SingleFileFlushTarget(self, self._store, self._registry, plan.meta)
-        indexer = ProgressiveIndexer(
-            target, flush_bytes=self._settings.sync_flush_mb * 1024 * 1024
-        )
+        indexer = self.progressive(target)
         try:
             self.reconcile_store(plan.meta)
             indexer.begin_file(
@@ -222,69 +232,19 @@ class SingleFileIndexer:
                 resume_watermark=plan.meta.resume_watermark,
                 total_chunks=plan.meta.total_chunks,
             )
-            streamer = DocumentStreamer(self._settings)
-            for batch, vectors in streamer.stream_batches(
-                plan.chunks, start_index=plan.meta.resume_watermark
-            ):
+            for batch, vectors in self.windows(plan):
                 indexer.add_window(file_id, batch, vectors)
             indexer.complete_file(file_id)
             indexer.drain()
-        except _RECOVERABLE as exc:
+        except FailureReason.RECOVERABLE as exc:
             # Honor the contract: a mid-stream I/O/DB error (the file changed or
             # vanished, a flush failed) is a graceful per-file failure, not a
             # raise. The partial write is left for the next reconcile to
             # overwrite (its registry row reads partial → re-ingested).
             logger.warning("Watch index failed for %s: %s", document_name, exc)
-            return FileIndexOutcome(
-                document_name, indexer.inserted_count, error=f"{document_name}: {exc}"
-            )
+            error = FailureReason.line(document_name, exc)
+            return FileIndexOutcome(document_name, indexer.inserted_count, error=error)
         return FileIndexOutcome(document_name, indexer.inserted_count, error=None)
-
-    def _settled_without_embedding(
-        self, record: FileRecord | None, file_path: Path, document_name: str
-    ) -> FileIndexOutcome | None:
-        """Return the outcome for a file whose stored chunks are already current.
-
-        A watch event fires on every write, and most writes leave the content
-        identical — an editor saving in place, a branch switch restoring the same
-        bytes, a ``touch``.  Re-embedding those recomputes the same vectors and
-        rewrites the same rows, which is what made one document embed five times
-        in a row under churn.  ``None`` means the file genuinely needs indexing.
-
-        A file that vanished since the event has no ``stat`` to compare; that is
-        the normal TOCTOU case, and returning ``None`` hands it to the regular
-        path, which reports it as the per-file error it is.
-        """
-        try:
-            stat = file_path.stat()
-        except OSError:
-            return None
-        decision = FileChangeDetector().classify(record, file_path, stat)
-        if decision.needs_embedding:
-            return None
-        if record is not None and decision.change is FileChange.REFRESH:
-            self._refresh_row(record, stat, decision.content_hash)
-        return FileIndexOutcome(document_name, 0, error=None)
-
-    def _refresh_row(
-        self, record: FileRecord, stat: os.stat_result, content_hash: str | None
-    ) -> None:
-        """Re-stamp *record*'s metadata for content that did not actually change.
-
-        The file's ``(mtime, size)`` moved but its bytes did not, so the stored
-        chunks stay and only the row is brought current — which stops the next
-        scan from re-deciding the same non-change.
-        """
-        self._registry.files.upsert_file(
-            replace(
-                record,
-                mtime=stat.st_mtime,
-                size=stat.st_size,
-                ingested_at=datetime.now(UTC).isoformat(),
-                content_hash=content_hash,
-            ),
-            commit=True,
-        )
 
     def _plan_failed(
         self,
@@ -298,7 +258,9 @@ class SingleFileIndexer:
         if self.should_clear_stale(record, file_path):
             self.clear_stale(record)
             self._registry.files.delete_file(str(file_path), commit=True)
-        return FileIndexOutcome(document_name, 0, error=f"{document_name}: {exc}")
+        return FileIndexOutcome(
+            document_name, 0, error=FailureReason.line(document_name, exc)
+        )
 
     def _build_record(
         self, file_path: Path, document_name: str, content_hash: str | None

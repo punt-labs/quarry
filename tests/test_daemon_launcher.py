@@ -119,7 +119,7 @@ class TestLaunch:
             _options(host="0.0.0.0", api_key="k", tls=True)  # noqa: S104
         )
         with (
-            patch("quarry.daemon.launcher.TLS_DIR", tmp_path),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path),
             patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
             patch("quarry.daemon.launcher.Settings"),
         ):
@@ -163,7 +163,7 @@ class TestLaunch:
             _options(host="0.0.0.0", api_key="k", tls=True)  # noqa: S104
         )
         with (
-            patch("quarry.daemon.launcher.TLS_DIR", tmp_path),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path),
             patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
             patch("quarry.daemon.launcher.Settings"),
         ):
@@ -213,7 +213,7 @@ class TestTlsPaths:
     def test_tls_missing_certs_exits(self, tmp_path: Path) -> None:
         launcher = DaemonLauncher(_options(tls=True))
         with (
-            patch("quarry.daemon.launcher.TLS_DIR", tmp_path),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path),
             pytest.raises(SystemExit, match="TLS certificate files not found"),
         ):
             launcher.launch()
@@ -223,7 +223,7 @@ class TestTlsPaths:
         (tmp_path / "server.key").write_text("KEY")
         launcher = DaemonLauncher(_options(tls=True))
         with (
-            patch("quarry.daemon.launcher.TLS_DIR", tmp_path),
+            patch("quarry.home_paths.QuarryHome.tls_dir", return_value=tmp_path),
             patch("quarry.daemon.launcher.DaemonServer.serve") as mock_serve,
             patch("quarry.daemon.launcher.Settings"),
         ):

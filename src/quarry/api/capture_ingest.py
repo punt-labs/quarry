@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Final
+
 from pydantic import BaseModel
+
+# The one place the ``session-<id8>`` / ``subagent-<id8>-report`` key width
+# lives: the daemon names a raw capture and the hook names its distilled report
+# from the same agent id, so widening the prefix must move both names together.
+SESSION_ID_PREFIX_LEN: Final = 8
 
 
 class CaptureIngestRequest(BaseModel):
@@ -28,3 +35,7 @@ class CaptureIngestRequest(BaseModel):
     # never stored as-is: the daemon files the capture under the redacted
     # ``document_name``.  Empty for transcripts, which have nothing to re-fetch.
     source_url: str = ""
+    # The ISO-8601 UTC instant the hook read its transcript snapshot.  The daemon
+    # stores it as the capture's ingestion time (queue time when absent), so a
+    # transcript written after the read is newer than the stored document.
+    captured_at: str = ""

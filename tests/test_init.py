@@ -115,7 +115,7 @@ poison = {_POISONED!r}
 for _m in poison:
     sys.modules[_m] = None  # any real import of these now raises ImportError
 import quarry.mcp_server as mcp_server
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 engine = {_ENGINE!r}
 check = [m for m in engine if m not in poison]
@@ -123,7 +123,7 @@ loaded = [m for m in check if m in sys.modules]
 assert not loaded, loaded
 
 # Registering every tool on a fresh server must not import the engine.
-server = FastMCP("sabotage")
+server = MCPServer("sabotage")
 mcp_server.McpTools().register(server)
 
 # A tool call with a down client returns an error string, not an engine import.

@@ -38,7 +38,7 @@
 
 \title{Quarry: Technical Architecture Specification}
 \author{Local Semantic Search for AI Agents}
-\date{July 2026}
+\date{September 2026}
 \hypersetup{
   pdftitle={Quarry: Technical Architecture Specification},
   pdfauthor={Punt Labs},
@@ -132,9 +132,8 @@ holds the resident engine, every Claude Code tab shares one warm model
 rather than spawning a Python process that loads $\sim$200\,MB of its
 own.  Installed services use TLS with TOFU certificate pinning (DES-020)
 --- even on localhost.  (\texttt{mcp-proxy} is an MCP stdio$\leftrightarrow$daemon
-transport, not a REST-API client; \texttt{quarry install} still fetches it
-because it remains a supported transport for other MCP clients, but it is
-no longer on quarry's own MCP path --- the plugin runs \texttt{quarry mcp}
+transport, not a REST-API client; \texttt{quarry install} does not fetch it,
+and it is not on quarry's own MCP path --- the plugin runs \texttt{quarry mcp}
 directly.)
 
 When a remote server is configured (DES-021), the CLI routes
@@ -158,7 +157,8 @@ remote call.
 CLI         & \texttt{QuarryClient} over HTTPS \texttt{/v1} & Interactive use from terminal \\
 MCP server  & stdio (\texttt{quarry mcp}, a \texttt{QuarryClient}) & Claude Code/Desktop tools \\
 HTTP server & REST JSON \texttt{/v1} (FastAPI in \texttt{quarryd}) & CLI, MCP, menu bar app \\
-Plugin      & Hook shell commands  & Auto-register, auto-ingest, compaction safety \\
+Plugin      & Hook shell commands (\texttt{quarry-hook}) & Auto-register; capture web fetch/search,
+              opt-in reads, compaction, session end, subagent stop; memory distillation \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -194,6 +194,10 @@ Schema        & \modpath{db/schema.py}         & Chunks-table schema and
                 idempotent migration (agent-memory columns, FTS index). \\
 Storage       & \modpath{db/storage.py}        & LanceDB connection
                 management (discovery and size reporting removed --- DES-049). \\
+Connection    & \modpath{db/connection.py}     & Self-recycling LanceDB
+                connection that bounds file-descriptor growth. \\
+Chunk table   & \modpath{db/chunk\_table.py}   & Chunks-table lifecycle:
+                open, migrate, create-on-demand. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -213,17 +217,57 @@ ONNX model constants).
 \toprule
 \textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
 \midrule
-Pipeline    & \modpath{ingestion/pipeline.py}    & Orchestrator:
-              dispatch by format, chunk, embed, store.  Entry points
-              \texttt{ingest\_document}, \texttt{ingest\_content},
-              \texttt{ingest\_url}. \\
-Chunker     & \modpath{ingestion/chunker.py}     & Split page text into
-              overlapping chunks; respects page and heading boundaries. \\
-URL ingester & \modpath{ingestion/url\_ingester.py} & Fetch, parse HTML,
-              chunk, embed, store.  \texttt{ingest\_url} takes an opt-in
-              \texttt{content\_scrubber} (see PII redaction). \\
-Web fetch   & \modpath{ingestion/web\_fetch.py}  & Fetch a URL over
-              HTTP(S) and return validated HTML text. \\
+Pipeline    & \modpath{ingestion/pipeline.py}    & File orchestrator:
+              resolve the format strategy, extract, then chunk/embed/store
+              through the funnel.  Entry points \texttt{ingest\_document}
+              and \texttt{plan\_file\_chunks}; re-exports
+              \texttt{SUPPORTED\_EXTENSIONS}. \\
+Format strategies & \modpath{ingestion/format\_strategies.py} &
+              \texttt{resolve\_strategy(suffix)} returns a
+              \texttt{FormatStrategy} (PDF, image, or a
+              \texttt{TextLikeFormat} row from
+              \modpath{ingestion/text\_format.py}); owns
+              \texttt{SUPPORTED\_EXTENSIONS}. \\
+Funnel      & \modpath{ingestion/chunk\_store\_funnel.py} & The single
+              convergence point for chunking, embedding, and storing pages
+              (the DES-036 choke point every ingest path shares). \\
+Chunker     & \modpath{ingestion/page\_chunker.py}     & \texttt{PageChunker}:
+              refuse binary documents, split logical sections to the row
+              budget (an oversized paginated page fails the document), and pack
+              overlapping chunks; respects page boundaries (extractors cut
+              sections at headings).  Splitting is
+              \modpath{ingestion/page\_splitter.py}, sentence packing
+              \modpath{ingestion/sentence\_chunker.py}. \\
+Binary guard & \modpath{content\_guard.py} & \texttt{BinaryContent}
+              classifies text that is really a binary payload (signature plus
+              non-text ratio) and \texttt{UnindexableContentError}, the
+              content-refusal channel: a \texttt{RefusalError} (a
+              \texttt{ValueError}) whose message is a stable, URL-free
+              reason.  Neutral and stdlib-only, so the HTTP
+              routes and the pipeline share it. \\
+Row budget  & \modpath{db/row\_budget.py} & \texttt{RowBudget}: caps a stored
+              page, chunk and label so a Lance scan batch of 1,024 rows stays
+              under the 32-bit Arrow offset limit; \texttt{RowBudgetError} on
+              overflow, never truncation.  Enforced where rows are built
+              (\modpath{db/chunk\_table.py}) and before any delete. \\
+Web ingest  & \modpath{ingestion/web\_ingest.py} & \texttt{WebIngest}:
+              inline content (\texttt{ingest\_content}) and URL
+              (\texttt{ingest\_url}) ingest --- extract, scrub when the
+              request carries a \texttt{content\_scrubber}, funnel through
+              the store. \\
+Bulk / sitemap & \modpath{ingestion/bulk\_ingest.py},
+              \modpath{ingestion/sitemap\_ingest.py} & Threaded bulk fan-out
+              and sitemap-driven URL ingestion; a sitemap that cannot be read,
+              or a crawl in which every page failed, fails the task. \\
+Web fetch   & \modpath{ingestion/web\_fetch.py},
+              \modpath{ingestion/fetched\_body.py},
+              \modpath{ingestion/media\_type\_policy.py} & Fetch a URL over
+              HTTP(S) behind the SSRF gate; a media type outside the text
+              allow-list is refused from the headers before the body is read.
+              Every failure is an \texttt{UnindexableContentError}
+              (\texttt{FetchRefusedError}, or \texttt{UnsupportedContentError}
+              for a refused media type) whose message never embeds userinfo,
+              path or query. \\
 Ingest stats & \modpath{ingestion/ingest\_stats.py} & Per-format ingest
               counters merged into an ingest result. \\
 \bottomrule
@@ -319,9 +363,12 @@ Provider    & \modpath{ingestion/provider.py}  & ONNX Runtime execution
 
 \subsection{Capture and Redaction}
 
-Session transcripts and WebFetch auto-captures are scrubbed at write
-time before any bytes reach a git-tracked (and soon pushed) surface
-(DES-036).
+Every automatic capture --- session transcripts (PreCompact, SessionEnd,
+SubagentStop), WebFetch pages, WebSearch digests, and opt-in Read
+captures --- is scrubbed at write time before any bytes reach a
+git-tracked (and pushable) surface (DES-036), and again server-side by
+the daemon's \texttt{ScrubbedIngestJob} before a chunk is stored
+(DES-041).
 
 \begin{center}
 \begin{tabular}{llp{7cm}}
@@ -329,20 +376,39 @@ time before any bytes reach a git-tracked (and soon pushed) surface
 \textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
 \midrule
 Capture writer & \modpath{capture.py}       & \texttt{CaptureWriter} ---
-                 the single choke point both \texttt{.md} producers
-                 route through.  Scrubs, then atomically writes. \\
+                 the single choke point every local \texttt{.md} capture
+                 producer routes through.  Scrubs, then atomically writes. \\
 Scrubber       & \modpath{scrub.py}         & \texttt{Scrubber} ---
                  ordered redaction passes (secrets, paths, emails,
                  hostname, profanity).  Idempotent. \\
 Scrub rules    & \modpath{scrub\_rules.py}  & Secret-detection regex
                  catalog applied by the scrubber. \\
 Capture URL    & \modpath{capture\_url.py}  & \texttt{CaptureUrl} ---
-                 strips userinfo/query/fragment from a captured URL's
-                 metadata form. \\
+                 tolerant redaction for a URL that \texttt{HttpUrl}
+                 refuses; the fallback behind \texttt{HttpUrl.shown} and
+                 \texttt{DisplayName.stored}. \\
 Web capture    & \modpath{web\_capture.py}  & Parse a PostToolUse
                  WebFetch payload into URL + fetched content. \\
 Transcript     & \modpath{transcript.py}    & The session transcript
                  file and its derived identifiers. \\
+Session capture & \modpath{session\_transcript.py} &
+                 \texttt{SessionTranscriptCapture} --- archive the raw
+                 JSONL under \texttt{\~{}/.punt-labs/quarry/sessions/},
+                 write the scrubbed \texttt{.md}, POST the
+                 \texttt{CaptureIngestRequest}; shared by PreCompact,
+                 SessionEnd, and SubagentStop. \\
+Subagent capture & \modpath{subagent\_capture.py},
+                 \modpath{subagent\_report.py} & \texttt{SubagentCapture}
+                 --- the raw transcript row plus the subagent's final
+                 report filed as an \texttt{observation} in
+                 \texttt{memory-<handle>} (DES-055). \\
+Search / read  & \modpath{web\_search\_capture.py},
+                 \modpath{read\_capture.py} & Parse a WebSearch result
+                 digest; the four-check admission filter for the opt-in
+                 Read capture. \\
+Daemon sender  & \modpath{daemon\_capture.py} & \texttt{DaemonCaptureSender}
+                 --- the hooks' one bounded door to \texttt{/v1/capture},
+                 \texttt{/v1/ingest}, and \texttt{/v1/remember}. \\
 Backfill       & \modpath{backfill.py}      & Backfill historical
                  session transcripts through the capture writer. \\
 \bottomrule
@@ -421,6 +487,16 @@ Ingest     & \modpath{sync\_ingest.py}    & Progressive per-collection
              ingest (producer/consumer with within-file resume). \\
 Registry   & \modpath{sync\_registry.py}  & SQLite registry of watched
              directories and per-file state. \\
+Planner    & \modpath{sync\_planner.py}   & Compute the disk-vs-registry
+             plan for one collection (TOCTOU-resilient; the one
+             re-embed rule lives in \modpath{sync\_change.py}). \\
+Lock       & \modpath{sync\_lock.py}      & \texttt{SyncLock} --- the
+             kernel-\texttt{flock} single-flight guard around the detached
+             background sync launch. \\
+Finalize   & \modpath{sync\_finalize.py}  & Post-sync index rebuild,
+             optimize, capture-shadow push, and GC. \\
+Resume     & \modpath{sync\_resume.py}    & Within-file resume policy:
+             watermark gate and partial-hash marks (DES-034). \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -576,11 +652,17 @@ CLI         & \modpath{\_\_main\_\_.py} + \modpath{cli\_*.py} & Typer
               output.  Command groups split into \modpath{cli\_search},
               \modpath{cli\_ingest}, \modpath{cli\_documents},
               \modpath{cli\_sync}, \modpath{cli\_project},
-              \modpath{cli\_remote}, \modpath{cli\_maintenance}. \\
-MCP Server  & \modpath{mcp\_server.py}  & \texttt{quarry mcp}: a FastMCP
-              \emph{stdio} server whose eleven tool bodies are thin
-              \texttt{QuarryClient} calls over the daemon's \texttt{/v1}
-              API.  Imports \emph{no} engine --- loads zero
+              \modpath{cli\_remote}, \modpath{cli\_maintenance},
+              \modpath{cli\_captures}, \modpath{cli\_missions}; shared
+              output plumbing in \modpath{cli\_formatters}. \\
+MCP Server  & \modpath{mcp\_server.py}, \modpath{mcp\_missions.py} &
+              \texttt{quarry mcp}: a FastMCP \emph{stdio} server whose
+              tool bodies (the search/ingest/management tools on
+              \texttt{McpTools}, plus \texttt{missions\_sync} on the sibling
+              \texttt{MissionTools}, all behind \modpath{mcp\_guard.py}'s
+              \texttt{ToolGuard}) are
+              thin \texttt{QuarryClient} calls over the daemon's
+              \texttt{/v1} API.  Imports \emph{no} engine --- loads zero
               LanceDB/ONNX (DES-031 v2.2). \\
 Client tier & \modpath{client/}          & \texttt{QuarryClient} +
               injectable REST transport, typed \texttt{QuarryError}
@@ -590,10 +672,12 @@ Wire API    & \modpath{api/}             & The \texttt{/v1} contract:
               one Pydantic request/response model per operation +
               a uniform \texttt{ErrorBody}.  Drift is an import-time
               type error (the structural kill of bug class 3). \\
-Hooks       & \modpath{hooks.py}        & Claude Code plugin hooks:
-              session-start (auto-register), post-web-fetch
-              (auto-ingest), pre-compact (capture transcript).  Pure
-              clients (\texttt{QuarryClient}); all fail-open. \\
+Hooks       & \modpath{hooks.py}, \modpath{hooks\_agent.py} & Claude
+              Code plugin hooks: session-start (auto-register),
+              post-web-fetch, pre-compact (\modpath{hooks.py});
+              session-end, post-web-search, post-read, subagent-stop
+              (\modpath{hooks\_agent.py}).  Pure clients
+              (\texttt{QuarryClient}); all fail-open. \\
 Hook Entry  & \modpath{\_hook\_entry.py} & Lightweight hook dispatcher
               that bypasses full CLI import chain.  Dispatches
               via \texttt{sys.argv} with lazy imports
@@ -619,18 +703,25 @@ Formatting & \modpath{formatting.py} & Pre-formatted plain text
              and MCP for consistent output. \\
 Sitemap    & \modpath{sitemap.py}    & Sitemap discovery and URL
              extraction for web ingestion. \\
-Doctor     & \modpath{doctor.py}     & Health checks and install flow:
-             model availability, database access, MCP
-             configuration, ethos extension setup. \\
+Doctor     & \modpath{doctor.py} + \modpath{doctor\_*.py} & Health checks
+             and install flow: model availability, database access, MCP
+             configuration, daemon, sync, captures, ethos memory, recall
+             telemetry (\modpath{doctor\_memory.py}, \modpath{doctor\_ethos.py},
+             \modpath{doctor\_recall.py}). \\
+Recall Telemetry & \modpath{query\_log.py} + \modpath{query\_log\_schema.py}
+             & Local, engine-free SQLite store for recall telemetry
+             (DES-056): one \texttt{query\_events} row + N
+             \texttt{query\_hits} rows per search, written from
+             \modpath{daemon/routes/search.py} and read back through
+             \texttt{GET /insights}. Mirrors \modpath{sync\_registry.py}'s
+             connection lifecycle. \\
 Enable     & \modpath{enable.py}     & Project activation and
-             deactivation: register directory, bootstrap ethos
-             memory extensions, write per-project config. \\
+             deactivation: register directory, refresh the vendored
+             ethos memory-guide blocks (\modpath{ethos\_ext\_block.py},
+             \modpath{ethos\_ext\_scan.py}), write per-project config. \\
 TLS        & \modpath{tls.py}        & TLS certificate generation:
              self-signed EC\,P-256 CA and server cert with
              atomic file writes and TOFU-safe CA reuse. \\
-Proxy      & \modpath{proxy.py}      & \texttt{mcp-proxy} binary
-             download, SHA256 verification, and
-             platform-specific installation. \\
 Logging    & \modpath{logging\_config.py} & Structured logging
              configuration: rotating file handler + stderr,
              \texttt{QUARRY\_LOG\_LEVEL} override. \\
@@ -735,7 +826,7 @@ gates on \texttt{/health} \texttt{ready} before exiting~0.
 \subsection{MCP Transport (\texttt{quarry mcp})}
 
 Quarry's plugin runs \texttt{quarry mcp} directly --- a FastMCP
-\emph{stdio} server (\modpath{mcp\_server.py}) whose eleven tool bodies
+\emph{stdio} server (\modpath{mcp\_server.py}) whose tool bodies
 are thin \texttt{QuarryClient} calls over the daemon's \texttt{/v1} REST
 API.  It reads MCP JSON-RPC from stdin, dispatches each tool to the
 resident daemon (reusing its one warm \texttt{ctx.embedder}/\texttt{ctx.database}),
@@ -744,8 +835,7 @@ and relays the response to stdout.  It imports no engine, so
 zero LanceDB/ONNX.  Database selection is a per-request parameter carried
 in the wire call; the daemon holds no per-connection \texttt{ContextVar}
 because the in-daemon \texttt{/mcp} WebSocket route was removed (DES-031
-v2.2, PR-1).  \texttt{mcp-proxy} is no longer on this path (it remains a
-supported MCP stdio$\leftrightarrow$daemon transport for other MCP clients).
+v2.2, PR-1).  \texttt{mcp-proxy} is no longer on this path.
 
 \subsection{CLI and the Daemon}
 
@@ -780,11 +870,17 @@ path by the sabotage test.
 \midrule
 \endhead
 \tool{find}        & \field{query}, \field{limit},
-  \field{collection}       & Semantic search            & Sync \\
+  \field{collection}, \field{agent\_handle},
+  \field{memory\_type}     & Hybrid search              & Sync \\
 \tool{ingest}      & \field{source}, \field{overwrite},
-  \field{collection}       & Ingest file or URL         & Bg \\
+  \field{collection}       & Ingest a URL (files go through
+                             \tool{register\_directory}) & Bg \\
 \tool{remember}    & \field{content},
-  \field{document\_name}   & Ingest inline text         & Bg \\
+  \field{document\_name}, \field{agent\_handle},
+  \field{memory\_type}     & Ingest inline text         & Bg \\
+\tool{learn}       & \field{lesson}, \field{topic},
+  \field{name}             & Save a distilled lesson
+                             (\texttt{memory\_type = lesson}) & Bg \\
 \tool{list}        & \field{kind}
                            & List indexed data          & Sync \\
 \tool{show}        & \field{document\_name},
@@ -796,15 +892,26 @@ path by the sabotage test.
   \field{collection}       & Register for sync          & Bg \\
 \tool{deregister\_directory} & \field{collection},
   \field{keep\_data}       & Remove registration        & Bg \\
-\tool{sync\_all}   & ---  & Sync all registered dirs   & Bg \\
+\tool{sync\_all\_registrations} & ---  & Sync all registered dirs & Bg \\
 \tool{status}      & ---  & Database stats             & Sync \\
 \tool{use}         & \field{name}
                            & Switch active database     & Sync \\
+\tool{missions\_sync} & \field{mission}, \field{dry\_run},
+  \field{force}            & File frozen ethos mission rounds
+                             into \texttt{memory-<worker>} & Sync$^{*}$ \\
 \bottomrule
 \end{longtable}
 \end{center}
 
 Bg = background (daemon-side; the tool returns a \field{task\_id}).
+$^{*}$\tool{missions\_sync} runs client-side: it reads the repo's
+\texttt{.punt-labs/ethos/missions/} tree and issues one
+\texttt{/v1/remember} (202) per frozen round the daemon does not yet hold,
+returning after the last post (DES-055).  The table above is the
+registered surface: every tool on \texttt{McpTools} plus
+\texttt{missions\_sync} on the sibling \texttt{MissionTools}
+(\modpath{mcp\_missions.py}), registered from one call; the exact set is
+pinned by \texttt{tests/test\_mcp\_server.py}.
 
 Each tool body is a thin \texttt{QuarryClient} call over \texttt{/v1}
 (the MCP server holds no engine).  A background tool posts to the daemon,
@@ -858,10 +965,14 @@ raises \texttt{QuarryVersionError} in the client.
 \texttt{/v1/registrations}    & DELETE & Deregister directory (sync + 202 purge) & Yes & async \\
 \texttt{/v1/databases}        & GET    & List named databases             & Yes & sync  \\
 \texttt{/v1/status}           & GET    & Database statistics              & Yes & sync  \\
+\texttt{/v1/insights}         & GET    & Recall telemetry snapshot (DES-056) & Yes & sync  \\
+\texttt{/v1/coverage}         & GET    & Per-collection coverage counts   & Yes & sync  \\
 \texttt{/v1/use}              & POST   & Switch active database           & Yes & sync  \\
 \texttt{/v1/remember}         & POST   & Ingest inline content (returns 202) & Yes & async \\
-\texttt{/v1/ingest}           & POST   & Ingest file or URL (returns 202) & Yes & async \\
+\texttt{/v1/learn}            & POST   & Save a distilled lesson (returns 202) & Yes & async \\
+\texttt{/v1/ingest}           & POST   & Ingest a URL (returns 202)       & Yes & async \\
 \texttt{/v1/capture}          & POST   & Capture web/transcript (returns 202) & Yes & async \\
+\texttt{/v1/captures/lookup}  & POST   & Prior capture of a URL (web-fetch loop closer) & Yes & sync  \\
 \texttt{/v1/captures/push}    & POST   & Push private capture shadow repo & Yes & async \\
 \texttt{/v1/sync}             & POST   & Sync registrations (returns 202) & Yes & async \\
 \texttt{/v1/optimize}         & POST   & Compact + rebuild index (returns 202) & Yes & async \\
@@ -913,6 +1024,8 @@ All settings are environment variables read via pydantic-settings.
   Vector database location \\
 \texttt{REGISTRY\_PATH}  & \texttt{<root>/default/registry.db} &
   Directory sync SQLite database \\
+\texttt{TELEMETRY\_PATH} & \texttt{<root>/default/telemetry.db} &
+  Recall-telemetry SQLite database (DES-056) \\
 \texttt{QUARRY\_LOG\_DIR} & \texttt{\~{}/.punt-labs/quarry/logs/} &
   Log directory (\texttt{quarry.log} for the CLI/MCP client tier,
   \texttt{quarryd.log} for the daemon --- DES-048; rotating, 5\,MB
@@ -940,6 +1053,14 @@ All settings are environment variables read via pydantic-settings.
 \texttt{EMBED\_WINDOW\_CHUNKS} & \texttt{512} &
   Chunks embedded per window, so a large document never materializes
   all its vectors (a kpz throughput seam) \\
+\midrule
+\multicolumn{3}{l}{\textbf{Recall telemetry (DES-056)}} \\
+\midrule
+\texttt{TELEMETRY\_ENABLED}         & \texttt{true} &
+  Record one \texttt{query\_events} row + N \texttt{query\_hits} rows per
+  search; \texttt{false} makes the write path a true no-op \\
+\texttt{TELEMETRY\_RETENTION\_DAYS} & \texttt{90} &
+  Prune query-log rows older than this many days \\
 \midrule
 \multicolumn{3}{l}{\textbf{Watch/index loop (DES-045)}} \\
 \midrule
@@ -1132,7 +1253,7 @@ Three columns extend the chunks table for agent-scoped memory:
 \textbf{Column} & \textbf{Type} & \textbf{Default} & \textbf{Purpose} \\
 \hline
 \texttt{agent\_handle} & utf8 & \texttt{""} & Agent identity scope \\
-\texttt{memory\_type} & utf8 & \texttt{""} & fact, observation, opinion, procedure \\
+\texttt{memory\_type} & utf8 & \texttt{""} & fact, observation, opinion, procedure, lesson \\
 \texttt{summary} & utf8 & \texttt{""} & One-line summary \\
 \end{tabular}
 \end{center}
@@ -1141,8 +1262,25 @@ Migration is idempotent --- \texttt{\_migrate\_schema()} adds missing columns
 with empty-string defaults on every table open. Existing databases gain
 the columns transparently.
 
-Identity tagging: the PreCompact hook reads the agent handle from
-\texttt{.punt-labs/ethos/config.yaml} and tags captured transcripts automatically.
+\texttt{memory\_type} is a closed vocabulary (\modpath{memory\_types.py},
+\texttt{MemoryType}): the four agent-owned types decay; \texttt{lesson} is
+written only by \texttt{learn} and is boosted instead of decayed.  Every
+write route --- \texttt{/v1/remember}, \texttt{/v1/ingest},
+\texttt{/v1/capture} --- validates through one \texttt{RouteGroup} method,
+so an unknown value is a 400 with an identical body on all three, never a
+silently stored row that neither decays nor matches a typed filter
+(DES-055).
+
+Identity tagging: the parent-session hooks (PreCompact, SessionEnd) read
+the agent handle from the ethos repo pin --- \texttt{.punt-labs/ethos.yaml}
+first, then the legacy \texttt{.punt-labs/ethos/config.yaml}, at each
+ancestor up to the repository boundary (\modpath{ethos\_tree.py},
+\modpath{ethos\_handle.py}) --- and tag captured transcripts with it.
+SubagentStop never uses the pin for attribution (the pin names the
+leader): it uses \texttt{agent\_type} iff that handle is a registered
+identity in the vendored or global ethos tree, else the capture is filed
+unattributed.  A \texttt{remember} carries the caller's own handle; the
+daemon never infers one from \texttt{cwd} (DES-055).
 
 \subsection{Ethos Extension Integration}
 
@@ -1150,7 +1288,8 @@ Quarry stores its configuration in ethos's generic extension mechanism
 (DES-008, DES-019):
 
 \begin{verbatim}
-~/.punt-labs/ethos/identities/<handle>.ext/quarry.yaml
+~/.punt-labs/ethos/identities/<handle>.ext/quarry.yaml   (global)
+.punt-labs/ethos/identities/<handle>.ext/quarry.yaml    (vendored, per repo)
 \end{verbatim}
 
 The extension file contains two categories of data:
@@ -1165,16 +1304,194 @@ The extension file contains two categories of data:
     (collection name, slash commands, memory types).
 \end{enumerate}
 
-\texttt{quarry install} (step 7/7) scans all identity extension directories
-and appends \texttt{session\_context} to any \texttt{quarry.yaml} that has
-\texttt{memory\_collection} but no \texttt{session\_context}.  Uses raw file
-append to preserve existing YAML comments and formatting.  Per-identity
-exception handling ensures one malformed file does not abort the rest.
+The \texttt{session\_context} carries a versioned \texttt{\#\# Memory
+(quarry guide v2)} block (\modpath{ethos\_ext\_block.py}): the five
+moments to \texttt{remember}, what never to store, and the rule that an
+agent always passes its own handle.  \texttt{quarry install} refreshes the
+global identities; \texttt{quarry enable} refreshes the vendored
+\texttt{.punt-labs/ethos/identities/<handle>.ext/quarry.yaml} files (a
+committed diff, reported as ``commit via PR''); \texttt{doctor} stays
+read-only.  A v1 block is replaced in place, a customised block is left
+alone, and per-identity outcomes (\modpath{ethos\_ext\_scan.py}) ensure one
+malformed file does not abort the rest.
 
 Ownership boundary: ethos emits quarry's instructions without understanding
 them.  Quarry writes its own instructions without importing ethos.  The
 dependency is one-way --- quarry depends on ethos for identity; ethos has
 zero knowledge of quarry's internals.
+
+\subsection{Agent-Memory Write Loop (DES-055)}
+
+Recall-on-launch had worked since the agent-memory schema landed: ethos
+injects each identity's \texttt{session\_context} into a spawned agent.
+The \emph{write} side stayed dormant --- no \texttt{memory-*} collection
+existed --- until DES-055 added the three producers that fill it.  None of
+them runs a model; each is a thin client of the daemon's
+scrub-before-store \texttt{/v1/remember} route.
+
+\begin{enumerate}[label=\textbf{Loop \arabic*}.]
+  \item \textbf{Persist habit.}  The memory guide above tells every agent
+    when to \texttt{remember} and to pass its own handle.  The daemon
+    routes a handle-bearing \texttt{remember} with an empty
+    \texttt{collection} to \texttt{memory-<handle>}.
+  \item \textbf{Evaluator feedback.}  \texttt{quarry missions sync} (CLI),
+    \texttt{missions\_sync} (MCP), and \texttt{/quarry missions sync}
+    (plugin) read the repo's \texttt{.punt-labs/ethos/missions/} trio
+    (\texttt{contract}, \texttt{results}, \texttt{reflections}) and file
+    each \emph{frozen} round as an \texttt{observation} in
+    \texttt{memory-<worker>}, named
+    \texttt{mission-<repo>-<id>-r<n>}.  Idempotent: a round the daemon
+    already holds is skipped, a name held by another checkout's round is
+    an error and never overwritten (\texttt{-{}-force} re-files a matching
+    key only), \texttt{-{}-dry-run} posts nothing.  Ethos is never called,
+    so the one-way dependency holds.
+  \item \textbf{Capture distillation.}  \texttt{SubagentStop} archives the
+    subagent's own transcript to \texttt{<repo>-captures} and, when
+    \texttt{agent\_type} names a registered identity, files the subagent's
+    final assistant turn --- already a summary by construction --- as an
+    \texttt{observation} in \texttt{memory-<handle>}
+    (\texttt{subagent-<id8>-report}).  A bare \texttt{Agent()}
+    (\texttt{general-purpose}) is filed unattributed.
+\end{enumerate}
+
+\begin{center}
+\begin{tabular}{llp{6.6cm}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
+\midrule
+Vocabulary  & \modpath{memory\_types.py}      & \texttt{MemoryType} ---
+              the closed \texttt{memory\_type} vocabulary and its
+              write-rejection rule (one source for routes, decay, doctor,
+              and CLI help). \\
+Ethos tree  & \modpath{ethos\_tree.py},
+              \modpath{ethos\_handle.py}      & Read-only locator for the
+              ethos sidecar (pins, vendored/global identities, missions);
+              pin-based and \texttt{agent\_type}-based handle resolution. \\
+Mission store & \modpath{mission\_store.py},
+              \modpath{mission\_records.py},
+              \modpath{mission\_round\_parts.py} & Read every mission under
+              the repo's missions tree into \texttt{MissionContract} +
+              \texttt{MissionRound} records; parse errors are collected,
+              never fatal. \\
+Mission memory & \modpath{mission\_memory.py},
+              \modpath{mission\_sync\_types.py} & \texttt{MissionMemorySync}
+              --- compose one \texttt{RememberRequest} per frozen round,
+              check existence via \texttt{show}, post, tally
+              filed/skipped/errors. \\
+Surfaces    & \modpath{cli\_missions.py},
+              \modpath{mcp\_missions.py}      & The \texttt{missions sync}
+              Typer sub-app and the \texttt{missions\_sync} MCP tool; both
+              drive the same \texttt{MissionMemorySync}. \\
+Subagent    & \modpath{subagent\_capture.py},
+              \modpath{subagent\_report.py}   & Two rows from one event:
+              raw transcript capture plus the distilled report. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Recall Telemetry (DES-056)}
+
+DES-055 gave agents a place to write memory; DES-056 answers whether recall
+is actually exercised.  \modpath{daemon/routes/search.py} times every
+\texttt{SearchService.search()} call and, when
+\texttt{Settings.telemetry\_enabled}, scrubs the query text through the same
+\texttt{Scrubber} pass captures use (DES-041) and records one
+\texttt{query\_events} row plus one \texttt{query\_hits} row per ranked
+result to a local, engine-free SQLite store (\modpath{query\_log.py} +
+\modpath{query\_log\_schema.py}), mirroring \modpath{sync\_registry.py}'s
+WAL/busy-timeout connection lifecycle.  The write is boundary I/O: wrapped in
+\texttt{try/except}, a failure is logged and swallowed so a telemetry outage
+never turns a search into a 500.
+
+\texttt{GET /v1/insights} mirrors the \texttt{status} chain across all three
+surfaces (\texttt{quarry insights}, the \texttt{insights} MCP tool, the HTTP
+route) and reports total queries, empty-result rate, p50/p95 latency, top
+empty (scrubbed) queries, per-collection and per-agent recall counts, a
+memory-vs-knowledge split, and a hit recency (decay-band) breakdown.  The
+decay-band join --- a hit's document identity against the live catalog's
+\texttt{ingestion\_timestamp} --- runs in the route, not the store: the
+query log has no LanceDB import, so only the code already holding
+\texttt{ctx.database} can perform it.  \texttt{SearchRequest} carries an
+optional \texttt{surface} field (\texttt{cli}/\texttt{mcp}/\texttt{http}/
+\texttt{plugin}) for provenance; the CLI \texttt{find} path stamps
+\texttt{surface="cli"} the same way the MCP \texttt{find} tool stamps
+\texttt{"mcp"}.
+
+\subsection{Skills and Cross-Harness Distribution (quarry-x7ja)}
+
+Quarry ships two Agent Skills at \texttt{plugin/skills/}: \texttt{quarry-recall}
+(retrieve --- understand code, recall a project decision, recall memory, all
+backed by \texttt{quarry find} with different scope flags) and
+\texttt{quarry-capture} (persist --- \texttt{remember}/\texttt{learn}/
+\texttt{ingest}, the five-moments timing, the \texttt{agent\_handle}
+discipline).  Both drive the \texttt{quarry} CLI directly rather than naming
+MCP tools, so the same skill content works unmodified on any harness; deep
+detail (the failure-mode recovery table, scoping and decay, the memory-type
+vocabulary) lives in each skill's \texttt{references/} for progressive
+disclosure, while the SessionStart trigger trailer, the MCP server's
+\texttt{instructions} block, and the ethos-injected memory guide are kept to
+short pointer sentences naming the two skills, rather than each independently
+restating the same how-to.
+
+Claude Code reads \texttt{plugin/skills/} directly through the marketplace
+plugin tree --- no deposit step.  \modpath{skills\_install.py}
+(\texttt{SkillsInstaller}) composes \modpath{skills\_source.py}
+(\texttt{SkillSource}, which owns every source-tree and single-deposit
+mechanic: locate, hash, manifest, the atomic copy-and-swap) and adds only
+harness orchestration on top --- which harness, which root. Together they
+copy the same two skill directories, verbatim, into the auto-load location
+each other harness was confirmed (not guessed) to read skills from:
+
+\begin{itemize}
+  \item \textbf{pi} --- \texttt{\textasciitilde{}/.pi/agent/skills/<name>/}, matching
+    \texttt{getAgentDir()}'s resolution to \texttt{\textasciitilde{}/.pi/agent}.
+  \item \textbf{opencode} ---
+    \texttt{\textasciitilde{}/.config/opencode/skills/<name>/},
+    one of the paths opencode's own skill loader globs
+    (\texttt{\{skill,skills\}/**/SKILL.md}) as its ``global skills'' root.
+  \item \textbf{codex} --- \texttt{\textasciitilde{}/.codex/skills/<name>/} (or
+    \texttt{\$CODEX\_HOME}), the location codex's own preinstalled
+    \texttt{skill-installer} skill deposits third-party skills into,
+    explicitly alongside the sibling \texttt{.system/} directory that holds
+    codex's own preinstalled skills --- never inside it.
+\end{itemize}
+
+Each deposit is idempotent and version-stamped: a \texttt{.quarry-skill.json}
+manifest beside the deposited \texttt{SKILL.md} records a short content hash,
+so a re-run with unchanged source content is a no-op and a changed source
+overwrites the stale copy wholesale.  The copy itself is swapped in
+atomically --- written into a temp sibling directory first, the previous
+deposit (if any) renamed to a backup sibling, then the temp directory renamed
+into place, with the backup restored on any rename failure --- so an
+interrupted write never leaves a half-deposited skill on disk (the file-I/O
+safety class this repo's review history flags first).
+
+\texttt{quarry skills install [--agent <id>|--all]} and \texttt{quarry skills
+status} (\modpath{cli\_skills.py}) expose this: \texttt{--all} (the default)
+targets every harness \texttt{SkillsInstaller.detected\_harnesses()} finds on
+the machine (a harness's own top-level config directory, e.g. \texttt{\textasciitilde{}/.codex},
+existing); \texttt{--agent} targets one harness explicitly, detected or not.
+
+\texttt{quarry disable} retracts the deposits again through a private
+\texttt{\_SkillRetraction} collaborator, gated by two guards, both required
+(defense-in-depth for an \texttt{rmtree} under the operator's real
+\texttt{\$HOME}): \textbf{identity} --- every marketplace-layout Claude Code
+plugin (lux, prfaq, dungeon, punt-kit, quarry itself) ships an
+identically-shaped \texttt{plugin/skills/} tree, so that shape alone proves
+nothing; only a checkout whose own \texttt{pyproject.toml} names the
+\texttt{punt-quarry} package is quarry's own, checked on the disabled repo's
+root directly, never via an ancestor walk (an ancestor walk would
+true-positive on every path nested inside the quarry checkout, including
+every test's own temp directory, and reach the operator's real home
+directory as a side effect of an unrelated \texttt{disable} call); and
+\textbf{manifest ownership} --- \texttt{SkillsInstaller.remove}/
+\texttt{remove\_all} refuse (\texttt{action="foreign"}) any same-named
+directory that lacks a \texttt{.quarry-skill.json} manifest, so a directory
+this installer never deposited is never an \texttt{rmtree} candidate no
+matter how it got there. Retraction is best-effort: a filesystem failure
+during either guard's checks or the removal itself is logged and swallowed,
+never aborting \texttt{disable} or blocking the marker/import teardown that
+already committed.
 
 % ===================================================================
 \section{Logging and Exceptions}
@@ -1184,7 +1501,7 @@ zero knowledge of quarry's internals.
 
 Every module that performs I/O declares
 \texttt{logger = logging.getLogger(\_\_name\_\_)}.  Pure data modules
-(\texttt{models.py}, \texttt{types.py}, \texttt{chunker.py}) do not.
+(\texttt{models.py}, \texttt{types.py}, \texttt{page\_chunker.py}) do not.
 
 Logging is configured once at each application entry point --- the CLI,
 the MCP server, and the \texttt{quarryd} daemon (DES-048; the daemon writes
@@ -1382,23 +1699,27 @@ is idempotent --- backfill may safely re-run.
     \texttt{quarry.db.facade}.
 \end{itemize}
 
-\textbf{Single write choke point (\modpath{capture.py}).}  Both
-\texttt{.md} producers --- the PreCompact hook (\modpath{hooks.py}) and
-the backfill path (\modpath{backfill.py}) --- route through one
-\texttt{CaptureWriter}.  Scrubbing runs to completion before an atomic
+\textbf{Single write choke point (\modpath{capture.py}).}  Every local
+\texttt{.md} capture producer --- \texttt{SessionTranscriptCapture}
+(\modpath{session\_transcript.py}, serving the PreCompact, SessionEnd, and
+SubagentStop hooks) and the backfill path (\modpath{backfill.py}) ---
+routes through one \texttt{CaptureWriter}.  Scrubbing runs to completion before an atomic
 temp-file rename, so a scrub failure writes no file and a partial or
 half-redacted capture is never left behind.
 
 \textbf{WebFetch DB-ingest.}  The WebFetch auto-capture path scrubs page
-text via an opt-in \texttt{content\_scrubber} parameter on
-\texttt{ingest\_url} (\modpath{ingestion/pipeline.py}).  The parameter
-defaults to \texttt{None}: user-initiated \texttt{quarry ingest <url>},
+text via an opt-in \texttt{content\_scrubber} on the
+\texttt{UrlIngest}/\texttt{InlineIngest} request
+(\modpath{ingestion/web\_ingest.py}), which the daemon's
+\texttt{CaptureIngestJob} and \texttt{ScrubbedIngestJob}
+(\modpath{daemon/ingest\_jobs.py}) set for every hook-originated capture.
+The field defaults to \texttt{None}: user-initiated \texttt{quarry ingest <url>},
 sitemap crawls, and directory sync are \emph{not} scrubbed --- redaction
 is a captures concern, not a general-ingestion one.  The URL's persisted
-metadata form is redacted separately by \texttt{CaptureUrl}
-(\modpath{capture\_url.py}), which strips userinfo, query, and fragment
-(preserving IPv6 brackets) before the same text scrubber runs over the
-bare \texttt{scheme://host/path}.
+metadata form is its admitted \texttt{HttpUrl.document\_name}
+(\modpath{http\_url.py}), \texttt{scheme://host[:port]/path} with no
+userinfo, query, fragment, or \texttt{;params}, run through the same text
+scrubber (DES-057).
 
 % ===================================================================
 \section{Deployment}
@@ -1410,7 +1731,7 @@ bare \texttt{scheme://host/path}.
 curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh
 \end{lstlisting}
 
-Installs quarry, embedding model, mcp-proxy, Claude Code plugin, and
+Installs quarry, the embedding model, and the Claude Code plugin, and
 registers a daemon with TLS on localhost.
 
 \subsection{Network Mode (Remote GPU)}
@@ -1436,7 +1757,9 @@ quarry login <server> --api-key <token>
 
 No special flag needed.  Default install runs a local daemon on
 localhost.  \texttt{quarry login} redirects queries to the remote
-server via TOFU certificate pinning and writes the mcp-proxy config.
+server via TOFU certificate pinning and writes the client profile
+(\texttt{\~{}/.punt-labs/mcp-proxy/quarry.toml}: URL, pinned CA, bearer)
+that \texttt{ClientConfig} resolves for every surface.
 
 \subsection{Daemon (\texttt{quarryd})}
 
@@ -1523,9 +1846,17 @@ LanceDB's built-in filter predicates on the vector search.
 \section{Plugin and Hook System}
 % ===================================================================
 
-The Claude Code plugin (\texttt{plugin/.claude-plugin/}) registers hooks
-that fire on session events and tool calls.  All hooks are fail-open:
-exceptions are logged and the process exits~0.
+The Claude Code plugin (\texttt{plugin/hooks/hooks.json}, each script a
+one-line \texttt{quarry-hook <event>} dispatched by
+\modpath{\_hook\_entry.py}) registers hooks that fire on session events
+and tool calls.  All hooks are fail-open: exceptions are logged and the
+process exits~0.  Every hook is a thin daemon client --- no hook imports
+the engine --- and every capture lands in the \texttt{<repo>-captures}
+collection the daemon derives from the hook's \texttt{cwd}
+(\texttt{default-captures} when the directory is unregistered), scrubbed
+server-side before storage.  Each is independently toggleable under
+\texttt{auto\_capture} in \texttt{.punt-labs/quarry/config.md}; only
+\texttt{read} defaults to off.
 
 \begin{center}
 \begin{tabular}{llp{5cm}l}
@@ -1539,38 +1870,88 @@ PostToolUse   & quarry tools & Suppress tool output formatting &
   No \\
 PostToolUse   & WebFetch & Auto-ingest fetched URL (scrubbed) &
   No \\
-PreCompact    & * & Capture transcript as session notes (scrubbed) &
+PostToolUse   & WebSearch & File a scrubbed digest of the results &
   No \\
+PostToolUse   & Read & Opt-in: capture an out-of-tree prose file &
+  No \\
+PreCompact    & * & Capture transcript before compaction (scrubbed) &
+  No \\
+SessionEnd    & * & Capture the full transcript on every close &
+  No \\
+SubagentStop  & * & Archive subagent transcript; distill its report
+  into \texttt{memory-<handle>} & No$^{\dagger}$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
+$^{\dagger}$Claude Code treats \texttt{SubagentStop} as a blocking hook:
+a non-zero exit or a \texttt{decision} field keeps the subagent running.
+The handler returns \texttt{\{\}} on every path, and its tests assert
+that under adversarial payloads.
+
 \subsection{Session Start}
 
 \texttt{handle\_session\_start()} auto-registers the working directory
-and launches a background sync via a detached subprocess.  Uses
-atomic PID-file locking (\texttt{O\_CREAT|O\_EXCL}) at
-\texttt{\~{}/.punt-labs/quarry/sync.pid} to prevent concurrent syncs.  Returns
+and launches a background sync via a detached subprocess.  Single-flight
+is a kernel \texttt{flock} on \texttt{\~{}/.punt-labs/quarry/sync.pid}
+(\texttt{SyncLock}, \modpath{sync\_lock.py}) held for the sync
+subprocess's lifetime through fd inheritance, so a dead holder's lock is
+released by the kernel with no PID parsing or reclaim race.  Returns
 \texttt{additionalContext} immediately without waiting.
 
 \subsection{Web Fetch Capture}
 
-\texttt{handle\_post\_web\_fetch()} ingests URLs fetched during a
-session into the \texttt{web-captures} collection.  Deduplicates by
-document name.  Prefers already-fetched content from the tool response
-(avoids re-fetch, reduces SSRF surface).  Both ingress branches (primary
-and the \texttt{ingest\_url} re-fetch fallback) scrub page text and
-redact the URL metadata before content reaches the pushable
-\texttt{web-captures} collection (DES-036).
+\texttt{handle\_post\_web\_fetch()} hands the already-fetched page to the
+daemon's \texttt{/v1/capture} route, which extracts, scrubs, and stores
+it in \texttt{<repo>-captures} (no second fetch; a JS-rendered page that
+extracts to zero chunks is re-fetched server-side through the SSRF gate).
+Before sending, \texttt{WebFetchLoopCloser}
+(\modpath{web\_fetch\_loop\_closer.py}) checks \texttt{/v1/captures/lookup}
+for a prior capture of the URL and, when one exists, nudges the agent to
+\texttt{find} it instead of re-fetching.  The URL's persisted metadata form
+is derived by \texttt{WebFetchName} from the admitted \texttt{HttpUrl}
+(DES-036, DES-057).
 
-\subsection{Pre-Compact Capture}
+\subsection{Web Search and Read Capture}
 
-\texttt{handle\_pre\_compact()} reads the transcript (JSONL) and
-ingests it into the \texttt{session-notes} collection.  Extracts
-user/assistant message text, skipping tool-use blocks.  Capped at
-500{,}000 characters.  The capture file is written through the shared
-\texttt{CaptureWriter}, which scrubs secrets, PII, and profanity before
-the atomic write (DES-036).
+\texttt{HookAgent.post\_web\_search()} files a scrubbed digest of a
+WebSearch's results under the document name \texttt{search: <query>}.
+\texttt{HookAgent.post\_read()} is opt-in (\texttt{read: false} by default,
+because \texttt{Read} fires on every file the agent opens): a file passes
+four admission checks in order --- outside every registered tree, not on
+the secret-path denylist, an allow-listed extension, under the size cap
+--- plus a client-side secret-pattern scan, before its text is sent.
+
+\subsection{Pre-Compact and Session-End Capture}
+
+\texttt{handle\_pre\_compact()} and \texttt{HookAgent.session\_end()} run
+the same \texttt{SessionTranscriptCapture} pipeline
+(\modpath{session\_transcript.py}): archive the raw JSONL under
+\texttt{\~{}/.punt-labs/quarry/sessions/}, extract user/assistant text
+(tool-use blocks skipped, capped at 500{,}000 characters), write the
+scrubbed \texttt{.md} next to the project through the shared
+\texttt{CaptureWriter}, and POST a \texttt{CaptureIngestRequest} the daemon
+files as \texttt{session-<id8>} in \texttt{<repo>-captures}, attributed to
+the repo's ethos pin.  PreCompact fires only on compaction; SessionEnd
+fires on every close, so a short session that never compacts still yields
+a durable capture.  A down daemon leaves the local archive for
+\texttt{quarry backfill-sessions}.
+
+\subsection{Subagent Stop Capture}
+
+\texttt{HookAgent.subagent\_stop()} captures the subagent's own transcript
+(\texttt{agent\_transcript\_path}, keyed by \texttt{agent\_id} --- the
+parent's \texttt{transcript\_path}/\texttt{session\_id} are not its), then
+--- only when \texttt{agent\_type} names a registered ethos identity and
+the transcript had text --- files the subagent's final assistant turn as
+an \texttt{observation} in \texttt{memory-<handle>} named
+\texttt{subagent-<id8>-report}, through \texttt{/v1/remember} with the
+same 5\,s cap as the first post (\modpath{subagent\_capture.py},
+\modpath{subagent\_report.py}).  The transcript is parsed once for both
+rows.  No model distills anything: the report is the summary the subagent
+already wrote.  A non-identity \texttt{agent\_type}
+(\texttt{general-purpose}) gets the raw capture only, never a row under
+the leader's handle (DES-055).
 
 % ===================================================================
 \section{CLI Commands}
@@ -1586,9 +1967,15 @@ the atomic write (DES-036).
 \textbf{Command} & \textbf{Purpose} \\
 \midrule
 \endhead
-\texttt{ingest <source>}      & Ingest file or URL.  Flags: \texttt{-{}-agent-handle},
-  \texttt{-{}-memory-type}, \texttt{-{}-summary} \\
-\texttt{remember}             & Ingest stdin content \\
+\texttt{ingest <url>}         & Ingest a URL (URL-only; local files and
+  directories go through \texttt{register} + \texttt{sync}).  Flags:
+  \texttt{-{}-agent-handle}, \texttt{-{}-memory-type}, \texttt{-{}-summary} \\
+\texttt{remember}             & Ingest stdin content (\texttt{-{}-name};
+  \texttt{-{}-agent-handle} routes to \texttt{memory-<handle>};
+  \texttt{-{}-memory-type} from the closed vocabulary) \\
+\texttt{learn <lesson>}       & Save a distilled lesson (\texttt{-{}-topic},
+  \texttt{-{}-name}); the only writer of \texttt{memory\_type = lesson}
+  (DES-053) \\
 \texttt{find <query>}         & Semantic search \\
 \texttt{show <document>}      & Document metadata or page text \\
 \texttt{status}               & Database statistics \\
@@ -1605,8 +1992,15 @@ the atomic write (DES-036).
 \texttt{list collections}     & List collections with counts \\
 \texttt{list databases}       & List named databases \\
 \texttt{list registrations}   & List registered directories \\
-\texttt{serve}                & Start HTTP API server \\
-\texttt{mcp}                  & Start MCP server (stdio) \\
+\texttt{mcp}                  & Start MCP server (stdio; the engine runs
+  only in \texttt{quarryd}) \\
+\texttt{missions sync}        & File each frozen ethos mission round into
+  \texttt{memory-<worker>} (\texttt{-{}-mission}, \texttt{-{}-dry-run},
+  \texttt{-{}-force}; DES-055) \\
+\texttt{captures init|push}   & Bootstrap / re-scrub and push the project's
+  private capture shadow repo \\
+\texttt{backfill-sessions}    & Backfill historical Claude Code session
+  transcripts (returns 202) \\
 \texttt{login <host>}         & TOFU login to remote server (cert pinning) \\
 \texttt{logout}              & Disconnect from remote server \\
 \texttt{remote list}         & Show remote config; \texttt{-{}-ping} validates connection \\
@@ -1627,11 +2021,13 @@ Global flags: \texttt{-{}-json}, \texttt{-{}-verbose}/\texttt{-v},
 remote server over HTTPS with the pinned CA cert.  Only authentication
 commands (\texttt{login}, \texttt{logout}, \texttt{remote}) and
 administration commands (\texttt{install}, \texttt{uninstall},
-\texttt{serve}, \texttt{mcp}, \texttt{version}) are local-only.
+\texttt{mcp}, \texttt{version}) are local-only.
 All data commands --- \texttt{find}, \texttt{show}, \texttt{status},
-\texttt{ingest}, \texttt{remember}, \texttt{delete}, \texttt{sync},
-every \texttt{list} subcommand, and directory
-\texttt{register}/\texttt{deregister} --- route remotely.  \texttt{use}
+\texttt{ingest}, \texttt{remember}, \texttt{learn}, \texttt{delete},
+\texttt{sync}, every \texttt{list} subcommand, directory
+\texttt{register}/\texttt{deregister}, and \texttt{missions sync} (which
+reads the local mission files and posts each round to the configured
+daemon) --- route remotely.  \texttt{use}
 is local-only by design (the remote server is fixed to its own
 database).
 
@@ -1639,7 +2035,10 @@ database).
 \section{Test Architecture}
 % ===================================================================
 
-Roughly 1{,}500 tests across the suite.  Three tiers plus integration:
+The default run (\texttt{make test}) deselects the \texttt{slow} and
+\texttt{embedding} tiers; \texttt{uv run pytest -{}-collect-only -q}
+reports the current test count.  Three tiers plus integration; the files
+named are representative, not exhaustive:
 
 \begin{center}
 \begin{tabular}{lp{5cm}p{5cm}}
@@ -1647,38 +2046,49 @@ Roughly 1{,}500 tests across the suite.  Three tiers plus integration:
 \textbf{Tier} & \textbf{Strategy} & \textbf{Files} \\
 \midrule
 Tier 1: Core logic & Real data, no mocks & \texttt{test\_database},
-  \texttt{test\_chunker}, \texttt{test\_embeddings},
+  \texttt{test\_page\_chunker}, \texttt{test\_embeddings},
   \texttt{test\_code\_processor}, \texttt{test\_html\_processor},
   \texttt{test\_text\_processor}, \texttt{test\_collections},
   \texttt{test\_config}, \texttt{test\_formatting},
-  \texttt{test\_image\_analyzer}, \texttt{test\_latex\_utils},
-  \texttt{test\_models}, \texttt{test\_pdf\_analyzer},
-  \texttt{test\_presentation\_processor},
-  \texttt{test\_spreadsheet\_processor},
-  \texttt{test\_text\_extractor},
-  \texttt{test\_registry} (17 files) \\
+  \texttt{test\_models}, \texttt{test\_retrieval\_fusion},
+  \texttt{test\_retrieval\_hybrid}, \texttt{test\_memory\_types},
+  \texttt{test\_scrub}, \texttt{test\_format\_strategies},
+  \texttt{test\_registry} \\
 Tier 2: Orchestration & Mocked I/O & \texttt{test\_pipeline},
   \texttt{test\_pipeline\_images},
   \texttt{test\_ocr\_local}, \texttt{test\_url\_ingestion},
   \texttt{test\_sitemap}, \texttt{test\_backends},
-  \texttt{test\_sync},
-  \texttt{test\_hooks}, \texttt{test\_doctor} (9 files) \\
+  \texttt{test\_sync}, \texttt{test\_sync\_concurrency},
+  \texttt{test\_hooks}, \texttt{test\_hooks\_agent},
+  \texttt{test\_subagent\_capture}, \texttt{test\_mission\_memory},
+  \texttt{test\_mission\_store}, \texttt{test\_doctor} \\
 Tier 3: Surface wiring & Fully mocked / hermetic in-process ASGI
   (\texttt{httpx.ASGITransport}), $<$2\,s &
-  \texttt{test\_cli}, \texttt{test\_mcp\_server},
-  \texttt{test\_http\_server}, \texttt{test\_client\_config},
+  \texttt{test\_cli}, \texttt{test\_cli\_missions},
+  \texttt{test\_mcp\_server}, \texttt{test\_mcp\_missions},
+  \texttt{test\_http\_server} (the \modpath{api/} +
+  \modpath{daemon/routes/} contract), \texttt{test\_api},
+  \texttt{test\_client}, \texttt{test\_client\_config},
+  \texttt{test\_retrieval\_equivalence},
   \texttt{test\_daemon\_launcher}, \texttt{test\_watch\_loop},
   \texttt{test\_watch\_reconcile}, \texttt{test\_fs\_watchdog},
-  \texttt{test\_proxy}, \texttt{test\_service} \\
-Integration & Real ONNX + real LanceDB &
-  \texttt{test\_integration} (\texttt{@pytest.mark.slow}) \\
+  \texttt{test\_service} \\
+Invariants & Long-lived-process leak guards; suite hermeticity
+  (DES-047) & \texttt{test\_resource\_invariants},
+  \texttt{test\_hermeticity} \\
+Integration & Real ONNX + real LanceDB; real loopback TLS &
+  \texttt{test\_integration}, \texttt{test\_tls\_smoke}
+  (\texttt{@pytest.mark.slow}; the model loads only under
+  \texttt{embedding}) \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Quality gates: \texttt{ruff} (lint + format), \texttt{mypy} (strict),
-\texttt{pyright} (strict), \texttt{pytest} (all markers except
-slow/integration).  Zero violations required.
+Quality gates (\texttt{make check}): \texttt{ruff} (lint + format),
+\texttt{mypy} (strict), \texttt{pyright} (strict), \texttt{pytest} (all
+markers except slow/embedding), the OO, coupling, and suppression
+merge-base ratchets (DES-040), the import-linter client/engine contract,
+and the OpenAPI drift check.  Zero violations required.
 
 % ===================================================================
 \section{Formal Model}
@@ -1692,15 +2102,21 @@ The specification covers:
 
 \begin{itemize}
   \item Session start with/without auto-sync
-  \item Web fetch auto-capture into \texttt{web-captures} collection
-  \item Pre-compaction transcript capture into \texttt{session-notes}
+  \item Web fetch auto-capture into the \texttt{<repo>-captures} collection
+  \item Pre-compaction transcript capture into \texttt{<repo>-captures}
   \item Database switching via \texttt{use} tool
-  \item Knowledge hint injection at tool boundaries
+  \item Knowledge hint injection at tool boundaries (specified, not yet
+    built)
   \item Compaction observability: a capture flag records whether
     capture preceded compaction; the hook system enforces
     capture-before-compaction on a best-effort basis
   \item Clean session boundaries: all quarry state cleared on
-    \texttt{EndSession}
+    \texttt{EndSession} --- now wired to the \texttt{SessionEnd} hook,
+    which also captures the full transcript
+  \item The WebSearch, Read, and SubagentStop captures ride base-layer
+    operations (\texttt{CompleteToolSuccess}, \texttt{StopSubagent}); the
+    spec's implementation-validation section records them as wired
+    rather than modelling them as quarry-layer schemas
 \end{itemize}
 
 The specification can be type-checked with \texttt{fuzz -t
@@ -1769,19 +2185,21 @@ health              & sync   & ---  & ---  & ---  \\
 % --- Mutating operations (all async on HTTP) ---
 \multicolumn{5}{l}{\emph{Mutating operations}} \\
 \midrule
-register            & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
-deregister          & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
-delete (document)   & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
-delete (collection) & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
-remember            & fire-and-forget & sync & fire-and-forget & fire-and-forget \\
-ingest (URL)        & fire-and-forget & sync & fire-and-forget
+register            & fire-and-forget & fire-and-forget & fire-and-forget & fire-and-forget \\
+deregister          & fire-and-forget & fire-and-forget & fire-and-forget & fire-and-forget \\
+delete (document)   & fire-and-forget & fire-and-forget & fire-and-forget & fire-and-forget \\
+delete (collection) & fire-and-forget & fire-and-forget & fire-and-forget & fire-and-forget \\
+remember            & fire-and-forget & fire-and-forget & fire-and-forget & fire-and-forget \\
+learn               & fire-and-forget & fire-and-forget & fire-and-forget & fire-and-forget \\
+ingest (URL)        & fire-and-forget & fire-and-forget & fire-and-forget
                     & fire-and-forget \\
-ingest (file)       & ---    & sync & ---  & fire-and-forget \\
-sync                & fire-and-forget & sync & fire-and-forget
+capture (hooks)     & fire-and-forget & ---  & ---  & --- \\
+sync                & fire-and-forget & fire-and-forget & fire-and-forget
                     & fire-and-forget \\
+missions sync       & --- (N $\times$ remember) & sync & sync & sync \\
 use (switch db)     & sync   & sync & sync & sync \\
-optimize            & fire-and-forget & sync & fire-and-forget & --- \\
-backfill-sessions   & fire-and-forget & sync & fire-and-forget & --- \\
+optimize            & fire-and-forget & fire-and-forget & fire-and-forget & --- \\
+backfill-sessions   & fire-and-forget & fire-and-forget & fire-and-forget & --- \\
 \end{longtable}
 
 \subsection{Design Rationale}
@@ -1791,10 +2209,18 @@ search (embedding + vector similarity + BM25) completes in
 $<$100\,ms after model load; the overhead of task tracking would
 exceed the operation itself.
 
-\textbf{Mutating operations} are all fire-and-forget on HTTP.  Every
-mutating endpoint returns 202~Accepted with a \field{task\_id}; work
-runs in a background \texttt{asyncio.Task}.  This eliminates the
-15-second CLI timeout as a failure mode for any write operation.
+\textbf{Mutating operations} are all fire-and-forget on HTTP, and
+therefore on every client of it: the CLI prints the daemon's
+\field{task\_id} and exits~0.  Every mutating endpoint returns
+202~Accepted with a \field{task\_id}; the work runs on the daemon's
+serialized per-\texttt{RouteKey} ingest queue (DES-042).  This
+eliminates the 15-second CLI timeout as a failure mode for any write
+operation.  Local files never travel over the wire: \texttt{ingest} is
+URL-only on every surface, and a directory is indexed by
+\texttt{register} + the daemon's own watch loop.  \texttt{missions sync}
+is the one client-side composite: it reads the mission files locally and
+issues one \texttt{remember} per frozen round, so it has no HTTP row of
+its own.
 
 \begin{itemize}
   \item All mutating endpoints use the single unified
@@ -1820,10 +2246,13 @@ runs in a background \texttt{asyncio.Task}.  This eliminates the
 All background tasks follow the same lifecycle:
 
 \begin{enumerate}
-  \item \texttt{POST} validates input, creates a \texttt{TaskState}
-    record on the server context, spawns an \texttt{asyncio.Task}
-    wrapping \texttt{run\_in\_threadpool()}, and returns HTTP~202
-    with \field{task\_id} and \field{status}~=~\texttt{accepted}.
+  \item \texttt{POST} validates input (including the closed
+    \texttt{memory\_type} vocabulary on the write routes), creates a
+    \texttt{TaskState} record in the daemon's \texttt{TaskRegistry}
+    (\modpath{daemon/tasks.py}), hands the job to the daemon's background
+    machinery (the per-\texttt{RouteKey} ingest queue for writes), and
+    returns HTTP~202 with \field{task\_id} and
+    \field{status}~=~\texttt{accepted}.
   \item The background task updates \field{status} to
     \texttt{completed} (with \field{results}) or \texttt{failed}
     (with \field{error}) on completion.

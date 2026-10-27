@@ -207,3 +207,15 @@ class TestFromResponseUnit:
             assert isinstance(err, HttpError)
             assert err.status == status
             assert err.message == "x"
+
+
+class TestIsConflict:
+    """The 409 "already in progress" is the one status the CLI maps to exit 0."""
+
+    def test_409_is_conflict(self) -> None:
+        err = QuarryError.from_response(409, {"error": "busy", "task_id": "T1"})
+        assert err.is_conflict is True
+
+    @pytest.mark.parametrize("status", [400, 401, 404, 422, 500])
+    def test_other_statuses_are_not(self, status: int) -> None:
+        assert QuarryError.from_response(status, {"error": "x"}).is_conflict is False

@@ -168,9 +168,11 @@ class TestFindParamParity:
             assert key in params, f"filter {key} did not reach the daemon"
 
     def test_empty_filters_are_dropped(self, transport: RecordingTransport) -> None:
+        """Every optional filter is dropped when blank; ``surface`` is not
+        optional -- the CLI always stamps its own provenance (DES-056)."""
         _run(["find", "hello"])
         params = transport.params_for("GET", "/v1/search")
-        assert params == {"q": "hello"}
+        assert params == {"q": "hello", "surface": "cli"}
 
 
 class TestShow:
@@ -300,6 +302,32 @@ class TestRememberCollectionSentinel:
         assert result.exit_code == 0, result.output
         assert transport.body_for("POST", "/v1/remember")["collection"] == "notes"
 
+    def test_memory_type_reaches_the_wire_unchanged(
+        self, transport: RecordingTransport
+    ) -> None:
+        """The CLI never rewrites ``--memory-type``; the daemon owns validation."""
+        result = runner.invoke(
+            app,
+            ["--json", "remember", "--name", "n.md", "--memory-type", "procedure"],
+            input="body",
+        )
+        assert result.exit_code == 0, result.output
+        assert transport.body_for("POST", "/v1/remember")["memory_type"] == "procedure"
+
+    def test_memory_type_help_names_the_vocabulary(self) -> None:
+        """The help text is derived from ``MemoryType``, so it lists all four."""
+        result = runner.invoke(app, ["remember", "--help"])
+        assert result.exit_code == 0, result.output
+        for value in ("fact", "observation", "opinion", "procedure"):
+            assert value in result.output
+
+
+class TestIngestHelp:
+    def test_overwrite_help_says_a_stored_url_is_skipped_without_it(self) -> None:
+        result = runner.invoke(app, ["ingest", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "else skip it" in " ".join(result.output.split())
+
 
 class TestLearn:
     """CLI ``learn`` param parity (bug class 3) -- shape matches C2's ratified
@@ -357,6 +385,15 @@ class TestSyncRegisterDeregister:
         _run(["register", "/"])
         body = transport.body_for("POST", "/v1/registrations")
         assert body["collection"] == "root"
+
+    def test_register_default_name_is_the_sanitized_leaf(
+        self, transport: RecordingTransport, tmp_path: Path
+    ) -> None:
+        directory = tmp_path / "My Notes"
+        directory.mkdir()
+        _run(["register", str(directory)])
+        body = transport.body_for("POST", "/v1/registrations")
+        assert body["collection"] == "My-Notes"
 
     def test_deregister_encodes_params_and_dispatches(
         self, transport: RecordingTransport
@@ -520,3 +557,22 @@ def _status_request(
             "embedding_dimension": 768,
         },
     )
+
+
+class TestMcpCommand:
+    """``quarry mcp`` is the only launcher, so it owns the server's logging."""
+
+    def test_configures_stderr_logging_at_info_before_serving(self) -> None:
+        calls: list[str] = []
+        with (
+            patch(
+                "quarry.__main__.LoggingConfig.configure",
+                side_effect=lambda *, stderr_level: calls.append(stderr_level),
+            ),
+            patch("quarry.mcp_server.McpTools.run_stdio") as serve,
+        ):
+            result = runner.invoke(app, ["mcp"])
+        assert result.exit_code == 0, result.output
+        # The CLI callback's default level first, then the launcher's INFO.
+        assert calls[-1] == "INFO"
+        serve.assert_called_once()

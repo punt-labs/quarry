@@ -132,7 +132,7 @@ def test_sweep_never_touches_registered_or_retained_collections(tmp_path: Path) 
         # "reg" stays registered, "keep" is retained, "orphan" is neither. The
         # sweep derives registered + retained from the registry itself.
         await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
 
         # orphan swept; registered + kept spared
         assert _live_collections(ctx) == {"reg", "keep"}
@@ -176,7 +176,7 @@ def test_sweep_never_purges_unmarked_collections(tmp_path: Path) -> None:
         assert _live_collections(ctx) == live
 
         await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
 
         assert _live_collections(ctx) == live  # nothing marked → nothing swept
 
@@ -214,7 +214,7 @@ def test_sweep_purges_subsumed_child_marked_by_eviction(tmp_path: Path) -> None:
             conn.close()
 
         await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
 
         assert "child" not in _live_collections(ctx)  # marked → swept
 
@@ -282,7 +282,7 @@ def test_reregister_between_sweep_reads_spares_collection(tmp_path: Path) -> Non
         )
         with patch.object(SyncRegistry, "list_registrations", patched):
             await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
 
         # "keep" re-registered mid-read → spared; "orphan" still swept.
         assert _live_collections(ctx) == {"keep"}
@@ -322,7 +322,7 @@ def test_keepdata_deregister_between_sweep_reads_spares_collection(
         )
         with patch.object(SyncRegistry, "list_registrations", patched):
             await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
 
         # "keep" kept (retained mid-read) → spared; "orphan" swept.
         assert _live_collections(ctx) == {"keep"}
@@ -365,7 +365,7 @@ def test_sweep_fail_closed_on_scan_error(tmp_path: Path) -> None:
         assert _live_collections(ctx) == {"orphan"}  # skipped this cycle
 
         await reconciler._sweep_orphans()  # scan healthy again → self-heals
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
         assert _live_collections(ctx) == set()  # orphan purged next cycle
 
     asyncio.run(_run())

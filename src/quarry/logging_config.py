@@ -29,6 +29,10 @@ import os
 from pathlib import Path
 from typing import final
 
+from quarry.home_paths import HomeUnresolvedError, QuarryHome
+
+logger = logging.getLogger(__name__)
+
 
 @final
 class LoggingConfig:
@@ -65,7 +69,7 @@ class LoggingConfig:
         override = os.environ.get("QUARRY_LOG_DIR", "")
         if override:
             return Path(override)
-        return Path.home() / ".punt-labs" / "quarry" / "logs"
+        return QuarryHome.log_root()
 
     @staticmethod
     def _require_bare_filename(log_file: str) -> None:
@@ -106,8 +110,7 @@ class LoggingConfig:
         (PY-EH-1: validate at the boundary, trust within).
         """
         cls._require_bare_filename(log_file)
-        log_dir = cls.log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        log_dir = cls._resolved_log_dir()
 
         env_level = os.environ.get("QUARRY_LOG_LEVEL", "").upper()
         valid_levels = logging.getLevelNamesMapping()
@@ -115,7 +118,29 @@ class LoggingConfig:
             effective_level = env_level
         else:
             effective_level = stderr_level
+        if log_dir is None and valid_levels.get(effective_level, 0) < logging.WARNING:
+            # The file is where INFO detail (frames, breadcrumbs) goes; with no
+            # file it would flood stderr, so stderr keeps warnings and above.
+            effective_level = "WARNING"
 
+        handlers: dict[str, dict[str, object]] = {
+            "stderr": {
+                "class": "quarry.log_redaction.RedactingStreamHandler",
+                "stream": "ext://sys.stderr",
+                "formatter": "standard",
+                "level": effective_level,
+            },
+        }
+        if log_dir is not None:
+            handlers["file"] = {
+                "class": "quarry.log_redaction.RedactingFileHandler",
+                "filename": str(log_dir / log_file),
+                "maxBytes": cls._MAX_BYTES,
+                "backupCount": cls._BACKUP_COUNT,
+                "encoding": "utf-8",
+                "formatter": "standard",
+                "level": "INFO",
+            }
         logging.config.dictConfig(
             {
                 "version": 1,
@@ -126,31 +151,32 @@ class LoggingConfig:
                         "datefmt": cls._DATE_FORMAT,
                     },
                 },
-                "handlers": {
-                    "file": {
-                        "class": "logging.handlers.RotatingFileHandler",
-                        "filename": str(log_dir / log_file),
-                        "maxBytes": cls._MAX_BYTES,
-                        "backupCount": cls._BACKUP_COUNT,
-                        "encoding": "utf-8",
-                        "formatter": "standard",
-                        "level": "INFO",
-                    },
-                    "stderr": {
-                        "class": "logging.StreamHandler",
-                        "stream": "ext://sys.stderr",
-                        "formatter": "standard",
-                        "level": effective_level,
-                    },
-                },
+                "handlers": handlers,
                 "loggers": {
                     "lancedb": {"level": "WARNING"},
                     "onnxruntime": {"level": "WARNING"},
                     "httpx": {"level": "WARNING"},
                 },
-                "root": {
-                    "level": "DEBUG",
-                    "handlers": ["file", "stderr"],
-                },
+                "root": {"level": "DEBUG", "handlers": list(handlers)},
             }
         )
+        if log_dir is None:
+            logger.warning(
+                "no home directory: logging to stderr only "
+                "(set HOME, or QUARRY_LOG_DIR for a log file)"
+            )
+
+    @classmethod
+    def _resolved_log_dir(cls) -> Path | None:
+        """Return the log directory, created; ``None`` when no home resolves.
+
+        ``None`` is the documented contract: a process with no home directory and
+        no ``QUARRY_LOG_DIR`` has nowhere to write a log, and must still run (the
+        doctor has to report the fault), so it logs to stderr only.
+        """
+        try:
+            log_dir = cls.log_dir()
+        except HomeUnresolvedError:
+            return None
+        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return log_dir

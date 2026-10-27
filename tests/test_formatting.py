@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from quarry.api import InsightsResponse
 from quarry.formatting import (
     ColumnSpec,
     format_collections,
@@ -10,6 +11,7 @@ from quarry.formatting import (
     format_deregister_summary,
     format_documents,
     format_ingest_summary,
+    format_insights,
     format_register_summary,
     format_registrations,
     format_search_results,
@@ -241,6 +243,67 @@ class TestStatus:
         }
         result = format_status(info)
         assert "Provider:       ?" in result
+
+
+_EMPTY_INSIGHTS = InsightsResponse(
+    telemetry_enabled=True,
+    total_queries=0,
+    empty_result_rate=0.0,
+    p50_latency_ms=0.0,
+    p95_latency_ms=0.0,
+    top_empty_queries=[],
+    per_collection_hits=[],
+    per_agent_recall=[],
+    memory_queries=0,
+    knowledge_queries=0,
+    hit_decay_bands=[],
+)
+
+_POPULATED_INSIGHTS = InsightsResponse(
+    telemetry_enabled=True,
+    total_queries=10,
+    empty_result_rate=0.2,
+    p50_latency_ms=12.3,
+    p95_latency_ms=45.6,
+    top_empty_queries=[{"query_scrubbed": "nada", "count": 2}],
+    per_collection_hits=[{"collection": "default", "hit_count": 5}],
+    per_agent_recall=[{"agent_handle": "rmh", "query_count": 3}],
+    memory_queries=3,
+    knowledge_queries=7,
+    hit_decay_bands=[{"band": "0-7d", "hit_count": 4}],
+)
+
+
+class TestFormatInsights:
+    """Shared by the CLI (``quarry insights``) and the MCP ``insights`` tool."""
+
+    def test_empty_store_renders_without_breakdown_sections(self) -> None:
+        text = format_insights(_EMPTY_INSIGHTS)
+        assert "Total queries:    0" in text
+        assert "Top empty queries:" not in text
+        assert "Per-collection hits:" not in text
+
+    def test_telemetry_disabled_renders_as_disabled(self) -> None:
+        disabled = _EMPTY_INSIGHTS.model_copy(update={"telemetry_enabled": False})
+        text = format_insights(disabled)
+        assert "disabled" in text
+
+    def test_populated_store_renders_every_breakdown(self) -> None:
+        text = format_insights(_POPULATED_INSIGHTS)
+        assert "Top empty queries:" in text
+        assert "nada: 2" in text
+        assert "Per-collection hits:" in text
+        assert "default: 5" in text
+        assert "Per-agent recall:" in text
+        assert "rmh: 3" in text
+        assert "Hit decay bands:" in text
+        assert "0-7d: 4" in text
+
+    def test_latency_and_rate_are_formatted(self) -> None:
+        text = format_insights(_POPULATED_INSIGHTS)
+        assert "20.0%" in text
+        assert "12.3ms" in text
+        assert "45.6ms" in text
 
 
 class TestActionSummaries:

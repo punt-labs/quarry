@@ -1,22 +1,25 @@
 """Send scrubbed captures to the running daemon over the thin HTTP client.
 
 Every hook that produces a capture — pre-compact, web-fetch, session-end,
-web-search, read — routes through :class:`DaemonCaptureSender`.  Keeping the
-four failure classes named in exactly one place prevents each caller from
-re-inventing its own error branching.  Fire-and-forget: the daemon 202s a
-capture before any embedding runs, so a healthy send is near instant and a
-lost send is only a lost *capture*, never a lost transcript on disk.
+web-search, read, subagent-stop — routes through :class:`DaemonCaptureSender`.
+Keeping the four failure classes named in exactly one place prevents each
+caller from re-inventing its own error branching.  Fire-and-forget: the daemon
+202s a capture before any embedding runs, so a healthy send is near instant and
+a lost send is only a lost *capture*, never a lost transcript on disk.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Self, final
+from functools import partial
+from typing import TYPE_CHECKING, final
+
+from quarry.send_outcome import SendOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from quarry.api import CaptureIngestRequest, IngestRequest
+    from quarry.api import CaptureIngestRequest, IngestRequest, RememberRequest
     from quarry.client import QuarryClient
 
 logger = logging.getLogger(__name__)
@@ -38,36 +41,42 @@ class DaemonCaptureSender:
     has no durable local copy so a lost send is genuinely lost, whereas a
     compaction can fall back to ``backfill-sessions`` — so the caller supplies
     the phrasing that reflects what recovery is actually available.
+
+    Three doors, one boundary: a scrubbed capture (``/v1/capture``), a
+    server-side re-fetch (``/v1/ingest``), and a distilled memory
+    (``/v1/remember``). All three carry the same short timeout and land in the
+    daemon's scrub-before-store job, so no hook needs an engine.
     """
 
     __slots__ = ()
 
-    def __new__(cls) -> Self:
-        return super().__new__(cls)
-
     def send_capture(
         self, request: CaptureIngestRequest, *, unreachable_log: str
-    ) -> bool:
+    ) -> SendOutcome:
         """Send an inline capture (transcript or fetched page) to the daemon."""
-        return self._send(
-            lambda client: client.capture(request, timeout=_CAPTURE_SEND_TIMEOUT),
-            unreachable_log=unreachable_log,
-        )
+        return self._send(lambda c: partial(c.capture, request), unreachable_log)
 
-    def send_ingest_url(self, request: IngestRequest, *, unreachable_log: str) -> bool:
+    def send_ingest_url(
+        self, request: IngestRequest, *, unreachable_log: str
+    ) -> SendOutcome:
         """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
-        return self._send(
-            lambda client: client.ingest_url(request, timeout=_CAPTURE_SEND_TIMEOUT),
-            unreachable_log=unreachable_log,
-        )
+        return self._send(lambda c: partial(c.ingest_url, request), unreachable_log)
+
+    def send_remember(
+        self, request: RememberRequest, *, unreachable_log: str
+    ) -> SendOutcome:
+        """File a distilled memory (a subagent's own report) via ``remember``."""
+        return self._send(lambda c: partial(c.remember, request), unreachable_log)
 
     @staticmethod
-    def _send(post: Callable[[QuarryClient], object], *, unreachable_log: str) -> bool:
-        """Run *post* against a fresh client; ``False`` on any of four failure classes.
+    def _send(
+        door: Callable[[QuarryClient], Callable[..., object]], unreachable_log: str
+    ) -> SendOutcome:
+        """Post through the bound client method *door* selects; never raise.
 
         The hook imports only the thin client — no engine.  A failed send is
         never fatal (fire-and-forget; the daemon 202s immediately), so this
-        returns ``False`` rather than raising.  The four failure classes are
+        returns a falsy :class:`SendOutcome` rather than raising.  Failures are
         logged distinctly so an operator is not misled: a local misconfiguration
         (e.g. a ``QUARRY_URL`` pointing at a refused cleartext remote) is a
         config error, not a down daemon; a genuine connection failure is
@@ -85,19 +94,18 @@ class DaemonCaptureSender:
         )
 
         try:
-            post(TargetResolver.connect())
+            door(TargetResolver.connect())(timeout=_CAPTURE_SEND_TIMEOUT)
         except ClientConfigError as exc:
-            logger.warning("daemon target misconfigured: %s", exc.message)
-            return False
+            outcome = SendOutcome.config(f"daemon target misconfigured: {exc.message}")
         except QuarryConnectionError:
-            logger.warning("%s", unreachable_log)
-            return False
+            outcome = SendOutcome.unreachable(unreachable_log)
         except HttpError as exc:
-            logger.warning(
-                "daemon rejected request: HTTP %s — %s", exc.status, exc.message
-            )
-            return False
+            outcome = SendOutcome.rejected(exc.status, exc.message)
         except QuarryError as exc:
-            logger.warning("daemon send failed (malformed response): %s", exc.message)
-            return False
-        return True
+            outcome = SendOutcome.error(
+                f"daemon send failed (malformed response): {exc.message}"
+            )
+        else:
+            return SendOutcome(sent=True)
+        logger.warning("%s", outcome.log)
+        return outcome

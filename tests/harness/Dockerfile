@@ -33,7 +33,7 @@ ENV HF_HOME=/opt/hf-cache
 # Pinned to quarry's resolved huggingface-hub (uv.lock) so a breaking hub release
 # cannot make the harness flaky while the repo is unchanged — a digest-pinned
 # base image with an unpinned tool is a false floor.
-RUN pip install --no-cache-dir "huggingface-hub==1.4.1" \
+RUN pip install --no-cache-dir "huggingface-hub==1.30.0" \
  && python - <<'PY'
 from huggingface_hub import hf_hub_download
 

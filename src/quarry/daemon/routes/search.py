@@ -2,26 +2,66 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
+from quarry.query_log import get_query_log
+from quarry.query_log_types import QueryEvent, QueryHit
 from quarry.results import SearchFilter
 from quarry.retrieval import SearchService
 from quarry.retrieval.config import RetrievalConfig
+from quarry.scrub import scrub
 
 if TYPE_CHECKING:
     from starlette.datastructures import QueryParams
 
+    from quarry.results import SearchResult
+
 logger = logging.getLogger(__name__)
+
+# Surface recorded when a caller omits ``?surface=`` -- a bare HTTP client that
+# never threads provenance is not "cli" or "mcp", so this earns its own honest
+# label rather than silently defaulting to one of the named surfaces.
+_DEFAULT_SURFACE = "unknown"
+
+# The closed vocabulary ``SearchRequest.surface`` documents but does not
+# enforce (PY-TS-14 -- kept an open ``str`` there for forward-compat with a new
+# caller). This route is where an unrecognized value earns the fallback
+# instead: provenance is best-effort telemetry, so a stray or future value
+# must never turn into a 400 and break the search itself.
+_KNOWN_SURFACES = frozenset({"cli", "mcp", "http", "plugin"})
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchOutcome:
+    """One completed search's inputs and results, bundled for telemetry.
+
+    Pushes what would otherwise be six parameters on the telemetry-recording
+    methods into a single value object (PY-OO-3): the search route already
+    assembles every field below to answer the request, so telemetry recording
+    borrows them rather than re-deriving or re-threading them individually.
+    """
+
+    query: str
+    surface: str
+    search_filter: SearchFilter
+    limit: int
+    latency_ms: float
+    results: list[SearchResult]
 
 
 @final
 class SearchRoutes(RouteGroup):
-    """Serve search — clamp the limit, build the filter, rank hits."""
+    """Serve search — clamp the limit, build the filter, rank hits, log telemetry."""
 
     def search(self, request: Request) -> JSONResponse:
         auth_resp = self.reject_unauthorized(request)
@@ -42,18 +82,116 @@ class SearchRoutes(RouteGroup):
             decay_rate=self.ctx.settings.retrieval_decay_rate,
             lesson_boost=self.ctx.settings.retrieval_lesson_boost,
         )
+        started = time.perf_counter()
         results = SearchService(self.ctx.query_database, config).search(
             query, query_vector, search_filter, limit
         )
+        latency_ms = (time.perf_counter() - started) * 1000
         formatted = [r.to_dict() for r in results]
+
+        background = None
+        if self.ctx.settings.telemetry_enabled:
+            outcome = _SearchOutcome(
+                query=query,
+                surface=self._coerce_surface(params.get("surface", "")),
+                search_filter=search_filter,
+                limit=limit,
+                latency_ms=latency_ms,
+                results=results,
+            )
+            # A ``BackgroundTask`` on a sync function runs via Starlette's
+            # threadpool AFTER the response is sent (starlette.background),
+            # not before -- a contended or slow telemetry write must never
+            # add latency to the search response it rides along with.
+            background = BackgroundTask(self._record_telemetry, outcome)
 
         # DEBUG per the level policy in quarry.logging_config: search is the
         # daemon's highest-frequency request, so a count per query would bury
         # the operational record it shares a file with.
         logger.debug("Search results=%d", len(formatted))
         return JSONResponse(
-            {"query": query, "total_results": len(formatted), "results": formatted}
+            {"query": query, "total_results": len(formatted), "results": formatted},
+            background=background,
         )
+
+    def _record_telemetry(self, outcome: _SearchOutcome) -> None:
+        """Record one ``query_events`` row + N ``query_hits`` rows, scrubbed first.
+
+        Runs as a post-response :class:`~starlette.background.BackgroundTask`
+        (PY-EH boundary I/O, not internal defensive coding): a locked
+        database or a full disk here must never turn an otherwise-successful
+        search into a 500 or added latency, so any failure is logged and
+        swallowed rather than raised back into the (already-sent) response.
+        """
+        try:
+            query_log = get_query_log(self.ctx.settings.telemetry_path)
+            query_log.record(self._build_event(outcome), self._build_hits(outcome))
+        except Exception:  # boundary I/O, see docstring -- must not fail `find`
+            logger.exception("recall telemetry write failed; search results unaffected")
+
+    @staticmethod
+    def _build_event(outcome: _SearchOutcome) -> QueryEvent:
+        """Return the scrubbed ``query_events`` row for *outcome*."""
+        scrubbed, _counts = scrub(outcome.query)
+        search_filter = outcome.search_filter
+        return QueryEvent(
+            ts=datetime.now(UTC).isoformat(),
+            surface=outcome.surface,
+            agent_handle=search_filter.agent_handle or "",
+            collection=search_filter.collection or "",
+            filters_json=json.dumps(SearchRoutes._filter_dict(search_filter)),
+            limit_n=outcome.limit,
+            latency_ms=round(outcome.latency_ms, 3),
+            result_count=len(outcome.results),
+            query_scrubbed=scrubbed,
+            query_len=len(outcome.query),
+        )
+
+    @staticmethod
+    def _build_hits(outcome: _SearchOutcome) -> list[QueryHit]:
+        """Return one ``query_hits`` row per ranked result in *outcome*."""
+        return [
+            QueryHit(
+                rank=rank,
+                document_name=r.document_name,
+                collection=r.collection,
+                chunk_index=r.chunk_index,
+                score=r.similarity,
+                hit_agent_handle=r.agent_handle,
+                memory_type=r.memory_type,
+            )
+            for rank, r in enumerate(outcome.results, start=1)
+        ]
+
+    @staticmethod
+    def _filter_dict(search_filter: SearchFilter) -> dict[str, str]:
+        """Return *search_filter*'s non-empty fields, scrubbed, for ``filters_json``.
+
+        Every field here is a user-supplied query param (``?document=``,
+        ``?agent_handle=``, ...) that reaches disk verbatim in
+        ``query_events.filters_json`` -- DES-056 D3's "a secret typed into a
+        search query never hits disk" holds only if every persisted string is
+        scrubbed, not just ``query_scrubbed``.
+        """
+        fields = (
+            ("collection", search_filter.collection),
+            ("document", search_filter.document),
+            ("page_type", search_filter.page_type),
+            ("source_format", search_filter.source_format),
+            ("agent_handle", search_filter.agent_handle),
+            ("memory_type", search_filter.memory_type),
+        )
+        return {name: scrub(value)[0] for name, value in fields if value}
+
+    @staticmethod
+    def _coerce_surface(raw: str) -> str:
+        """Return *raw* if it names a known surface, else :data:`_DEFAULT_SURFACE`.
+
+        Covers both an absent ``?surface=`` (empty string) and a value outside
+        the closed set -- a future caller identifying itself with a name this
+        set hasn't learned yet must still get a recorded search, not a 400.
+        """
+        return raw if raw in _KNOWN_SURFACES else _DEFAULT_SURFACE
 
     @staticmethod
     def _limit(params: QueryParams) -> int:

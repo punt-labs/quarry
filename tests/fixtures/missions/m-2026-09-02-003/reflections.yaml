@@ -1,0 +1,11 @@
+reflections:
+    - mission: m-2026-09-02-003
+      round: 1
+      created_at: "2026-09-02T13:36:13Z"
+      author: claude
+      converging: true
+      signals:
+        - 'evaluator djb: REJECT — blocker: WatchedTree._watches mutated from event-loop and observer threads with no lock; release() can abort mid-cleanup and re-leak watches'
+        - 'evaluator djb: major — schedule_tree aborts the whole tree on any OSError'
+      recommendation: continue
+      reason: Round 1's DRY consolidation stands; round 2 replaces the per-directory scheduling mechanism.

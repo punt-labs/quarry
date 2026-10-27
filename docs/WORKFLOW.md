@@ -403,6 +403,8 @@ function mission_loop(mission):
         if findings: reflect(findings)   # another round, same mission
     while findings remain
     close(mission)
+    quarry_missions_sync(mission)    # Loop 2 (DES-055): file this mission's
+                                     # per-round evaluator feedback to memory-<worker>
 ```
 
 Entry and exit for one mission iteration:

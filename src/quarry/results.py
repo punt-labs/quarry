@@ -31,6 +31,8 @@ class IngestResult(TypedDict):
     sheets: NotRequired[int]
     slides: NotRequired[int]
     format: NotRequired[str]
+    # ``"exists"`` for a create-if-absent skip: the document was already stored.
+    skipped: NotRequired[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +151,7 @@ class DocumentSummary(TypedDict):
     chunk_count: int
     indexed_pages: int
     ingestion_timestamp: str
+    source_version: str
 
 
 class CollectionSummary(TypedDict):
@@ -173,19 +176,6 @@ class CoverageCounts(TypedDict):
     documents_indexed: int
     transcripts_captured: int
     memories_saved: int
-
-
-class SitemapResult(TypedDict):
-    """Result of sitemap crawl and bulk URL ingestion."""
-
-    sitemap_url: str
-    collection: str
-    total_discovered: int
-    after_filter: int
-    ingested: int
-    skipped: int
-    failed: int
-    errors: list[str]
 
 
 @dataclass(frozen=True, slots=True)

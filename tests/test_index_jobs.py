@@ -88,7 +88,7 @@ def test_index_one_missing_file_is_graceful(tmp_path: Path) -> None:
         conn.close()
     assert outcome.error is not None
     assert outcome.ingested == 0
-    assert "never_existed.md" in outcome.error
+    assert outcome.error == "never_existed.md: internal error: FileNotFoundError"
 
 
 def test_index_one_mid_stream_error_is_graceful(
@@ -114,7 +114,8 @@ def test_index_one_mid_stream_error_is_graceful(
     finally:
         conn.close()
     assert outcome.error is not None
-    assert "stream boom" in outcome.error
+    assert outcome.error.endswith(": internal error: OSError")
+    assert "stream boom" not in outcome.error
 
 
 def test_file_index_job_run_completes(tmp_path: Path) -> None:
@@ -237,7 +238,7 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
         purge_state = ctx.tasks.begin("deregister")
         purge_state.results = {"deleted_chunks": 0}
         await RegistrationLifecycle(ctx).run_purge(purge_state, "col")
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
         # 3. no orphan chunks survive for the deregistered collection.
         assert _docs(ctx.database) == set()
 
@@ -288,11 +289,80 @@ def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> No
         )
         assert reg_state.status == "completed"
         assert reg_state.results["subsumed"] == ["child-col"]
-        await ctx.aclose_ingest_queue()
+        await ctx.ingest_queue.aclose(drain_timeout=30.0)
         # 3. no orphan chunks survive in the subsumed child collection.
         assert _docs(ctx.database) == set()
 
     asyncio.run(_run())
+
+
+def _lifecycle_fixture(tmp_path: Path) -> tuple[Settings, Path]:
+    base = tmp_path / "data" / "testdb"
+    (base / "lancedb").mkdir(parents=True)
+    settings = Settings(
+        lancedb_path=base / "lancedb", registry_path=base / "registry.db"
+    )
+    parent = tmp_path / "proj"
+    (parent / "sub").mkdir(parents=True)
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(parent.resolve(), "parent-col")
+    finally:
+        conn.close()
+    return settings, parent
+
+
+def test_a_registration_refusal_is_returned_to_the_client_and_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings, parent = _lifecycle_fixture(tmp_path)
+
+    async def _run() -> TaskState:
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
+        state = ctx.tasks.begin("register")
+        with caplog.at_level(logging.WARNING):
+            await RegistrationLifecycle(ctx).run_register(
+                state, (parent / "sub").resolve(), "child-col"
+            )
+        return state
+
+    state = asyncio.run(_run())
+    assert state.status == "failed"
+    assert state.error is not None
+    assert state.error.startswith("directory covered by a parent registration; ")
+    assert state.error.endswith("named in the quarry logs)")
+    assert state.error in caplog.text
+    assert "parent-col" in caplog.text
+    assert not [r for r in caplog.records if r.exc_info]
+
+
+def test_a_stray_value_error_in_registration_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings, parent = _lifecycle_fixture(tmp_path)
+
+    def _boom(*_a: object, **_k: object) -> None:
+        detail = "unexpected /home/me/secret/path"
+        raise ValueError(detail)
+
+    monkeypatch.setattr(RegistrationLifecycle, "_register_sync", _boom)
+
+    async def _run() -> TaskState:
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
+        state = ctx.tasks.begin("register")
+        with caplog.at_level(logging.WARNING):
+            await RegistrationLifecycle(ctx).run_register(
+                state, (parent / "sub").resolve(), "child-col"
+            )
+        return state
+
+    state = asyncio.run(_run())
+    assert state.error == "internal error: ValueError"
+    assert "ValueError" in caplog.text  # the log names the class and the frames ...
+    assert "_boom" in caplog.text
+    assert "/home/me/secret/path" not in caplog.text  # ... and never the message
 
 
 def test_subsume_purge_failure_is_logged_and_reported(
@@ -369,3 +439,27 @@ def test_index_one_does_not_reembed_unchanged_content(tmp_path: Path) -> None:
     assert outcome.error is None
     assert not second.embedded
     assert "a.md" in _docs(db)  # the chunks are still there, not deleted
+
+
+def test_index_one_planning_refusal_keeps_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal is URL-free by construction, so the file's error keeps it."""
+    from quarry.content_guard import UnindexableContentError
+
+    db, settings, root = _fixture(tmp_path)
+    (root / "d.md").write_text("body")
+
+    def _refuse(*_args: object, **_kwargs: object) -> object:
+        msg = "binary content rejected: pdf header"
+        raise UnindexableContentError(msg)
+
+    monkeypatch.setattr("quarry.ingestion.file_indexer.plan_file_chunks", _refuse)
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        outcome = SingleFileIndexer(
+            db.store, conn, settings, collection="col", resolved=root
+        ).index_one(root / "d.md")
+    finally:
+        conn.close()
+    assert outcome.error == "d.md: binary content rejected: pdf header"

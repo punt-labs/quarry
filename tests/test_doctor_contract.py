@@ -1,0 +1,1029 @@
+"""Doctor and install always complete; a failed or crashed required check fails them."""
+
+from __future__ import annotations
+
+import errno
+import json
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+from unittest.mock import patch
+
+import lancedb
+import pytest
+from pydantic import BaseModel, ValidationError, field_validator
+
+from quarry import doctor as doctor_mod
+from quarry.doctor import check_environment, run_install
+from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_failure import CheckFailure
+from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.doctor_memory import MemoryDiagnostics
+from quarry.json_file import JsonFile
+from quarry.opencv_headless import HeadlessOpenCv
+from tests.test_doctor import _mock_install_deps
+
+MP = pytest.MonkeyPatch
+
+
+class TestRequiredChecksStayRequired:
+    def test_a_required_check_that_crashes_fails_the_run(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        def boom() -> object:
+            msg = "version probe exploded"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(doctor_mod, "_check_python_version", boom)
+
+        code = check_environment()
+
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "✗ Python" in out  # a required failure, not an advisory circle
+
+    def test_an_advisory_check_that_crashes_does_not_fail_the_run(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        baseline = check_environment()
+        capsys.readouterr()
+
+        def boom() -> object:
+            msg = "probe exploded"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(DaemonDiagnostics, "reachability", boom)
+
+        assert check_environment() == baseline
+
+
+class TestHomeAndCwdAreGuarded:
+    def test_a_deleted_working_directory_is_a_failed_check_not_a_crash(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        def gone() -> Path:
+            raise FileNotFoundError(errno.ENOENT, "cwd deleted")
+
+        monkeypatch.setattr(Path, "cwd", gone)
+
+        check_environment()
+
+        out = capsys.readouterr().out
+        assert "the current directory no longer exists" in out
+        assert "Recall telemetry" in out  # the checks after it still ran
+
+    def test_a_home_that_cannot_be_resolved_does_not_crash_doctor_or_install(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def no_home() -> Path:
+            msg = "Could not determine home directory."
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(Path, "home", no_home)
+
+        check_environment()
+        out = capsys.readouterr().out
+
+        assert "✗ Home directory" in out
+        assert "Python" in out
+        assert "issue(s) found" in out
+
+
+@pytest.mark.usefixtures("real_embedding_factory")
+class TestInstallAlwaysCompletes:
+    _DL = "quarry.embeddings.OnnxEmbeddingBackend.download_model_files"
+
+    def test_a_configure_that_crashes_is_a_failed_step_and_install_goes_on(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        registered: list[bool] = []
+
+        def register() -> str:
+            registered.append(True)
+            return "registered"
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_deps(monkeypatch)
+
+        def boom(_self: ClaudeCodeMcp) -> object:
+            msg = "claude exploded"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(ClaudeCodeMcp, "configure", boom)
+        monkeypatch.setattr("quarry.service.install", register)
+        with patch(self._DL) as download:
+            download.return_value = ("/m.onnx", "/t.json")
+            run_install()
+
+        assert registered == [True]
+        assert "RuntimeError" in capsys.readouterr().out
+
+    def test_a_home_that_cannot_be_resolved_fails_the_directory_step_only(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _mock_install_deps(monkeypatch)
+
+        def no_home() -> Path:
+            msg = "no home"
+            raise RuntimeError(msg)
+
+        # A context, so the home is back before the autouse fixtures tear down.
+        with monkeypatch.context() as scoped:
+            scoped.setattr(Path, "home", no_home)
+            for name in ("QUARRY_ROOT", "QUARRY_LOG_DIR", "LANCEDB_PATH"):
+                scoped.delenv(name, raising=False)
+            with patch(self._DL) as download:
+                download.return_value = ("/m.onnx", "/t.json")
+                code = run_install()
+
+        assert code == 1
+        out = capsys.readouterr().out
+        assert "Failed to locate the data directory: HomeUnresolvedError" in out
+
+    def test_the_fp16_step_says_why_it_was_skipped(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_deps(monkeypatch)
+        monkeypatch.setattr(
+            "onnxruntime.get_available_providers", lambda: ["CUDAExecutionProvider"]
+        )
+        calls: list[object] = []
+
+        def download(**kwargs: object) -> tuple[str, str]:
+            calls.append(kwargs)
+            if kwargs.get("model_file") == "onnx/model_fp16.onnx":
+                raise OSError(errno.ENOSPC, "no space")
+            return ("/m.onnx", "/t.json")
+
+        with patch(self._DL, side_effect=download):
+            run_install()
+
+        out = capsys.readouterr().out
+        assert "FP16 skipped: OSError: ENOSPC" in out
+        assert len(calls) == 2
+
+
+def _fake_claude(directory: Path, script: str) -> Path:
+    path = directory / "claude"
+    path.write_text(f"#!/bin/sh\n{script}\n")
+    path.chmod(0o755)
+    return path
+
+
+class TestClaudeCodeConfigure:
+    def test_output_that_is_not_utf_8_is_a_failed_result_not_a_crash(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        _fake_claude(tmp_path, "printf '\\377\\376 broken' >&2; exit 1")
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+        result = ClaudeCodeMcp().configure()
+
+        assert result.passed is False
+        assert "claude mcp add failed" in result.message
+
+    def test_what_claude_says_is_one_bounded_printable_line(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        noise = "x" * 500
+        _fake_claude(
+            tmp_path,
+            "printf 'noise\\nERROR\\033[31m: "
+            f"{noise}\\n[notice] upgrade pip' >&2; exit 1",
+        )
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+        result = ClaudeCodeMcp().configure()
+
+        assert "\x1b" not in result.message
+        assert "x" * 200 not in result.message
+        assert "ERROR" in result.message  # the cause, not pip's closing advice
+        assert "[notice]" not in result.message
+
+    def test_a_re_add_that_times_out_after_the_remove_is_the_loud_message(
+        self, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        calls: list[list[str]] = []
+
+        def run(argv: list[str], **_kw: object) -> object:
+            calls.append(argv)
+            if len(calls) == 3:
+                raise subprocess.TimeoutExpired(argv, 1)
+            stderr = "already exists" if len(calls) == 1 else ""
+            code = 1 if len(calls) == 1 else 0
+            return type(
+                "CP", (), {"returncode": code, "stdout": "", "stderr": stderr}
+            )()
+
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", run)
+
+        result = ClaudeCodeMcp().configure()
+
+        assert result.passed is False
+        assert "removed the stale quarry MCP entry but the re-add failed" in (
+            result.message
+        )
+        assert "TimeoutExpired" in result.message
+
+    def test_the_calls_share_one_total_time_bound(self, monkeypatch: MP) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        timeouts: list[float] = []
+
+        def run(_argv: list[str], **kw: float) -> object:
+            timeouts.append(kw["timeout"])
+            return type(
+                "CP", (), {"returncode": 1, "stdout": "", "stderr": "already exists"}
+            )()
+
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", run)
+        clock = iter([0.0, 0.0, 100.0, 100.0, 119.0, 119.0, 130.0, 130.0])
+        monkeypatch.setattr("quarry.doctor_mcp.time.monotonic", lambda: next(clock))
+
+        result = ClaudeCodeMcp().configure()
+
+        assert result.passed is False
+        assert all(0 < t <= 60.0 for t in timeouts)
+
+    def test_an_attribute_error_in_the_check_is_not_swallowed(
+        self, tmp_path: Path
+    ) -> None:
+        registry = tmp_path / "installed_plugins.json"
+        registry.write_text("{}")
+        with (
+            patch.object(ClaudeCodeMcp, "_read_registry", side_effect=AttributeError),
+            pytest.raises(AttributeError),
+        ):
+            ClaudeCodeMcp(registry).check()
+
+
+class TestDesktopFailures:
+    def test_an_untraversable_parent_is_a_failed_result(self, tmp_path: Path) -> None:
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        config = locked / "Claude" / "claude_desktop_config.json"
+        locked.chmod(0)
+        try:
+            configured = ClaudeDesktopMcp(config).configure()
+            checked = ClaudeDesktopMcp(config).check()
+        finally:
+            locked.chmod(0o700)
+
+        assert configured.passed is False
+        assert checked.passed is False
+
+    def test_quarry_that_is_not_on_path_is_never_registered_as_configured(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr("quarry.doctor_mcp.shutil.which", lambda _name: None)
+        config = tmp_path / "claude_desktop_config.json"
+        config.write_text("{}")
+
+        result = ClaudeDesktopMcp(config).configure()
+
+        assert result.passed is False
+        assert "not on PATH" in result.message
+        assert config.read_text() == "{}"
+
+
+class TestCheckFailureMessages:
+    def test_an_oserror_is_shown_by_errno_name_never_its_path(self) -> None:
+        exc = OSError(errno.EACCES, "denied", "/home/someone/secret/path")
+
+        assert CheckFailure.detail(exc) == "PermissionError: EACCES"
+
+    def test_a_raising_str_is_survived(self) -> None:
+        class HostileError(Exception):
+            def __str__(self) -> str:
+                msg = "no str for you"
+                raise RuntimeError(msg)
+
+        assert CheckFailure.detail(HostileError()) == "HostileError"
+
+    def test_an_import_errors_module_name_is_sanitized(self) -> None:
+        exc = ImportError("x", name="evil\x1b[31m\nsecond line")
+
+        message = CheckFailure.import_message("attempted", exc)
+
+        assert "\x1b" not in message
+        assert "second line" not in message
+
+    def test_a_non_import_error_names_the_module_it_was_raised_in(self) -> None:
+        def raiser() -> None:
+            msg = "bad abi"
+            raise ValueError(msg)
+
+        with pytest.raises(ValueError, match="bad abi") as raised:
+            raiser()
+
+        message = CheckFailure.import_message("quarry.db", raised.value)
+
+        assert "cannot load quarry.db" in message
+        assert "in tests.test_doctor_contract" in message
+
+    def test_a_missing_module_advises_reinstalling_and_others_do_not(self) -> None:
+        missing = ModuleNotFoundError("gone", name="libfoo")
+
+        assert "reinstall quarry" in CheckFailure.import_message("x", missing)
+        assert "reinstall" not in CheckFailure.import_message("x", OSError("y"))
+
+
+class TestDesktopCommand:
+    def test_a_path_that_is_not_absolute_is_refused(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which",
+            lambda _n, path=None: None if path is not None else "bin/quarry",
+        )
+        config = tmp_path / "claude_desktop_config.json"
+
+        result = ClaudeDesktopMcp(config).configure()
+
+        assert result.passed is False
+        assert "relative entry" in result.message
+        assert not config.exists()
+
+    def test_a_later_absolute_path_entry_is_used_past_a_relative_one(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        relative = tmp_path / "rel"
+        relative.mkdir()
+        (relative / "quarry").write_text("#!/bin/sh\n")
+        (relative / "quarry").chmod(0o755)
+        absolute = tmp_path / "abs"
+        absolute.mkdir()
+        (absolute / "quarry").write_text("#!/bin/sh\n")
+        (absolute / "quarry").chmod(0o755)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", f"rel{os.pathsep}{absolute}")
+        config = tmp_path / "claude_desktop_config.json"
+
+        ClaudeDesktopMcp(config).configure()
+
+        server = json.loads(config.read_text())["mcpServers"]["quarry"]
+        assert server["command"] == str(absolute / "quarry")
+
+    def test_a_symlinked_shim_is_kept_as_it_is(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        target = tmp_path / "real-quarry"
+        target.write_text("#!/bin/sh\n")
+        shim = tmp_path / "quarry"
+        shim.symlink_to(target)
+        monkeypatch.setattr("quarry.doctor_mcp.shutil.which", lambda _n: str(shim))
+        config = tmp_path / "claude_desktop_config.json"
+
+        ClaudeDesktopMcp(config).configure()
+
+        server = json.loads(config.read_text())["mcpServers"]["quarry"]
+        assert server["command"] == str(shim)  # not resolved to the target
+
+
+class TestMessagesNameTheirFile:
+    def test_an_oserror_names_the_file_and_the_cause_never_the_path(
+        self, tmp_path: Path
+    ) -> None:
+        config = tmp_path / "claude_desktop_config.json"
+        config.write_text("{}")
+        config.chmod(0)
+        try:
+            result = ClaudeDesktopMcp(config).check()
+        finally:
+            config.chmod(0o600)
+
+        assert result.passed is False
+        assert "claude_desktop_config.json: PermissionError: EACCES" in result.message
+        assert str(tmp_path) not in result.message
+
+    def test_a_plain_value_error_from_the_parser_is_not_json(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "big-int.json"
+        path.write_text('{"n": ' + "9" * 6000 + "}")
+
+        with pytest.raises(ValueError, match=r"big-int\.json: not JSON"):
+            JsonFile.load(path)
+
+    def test_a_config_too_deep_to_write_back_is_reported_as_not_json(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        config = tmp_path / "claude_desktop_config.json"
+        config.write_text("{}")
+
+        def deep(*_a: object, **_k: object) -> str:
+            raise RecursionError
+
+        monkeypatch.setattr("quarry.doctor_mcp.json.dumps", deep)
+
+        result = ClaudeDesktopMcp(config).configure()
+
+        assert "claude_desktop_config.json: nested too deeply" in result.message
+        assert config.read_text() == "{}"
+
+
+class TestRemoveAndOutput:
+    @staticmethod
+    def _scripted(monkeypatch: MP, steps: list[object]) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        calls = iter(steps)
+
+        def run(_argv: list[str], **_kw: object) -> object:
+            step = next(calls)
+            if isinstance(step, BaseException):
+                raise step
+            return step
+
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", run)
+
+    @staticmethod
+    def _done(code: int, stderr: str = "", stdout: str = "") -> object:
+        return type(
+            "CP", (), {"returncode": code, "stdout": stdout, "stderr": stderr}
+        )()
+
+    def test_a_remove_that_times_out_says_the_entry_may_be_gone(
+        self, monkeypatch: MP
+    ) -> None:
+        self._scripted(
+            monkeypatch,
+            [
+                self._done(1, "already exists"),
+                subprocess.TimeoutExpired(["claude", "mcp", "remove"], 30),
+            ],
+        )
+
+        result = ClaudeCodeMcp().configure()
+
+        assert "may be gone" in result.message
+        assert "TimeoutExpired after 30s" in result.message
+        assert "claude" not in result.message.replace("claude mcp add", "")
+
+    def test_what_claude_says_falls_back_to_stdout(self, monkeypatch: MP) -> None:
+        self._scripted(monkeypatch, [self._done(1, "", "boom on stdout")])
+
+        result = ClaudeCodeMcp().configure()
+
+        assert "boom on stdout" in result.message
+
+    def test_the_synthetic_timeout_carries_the_real_elapsed_time(
+        self, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        clock = iter([0.0, 150.0, 150.0])
+        monkeypatch.setattr("quarry.doctor_mcp.time.monotonic", lambda: next(clock))
+        ran: list[object] = []
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.subprocess.run", lambda *a, **k: ran.append(a)
+        )
+
+        result = ClaudeCodeMcp().configure()
+
+        assert ran == []  # past the deadline: claude is not even started
+        assert "TimeoutExpired after 150s" in result.message
+
+    def test_each_call_gets_the_time_left_not_the_full_timeout(
+        self, monkeypatch: MP
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        timeouts: list[float] = []
+
+        def run(_argv: list[str], **kw: float) -> object:
+            timeouts.append(kw["timeout"])
+            return self._done(0 if len(timeouts) == 2 else 1, "already exists")
+
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", run)
+        clock = iter([0.0, 10.0, 100.0, 119.0])
+        monkeypatch.setattr("quarry.doctor_mcp.time.monotonic", lambda: next(clock))
+
+        ClaudeCodeMcp().configure()
+
+        assert timeouts[0] == 60.0  # 110 s left, capped at the per-call bound
+        assert timeouts[1] == 20.0  # 20 s left of the 120 s total
+        assert timeouts[2] == 1.0
+
+
+def test_registry_text_is_sanitized(tmp_path: Path) -> None:
+    registry = tmp_path / "installed_plugins.json"
+    hostile = "evil\x1b[31m\ndir"
+    registry.write_text(
+        json.dumps(
+            {"plugins": {"quarry@punt-labs": [{"installPath": f"/x/{hostile}"}]}}
+        )
+    )
+
+    result = ClaudeCodeMcp(registry).check()
+
+    assert "\x1b" not in result.message
+    assert "\n" not in result.message
+
+
+class TestFtsMissingVsFault:
+    def test_only_enoent_is_missing(self) -> None:
+        assert CheckFailure.is_missing(FileNotFoundError(errno.ENOENT, "gone"))
+        assert not CheckFailure.is_missing(OSError("bare, no errno"))
+        assert not CheckFailure.is_missing(ValueError("table not found"))
+        assert not CheckFailure.is_missing(PermissionError(errno.EACCES, "no"))
+
+    def test_a_bare_oserror_keeps_its_sanitized_first_line(self) -> None:
+        detail = CheckFailure.detail(OSError("index damaged\x1b[0m\nsecond"))
+
+        assert detail == "OSError: index damaged?[0m"
+
+
+def test_a_settings_failure_names_the_field_and_the_reason(
+    tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with monkeypatch.context() as bad:
+        bad.setenv("INGEST_DRAIN_TIMEOUT_S", "not-a-number")
+        check_environment()
+
+    out = capsys.readouterr().out
+    assert "invalid settings (ingest_drain_timeout_s:" in out
+
+
+class TestHeadlessOpenCvFailure:
+    def test_a_failed_reinstall_carries_pips_last_line_bounded(
+        self, monkeypatch: MP
+    ) -> None:
+        def run(_argv: list[str], **_kw: object) -> object:
+            err = "first\n" + "x" * 300 + "\x1b[31m ERROR: no matching distribution"
+            return type("CP", (), {"returncode": 1, "stdout": "", "stderr": err})()
+
+        monkeypatch.setattr("quarry.opencv_headless.subprocess.run", run)
+
+        with pytest.raises(RuntimeError, match="the reinstall exited 1: ") as raised:
+            HeadlessOpenCv("/usr/bin/python3").enforce()
+
+        assert "\x1b" not in str(raised.value)
+        assert len(str(raised.value)) < 200
+
+
+_NO_HOME_PRELUDE = """
+import pwd, sys
+def missing(_uid):
+    raise KeyError(_uid)
+pwd.getpwuid = missing
+"""
+
+
+def _run_without_a_home(
+    body: str,
+    *,
+    roots: Path | None = None,
+    env_extra: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run *body* in a fresh interpreter with no HOME and no passwd entry.
+
+    With *roots*, ``QUARRY_ROOT`` and ``QUARRY_LOG_DIR`` point under it: the
+    data and log directories then resolve without a home directory, and the
+    home directory is still what is missing.
+    """
+    # QUARRY_* too: the suite redirects the data and log roots, which would make
+    # the home directory unnecessary.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k != "HOME" and not k.startswith(("QUARRY", "INGEST_"))
+    }
+    if roots is not None:
+        env["QUARRY_ROOT"] = str(roots / "data")
+        env["QUARRY_LOG_DIR"] = str(roots / "logs")
+    env.update(env_extra or {})
+    return subprocess.run(
+        [sys.executable, "-c", _NO_HOME_PRELUDE + textwrap.dedent(body)],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=cwd,
+        timeout=60,
+        check=False,
+    )
+
+
+_REPO = Path(__file__).resolve().parent.parent
+
+_NO_HOME_LINE = (
+    "quarry: cannot determine the home directory "
+    "(set HOME, or give this user a passwd entry)"
+)
+
+
+def _lines_but_the_log_warning(stderr: str) -> list[str]:
+    """Return stderr's lines, minus the one warning that logging has no file."""
+    return [
+        line for line in stderr.splitlines() if "logging to stderr only" not in line
+    ]
+
+
+# ``quarry install`` runs real steps; the ones that would install packages,
+# download a model or register a service are stubbed, as the in-process install
+# tests stub them.
+_INSTALL = f"""
+        sys.path.insert(0, {str(_REPO)!r})
+        import pytest
+        from unittest.mock import patch
+        from tests.test_doctor import _mock_install_deps
+        mp = pytest.MonkeyPatch()
+        import quarry.doctor as doctor
+        real_check = doctor.check_environment
+        _mock_install_deps(mp)
+        mp.setattr(doctor, "check_environment", real_check)
+        download = "quarry.embeddings.OnnxEmbeddingBackend.download_model_files"
+        with patch(download, return_value=("/m.onnx", "/t.json")):
+            sys.argv = ["quarry", "install"]
+            from quarry._cli_entry import main
+            main()
+"""
+
+_ENTRY_POINTS: dict[str, str] = {
+    "quarry doctor": """
+        sys.argv = ["quarry", "doctor"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry find": """
+        sys.argv = ["quarry", "find", "x"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry find doctor": """
+        sys.argv = ["quarry", "find", "doctor"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "python -m quarry doctor": """
+        import runpy
+        sys.argv = ["quarry", "doctor"]
+        runpy.run_module("quarry", run_name="__main__", alter_sys=True)
+    """,
+    "quarryd": """
+        sys.argv = ["quarryd"]
+        from quarry.daemon.launcher import entrypoint
+        entrypoint()
+    """,
+    "quarry enable ~/proj": """
+        sys.argv = ["quarry", "enable", "~/proj"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry disable ~/proj": """
+        sys.argv = ["quarry", "disable", "~/proj"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry register ~/proj": """
+        sys.argv = ["quarry", "register", "~/proj"]
+        from quarry._cli_entry import main
+        main()
+    """,
+    "quarry-hook": """
+        sys.argv = ["quarry-hook", "session-setup"]
+        from quarry._hook_entry import main
+        main()
+    """,
+}
+
+
+def test_a_hook_without_a_home_fails_open_and_never_prints_a_traceback() -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry-hook"])
+
+    assert done.returncode == 0
+    assert done.stdout.strip() == "{}"
+    assert "Traceback" not in done.stderr
+    [line] = done.stderr.splitlines()  # exactly one line, and it names the cause
+    assert "no home directory: logging to stderr only" in line
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "quarry find",
+        "quarry find doctor",
+        "quarryd",
+        "quarry enable ~/proj",
+        "quarry disable ~/proj",
+        "quarry register ~/proj",
+    ],
+)
+def test_every_other_entry_point_prints_one_clean_line_without_a_home(
+    entry: str,
+) -> None:
+    done = _run_without_a_home(_ENTRY_POINTS[entry])
+
+    assert done.returncode == 1
+    assert "Traceback" not in done.stderr + done.stdout
+    assert _lines_but_the_log_warning(done.stderr) == [_NO_HOME_LINE]
+    assert done.stdout == ""
+
+
+@pytest.mark.parametrize("with_roots", [False, True], ids=["unset", "set"])
+@pytest.mark.parametrize("entry", ["quarry doctor", "python -m quarry doctor"])
+def test_doctor_runs_its_real_checks_without_a_home(
+    entry: str, *, with_roots: bool, tmp_path: Path
+) -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS[entry], roots=tmp_path if with_roots else None
+    )
+
+    assert done.returncode == 1
+    assert "Traceback" not in done.stdout
+    assert "Python version" in done.stdout
+    assert "✗ Home directory" in done.stdout
+    assert "set HOME" in done.stdout
+    assert "invalid settings" not in done.stdout  # one fault, reported once
+    assert "issue(s) found" in done.stdout
+
+
+@pytest.mark.parametrize("with_roots", [False, True], ids=["unset", "set"])
+def test_install_runs_its_real_steps_without_a_home(
+    *, with_roots: bool, tmp_path: Path
+) -> None:
+    done = _run_without_a_home(_INSTALL, roots=tmp_path if with_roots else None)
+
+    assert done.returncode == 1
+    assert "Traceback" not in done.stdout
+    assert "[7/7]" in done.stdout  # every step ran
+    assert "✗ Home directory" in done.stdout
+    assert "issue(s) found" in done.stdout
+    if with_roots:
+        assert (tmp_path / "data" / "default" / "lancedb").is_dir()
+    else:
+        assert "Failed to locate the data directory" in done.stdout
+
+
+def test_a_command_prints_one_clean_line_when_only_the_roots_are_set(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry find"], roots=tmp_path)
+
+    assert done.returncode == 1
+    assert "Traceback" not in done.stderr + done.stdout
+    assert _lines_but_the_log_warning(done.stderr) == [_NO_HOME_LINE]
+
+
+def test_every_quarry_module_imports_when_home_cannot_be_resolved() -> None:
+    """Proves nothing resolves the home directory at import."""
+    done = _run_without_a_home(
+        """
+        import importlib, pkgutil
+        import quarry
+        failures = []
+        for info in pkgutil.walk_packages(quarry.__path__, "quarry."):
+            if info.name.endswith(".__main__"):
+                continue  # the entry point's own module is covered above
+            try:
+                importlib.import_module(info.name)
+            except RuntimeError as exc:
+                failures.append((info.name, str(exc)))
+        print(failures)
+        """
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "[]", done.stdout
+
+
+def test_an_oserror_on_the_plugin_manifest_is_reported_under_the_manifest(
+    tmp_path: Path,
+) -> None:
+    install = tmp_path / "plugin"
+    manifest = install / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}")
+    manifest.chmod(0)
+    registry = tmp_path / "installed_plugins.json"
+    registry.write_text(
+        json.dumps({"plugins": {"quarry@punt-labs": [{"installPath": str(install)}]}})
+    )
+    try:
+        result = ClaudeCodeMcp(registry).check()
+    finally:
+        manifest.chmod(0o600)
+
+    assert "plugin.json: PermissionError: EACCES" in result.message
+    assert "installed_plugins.json" not in result.message
+
+
+def test_a_diagnostic_that_fails_names_its_file_and_never_echoes_the_message() -> None:
+    private_path = "/home/someone/private"
+    with patch.object(
+        MemoryDiagnostics,
+        "_summarize",
+        side_effect=OSError(errno.EACCES, "x", private_path),
+    ):
+        result = MemoryDiagnostics.corpus(Path(__file__))
+
+    assert "test_doctor_contract.py: PermissionError: EACCES" in result.message
+    assert private_path not in result.message
+
+
+def test_the_fts_check_treats_a_table_without_an_index_as_missing(
+    tmp_path: Path,
+) -> None:
+    """Against a real LanceDB table, not a double."""
+    db_dir = tmp_path / "db"
+    lancedb.connect(str(db_dir)).create_table(
+        "chunks", data=[{"text": "hello", "vector": [0.1, 0.2, 0.3, 0.4]}]
+    )
+
+    result = doctor_mod._check_fts_health(db_dir)
+
+    assert result.passed is False
+    assert "missing — will be created on next sync" in result.message
+
+
+def test_a_settings_value_error_never_echoes_the_value() -> None:
+    class Holder(BaseModel):
+        token: str
+
+        @field_validator("token")
+        @classmethod
+        def reject(cls, value: str) -> str:
+            msg = f"bad token {value}"
+            raise ValueError(msg)
+
+    with pytest.raises(ValidationError) as raised:
+        Holder(token="hunter2")
+
+    reason = CheckFailure.settings_reason(raised.value)
+
+    assert reason == "token: value_error"
+    assert "hunter2" not in reason
+
+
+def test_a_working_directory_without_permission_says_so(
+    monkeypatch: MP, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def denied() -> Path:
+        raise PermissionError(errno.EACCES, "no")
+
+    monkeypatch.setattr(Path, "cwd", denied)
+
+    check_environment()
+
+    assert "the current directory is not accessible" in capsys.readouterr().out
+
+
+_CHECKS = (
+    "Home directory",
+    "Settings",
+    "Python version",
+    "Data directory",
+    "Embedding model",
+    "ONNX provider",
+    "Core imports",
+    "Claude Code MCP",
+    "Claude Desktop MCP",
+    "Daemon",
+    "Serve token",
+    "Fd headroom",
+    "Stop timeout",
+    "FTS index",
+    "Sync directories",
+    "Sync enable",
+    "Unlinked captures",
+    "Shadow repo",
+    "Memory corpus",
+    "Memory identity",
+    "Recall activity",
+)
+
+
+def _check_lines(stdout: str) -> dict[str, str]:
+    """Return each report line by the check it names (the marker is its first word)."""
+    lines = [
+        line.strip()
+        for line in stdout.splitlines()
+        if line.strip() and line.strip()[0] in "✓✗○"
+    ]
+    return {line[2:].split(":")[0]: line for line in lines}
+
+
+def test_a_missing_home_is_exactly_one_doctor_issue() -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"])
+
+    lines = _check_lines(done.stdout)
+    failing = [line for line in lines.values() if line.startswith("✗")]
+    assert "1 issue(s) found" in done.stdout, done.stdout
+    assert list(lines) == list(_CHECKS), "a check vanished or appeared"
+    assert len(failing) == 1, failing
+    assert "Home directory" in failing[0]
+    assert "skipped (needs the home directory)" in lines["Daemon"]
+    assert lines["Shadow repo"].startswith("✓"), lines["Shadow repo"]
+
+
+def test_memory_identity_is_a_skipped_line_when_only_the_roots_are_set(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"], roots=tmp_path)
+
+    identity = _check_lines(done.stdout)["Memory identity"]
+    assert identity == "○ Memory identity: skipped (needs the home directory)"
+
+
+def test_a_broken_root_is_reported_even_with_no_home(tmp_path: Path) -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS["quarry doctor"],
+        env_extra={
+            "QUARRY_ROOT": "/nonexistent/qroot",
+            "QUARRY_LOG_DIR": str(tmp_path / "logs"),
+            "HF_HOME": "/nonexistent/hf",
+        },
+    )
+
+    failing = [line for line in done.stdout.splitlines() if "✗" in line]
+    assert "3 issue(s) found" in done.stdout, done.stdout
+    assert [
+        name
+        for name in ("Home directory", "Data directory", "Embedding model")
+        if any(name in line for line in failing)
+    ] == ["Home directory", "Data directory", "Embedding model"]
+
+
+def test_a_malformed_setting_is_reported_beside_the_missing_home(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS["quarry doctor"],
+        roots=tmp_path,
+        env_extra={"INGEST_DRAIN_TIMEOUT_S": "not-a-number"},
+    )
+
+    lines = _check_lines(done.stdout)
+    failing = [line for line in lines.values() if line.startswith("✗")]
+    assert "2 issue(s) found" in done.stdout, done.stdout
+    assert any("Home directory" in line for line in failing)
+    assert "invalid settings (ingest_drain_timeout_s" in lines["Settings"]
+    for name in (
+        "Data directory",
+        "Daemon",
+        "Fd headroom",
+        "FTS index",
+        "Recall activity",
+    ):
+        assert lines[name].endswith("skipped (needs valid settings)"), lines[name]
+
+
+def test_a_malformed_setting_is_reported_with_no_roots_either() -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS["quarry doctor"],
+        env_extra={"INGEST_DRAIN_TIMEOUT_S": "not-a-number"},
+    )
+
+    failing = [line for line in done.stdout.splitlines() if "✗" in line]
+    assert any("Home directory" in line for line in failing), done.stdout
+    assert any("invalid settings (ingest_drain_timeout_s" in line for line in failing)
+
+
+def test_a_shadow_leak_is_still_a_failure_without_a_home(tmp_path: Path) -> None:
+    repo = tmp_path / "project"
+    captures = repo / ".punt-labs" / "quarry" / "captures"
+    captures.mkdir(parents=True)
+    (captures / "session-old.md").write_text("a capture that must stay private\n")
+    for argv in (
+        ["git", "init", "-q"],
+        ["git", "add", "-f", "."],
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"],
+    ):
+        subprocess.run(argv, cwd=repo, check=True, capture_output=True)
+
+    done = _run_without_a_home(_ENTRY_POINTS["quarry doctor"], cwd=repo)
+
+    lines = _check_lines(done.stdout)
+    assert lines["Shadow repo"].startswith("✗"), done.stdout
+    assert "2 issue(s) found" in done.stdout, done.stdout
+
+
+def test_an_xdg_cache_root_lets_the_model_check_run_without_a_home(
+    tmp_path: Path,
+) -> None:
+    done = _run_without_a_home(
+        _ENTRY_POINTS["quarry doctor"],
+        env_extra={"XDG_CACHE_HOME": str(tmp_path / "xdg")},
+    )
+
+    model = _check_lines(done.stdout)["Embedding model"]
+    assert model.startswith("✗ Embedding model: Not cached"), model

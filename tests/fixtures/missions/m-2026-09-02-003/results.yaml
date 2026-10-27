@@ -1,0 +1,26 @@
+results:
+    - mission: m-2026-09-02-003
+      round: 1
+      created_at: "2026-09-02T13:18:19Z"
+      author: rmh
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: src/quarry/daemon/fs_watchdog.py
+          added: 55
+          removed: 71
+      evidence:
+        - name: make check green
+          status: pass
+      open_questions:
+        - Two coupling-ratchet metrics were relaxed with an inline audit-log justification.
+      prose: |
+        Round 1: IgnoreRules extracted; watch scheduling prunes via the shared seam.
+    - mission: m-2026-09-02-003
+      round: 2
+      created_at: "2026-09-02T15:10:00Z"
+      author: rmh
+      verdict: pass
+      confidence: 0.8
+      prose: |
+        Round 2 in progress — not yet reflected on, so not frozen.

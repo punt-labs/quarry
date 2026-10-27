@@ -1,0 +1,73 @@
+"""Progress reporting and the shared bulk-ingest context (DES-036 leaf module)."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Self, final
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from datetime import datetime
+
+    from quarry.config import Settings
+    from quarry.db import Database
+
+logger = logging.getLogger(__name__)
+
+# The storage-column shape of quarry.memory_types.MemoryType plus "" (unset).
+# "lesson" is written only by the daemon's learn route and rejected at every
+# other boundary — see daemon/routes/base.py's reject_invalid_memory_type,
+# which is also where an unknown value becomes a 400 instead of a row.
+type MemoryType = Literal["", "fact", "observation", "opinion", "procedure", "lesson"]
+
+
+@final
+class Progress:
+    """Reports a progress line: always to the logger, optionally to a callback."""
+
+    __slots__ = ("_callback", "_log")
+
+    _callback: Callable[[str], None] | None
+    _log: bool
+
+    def __new__(
+        cls, callback: Callable[[str], None] | None, *, log: bool = True
+    ) -> Self:
+        self = super().__new__(cls)
+        self._callback = callback
+        self._log = log
+        return self
+
+    @classmethod
+    def silent(cls) -> Self:
+        """Return a Progress that reports nothing — no logger call, no callback.
+
+        ``plan_file_chunks`` emits zero progress output today; a bare
+        ``Progress(None)`` would still log every message and regress the
+        "no behavior change" invariant this decomposition promises.
+        """
+        return cls(None, log=False)
+
+    def __call__(self, fmt: str, *args: object) -> None:
+        if self._log:
+            logger.info(fmt, *args)
+        if self._callback is not None:
+            self._callback(fmt % args if args else fmt)
+
+
+@dataclass(frozen=True, slots=True)
+class IngestContext:
+    """The knobs common to every bulk ingest path: target, mode, memory tags."""
+
+    database: Database
+    settings: Settings
+    overwrite: bool = False
+    collection: str = "default"
+    agent_handle: str = ""
+    memory_type: MemoryType = ""
+    summary: str = ""
+    source_version: str = ""  # what the source was when read; see StoredSessions
+    url_sourced: bool = False  # a fetched URL's page, not a label or a file
+    # The instant to record as ingestion time; ``None`` is the time of chunking.
+    ingested_at: datetime | None = None

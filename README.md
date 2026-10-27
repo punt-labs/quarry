@@ -17,7 +17,7 @@ Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (sn
 Install the CLI, the daemon, the MCP server, and the Claude Code plugin:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/935c58d/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fcce6d1/install.sh | sh
 ```
 
 Restart Claude Code. Your current project is auto-indexed at session start, so you can search it by meaning right away — see [What It Looks Like](#what-it-looks-like).
@@ -74,13 +74,13 @@ Use one distribution channel per machine — mixing Homebrew with the `curl | sh
 For non-Claude harnesses (Codex, Cursor, a plain terminal) or Claude Code users whose org policy blocks marketplace/plugin installs, `--no-plugin` installs everything except the marketplace-register and plugin-install steps:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/935c58d/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fcce6d1/install.sh | sh -s -- --no-plugin
 ```
 
 Where a flag cannot be passed (CI templating a bare `curl … | sh`), set `QUARRY_NO_PLUGIN=1` — honored only when exactly `1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/935c58d/install.sh | QUARRY_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fcce6d1/install.sh | QUARRY_NO_PLUGIN=1 sh
 ```
 
 Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server directly; both talk to the resident `quarryd`. Re-run the installer without `--no-plugin` to add the plugin later.
@@ -93,7 +93,7 @@ Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server di
 Download the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/935c58d/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fcce6d1/install.sh -o install.sh
 ```
 
 Check its digest (`shasum -a 256 install.sh` on macOS):
@@ -155,10 +155,11 @@ Search by meaning:
 |---------|-------------|
 | `/ingest <source>` | Ingest a URL, or register+sync a local file or directory |
 | `/remember <name>` | Ingest inline text under a document name |
+| `/learn <name>` | Save a distilled, retrieval-preferred lesson (project-scoped) |
 | `/find <query>` | Semantic search; questions get synthesized answers, keywords get raw results |
 | `/explain <topic>` | Search and synthesize an explanation |
 | `/source <claim>` | Find which document a claim comes from |
-| `/quarry [sub]` | Manage: `status`, `sync`, `collections`, `databases`, `registrations` |
+| `/quarry [sub]` | Manage: `status`, `sync`, `collections`, `databases`, `registrations`, `missions sync` |
 
 ### MCP Tools
 
@@ -168,11 +169,14 @@ Search by meaning:
 | `show` | Document metadata or page text |
 | `list` | Documents, collections, databases, registrations |
 | `status` | Database statistics |
+| `insights` | Recall telemetry: query volume, latency, empty-result rate, recall mix |
 | `ingest` / `remember` | Index a URL, or inline text |
+| `learn` | Save a distilled lesson (`memory_type=lesson`, project-scoped, retrieval boost) |
 | `register_directory` / `deregister_directory` | Manage a synced directory |
 | `sync_all_registrations` | Re-index all registered directories |
 | `delete` | Remove a document or collection |
 | `use` | Switch the active database |
+| `missions_sync` | File each frozen ethos mission round into the worker's memory |
 
 ### CLI
 
@@ -181,12 +185,17 @@ Search by meaning:
 | `quarry find "<query>"` | Hybrid search (vector + full-text) |
 | `quarry ingest <url>` | Index a webpage (local files/directories: `quarry register`) |
 | `quarry remember --name <name>` | Index inline text from stdin |
+| `quarry learn --name <name>` | Save a distilled lesson from stdin (project-scoped, retrieval-preferred) |
 | `quarry list documents` | List indexed documents |
 | `quarry register <dir>` | Watch a directory for changes |
 | `quarry sync` | Re-index registered directories |
 | `quarry enable` / `quarry disable` | Set up / tear down project collections + captures |
+| `quarry missions sync` | File each frozen ethos mission round into `memory-<worker>` (`--mission`, `--dry-run`, `--force`) |
+| `quarry skills install [--agent <id>\|--all]` | Deposit the quarry-recall/quarry-capture skills into every detected coding-agent harness (pi, opencode, codex); `--all` is the default |
+| `quarry skills status` | Report which harnesses have the skills deposited, and whether current |
 | `quarry use <name>` | Switch the active database |
 | `quarry status` | Database dashboard |
+| `quarry insights` | Recall telemetry: query volume, latency, empty-result rate, recall mix |
 | `quarry doctor` | Health check |
 | `quarry install` | Set up the daemon service, TLS certs, and MCP config |
 | `quarry uninstall` | Remove the daemon service (its launchd/systemd unit) |
@@ -194,6 +203,11 @@ Search by meaning:
 | `quarry logout` | Disconnect, revert to the local daemon |
 
 Agent-memory tagging is available on `ingest`/`remember`/`find` via `--agent-handle`, `--memory-type`, and `--summary`.
+`--memory-type` is one vocabulary on every surface (`fact`, `observation`, `opinion`, `procedure`; `lesson` is reserved for `quarry learn`) — an unknown value is a 400 on `remember`, `ingest`, and the capture route alike. Always pass your own handle: the daemon cannot infer it, and a subagent's working directory resolves to the repo's leader, not to the subagent.
+
+Each ethos identity gets a versioned `## Memory (quarry guide v2)` block in its `session_context` — when to `remember` (the five moments), what never to store, and why the handle is yours — written to the vendored `.punt-labs/ethos/identities/<handle>.ext/quarry.yaml` on `quarry enable` (commit it via PR) and to the global identities on `quarry install`.
+
+Two Agent Skills carry the deep how-to that used to be restated across the SessionStart context, the MCP `instructions` block, and the memory guide: `quarry-recall` (understand code, recall a decision, recall memory — all backed by `quarry find`) and `quarry-capture` (`remember`/`learn`/`ingest`, the five-moments timing, the `agent_handle` discipline). Claude Code reads them straight from this repo's `plugin/skills/`; `quarry skills install` deposits the same two skills into pi (`~/.pi/agent/skills/`), opencode (`~/.config/opencode/skills/`), and codex (`~/.codex/skills/`, alongside its own preinstalled `.system/` skills) — version-stamped by content hash, so a re-run only touches a harness whose deposit is stale. `quarry disable` retracts them again, but only when the disabled repo's own `pyproject.toml` names the `punt-quarry` package (never merely because a `plugin/skills/` tree exists — every marketplace-layout plugin ships one) and only for a directory carrying quarry's own deposit manifest; a same-named directory it never wrote is left alone.
 
 A registered directory isn't cron-driven — `quarryd` runs a live filesystem
 watch (debounced, ~1s) that reacts to changes as they happen, backed by a
@@ -234,10 +248,21 @@ knowledge automatically, with no action from you:
 | `PostToolUse` (Read) | Opt-in (off by default): captures prose files read from outside any registered tree, gated by an in-tree/secret-path/extension/size filter |
 | `PreCompact` | Captures the session transcript before context compaction discards it |
 | `SessionEnd` | Captures the full session transcript on every close, even a short session that never compacts |
-| `SubagentStop` | Archives a subagent's own transcript, separate from the parent session's |
+| `SubagentStop` | Archives a subagent's own transcript, separate from the parent session's, and — when `agent_type` names a registered ethos identity — files the subagent's final report as an `observation` in `memory-<handle>`; a bare `Agent()` (`general-purpose`) is filed unattributed, never under the leader's pin |
 
 Every hook fails open — a hook failure never blocks Claude Code — and each is
 independently toggleable in `.punt-labs/quarry/config.md`.
+
+**Permissions.** The plugin never edits a Claude settings file on its own.
+Running `quarry enable` is your consent: it adds quarry's allow rules
+(`mcp__quarry__*` plus `Skill(find)`, `Skill(ingest)`, and the other quarry
+commands) to that project's `.claude/settings.json`, so Claude calls quarry
+without a prompt in that project only, and prints each rule it added. Every
+other setting and rule in the file is kept. `quarry disable` removes exactly
+those rules. To be asked before each quarry call, delete them from
+`permissions.allow` after enabling. Earlier versions added the same rules to
+your user-global `~/.claude/settings.json` at session start; those entries
+stay until you delete them.
 
 Captures are scrubbed at write time (secrets, paths, emails, hostnames)
 through a single choke point before they ever reach disk. The scrub is
@@ -252,6 +277,13 @@ DESIGN.md](DESIGN.md).
 public repo entirely, for projects where even scrubbed transcripts shouldn't
 live in a public history. See [DES-039 in DESIGN.md](DESIGN.md) and
 [AGENTS.md](AGENTS.md).
+
+**Recall telemetry privacy note.** Every search records a scrubbed copy of the
+query text and its ranked hits to a local SQLite file
+(`~/.punt-labs/quarry/data/<db>/telemetry.db`) — nothing leaves the machine.
+Query text goes through the same secret/PII scrub as captures before it ever
+touches disk. Turn it off with `telemetry_enabled: false` in `Settings`
+(env var `TELEMETRY_ENABLED`); see [DES-056 in DESIGN.md](DESIGN.md).
 
 ## Managing the Daemon
 
@@ -282,12 +314,27 @@ daemon directly. `quarry install` generates a self-signed CA for the managed
 daemon, local or remote, so it's TLS even on loopback:
 
 ```bash
-curl --cacert ~/.punt-labs/quarry/tls/ca.crt "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
+{ printf 'Authorization: Bearer '
+  tr -d '\n' < ~/.punt-labs/quarry/data/default/serve.token
+  echo; } |
+  curl --cacert ~/.punt-labs/quarry/tls/ca.crt -H @- \
+    "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
 ```
 
-Local installs bind loopback-only with no auth required; a `--network`
-install additionally requires a Bearer token (`QUARRY_API_KEY`) — see
-[ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
+The header is built on the pipe and read from stdin (`-H @-`), so the token is
+never a command-line argument of any process (`curl`, `printf`, or `tr`):
+other local users can read argv from the process table. Avoid
+`"$(cat serve.token)"` and `-H "Authorization: Bearer $TOKEN"` for that reason.
+
+Every `/v1` endpoint requires a Bearer token, loopback included. A local
+install binds loopback-only and needs no key configured: `quarryd` mints a
+fresh token at each start and writes it to `serve.token` (mode 0600) in its
+data directory, where the CLI, MCP server, and hooks read it. Scripts read
+the same file; a `401` after a daemon restart means the token rotated, so
+re-read it. Only `/health` and `/ca.crt` are unauthenticated, so a client can
+probe liveness and bootstrap TLS trust. A `--network` install refuses to
+start without an operator key (`QUARRY_API_KEY`), which remote clients
+present instead — see [ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
 is generated at [`docs/openapi.json`](docs/openapi.json) (`make openapi`
 regenerates it).
 

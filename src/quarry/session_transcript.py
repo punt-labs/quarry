@@ -6,9 +6,6 @@ artifacts, write a scrubbed ``.md`` capture next to the project, then POST a
 ``CaptureIngestRequest`` to the daemon.  Both PreCompact (mid-session) and
 SessionEnd (guaranteed close) call this identically; SubagentStop calls it for
 the subagent's own transcript, distinct from the parent's.
-
-*label* names the producer (``"pre-compact"``, ``"session-end"``,
-``"subagent-stop"``) so the scrub log line still identifies its origin.
 """
 
 from __future__ import annotations
@@ -20,64 +17,100 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon_capture import DaemonCaptureSender
+from quarry.ethos_handle import EthosConfig
+from quarry.home_paths import QuarryHome
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
+    from quarry.send_outcome import SendOutcome
     from quarry.transcript_reader import TranscriptReader
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class TranscriptSource:
+    """Which transcript a hook captures, and the id it is filed under.
+
+    ``session_id`` is the identity the capture files under — the parent
+    session id for PreCompact and SessionEnd, the subagent id for SubagentStop
+    (that carrier decision belongs to the caller). ``cwd`` may be empty: an
+    unregistered directory still archives and ingests. ``label`` names the
+    producer (``"pre-compact"``, ``"session-end"``, ``"subagent-stop"``) so
+    the scrub log line still identifies its origin.
+    """
+
+    cwd: str
+    session_id: str
+    transcript_path: Path
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptCaptureOutcome:
     """Report what a transcript capture attempted.
 
-    ``sent`` is whether the daemon accepted the wire payload; ``archived`` is
-    whether the raw JSONL is now durable on disk.  Callers rely on the split:
-    an unreachable daemon leaves ``archived=True, sent=False`` so
-    ``backfill-sessions`` can recover the transcript later.
+    ``sent`` is whether the daemon accepted the wire payload (``failure`` is the
+    trace label of a send that failed); ``archived`` is whether the raw JSONL is
+    now durable on disk.  Callers rely on the split: an unreachable daemon leaves
+    ``archived=True, sent=False`` so ``backfill-sessions`` can recover the
+    transcript later.
     """
 
     archived: bool
     sent: bool
     text_captured: bool
+    failure: str = ""
+    written: bool = False
 
 
 @final
 class SessionTranscriptCapture:
     """Archive, scrub, and post a Claude Code session transcript.
 
-    One instance per hook invocation.  ``session_id`` is the identity the
-    capture files under — the parent session id for PreCompact and SessionEnd,
-    the subagent id for SubagentStop (that carrier decision belongs to the
-    caller, not this class).  ``agent_handle`` is empty when no ethos identity
-    covers *cwd*; the daemon still routes to ``<repo>-captures`` either way.
+    One instance per hook invocation.  ``agent_handle`` is the identity the
+    capture is attributed to and ``summary`` the one-line description every
+    chunk carries; both are empty when the caller has neither, and the daemon
+    still routes to ``<repo>-captures`` either way.
     """
 
-    __slots__ = ("_agent_handle", "_cwd", "_label", "_session_id", "_transcript_path")
+    __slots__ = ("_agent_handle", "_reader", "_source", "_summary")
 
-    _cwd: str
-    _session_id: str
-    _transcript_path: Path
-    _label: str
+    _source: TranscriptSource
+    _reader: TranscriptReader
     _agent_handle: str
+    _summary: str
 
     def __new__(
         cls,
+        source: TranscriptSource,
+        reader: TranscriptReader,
         *,
-        cwd: str,
-        session_id: str,
-        transcript_path: Path,
-        label: str,
         agent_handle: str = "",
+        summary: str = "",
     ) -> Self:
         self = super().__new__(cls)
-        self._cwd = cwd
-        self._session_id = session_id
-        self._transcript_path = transcript_path
-        self._label = label
+        self._source = source
+        # The reader is injected so a caller that already read the transcript
+        # (SubagentStop, for the distilled report) shares that one parse.
+        self._reader = reader
         self._agent_handle = agent_handle
+        self._summary = summary
         return self
+
+    @classmethod
+    def for_session(cls, source: TranscriptSource) -> Self:
+        """Build the capture for a *parent* session: attributed to the repo pin.
+
+        The one place a parent-session hook resolves identity, so PreCompact
+        and SessionEnd cannot drift. A subagent's capture must not come through
+        here — its ``cwd`` is the repo and the pin would name the leader.
+        """
+        from quarry.transcript_reader import TranscriptReader  # noqa: PLC0415
+
+        handle = EthosConfig.agent_handle_at(source.cwd) if source.cwd else ""
+        reader = TranscriptReader(source.transcript_path)
+        return cls(source, reader, agent_handle=handle)
 
     def capture(self) -> TranscriptCaptureOutcome:
         """Run archive → scrub → daemon-post; return what actually happened.
@@ -91,14 +124,15 @@ class SessionTranscriptCapture:
             extract_artifacts,
             format_artifacts_header,
         )
-        from quarry.transcript_reader import TranscriptReader  # noqa: PLC0415
 
-        reader = TranscriptReader(self._transcript_path)
-        archived = self._archive(reader)
+        # Taken before the transcript is read: anything written after this instant
+        # is newer than the capture, whatever the daemon does with it later.
+        snapshot = datetime.now(UTC)
+        archived = self._archive()
 
-        raw_text = reader.text()
+        raw_text = self._reader.text()
         if not raw_text:
-            logger.debug("%s: no conversation text found", self._label)
+            logger.debug("%s: no conversation text found", self._source.label)
             return TranscriptCaptureOutcome(
                 archived=archived, sent=False, text_captured=False
             )
@@ -107,65 +141,65 @@ class SessionTranscriptCapture:
         header = format_artifacts_header(artifacts)
         wire_text = f"{header}\n\n{raw_text}" if header else raw_text
 
-        if self._cwd:
-            iso_timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            self._write_local_capture(
-                project_dir=Path(self._cwd),
-                timestamp=iso_timestamp,
-                artifacts=artifacts,
-                text=raw_text,
-            )
-
-        sent = self._send(wire_text)
+        written = self._write_local_capture(artifacts, raw_text)
+        send = self._send(wire_text, archived=archived, snapshot=snapshot)
         return TranscriptCaptureOutcome(
-            archived=archived, sent=sent, text_captured=True
+            archived=archived,
+            sent=bool(send),
+            text_captured=True,
+            failure=send.label,
+            written=written,
         )
 
-    def _archive(self, reader: TranscriptReader) -> bool:
+    def _archive(self) -> bool:
         """Copy the raw JSONL under sessions/ and dedup prior archives for it."""
-        sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
+        sessions_dir = QuarryHome.root() / "sessions"
         try:
-            reader.archive(self._session_id, sessions_dir)
+            self._reader.archive(self._source.session_id, sessions_dir)
         except OSError:
-            logger.exception("%s: archival failed, proceeding with ingest", self._label)
+            logger.exception(
+                "%s: archival failed, proceeding with ingest", self._source.label
+            )
             return False
         return True
 
-    def _write_local_capture(
-        self,
-        *,
-        project_dir: Path,
-        timestamp: str,
-        artifacts: SessionArtifacts,
-        text: str,
-    ) -> None:
-        """Write the scrubbed ``.md`` capture file next to the project."""
+    def _write_local_capture(self, artifacts: SessionArtifacts, text: str) -> bool:
+        """Write the scrubbed ``.md`` capture file; return whether one landed.
+
+        There is none to write when the hook has no working directory.
+        """
         from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
 
-        CaptureWriter().write(
+        if not self._source.cwd:
+            return False
+        return CaptureWriter().write(
             CaptureRequest(
-                project_dir=project_dir,
-                session_id=self._session_id,
-                timestamp=timestamp,
+                project_dir=Path(self._source.cwd),
+                session_id=self._source.session_id,
+                timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 artifacts=artifacts,
                 text=text,
-                label=self._label,
+                label=self._source.label,
             )
         )
 
-    def _send(self, wire_text: str) -> bool:
-        """Post the wire text to the daemon; return whether the send succeeded."""
+    def _send(
+        self, wire_text: str, *, archived: bool, snapshot: datetime
+    ) -> SendOutcome:
+        """Post the wire text to the daemon; return the send's outcome."""
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
 
         request = CaptureIngestRequest(
             content=wire_text,
-            cwd=self._cwd,
-            session_id=self._session_id,
+            cwd=self._source.cwd,
+            session_id=self._source.session_id,
             agent_handle=self._agent_handle,
+            summary=self._summary,
             format_hint="markdown",
+            captured_at=snapshot.isoformat(),
         )
-        unreachable = (
-            f"{self._label}: daemon unreachable; transcript archived, "
-            "run backfill-sessions to index it"
+        note = "archived, run backfill-sessions to index it"
+        down = f"{self._source.label}: daemon unreachable; transcript " + (
+            note if archived else "could not be archived"
         )
-        return DaemonCaptureSender().send_capture(request, unreachable_log=unreachable)
+        return DaemonCaptureSender().send_capture(request, unreachable_log=down)

@@ -1,29 +1,28 @@
-"""SSRF policy: validate a URL or host against the block policy.
+"""SSRF policy: validate a host and its resolved addresses against the block policy.
 
 ``POST /ingest`` and every server-side fetch take a caller-supplied URL, so an
 unguarded resolve-and-connect is an SSRF primitive.  This module owns the single
-block policy — non-``http(s)`` schemes, a metadata/``.local`` hostname denylist,
-and the private/loopback/link-local/reserved/multicast/CGNAT address classes —
-and exposes it two ways that share one classifier:
-
-* :meth:`UrlSafetyCheck.reject_reason` — the ``None``-means-safe admission gate
-  callers use (route admission, final-URL re-checks).
-* :meth:`UrlSafetyCheck.validated_addresses` — the fail-closed resolver the
-  pinned connection calls *inside* ``connect`` so the socket targets an address
-  drawn from the same resolution that was validated (no independent re-resolve).
+host and address block policy — a metadata/``.local`` hostname denylist and the
+private/loopback/link-local/reserved/multicast/CGNAT address classes — and
+exposes it as :meth:`UrlSafetyCheck.validated_addresses` — the fail-closed
+resolver the pinned connection calls *inside* ``connect`` so the socket targets an
+address drawn from the same resolution that was validated (no independent
+re-resolve).  The ``None``-means-safe admission gate callers use is
+:class:`quarry.url_admission.UrlAdmission`, which owns the scheme and syntax rules.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import socket as socket_module
-from urllib.parse import urlsplit
 
 type IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 class UrlRejectedError(ValueError):
-    """A URL, host, or resolved address failed the SSRF policy.
+    """A host or resolved address failed the SSRF policy.
+
+    Host and address only: scheme and syntax belong to ``UrlAdmission``.
 
     A ``ValueError`` so the existing ``ValueError`` handling on both fetch paths
     (``WebFetcher.fetch``, ``GatedSitemapWebClient.get``) surfaces it as a URL
@@ -65,35 +64,10 @@ class UrlSafetyCheck:
         cls._reject_hostname(host)
         addresses = cls._resolve_host(host)
         for addr in addresses:
-            cls._reject_address(host, addr)
+            blocked = cls._blocked_class(addr)
+            if blocked:
+                raise UrlRejectedError(f"host {host!r} resolves to {blocked} {addr}")
         return addresses
-
-    @classmethod
-    def reject_reason(cls, url: str) -> str | None:
-        """Return ``None`` if *url* is safe to fetch, else a rejection reason.
-
-        The ``None``-means-safe contract mirrors a boolean guard (PY-EH-4) and
-        never raises for malformed input: a parse failure returns a reason, a
-        bad scheme/host returns a reason, and every resolution/address rejection
-        raised by :meth:`validated_addresses` is caught and rendered as one.
-        """
-        try:
-            parsed = urlsplit(url)
-            scheme = parsed.scheme.lower()
-            host = parsed.hostname
-        except ValueError as exc:
-            # A malformed URL (bad IPv6 brackets, invalid port) must reject, not
-            # crash: ``urlsplit`` and lazy ``.hostname``/``.port`` both raise.
-            return f"malformed URL: {exc}"
-        if scheme not in {"http", "https"}:
-            return f"unsupported scheme {scheme!r}"
-        if not host:
-            return "missing hostname"
-        try:
-            cls.validated_addresses(host)
-        except UrlRejectedError as exc:
-            return str(exc)
-        return None
 
     @classmethod
     def _reject_hostname(cls, host: str) -> None:
@@ -123,7 +97,7 @@ class UrlSafetyCheck:
 
         A mapped address (``::ffff:a.b.c.d``) is judged and pinned by its
         embedded IPv4; otherwise a mapped CGNAT/private address would slip the
-        IPv4-only checks in :meth:`_reject_address`.
+        IPv4-only checks in :meth:`_blocked_class`.
         """
         try:
             addr = ipaddress.ip_address(raw_addr)
@@ -134,12 +108,13 @@ class UrlSafetyCheck:
         return mapped if mapped is not None else addr
 
     @classmethod
-    def _reject_address(cls, host: str, addr: IpAddress) -> None:
-        """Reject one already-parsed address if it falls in a blocked class."""
+    def _blocked_class(cls, addr: IpAddress) -> str:
+        """Return the class of blocked address *addr* is, or ``""`` if it is allowed."""
         if cls._is_blocked(addr):
-            raise UrlRejectedError(f"host {host!r} resolves to blocked address {addr}")
+            return "blocked address"
         if addr.version == 4 and addr in cls._CGNAT_NETWORK:
-            raise UrlRejectedError(f"host {host!r} resolves to CGNAT address {addr}")
+            return "CGNAT address"
+        return ""
 
     @staticmethod
     def _is_blocked(addr: IpAddress) -> bool:

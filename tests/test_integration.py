@@ -7,7 +7,9 @@ import pytest
 from quarry.config import Settings
 from quarry.db import ChunkCatalog, ChunkSearch, ChunkStore, Database
 from quarry.ingestion.backends import get_embedding_backend
-from quarry.ingestion.pipeline import ingest_content, ingest_document
+from quarry.ingestion.ingest_context import IngestContext, Progress
+from quarry.ingestion.pipeline import ingest_document
+from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 from quarry.results import SearchResult
 from quarry.types import LanceDB
 
@@ -324,17 +326,18 @@ class TestOverwriteBehavior:
         integration_settings: Settings,
     ) -> None:
         ingest_content(
-            "The mitochondria is the powerhouse of the cell.",
+            InlineIngest("The mitochondria is the powerhouse of the cell."),
             "bio.txt",
-            database,
-            integration_settings,
+            Progress(None),
+            IngestContext(database, integration_settings),
         )
         ingest_content(
-            "Tectonic plates shift and cause earthquakes along fault lines.",
+            InlineIngest(
+                "Tectonic plates shift and cause earthquakes along fault lines."
+            ),
             "bio.txt",
-            database,
-            integration_settings,
-            overwrite=True,
+            Progress(None),
+            IngestContext(database, integration_settings, overwrite=True),
         )
 
         old_results = _search(lance_db, "mitochondria powerhouse", integration_settings)
@@ -358,19 +361,18 @@ class TestOverwriteBehavior:
         integration_settings: Settings,
     ) -> None:
         ingest_content(
-            "Helium is a noble gas with atomic number two.",
+            InlineIngest("Helium is a noble gas with atomic number two."),
             "chem.txt",
-            database,
-            integration_settings,
+            Progress(None),
+            IngestContext(database, integration_settings),
         )
         count_before = ChunkStore(lance_db).count()
 
         ingest_content(
-            "Helium is a noble gas with atomic number two.",
+            InlineIngest("Helium is a noble gas with atomic number two."),
             "chem.txt",
-            database,
-            integration_settings,
-            overwrite=False,
+            Progress(None),
+            IngestContext(database, integration_settings, overwrite=False),
         )
         count_after = ChunkStore(lance_db).count()
 
@@ -444,7 +446,12 @@ class TestRawTextIngestion:
             "lithosphere. The lithosphere is divided into several tectonic "
             "plates that float on the semi-fluid asthenosphere beneath them."
         )
-        result = ingest_content(content, "geology.txt", database, integration_settings)
+        result = ingest_content(
+            InlineIngest(content),
+            "geology.txt",
+            Progress(None),
+            IngestContext(database, integration_settings),
+        )
         assert int(str(result["chunks"])) >= 1
 
         results = _search(lance_db, "tectonic plates lithosphere", integration_settings)
@@ -458,11 +465,10 @@ class TestRawTextIngestion:
         integration_settings: Settings,
     ) -> None:
         ingest_content(
-            "RNA polymerase transcribes DNA into messenger RNA.",
+            InlineIngest("RNA polymerase transcribes DNA into messenger RNA."),
             "bio-notes.txt",
-            database,
-            integration_settings,
-            collection="notes",
+            Progress(None),
+            IngestContext(database, integration_settings, collection="notes"),
         )
 
         collections = ChunkCatalog(lance_db).list_collections()

@@ -7,8 +7,13 @@ from unittest.mock import patch
 
 import pytest
 
+from quarry.home_paths import HomeUnresolvedError
 from quarry.logging_config import LoggingConfig
 from tests.hermetic_env import ENV
+
+
+def _fail(msg: str) -> None:
+    raise RuntimeError(msg)
 
 
 def test_env_var_overrides_stderr_level(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,7 +127,11 @@ class TestDaemonLogFile:
                 (handler["class"], handler["maxBytes"], handler["backupCount"])
             )
         assert policies[0] == policies[1]
-        assert policies[0] == ("logging.handlers.RotatingFileHandler", 5_242_880, 5)
+        assert policies[0] == (
+            "quarry.log_redaction.RedactingFileHandler",
+            5_242_880,
+            5,
+        )
 
 
 class TestDaemonLoggingIsRealAndContained:
@@ -151,6 +160,41 @@ class TestDaemonLoggingIsRealAndContained:
         # A timestamp is the whole point: an undated traceback in the
         # supervisor's stderr file is what made a dead error look live.
         assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ", written)
+
+    def test_the_written_file_has_no_url_secret_and_no_library_chatter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Configure for real: redaction and the first-party cap hold on disk."""
+        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path))
+        monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
+        root = logging.getLogger()
+        prior = (root.handlers[:], root.level)
+        try:
+            LoggingConfig.configure(log_file=LoggingConfig.DAEMON_LOG)
+            logging.getLogger("quarry.x").info(
+                "fetch %s", "https://u:USEC@h.test/p?q=QSEC"
+            )
+            logging.getLogger("usp.helpers").info("noise https://h.test/s?token=QSEC")
+            logging.getLogger("usp.fetch_parse").warning(
+                "bad https://h.test/s?token=QSEC"
+            )
+            try:
+                _fail("boom http://u:USEC@h.test/p?token=QSEC")
+            except RuntimeError:
+                logging.getLogger("quarry.x").exception("failed")
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+            written = (tmp_path / "quarryd.log").read_text()
+        finally:
+            for handler in logging.getLogger().handlers:
+                handler.close()
+            root.handlers[:], root.level = prior
+        for marker in ("USEC", "QSEC"):
+            assert marker not in written
+        assert "fetch https://h.test/…(segments=1)" in written
+        assert "noise" not in written
+        assert "bad https://h.test/…(segments=1)" in written
+        assert "RuntimeError" in written
 
     def test_the_suite_redirect_contains_daemon_logging(self) -> None:
         """Hermeticity: with no override set, the session HOME still binds it.
@@ -199,3 +243,76 @@ class TestLogFileIsABareFilename:
         for name in (LoggingConfig.CLIENT_LOG, LoggingConfig.DAEMON_LOG):
             with patch("quarry.logging_config.logging.config.dictConfig"):
                 LoggingConfig.configure(log_file=name)
+
+
+class TestWithoutAHomeDirectory:
+    """No home and no ``QUARRY_LOG_DIR``: log to stderr, say so once, never fail."""
+
+    @staticmethod
+    def _no_home(monkeypatch: pytest.MonkeyPatch) -> None:
+        def missing() -> Path:
+            msg = "Could not determine home directory."
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(Path, "home", missing)
+        monkeypatch.delenv("QUARRY_LOG_DIR", raising=False)
+        monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
+
+    def test_configure_falls_back_to_a_stderr_only_handler(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        self._no_home(monkeypatch)
+        with (
+            patch("quarry.logging_config.logging.config.dictConfig") as mock_dc,
+            caplog.at_level(logging.WARNING, logger="quarry.logging_config"),
+        ):
+            LoggingConfig.configure(stderr_level="INFO")
+
+        config = mock_dc.call_args[0][0]
+        assert list(config["handlers"]) == ["stderr"]
+        assert config["root"]["handlers"] == ["stderr"]
+        assert [r.getMessage() for r in caplog.records].count(
+            "no home directory: logging to stderr only "
+            "(set HOME, or QUARRY_LOG_DIR for a log file)"
+        ) == 1
+
+    def test_stderr_keeps_warnings_and_above_when_there_is_no_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_home(monkeypatch)
+        with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+            LoggingConfig.configure(stderr_level="INFO")
+
+        assert mock_dc.call_args[0][0]["handlers"]["stderr"]["level"] == "WARNING"
+
+    def test_a_log_dir_override_still_gets_its_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._no_home(monkeypatch)
+        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path))
+        with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+            LoggingConfig.configure(stderr_level="INFO")
+
+        config = mock_dc.call_args[0][0]
+        assert set(config["handlers"]) == {"stderr", "file"}
+        assert config["handlers"]["stderr"]["level"] == "INFO"
+
+    def test_log_dir_itself_raises_the_typed_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_home(monkeypatch)
+
+        with pytest.raises(HomeUnresolvedError):
+            LoggingConfig.log_dir()
+
+
+@pytest.mark.parametrize("name", ["usp", "usp.helpers"])
+def test_the_parser_librarys_warnings_are_never_capped_above_warning(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """USP reports the failures that matter at WARNING; no level may hide them."""
+    monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
+    with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+        LoggingConfig.configure()
+    level = mock_dc.call_args[0][0]["loggers"].get(name, {}).get("level", "NOTSET")
+    assert logging.getLevelNamesMapping()[level] <= logging.WARNING

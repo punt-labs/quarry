@@ -1,22 +1,26 @@
-"""Hermetic tests for the WatchLoop producer (DES-045).
+"""Hermetic tests for the WatchLoop producer.
 
 The loop is driven by a synthetic :class:`FsEventSource` and a recording queue —
 no watchdog, no real ONNX, no LanceDB writes — so debounce coalescing, the bulk
 threshold, delete routing, register/deregister ordering, the single-writer
 route key, and the never-crash-the-loop contract are asserted deterministically.
 The recording queue captures the ``(RouteKey, IngestUnit)`` submissions the loop
-would hand to the real DES-042 queue.
+would hand to the real queue.
 """
 
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
 from unittest.mock import patch
+
+import pytest
 
 from quarry.config import Settings
 from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
@@ -39,8 +43,6 @@ def _reconciler(loop: WatchLoop) -> WatchReconciler:
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-
-    import pytest
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
@@ -292,7 +294,7 @@ def test_start_does_not_warn_when_the_safety_scan_backstop_is_enabled(
 
 
 def test_watch_state_watched_for_a_live_handle(tmp_path: Path) -> None:
-    """A collection with a live observer handle reports "watched" (DES-045e)."""
+    """A collection with a live observer handle reports "watched"."""
 
     async def _run() -> None:
         queue = _RecordingQueue()
@@ -647,7 +649,7 @@ def test_request_scan_fails_umbrella_when_a_child_is_shed(tmp_path: Path) -> Non
 
     request_scan must reflect the children — a shed/failed child fails the
     umbrella with a count — never report silent success while collections go
-    unindexed (DES-045 djb fix 2).
+    unindexed.
     """
 
     async def _run() -> None:
@@ -1454,7 +1456,7 @@ def test_request_scan_skips_an_unresolvable_root(tmp_path: Path) -> None:
 
     ``root.resolve()`` can raise (symlink loop, permission).  An on-demand sync
     must skip that one bad registration and scan the good ones, never crash the
-    whole request_scan (Class-2 exception boundary).
+    whole request_scan.
     """
 
     async def _run() -> None:
@@ -1524,5 +1526,180 @@ def test_reconcile_finalizes_each_database_once_not_once_per_collection(
         # ...but the table-wide finalize runs once for the one database.
         assert len(queue.jobs(CollectionFinalizeJob)) == 1
         await loop.stop()
+
+    asyncio.run(_run())
+
+
+def _blocking_stop(release: threading.Event) -> Callable[[_FakeSource], None]:
+    """Return a ``stop`` that joins its observer thread only when released."""
+
+    def stop(source: _FakeSource) -> None:
+        release.wait(timeout=10)
+        source.stopped = True
+
+    return stop
+
+
+def _is_torn_down(loop: WatchLoop) -> bool:
+    return loop._roster is None and loop._source is None and loop._dispatcher is None
+
+
+def test_stop_drops_its_collaborators_even_when_the_roster_teardown_fails(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue())
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop._roster is not None
+
+        with (
+            patch.object(
+                WatchRoster, "unwatch_all", side_effect=RuntimeError("unwatch failed")
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await loop.stop()
+
+        assert _is_torn_down(loop)  # a later start() rebuilds cleanly
+        assert source.stopped is True  # and the observer was still joined
+
+    asyncio.run(_run())
+
+
+def test_a_cancel_during_the_observer_join_still_tears_down_and_says_so(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue())
+        source = _FakeSource()
+        release = threading.Event()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+
+        with (
+            patch.object(_FakeSource, "stop", _blocking_stop(release)),
+            caplog.at_level(logging.WARNING, logger="quarry.daemon.watch_stop"),
+        ):
+            stopping = asyncio.create_task(loop.stop())
+            await asyncio.sleep(0.1)  # in the observer join
+            stopping.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await stopping
+
+            assert _is_torn_down(loop)
+            assert "joining the observer was in progress" in caplog.text
+            release.set()
+            await asyncio.sleep(0.2)
+            assert source.stopped is True  # the shielded join ran to the end
+
+    asyncio.run(_run())
+
+
+def test_a_cancel_while_the_safety_task_retires_is_not_swallowed(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue())
+        loop = WatchLoop(ctx, source=_FakeSource())
+        await loop.start()
+        release = asyncio.Event()
+
+        async def slow_to_retire() -> None:
+            while not release.is_set():
+                try:
+                    await asyncio.sleep(0.05)
+                except asyncio.CancelledError:
+                    continue  # takes its time to retire
+
+        loop._safety_task = asyncio.ensure_future(slow_to_retire())
+        stopping = asyncio.create_task(loop.stop())
+        await asyncio.sleep(0.1)
+        stopping.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await stopping  # the teardown's own cancel gets through
+
+        assert _is_torn_down(loop)
+        release.set()
+        await asyncio.sleep(0.1)
+
+    asyncio.run(_run())
+
+
+def test_a_crash_of_the_safety_loop_is_logged_when_it_happens_and_noted_at_stop(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue(), safety_scan_s=0.05)
+        loop = WatchLoop(ctx, source=_FakeSource())
+
+        async def boom(_self: WatchReconciler) -> None:
+            msg = "reconcile secret detail"
+            raise RuntimeError(msg)
+
+        with (
+            patch.object(WatchReconciler, "run_once", boom),
+            caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"),
+        ):
+            await loop.start()
+            await asyncio.sleep(0.3)  # the loop has crashed by now
+
+            assert "safety reconcile loop crashed" in caplog.text  # at once
+            assert "RuntimeError" in caplog.text
+            assert "reconcile secret detail" not in caplog.text
+            await loop.stop()
+
+        assert "had already crashed before stop" in caplog.text
+
+    asyncio.run(_run())
+
+
+def test_each_cleanup_failure_in_stop_is_logged_where_it_happens(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def _run() -> None:
+        ctx, _root = _build(tmp_path, queue=_RecordingQueue())
+        loop = WatchLoop(ctx, source=_FakeSource())
+        await loop.start()
+
+        with (
+            patch.object(
+                WatchRoster, "unwatch_all", side_effect=RuntimeError("unwatch failed")
+            ),
+            patch.object(
+                WatchRoster, "close", side_effect=OSError(errno.EIO, "close failed")
+            ),
+            caplog.at_level(logging.ERROR, logger="quarry.daemon.watch_stop"),
+            pytest.raises(RuntimeError),
+        ):
+            await loop.stop()
+
+        assert "watch: unwatching the roster failed" in caplog.text
+        assert "watch: closing the roster failed" in caplog.text
+        assert _is_torn_down(loop)
+
+    asyncio.run(_run())
+
+
+def test_a_stop_between_the_none_check_and_the_feed_never_raises(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        ctx, root = _build(tmp_path, queue=_RecordingQueue())
+        loop = WatchLoop(ctx, source=_FakeSource())
+        await loop.start()
+        key = RouteKey(ctx.database_name, "col")
+        real = WatchRoster.resolved_root
+
+        def stop_lands_here(self: WatchRoster, which: RouteKey) -> Path | None:
+            found = real(self, which)
+            # stop() on the loop thread nulls everything after the None check.
+            loop._loop = loop._dispatcher = loop._roster = None
+            return found
+
+        with patch.object(WatchRoster, "resolved_root", stop_lands_here):
+            loop._on_fs_event(key, FsEvent(root / "a.md", deleted=False))
 
     asyncio.run(_run())

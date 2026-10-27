@@ -29,6 +29,7 @@ from quarry.api import (
     ErrorBody,
     HealthResponse,
     IngestRequest,
+    InsightsResponse,
     LearnRequest,
     OptimizeRequest,
     RegisterRequest,
@@ -249,6 +250,7 @@ class RouteTable:
                 status_code=202,
             ),
             RouteSpec("/status", meta.status, ("GET",), StatusResponse),
+            RouteSpec("/insights", meta.insights, ("GET",), InsightsResponse),
             RouteSpec("/coverage", meta.coverage, ("GET",), CoverageResponse),
             RouteSpec(
                 "/optimize",

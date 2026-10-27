@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
+import pytest
+
 from quarry.lesson import LessonComposer, LessonsCollection
+
+
+class TestLessonComposerContract:
+    def test_memory_type_is_lesson(self) -> None:
+        assert LessonComposer.memory_type() == "lesson"
+
+    def test_check_length_accepts_exactly_max_chars(self) -> None:
+        LessonComposer.check_length("x" * LessonComposer.MAX_CHARS)
+
+    def test_check_length_rejects_one_over(self) -> None:
+        with pytest.raises(ValueError, match="exceeds 500 chars"):
+            LessonComposer.check_length("x" * (LessonComposer.MAX_CHARS + 1))
 
 
 class TestLessonComposerDocumentName:

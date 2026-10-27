@@ -8,15 +8,12 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Self
 
+from quarry.memory_types import DECAYABLE_MEMORY_TYPES, MemoryType
 from quarry.results import SearchResult
 
 logger = logging.getLogger(__name__)
 
 _RowKey = tuple[str, int, int]
-_DECAYABLE_TYPES: frozenset[str] = frozenset(
-    {"fact", "observation", "opinion", "procedure"}
-)
-_LESSON_TYPE = "lesson"
 
 
 class RrfFusion:
@@ -86,14 +83,14 @@ class RrfFusion:
         memory_type = str(row.get("memory_type") or "")
         if (
             self._decay_rate > 0
-            and memory_type in _DECAYABLE_TYPES
+            and memory_type in DECAYABLE_MEMORY_TYPES
             and row.get("agent_handle")
         ):
             ts = row.get("ingestion_timestamp", "")
             weight = self.temporal_weight(ts, now_ts, self._decay_rate)
         else:
             weight = 1.0
-        boost = self._lesson_boost if memory_type == _LESSON_TYPE else 1.0
+        boost = self._lesson_boost if memory_type == MemoryType.LESSON else 1.0
         return (1.0 / (self._rrf_k + rank)) * weight * boost
 
     @staticmethod

@@ -3,13 +3,29 @@
 **Status:** Historical — implemented in March 2026. Archived rationale.
 
 > The strategies described below are now live in quarry.
-> Tag memories with `quarry ingest file.md --agent-handle claude --memory-type fact`.
+> Tag memories with `quarry remember --name note.md --agent-handle claude --memory-type fact`.
 > Filter with `quarry find "query" --agent-handle claude --memory-type procedure`.
 > Hybrid search (vector + BM25 via RRF) is used for all `find` calls.
 > Automatic captures (session transcripts, web fetches) are PII-scrubbed at write
 > time (paths, emails, local hostname) before storage — see DES-036; deliberate
 > `quarry ingest`/`remember` memories are stored verbatim.
-> See `docs/architecture.tex` Section 8 for technical details.
+>
+> **The write loop shipped in September 2026 (DES-055).** The read side this
+> document designed had worked since March; the write side stayed dormant until
+> DES-055 added the three producers that fill `memory-<handle>`: a versioned
+> `## Memory (quarry guide v2)` block in every ethos identity's session context
+> (the five moments to `remember`, and the rule that a subagent always passes its
+> own handle because its cwd resolves to the leader); `quarry missions sync`
+> (CLI, MCP `missions_sync`, `/quarry missions sync`), which files each frozen
+> ethos mission round's evaluator feedback as an `observation` in
+> `memory-<worker>`; and the `SubagentStop` hook, which distills a subagent's own
+> final report into `memory-<handle>` alongside the raw transcript capture. The
+> same change made `memory_type` a closed vocabulary validated server-side
+> (`fact`, `observation`, `opinion`, `procedure`; `lesson` reserved for
+> `learn`; anything else is a 400). The full design is
+> [`docs/design/agent-memory-loop.md`](design/agent-memory-loop.md).
+> See `docs/architecture.tex` (Search and Retrieval, Plugin and Hook System) for
+> technical details.
 
 ## The Problem
 
@@ -55,7 +71,7 @@ For each chunk, run an LLM pass (local model on your DGX Spark works here) to ex
 |---|---|---|
 | **Entities** | Named things mentioned | `["LanceDB", "Lance format", "IVF-PQ index"]` |
 | **Topics/Tags** | High-level categories | `["storage", "indexing", "performance"]` |
-| **Memory type** | What kind of knowledge this is | `fact`, `opinion`, `procedure`, `observation` |
+| **Memory type** | What kind of knowledge this is | `fact`, `opinion`, `procedure`, `observation` — plus `lesson`, written only by `quarry learn` and boosted rather than decayed. As shipped, this is a closed vocabulary: the daemon rejects any other value with a 400 (`src/quarry/memory_types.py`, DES-055). |
 | **Timestamp** | When this was created or learned | `2026-03-25T10:00:00Z` |
 | **Source** | Where it came from | `seed:architecture-doc` or `agent:task-42` |
 | **Summary** | One-sentence distillation | `"LanceDB uses the Lance columnar format..."` |
@@ -187,6 +203,19 @@ For a corpus of, say, 10,000 chunks, the LLM enrichment pass is the bottleneck. 
 Mark all seed memories with `source: "seed"` and consider exempting them from temporal decay.
 
 ## Agent-Generated Memories
+
+> **Superseded — this is not what shipped.** The section below sketched an
+> LLM-enriched write path with `source:` tags and a consolidation pass. DES-055
+> shipped a different write loop, without any model in the loop: agents call
+> `remember` themselves at five defined moments; `quarry missions sync` files
+> evaluator feedback per mission round as an `observation`; and `SubagentStop`
+> files the subagent's own final report — already a summary by construction —
+> as an `observation` in `memory-<handle>`. Provenance is carried by the
+> document name (`mission-<repo>-<id>-r<n>`, `subagent-<id8>-report`), the
+> `agent_handle` column, and the `summary` column, not by a `source` field.
+> Consolidation was rejected for the same reason as LLM distillation (cost, no
+> local model, heavy work in a blocking hook); see the design's §g.2. The text
+> is kept for the reasoning, not as a description of the system.
 
 When the agent creates new memories during work, the same pipeline runs but in a lighter mode:
 

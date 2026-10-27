@@ -16,6 +16,7 @@ import pytest
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
+from quarry.url_admission import UrlAdmission
 from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
 from tests.hermetic_env import ENV, ProductionTreeGuard
 
@@ -141,6 +142,20 @@ class TestAmbientGitConfig:
         assert leftovers == []
 
 
+class TestAmbientCodexHome:
+    """The operator's ``CODEX_HOME`` does not follow the suite in.
+
+    Left ambient, ``Harness._codex_home`` reads ``$CODEX_HOME`` directly and
+    ignores whatever stubbed ``home`` a skills-install test constructs a
+    ``SkillsInstaller`` with — silently depositing a skill into the
+    operator's REAL codex directory regardless of the sandbox the test
+    believes it is writing to.
+    """
+
+    def test_codex_home_is_dropped(self) -> None:
+        assert "CODEX_HOME" not in os.environ
+
+
 class TestThreadPins:
     """The per-run thread budget is pinned before lance builds its runtime."""
 
@@ -205,7 +220,7 @@ class TestNoRealDns:
 
     def test_the_overlong_label_boundary_still_raises(self) -> None:
         """The fake reproduces the real resolver's UnicodeError, not just success."""
-        assert UrlSafetyCheck.reject_reason(f"https://{'a' * 64}.example.com/")
+        assert UrlAdmission.reject_reason(f"https://{'a' * 64}.example.com/")
 
 
 class TestSubprocessNetworkIsRefused:

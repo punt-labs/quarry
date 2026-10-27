@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -21,7 +22,7 @@ from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
-from quarry.sync import sync_collection
+from quarry.sync import SyncContext, _delete_documents, _refresh_files, sync_collection
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
@@ -1201,7 +1202,29 @@ class TestSyncCollectionProgressive:
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 1
         assert result.failed == 1
-        assert any("bad.txt" in e for e in result.errors)
+        assert result.errors == ["bad.txt: internal error: RuntimeError"]
+        conn.close()
+
+    def test_binary_file_is_a_per_file_error_and_the_rest_index(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "good.txt").write_text(_SENTENCE * 2)
+        (d / "other.txt").write_text(_SENTENCE * 3)
+        (d / "bad.txt").write_text("%PDF-1.5\n" + "\x00\x01\x02\x03" * 400)
+
+        with caplog.at_level(logging.WARNING), patched_embedder(FakeEmbeddingBackend()):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        assert result.ingested == 2
+        assert result.failed == 1
+        assert any(
+            "bad.txt" in e and "binary content rejected: pdf header" in e
+            for e in result.errors
+        )
+        assert _docnames(db) == {"good.txt", "other.txt"}
+        assert "bad.txt" in caplog.text
         conn.close()
 
     def test_deletes_removed_files(self, tmp_path: Path):
@@ -1421,7 +1444,9 @@ class TestWithinFileResume:
         Image.new("RGB", (64, 64), "white").save(img)
         ocr = _FakeOcr(_SENTENCE * 12)
 
-        with patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr):
+        with patch(
+            "quarry.ingestion.format_strategies.get_ocr_backend", return_value=ocr
+        ):
             chunks, deterministic = plan_file_chunks(
                 img, settings, collection="col", document_name="scan.png"
             )
@@ -1446,7 +1471,9 @@ class TestWithinFileResume:
         )
         embedder = FakeEmbeddingBackend()
         with (
-            patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr),
+            patch(
+                "quarry.ingestion.format_strategies.get_ocr_backend", return_value=ocr
+            ),
             patched_embedder(embedder),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
@@ -1826,7 +1853,7 @@ class TestConcurrencyLiveness:
             )
         assert result.ingested == 1
         assert result.failed == 1
-        assert any("bad.txt" in e for e in result.errors)
+        assert result.errors == ["bad.txt: internal error: KeyError"]
         conn.close()
 
     def test_consumer_non_flush_error_aborts_no_deadlock(self, tmp_path: Path):
@@ -1848,7 +1875,14 @@ class TestConcurrencyLiveness:
                 lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
             )
         assert result.failed >= 1
-        assert result.errors
+        assert (
+            result.errors[0] == "[col] flush failed: internal error: _ConsumerBoomError"
+        )
+        assert all("table.add blew up" not in e for e in result.errors)
+        assert all(
+            e.startswith(("[col] flush failed", "[col] aborted before "))
+            for e in result.errors
+        )
 
         # Post-abort consistency: the aborted sync left nothing half-written, so a
         # clean re-sync (insert_records restored) yields contiguous, zero-dup chunks
@@ -2092,3 +2126,54 @@ class TestConcurrencyLiveness:
         ingested, failed, errors = result
         assert (ingested, failed, errors) == (4, 0, [])
         conn.close()
+
+
+class TestPerFileFailuresFailClosed:
+    """A refresh or delete error reaches the client as its class alone."""
+
+    @staticmethod
+    def _ctx(root: Path, conn: SyncRegistry, lines: list[str]) -> SyncContext:
+        return SyncContext(
+            collection="col",
+            resolved=root,
+            db=cast("LanceDB", object()),
+            conn=conn,
+            progress=lines.append,
+        )
+
+    def test_a_refresh_error_is_the_class_alone_and_the_detail_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "registry.db")
+        lines: list[str] = []
+        with caplog.at_level(logging.WARNING, logger="quarry.sync"):
+            refreshed, failed, errors = _refresh_files(
+                [(tmp_path / "gone.txt", "hash")], self._ctx(tmp_path, conn, lines)
+            )
+        conn.close()
+        assert (refreshed, failed) == (0, 1)
+        assert errors == ["gone.txt: internal error: FileNotFoundError"]
+        assert "No such file" in caplog.text
+
+    def test_a_delete_error_is_the_class_alone_in_the_error_and_the_progress_line(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "registry.db")
+        lines: list[str] = []
+
+        def boom(*_a: object, **_k: object) -> None:
+            msg = "disk gone at /home/me/secret/lance"
+            raise OSError(msg)
+
+        with (
+            patch.object(ChunkStore, "delete_document", boom),
+            caplog.at_level(logging.ERROR, logger="quarry.sync"),
+        ):
+            deleted, failed, errors = _delete_documents(
+                ["doc.md"], self._ctx(tmp_path, conn, lines)
+            )
+        conn.close()
+        assert (deleted, failed) == (0, 1)
+        assert errors == ["doc.md: internal error: OSError"]
+        assert lines == ["[col] Failed to delete doc.md"]
+        assert "/home/me/secret/lance" in caplog.text

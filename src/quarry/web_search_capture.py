@@ -14,7 +14,10 @@ not a failure — see :class:`WebFetchPayload` for the precedent this file mirro
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +30,43 @@ class WebSearchPayload:
     """
 
     _raw: dict[str, object]
+
+    def log_shape(self) -> None:
+        """Emit the DEBUG payload-shape probe used to diagnose extractor drift.
+
+        Keys + tool_response type only — never contents, which may hold
+        secrets.  :meth:`warn_no_digest` fires on every silent skip, so the
+        pair together makes the shape visible at production INFO.
+        """
+        logger.debug(
+            "post-web-search: payload keys=%s tool_response_type=%s",
+            sorted(self._raw.keys()),
+            self._response_type_name(),
+        )
+
+    def warn_no_digest(self) -> None:
+        """Emit the WARN line for a payload that yields no digest.
+
+        WARN rather than DEBUG so a silent skip is visible at production INFO —
+        the operator's only proof a WebSearch payload arrived and was rejected.
+        Logs shape metadata only (presence + length + tool_response type): a
+        search box may hold tokens like any free-text input, and CWE-532
+        forbids persisting that to ``quarry.log`` (parity with
+        :meth:`log_shape`).
+        """
+        query = self.query
+        logger.warning(
+            "post-web-search: no result digest in payload "
+            "(query_present=%s, query_len=%d, tool_response type=%s); "
+            "skipping capture",
+            query is not None,
+            len(query or ""),
+            self._response_type_name(),
+        )
+
+    def _response_type_name(self) -> str:
+        """Return the ``tool_response`` value's type name, never its contents."""
+        return type(self._raw.get("tool_response")).__name__
 
     @property
     def query(self) -> str | None:

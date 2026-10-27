@@ -8,17 +8,21 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from quarry.config import Settings
 from quarry.db import ChunkStore
+from quarry.failure_reason import FailureReason
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
 from quarry.sync_delete_reconciler import DeleteReconciler
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_planner import SyncPlanner
-from quarry.sync_registry import SyncRegistry
-from quarry.types import LanceDB
+
+if TYPE_CHECKING:
+    from quarry.config import Settings
+    from quarry.sync_registry import SyncRegistry
+    from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +49,6 @@ class SyncResult:
     errors: list[str] = field(default_factory=list)
 
 
-_RECOVERABLE = (OSError, ValueError, RuntimeError, TimeoutError)
-
-
 def _refresh_files(
     plan_to_refresh: list[tuple[Path, str]],
     ctx: SyncContext,
@@ -60,16 +61,15 @@ def _refresh_files(
     the plan was computed, the refresh is skipped so the next sync detects it.
     """
     refreshed = 0
-    failed = 0
     errors: list[str] = []
     for fp, plan_hash in plan_to_refresh:
+        document_name = str(fp.relative_to(ctx.resolved))
         try:
             stat = fp.stat()
             current_hash = FileDiscovery.content_hash(fp)
             if current_hash != plan_hash:
                 logger.info("File changed since plan, skipping refresh: %s", fp)
                 continue
-            document_name = str(fp.relative_to(ctx.resolved))
             ctx.conn.files.upsert_file(
                 FileRecord(
                     path=str(fp),
@@ -85,11 +85,10 @@ def _refresh_files(
             refreshed += 1
             ctx.progress(f"[{ctx.collection}] Refreshed {document_name}")
         except OSError as exc:
-            failed += 1
-            errors.append(f"{fp}: {exc}")
+            errors.append(FailureReason.line(document_name, exc))
             logger.warning("Refresh failed for %s: %s", fp, exc)
     ctx.conn.commit()
-    return refreshed, failed, errors
+    return refreshed, len(errors), errors
 
 
 def _delete_documents(
@@ -107,7 +106,6 @@ def _delete_documents(
         files_by_document_name.setdefault(rec.document_name, []).append(rec)
 
     deleted = 0
-    failed = 0
     errors: list[str] = []
     for document_name in plan_to_delete:
         try:
@@ -118,11 +116,10 @@ def _delete_documents(
                 ctx.conn.files.delete_file(rec.path, commit=False)
             deleted += 1
             ctx.progress(f"[{ctx.collection}] Deleted {document_name}")
-        except _RECOVERABLE as exc:
-            failed += 1
-            errors.append(f"{document_name}: {exc}")
+        except FailureReason.RECOVERABLE as exc:
+            errors.append(FailureReason.line(document_name, exc))
             logger.exception("Delete failed for %s", document_name)
-            ctx.progress(f"[{ctx.collection}] Failed to delete {document_name}: {exc}")
+            ctx.progress(f"[{ctx.collection}] Failed to delete {document_name}")
     ctx.conn.commit()
     if plan_to_delete:
         logger.info(
@@ -131,7 +128,7 @@ def _delete_documents(
             deleted,
             time.perf_counter() - t_delete_start,
         )
-    return deleted, failed, errors
+    return deleted, len(errors), errors
 
 
 def sync_collection(

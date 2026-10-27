@@ -1,8 +1,8 @@
 """The watch loop's index jobs: per-file reindex, document delete, and bulk scan.
 
 Each is an :class:`~quarry.daemon.ingest_unit.IngestUnit` the always-on watch
-loop (DES-045) submits to the DES-042 queue as a *producer*.  They write no
-LanceDB table directly beyond the DES-034 core they compose — the queue's
+loop submits to the ingest queue as a *producer*.  They write no LanceDB table
+directly beyond the single-file and bulk-sync cores they compose — the queue's
 per-``(database, collection)`` FIFO worker is still the single writer, and the
 embed gate still bounds concurrency.  Unlike the content jobs (remember /
 capture / URL ingest, which target the daemon's active database), these carry
@@ -19,9 +19,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from starlette.concurrency import run_in_threadpool
-
-from quarry.daemon.tasks import task_terminal
+from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.settlement import Settlement
+from quarry.daemon.store_run import StoreRun
+from quarry.daemon.terminal import Terminal
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync import sync_collection
 from quarry.sync_registry import SyncRegistry
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class FileIndexJob:
-    """Reindex one changed file through the DES-034 single-file core.
+    """Reindex one changed file through the single-file core.
 
     ``spool_record`` returns ``None``: the file on disk is the durable artifact
     (like a capture's ``.md``), recoverable by a rescan, so a drain-abort need
@@ -56,26 +57,27 @@ class FileIndexJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Index the file off-thread, recording per-file success or a soft error."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        # task_terminal so an UNEXPECTED failure records ``failed`` and never
+        # Terminal so an UNEXPECTED failure records ``failed`` and never
         # escapes to crash the queue worker (the queue's per-job contract).
-        with task_terminal(state):
-            outcome = await run_in_threadpool(self._index)
-            if outcome.error is not None:
-                state.status = "failed"
-                state.error = outcome.error
-                return
-            state.status = "completed"
-            state.results = {
-                "document": outcome.document_name,
-                "ingested": outcome.ingested,
-            }
+        with Terminal.for_job(state).recording():
+            store = StoreRun.start(self, state, self._index, self._settlement)
+            JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: the file on disk is the recoverable artifact."""
         return None
 
+    @staticmethod
+    def _settlement(outcome: FileIndexOutcome) -> Settlement:
+        """Return how *outcome* settles the job: its error is its own."""
+        if outcome.error is not None:
+            return Settlement.failed(outcome.error)
+        return Settlement.done(
+            {"document": outcome.document_name, "ingested": outcome.ingested}
+        )
+
     def _index(self) -> FileIndexOutcome:
-        """Open a thread-bound registry, index the file, then close it (DES-026)."""
+        """Open a thread-bound registry, index the file, then close it."""
         conn = SyncRegistry(self.settings.registry_path)
         try:
             indexer = SingleFileIndexer(
@@ -112,14 +114,17 @@ class DocumentDeleteJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete every document's chunks + registry rows off-thread."""
         del ctx
-        with task_terminal(state):
-            deleted = await run_in_threadpool(self._delete)
-            state.status = "completed"
-            state.results = {"documents": len(self.documents), "deleted": deleted}
+        with Terminal.for_job(state).recording():
+            store = StoreRun.start(self, state, self._delete, self._settlement)
+            JobLifecycle(state).settle(await store.wait())
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a delete has no content to recover."""
         return None
+
+    def _settlement(self, deleted: int) -> Settlement:
+        """Return the settlement of a delete that removed *deleted* chunks."""
+        return Settlement.done({"documents": len(self.documents), "deleted": deleted})
 
     def _delete(self) -> int:
         """Delete chunks for every document, then their registry rows, in one txn."""
@@ -141,10 +146,10 @@ class DocumentDeleteJob:
 
 @dataclass(frozen=True, slots=True)
 class CollectionSyncJob:
-    """A bulk scan of one collection — the unchanged DES-034 ``CollectionIngestor``.
+    """A bulk scan of one collection — the unchanged ``CollectionIngestor``.
 
     Used for the initial index on start, an explicit full ``quarry sync``, and a
-    fs-event burst above ``watch_bulk_threshold`` (DES-045 §3.1).  One job per
+    fs-event burst above ``watch_bulk_threshold``.  One job per
     collection, not one per file, so the depth-32 admission bound and the
     fragment budget both hold.  The FTS rebuild is deferred to a following
     ``CollectionFinalizeJob`` (post-quiescence coalescing).
@@ -158,10 +163,19 @@ class CollectionSyncJob:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Run the bulk collection sync off-thread, recording its counts."""
         del ctx
-        with task_terminal(state):
-            result = await run_in_threadpool(self._sync)
-            state.status = "completed"
-            state.results = {
+        with Terminal.for_job(state).recording():
+            store = StoreRun.start(self, state, self._sync, self._settlement)
+            JobLifecycle(state).settle(await store.wait())
+
+    def spool_record(self) -> SpoolRecord | None:
+        """Return ``None``: a bulk scan reconciles from disk, nothing to spool."""
+        return None
+
+    @staticmethod
+    def _settlement(result: SyncResult) -> Settlement:
+        """Return the settlement of a bulk sync that counted *result*."""
+        return Settlement.done(
+            {
                 "collection": result.collection,
                 "ingested": result.ingested,
                 "refreshed": result.refreshed,
@@ -170,10 +184,7 @@ class CollectionSyncJob:
                 "failed": result.failed,
                 "errors": list(result.errors),
             }
-
-    def spool_record(self) -> SpoolRecord | None:
-        """Return ``None``: a bulk scan reconciles from disk, nothing to spool."""
-        return None
+        )
 
     def _sync(self) -> SyncResult:
         """Open a thread-bound registry, run the bulk sync, then close it."""

@@ -168,6 +168,7 @@ whenever a row's `memory_type == "lesson"`, independent of `agent_handle`,
 # src/quarry/retrieval/fusion.py
 _LESSON_TYPE = "lesson"
 
+
 class RrfFusion:
     __slots__ = ("_decay_rate", "_rrf_k", "_lesson_boost")
 
@@ -555,6 +556,7 @@ MAX_LEARN_BODY_BYTES = 64 * 1024
 _MAX_LESSON_CHARS = 500
 _RESERVED_MEMORY_TYPE = "lesson"
 
+
 async def learn(self, request: Request) -> JSONResponse:
     """Save a distilled lesson as a background task.
 
@@ -574,9 +576,8 @@ async def learn(self, request: Request) -> JSONResponse:
     state = self.ctx.tasks.begin("learn")
     return self.submit(job, state)
 
-async def _learn_job(
-    self, body: dict[str, object]
-) -> ScrubbedIngestJob | JSONResponse:
+
+async def _learn_job(self, body: dict[str, object]) -> ScrubbedIngestJob | JSONResponse:
     """Validate a learn body into a ScrubbedIngestJob or a 400.
 
     Naming, collection routing, and memory_type are single server-side
@@ -622,14 +623,16 @@ above (defined once, both guards reference it).
 `route_table.py` registers the route as a sibling of `/remember`:
 
 ```python
-RouteSpec(
-    "/learn",
-    ingestion.learn,
-    ("POST",),
-    TaskAccepted,
-    request_model=LearnRequest,
-    status_code=202,
-),
+(
+    RouteSpec(
+        "/learn",
+        ingestion.learn,
+        ("POST",),
+        TaskAccepted,
+        request_model=LearnRequest,
+        status_code=202,
+    ),
+)
 ```
 
 ## `LessonsCollection`
@@ -698,6 +701,7 @@ def register(self, app: typer.Typer) -> None:
     app.command(name="ingest")(self._p.cli_errors(self._ingest))
     app.command(name="remember")(self._p.cli_errors(self._remember))
     app.command(name="learn")(self._p.cli_errors(self._learn))
+
 
 def _learn(
     self,

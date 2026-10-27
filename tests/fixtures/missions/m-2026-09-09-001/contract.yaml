@@ -1,0 +1,23 @@
+mission_id: m-2026-09-09-001
+status: closed
+type: implement
+created_at: "2026-09-09T05:14:15Z"
+updated_at: "2026-09-09T05:59:01Z"
+closed_at: "2026-09-09T05:59:01Z"
+repo: /home/someone/Coding/punt-labs/quarry
+leader: claude
+worker: gvr
+evaluator:
+    handle: rmh
+    pinned_at: "2026-09-09T05:14:15Z"
+    hash: 0539f8bf81b60a98eeba5626db10ecea2aeb909731ec33b7abf74624a5cc7aed
+write_set:
+    - .tmp/missions/results/hb9u-pipeline-design.md
+success_criteria:
+    - A design document exists with all seven sections.
+budget:
+    rounds: 2
+    reflection_after_each: false
+current_round: 2
+context: |
+    Design mission only.

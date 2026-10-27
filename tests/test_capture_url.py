@@ -82,15 +82,16 @@ def test_redacted_trailing_slash_not_normalized() -> None:
     assert without != with_slash
 
 
-def test_for_web_fetch_matches_manual_redaction() -> None:
-    """``for_web_fetch`` is the one true derivation both write and lookup use."""
-    url = "https://x.test/reset?email=user@example.com#frag"
-    assert CaptureUrl.for_web_fetch(url) == CaptureUrl(url).redacted(_scrub)
+def test_display_is_total_and_never_echoes_an_unparseable_url() -> None:
+    assert CaptureUrl.display("http://u:secret@h:99999/a?token=t") == (
+        "(unparseable URL)"
+    )
 
 
-def test_for_web_fetch_query_and_fragment_collapse_to_same_name() -> None:
-    """Two URLs differing only by query string or fragment share one document."""
-    base = CaptureUrl.for_web_fetch("https://x.test/docs/guide")
-    with_query = CaptureUrl.for_web_fetch("https://x.test/docs/guide?utm=1")
-    with_fragment = CaptureUrl.for_web_fetch("https://x.test/docs/guide#section")
-    assert base == with_query == with_fragment
+def test_display_of_a_good_url_drops_userinfo_query_and_fragment() -> None:
+    assert CaptureUrl.display("https://u:pw@x.test/p?t=1#f") == "https://x.test/p"
+
+
+def test_redacted_drops_path_parameters_on_every_segment() -> None:
+    url = "https://x.test/a;sess=PSEC/b;x=1/c?q=1"
+    assert CaptureUrl(url).redacted(_scrub) == "https://x.test/a/b/c"

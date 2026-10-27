@@ -14,14 +14,501 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-10-25
+
+### Changed
+
+- tool: plugin session start no longer adds allow rules to your user-global
+  `~/.claude/settings.json` without asking. `quarry enable` now grants
+  `mcp__quarry__*` and quarry's `Skill()` rules in that project's
+  `.claude/settings.json` only, prints each rule it added, and keeps every
+  other setting. `quarry disable` removes exactly those rules. Rules earlier
+  versions added globally stay until you delete them (#552, DES-058).
+- tool: edits to `CLAUDE.md` and `.claude/settings.json` now lock the
+  standard cross-tool sibling `.<file>.punt-import.lock` (was `.<file>.lock`),
+  so quarry serializes with other punt tools editing the same file. A
+  symlinked `.claude/` is refused before any lock file is created (#552).
+
+### Fixed
+
+- connector: `quarry backfill` no longer files one project's Claude transcripts
+  into another's collection. Claude Code's lossy directory encoding maps
+  `/w/my.notes` and `/w/my_notes` to the same `-w-my-notes` folder; when two
+  registrations share a folder, each now gets only the transcripts whose
+  recorded `cwd` is its own directory, and the collision is logged (#557).
+
+- docs: the README HTTP API section no longer says loopback needs no auth.
+  Every `/v1` endpoint requires a Bearer token; local installs get one minted
+  automatically in `serve.token`, and the `curl` example now sends it (#551).
+
+- `/ingest <file>` now indexes the file's parent directory. The daemon
+  rejected an existing file with the same `directory not found` error as a
+  nonexistent path, and the command waited for a `FileNotFoundError` that
+  never arrived, so it never retried. `POST /v1/registrations` now answers
+  `not a directory (it is a file)` for a file, the command retries only on
+  that, and a nonexistent path is reported instead of widened (#561).
+
+- Session backfill no longer skips a transcript that grew while it was being
+  ingested (#556). Each stored session now records the transcript's size and
+  mtime as read (a new `source_version` column, migrated in place), and
+  backfill re-ingests any session whose transcript no longer matches it.
+  Sessions stored before this change carry no version and are re-ingested once.
+
+## [3.5.0] - 2026-10-25
+
+### Security
+
+- Clear 43 open Dependabot alerts (6 critical, 23 high) by bumping `uv.lock`:
+  Pillow 12.3.0 → 13.0.0, certifi 2026.1.4 → 2026.10.23, opentelemetry-api
+  1.45.0 → 1.45.1.
+
 ### Added
 
+- infra: `--relax-category` on the suppression ratchet
+  (`tools/suppression_ratchet.py`), the config-level sibling of the existing
+  file-scoped `--relax`. It records an audited, justified, single-category
+  increase in a config-derived suppression category (e.g. `per_file_ignores`,
+  which is scored from `pyproject.toml` and never attributed to any file's
+  bucket, so `--relax` could not target it and `--update` refuses all
+  increases). `Audit.relaxations_since` is split into waivable files and
+  waivable categories so `check`'s forgiveness path recognizes a
+  category-keyed waiver without relying on a file-path-vs-category-name
+  coincidence; an unjustified category increase with no matching audit entry
+  still fails the gate.
+
+### Changed
+
+- Migrate the `quarry mcp` stdio server from `FastMCP` (mcp 1.x) to
+  `MCPServer` (mcp 2.x). The `mcp.server.fastmcp.FastMCP` entry point was
+  removed in mcp 2.0; `mcp_server.py` and `mcp_missions.py` now construct and
+  type against `MCPServer`. `add_tool`, `run`, and the `instructions=` kwarg
+  are unchanged, so tool registration and the wire surface are identical.
+- tool: decompose `mcp_server.py` (555 lines, over the 500-line module cap)
+  into three sibling tool classes: `ResourceCatalog` (`src/quarry/mcp_catalog.py`)
+  owns the `list` tool; `DocumentTools` (`src/quarry/mcp_documents.py`) owns
+  `show`, `delete`, `register_directory`, `deregister_directory`, and
+  `sync_all_registrations`. `mcp_server.py` drops to 315 lines and keeps
+  `find`, `ingest`, `remember`, `learn`, `status`, `insights`, and
+  `use_database`, plus the registration wiring that delegates to all three
+  sibling classes (mirroring the existing `MissionTools` pattern). The stdio
+  wire surface — tool names, behavior, `MCPServer` construction — is
+  unchanged. `McpTools.main()` moves to a `McpTools.run_stdio` staticmethod.
+- index: a URL's stored document name is `scheme://host[:port]/path`,
+  followed by `?q[sha256]=<digest>` when the URL has a query. The digest is the
+  first 16 hex digits of a SHA-256 of the sorted, encoded parameters, so a
+  secret in a query string is never stored while pages that differ by query
+  stay separate documents. These parts are removed:
+  - userinfo, fragment, and `;params`;
+  - an explicit default port;
+  - a trailing dot on the host.
+
+  The path is percent-encoded once as UTF-8, with existing escapes kept and
+  upper-cased, so `…/café` and `…/caf%C3%A9` are one document and a
+  non-ASCII URL is fetched rather than failing. This applies to `quarry
+  ingest <url>`, sitemap pages, a `remember` whose name is a URL, and
+  captures. URLs that differ only in fragment, `;params`, or parameter order
+  resolve to the same document. Ingesting a URL from the web replaces a
+  web-sourced document stored under the URL's former spelling (logged at
+  WARNING) rather than leaving a duplicate. Documents named by `remember`
+  or `learn` are labels and are never matched or replaced, whatever their
+  format hint.
+- tool: a failed task's error shows its reason only when the task was
+  refused (binary content, an over-budget row, a rejected or failed fetch,
+  or a directory registration that is already covered, already registered,
+  uses a taken collection name, or targets an archived collection). Every
+  other failure reads `internal error: <ExceptionClass>`, with the detail in
+  the redacted `quarry.log`. This also applies to per-file errors from sync,
+  watch, and sitemap crawls.
+- tool: registration refusals are fixed text (`directory already
+  registered`, `directory covered by a parent registration`, `collection
+  name already in use`, `collection holds archived data from another
+  directory`), each followed by a fixed remediation. The directory and
+  collection names appear only in the redacted log line. A refused
+  automatic registration at session start is reported in the session
+  context instead of failing the hook.
+- tool: a task that stores nothing now fails instead of ending `completed`.
+  A crawl that selects no pages fails with `nothing was stored: no pages
+  were selected for ingest`. A crawl whose pages all produce no text, and
+  any other ingest, capture, or `remember`/`learn` that stores nothing,
+  fails with `nothing was stored: the content produced no indexable text`.
+  A crawl result now reports an `empty` count for pages that stored
+  nothing.
+- tool: hook traces tell a daemon refusal (`daemon-refused`) from an
+  unreachable daemon (`daemon-unreachable`), a hook-side configuration error
+  (`config-error`), and a server fault (`daemon-error`). The PreCompact
+  message states truthfully whether a local copy was saved, and for a
+  recoverable failure notes that `quarry backfill-sessions` indexes missed
+  sessions of registered directories. A SubagentStop trace reports the
+  distillation result (`distilled` or `distill-<label>`) whether or not the
+  raw send succeeded. SessionStart traces a nudge, drift, or refused
+  registration as a skip and a failed sync launch as an error, never as a
+  capture. A background sync that cannot take its lock or start its process
+  is reported as `Background sync failed to launch` with a pointer to the
+  log, instead of `already running`.
+- tool: the drift notice's command is `quarry deregister --keep-data --
+  <name>`, so it keeps the indexed data the notice says it keeps.
+- tool: `quarry register` and the MCP `register_directory` default the
+  collection name to the directory's leaf with characters outside
+  `A-Z a-z 0-9 . _ -` mapped to `-`, the same name automatic registration
+  picks.
+- security: SessionStart context quotes every directory and collection name
+  on one line, and runnable commands are shell-quoted, so a hostile
+  directory name cannot inject instructions. A name with unprintable
+  characters never appears in a command; the context says to run `quarry
+  enable .` from that directory, or to find the collection with `quarry
+  list collections`. New collection names use only `A-Z a-z 0-9 . _ -` and
+  cannot start with `-` or `.`; a directory leaf with other characters is
+  mapped to `-`, and a user-supplied name with them is refused.
+- security: the WebFetch loop-closer no longer prints a stored document name
+  into the session. It shows the URL's log form and, when the page is
+  indexed under an older spelling, says `quarry find` reaches it.
+- tool: `quarry backfill-sessions` re-ingests a session whose transcript
+  has grown since it was last stored, instead of skipping it. It finds a
+  project's transcripts for paths containing dots, underscores, or spaces,
+  matching Claude Code's directory names.
+- infra: log lines show a URL as `scheme://host[:port]/…(segments=N)`, never
+  its path, whether quarry logs it or a library does. The full path is kept
+  in the stored document name. Tracebacks in the log are indented, and a
+  record is capped at 64 KiB. Punctuation after a URL path in a log line is
+  kept. An HTTP error status is logged as one line without a traceback,
+  and an SSRF-blocked sitemap fetch is now logged. A record the redactor cannot
+  settle is
+  replaced by one line naming its time, level, logger, and call site, with
+  the message withheld.
+
+### Fixed
+
+- index: binary content can no longer be stored as chunk text. A PDF captured
+  through the WebFetch hook was decoded as text, and its multi-megabyte page
+  was copied onto every one of its chunks. That poisoned the `chunks` table:
+  every `optimize()` failed with an Arrow `Offset overflow`. Because cleanup
+  runs inside the same call, each failed compaction also left orphaned files
+  on disk. Ingestion now refuses binary content and bounds every stored row
+  (DES-057):
+  - A media-type allow-list is checked before a fetched body is read.
+  - A document-level binary classifier (`content_guard.py`) checks for magic
+    bytes and the share of replacement and control characters. Prose that
+    merely begins with `%PDF-` or `GIF8` still passes.
+  - A text, markdown, or HTML section, code section, or spreadsheet row group over
+    the page cap (just under 1 MiB) is split at the best available boundary,
+    never truncated. An oversized PDF or other paginated page fails its
+    document instead, so page numbers always match the source.
+  - Overlong unpunctuated runs are hard-wrapped so a chunk's stored text
+    equals its embedded text.
+  - Label columns (`summary`, document name and path, collection, agent
+    handle) are capped at 8 KiB.
+  - The row budget is checked before any overwrite-delete, so a refused
+    document never replaces the previous version with a partial one.
+
+  A refused payload fails with its reason on every surface, with no traceback
+  in the daemon log:
+  - HTTP 400 is returned before any job is queued:
+    - `remember` and `capture`: binary content, an over-budget label, or an
+      unknown `format_hint`.
+    - `learn`: binary content or an over-budget label.
+    - `ingest`: an over-budget label.
+    - `ingest` and `capture`: a URL with userinfo, whitespace or control
+      characters, `\` or `%` in the host, or an out-of-range port. The
+      reason is fixed text (`malformed URL`, `unsupported scheme`) and never
+      echoes the URL.
+  - A URL ingest task ends `failed`.
+  - Directory sync reports a per-file error and indexes the rest.
+  - A sitemap crawl records the reason per page. A crawl in which every page
+    failed fails its task.
+  - The hook never blocks the session.
+  - MCP tools render a daemon refusal as `Error: <message>`, the same text as
+    the CLI.
+- index: a failed fetch now fails its task with a URL-free reason and one
+  redacted log line. These cases used to end `completed` with zero chunks:
+  - Scrubbed URL ingests and capture re-fetches that hit an HTTP error,
+    timeout, unreachable host, or over-cap body.
+  - A sitemap URL that could not be fetched or parsed, or a sitemap index
+    whose sub-sitemaps all failed.
+  - A crawl in which every listed URL was rejected as unsafe.
+  - A capture or scrubbed URL ingest whose content extracted to no text.
+- security: URL secrets can no longer reach logs, task errors, HTTP
+  responses, MCP results, or stored document names (DES-057). Credentials,
+  query strings and tokens in a URL used to leak through several paths:
+  network errors, sitemap-parser exceptions and logs, document-name log
+  lines, and a parse differential that put userinfo into connection errors.
+  The fix is structural rather than per call site:
+  - One admission gate rejects any URL that the URL parser, urllib, and the
+    sitemap parser could read differently.
+  - URLs are carried as an `HttpUrl` value whose printed form is redacted.
+  - Every log handler redacts URLs and control characters in the final
+    text, and drops third-party log records below WARNING.
+- index: a CSV with a single cell larger than 128 KiB no longer crashes
+  extraction. Large cells are chunked within the row budget, and a cell
+  over the page cap fails its file with a reason. A malformed CSV fails with
+  `not parseable CSV` rather than a misleading field-size message.
+- infra: `chunk_max_chars` is bounded in `Settings` (1 to 16,384), so every
+  chunk fits the 64 KiB per-chunk row budget. `chunk_overlap_chars` must be
+  non-negative. An out-of-range value is refused at load, with an error naming
+  the field. Without this bound, an oversized `chunk_max_chars` would fail
+  every ingest against the new per-chunk budget with an error that never named
+  the setting.
+- tool: add the `missions_sync` tool to `scripts/mcpb-manifest.template.json`
+  — it was never added when the tool shipped, so the Claude Desktop bundle's
+  tool list silently omitted it.
+- index: `quarry backfill-sessions` no longer races live ingests. Backfill
+  runs through the same per-collection ingest queue as captures and
+  `remember`.
+- tool (daemon): a shutdown accounts for every queued and running ingest job.
+  Each job ends in a status that matches what reached disk. A job whose
+  content was not stored is spooled for recovery, and a store that finishes
+  after its cancel completes its job and removes its spool record. The
+  shutdown summary counts every job once. Stores still running when the
+  daemon exits are named in a warning. Spool writes run on daemon threads, so
+  a stalled disk cannot hold the process past its stop timeout. The model is
+  in `docs/design/job-abort.spec.tex`.
+- infra: `INGEST_DRAIN_TIMEOUT_S` (the daemon's shutdown budget, default 30 s)
+  is now bounded to 5-300 s and must be finite. `quarry install` bakes it into
+  the service's stop timeout (the budget plus a 12 s margin). `quarry doctor`
+  and daemon start report an installed service whose stop timeout or budget is
+  missing, unreadable or out of range, with `quarry install` as the fix.
+- tool: `quarry doctor` and `quarry install` always complete. A check that
+  crashes is a failed check that names its cause and file, and a required
+  check that fails makes the run fail. With no resolvable home directory,
+  every entry point prints one line instead of a traceback. Doctor reports the
+  missing home once and marks the checks that need it as skipped.
+- security: with a pinned CA installed, `quarry doctor` never falls back to
+  plain HTTP. A certificate that fails verification is reported against
+  `ca.crt`.
+- infra: requires `pydantic>=2.10` and `pydantic-settings>=2.7`.
+- infra: `Settings(quarry_root=X)` places the database, registry and telemetry
+  files under `X`. Previously they stayed under the default root until
+  `resolve_db_paths` ran.
+- tool: `quarry install` no longer installs `mcp-proxy`. The retired proxy
+  step and `check_mcp_proxy` are removed.
+
+## [3.4.0] - 2026-09-21
+
+### Added
+
+- query: recall telemetry (DES-056, quarry-x7ja). Every search records one
+  scrubbed `query_events` row plus one `query_hits` row per ranked result in a
+  local, engine-free SQLite store (`~/.punt-labs/quarry/data/<db>/telemetry.db`),
+  gated by two new `Settings` knobs: `telemetry_enabled` (default on) and
+  `telemetry_retention_days` (pruned automatically). The query text is scrubbed
+  through the same secret/PII pass captures already use before it ever touches
+  disk; a telemetry write failure is logged and swallowed, never turning a
+  search into a 500.
+- tool: `quarry insights` (CLI), an `insights` MCP tool, and `GET /insights`
+  (HTTP) — the aggregate recall snapshot: total queries, empty-result rate,
+  p50/p95 latency, top empty (scrubbed) queries, per-collection hit counts,
+  per-agent recall counts, a memory-vs-knowledge split, and a hit recency
+  (decay-band) breakdown. Mirrors the existing `status` chain across all three
+  surfaces.
+- query: `SearchRequest` gains an optional `surface` field ("cli"/"mcp"/
+  "http"/"plugin") for query provenance; the MCP `find` tool now sets it, and
+  the CLI `find` path now stamps `surface="cli"` too (was left unset — the
+  daemon recorded it as `"unknown"`).
+- tool: `quarry-recall` and `quarry-capture` Agent Skills (`plugin/skills/`) —
+  CLI-driven (`quarry find`/`quarry remember`/`quarry learn`/`quarry ingest`,
+  not MCP tool names, for portability across harnesses), with progressive
+  disclosure into `references/` for failure-mode recovery, scoping/decay, and
+  the memory-type vocabulary.
+- tool: `quarry skills install [--agent <id>|--all]` and `quarry skills
+  status` deposit the two skills into every detected coding-agent harness —
+  pi (`~/.pi/agent/skills/`), opencode (`~/.config/opencode/skills/`), and
+  codex (`~/.codex/skills/`, confirmed alongside its own preinstalled
+  `.system/` skills, never inside it). Claude Code needs no deposit; it reads
+  `plugin/skills/` directly. Each deposit is content-hash version-stamped
+  (idempotent re-install) and atomically swapped in (temp-then-backup-then-
+  rename), so an interrupted write never leaves a half-deposited skill.
+  `quarry disable` retracts the deposits again, but only when the disabled
+  repo's own `pyproject.toml` names the `punt-quarry` package (identity —
+  every marketplace-layout Claude Code plugin ships an identically-shaped
+  `plugin/skills/` tree, so shape alone proves nothing) AND the target
+  directory carries quarry's own `.quarry-skill.json` manifest (ownership —
+  a same-named directory this installer never wrote is refused, not
+  deleted). Retraction is best-effort: a filesystem failure is logged and
+  swallowed, never aborting `disable`.
+- tool: `mcp_guard.ToolGuard` renders an actionable recovery hint for a
+  down/unreachable `quarryd` (a restart command for a loopback target, a
+  `QUARRY_URL`/`quarry login` hint for a remote one) instead of a bare
+  `Error: QuarryConnectionError: …` string.
+
+### Changed
+
+- tool: the single `recall` skill is replaced by `quarry-recall` (retrieve:
+  understand code / recall a decision / recall memory, one skill, three
+  trigger clusters) and `quarry-capture` (persist: remember/learn/ingest) —
+  no back-compat shim. The SessionStart trigger trailer, the MCP server's
+  `instructions` block, and the injected ethos memory guide are now concise
+  nudges pointing at the two skills instead of each independently restating
+  the same deep how-to.
+
+### Removed
+
+- Removed the misleading `quarry doctor` sync-recency (`>24h stale`) check —
+  it reported last-ingest age, not sync health, and false-flagged quiescent
+  repos.
+
+## [3.3.0] - 2026-09-19
+
+### Added
+
+- tool: `quarry missions sync` (CLI), `missions_sync` (MCP)
+  and `/quarry missions sync` (plugin) — Loop 2 of the agent memory loop.
+  Reads this repo's `.punt-labs/ethos/missions/` sidecar (contract, results,
+  reflections; quarry never calls ethos) and files each frozen round as an
+  `observation` in `memory-<worker>` via `POST /v1/remember`, named
+  `mission-<repo>-<id>-r<n>`. Idempotent: a round the daemon already holds is
+  skipped, a name held by another checkout's round is an error and never
+  overwritten (`--force` re-files a matching key only), `--dry-run` posts
+  nothing. The write is create-if-absent (`overwrite: false`), so two syncs
+  racing on one name — both see "absent" before either 202 is indexed — are
+  arbitrated on the daemon's per-collection writer: the second completes as
+  a skip, never a replacement and never a second chunk set; only `--force`
+  posts `overwrite`. Errors never pass silently: a parse failure, a daemon failure on
+  any one round (a 503, an unreachable daemon), and a `--mission` id that
+  names no mission are each one error line and exit 1, and the run continues
+  past every one so the rounds already filed are never lost. A mission
+  directory holding no `contract.yaml` (a delegation log left by another
+  checkout, or a partially sealed tree) is not a mission and is skipped
+  without an error line — only a `contract.yaml` that is present but
+  unreadable is one. The tree is read as cloned content: `--mission` must
+  be the id ethos mints (`m-YYYY-MM-DD-NNN`) before it is joined onto the
+  missions root, and a mission directory or YAML file reached through a
+  symlink is refused (an error line by id, a warning-and-skip in the full
+  scan), so neither a crafted id nor a committed link can make the sync
+  read another tree's rounds. The write and the existence check both name
+  `memory-<worker>` explicitly, so a same-named document in another
+  collection never reads as "filed". New modules `path_guard`,
+  `mission_records`, `mission_round_parts`, `mission_directory`,
+  `mission_store`, `mission_sync_types`, `mission_memory`, `cli_missions`,
+  `mcp_missions`. (quarry-fbj9)
+- tool: `SubagentStop` now files the subagent's final report as an
+  `observation` in `memory-<handle>` (`subagent-<id8>-report`) alongside the
+  raw transcript capture, which now carries a summary — Loop 3. Attribution is
+  identity-validated: `agent_type` is used only when it names a vendored or
+  global ethos identity; a bare `Agent()` reviewer (`general-purpose`) is
+  filed unattributed, never under the repo pin's leader, and a vendored
+  `<handle>.yaml` that is a symlink (or sits below one) registers nothing —
+  the file it points at is not the repo's. Both rows go through
+  the daemon's scrub-before-store route with the hook's 5 s cap; no engine
+  runs in the hook (DES-041), and the transcript is parsed once for both
+  rows. New modules `subagent_report`, `subagent_capture`, `transcript_turns`
+  (one record's text, split out of `transcript_reader`);
+  `EthosConfig.subagent_handle_at`; `DaemonCaptureSender.send_remember`;
+  `QuarryClient.remember(timeout=)`. (quarry-fbj9)
+- tool: a versioned memory guide, `## Memory (quarry guide v2)`, in every
+  ethos identity's `session_context` — the five moments to `remember`, what
+  never to store, and why the handle is the agent's own. `quarry enable`
+  refreshes the vendored `.punt-labs/ethos/identities/<handle>.ext/quarry.yaml`
+  files (reported as "commit via PR") and `quarry install` refreshes the
+  global ones; a v1 block is replaced in place, a customised block is left
+  alone. The vendored refresh is sealed at the checkout root: an ext file,
+  ext directory, or `identities/` reached through a symlink is refused and
+  reported as that identity's failure, never written through, so a hostile
+  checkout cannot redirect the guide write onto a file outside the repo.
+  Both the read and the write of a vendored ext file go through the same
+  `openat`/`O_NOFOLLOW` primitive (`SafeRepoPath.write_atomic`, surfaced as
+  `SealedTree.write_text`) rather than a check made before an
+  `AtomicFile` replace, so a link swapped in between the read and the write
+  is refused too — there is no check-then-write window — and the leaf's
+  mode is preserved. `write_atomic` now refuses to replace any non-regular
+  leaf (symlink, directory, fifo), the rule `create_exclusive` already
+  applied. The global refresh still follows the operator's own
+  (dotfile-manager) symlinks. The MCP `remember` docstring, the recall skill, `/remember`, and the
+  deposited repo guide carry the same five moments. The repo-pin walk that
+  attributes a parent session's captures (PreCompact, SessionEnd, a
+  `SubagentStop` with no `agent_type`) is bounded at the checkout root
+  exactly like the vendored-tree walk: a repo with no
+  `.punt-labs/ethos.yaml` is filed unattributed rather than under a parent
+  directory's pin or the operator's `~/.punt-labs/ethos.yaml`/`config.yaml`
+  (the home is resolved before the skip, so a symlinked `$HOME` is skipped
+  too). Every repo-controlled sidecar read — the pin, a vendored identity,
+  a mission's `contract.yaml`/`results.yaml`/`reflections.yaml` — goes
+  through one primitive, `SafeRepoPath.read_text` (the `openat` walk the
+  enable-time writers already use, `O_NOFOLLOW` on every component below
+  the checkout root), so a symlink at the file or at any directory above
+  it is refused inside the open itself rather than by a check made before
+  it: a component swapped for a link between a listing and the read is
+  refused all the same. A symlinked pin fails closed to unattributed with
+  a warning. New modules `ethos_tree` (the read-only sidecar locator:
+  pins, vendored/global identities, missions; `read_sidecar` is the sealed
+  read), `ethos_ext_block`, `ethos_ext_scan`. (quarry-fbj9)
+- tool: one `MemoryType` vocabulary (`fact`, `observation`, `opinion`,
+  `procedure`; `lesson` reserved for `learn`) enforced on `remember`,
+  `ingest`, and `capture` alike — an unknown `memory_type` is a 400 with an
+  identical body on all three routes instead of a silently stored row that
+  neither decays nor matches a typed filter. The CLI `--memory-type` help and
+  the MCP docstrings name the same set. (quarry-fbj9)
 - infra: vendored, locally-optimized ethos identity registry at
   `.punt-labs/ethos/` — the 8-member `quarry` team only, produced by
   `ethos vendor` plus a prune to the quarry-team closure, with
   `resolution: repo-only` pinned in `.punt-labs/ethos.yaml`, replacing
   global-store fallback. Runtime state (`missions/`, `missions.jsonl`,
   `sessions/`, `.biff`) stays gitignored. (quarry-teuk)
+
+### Changed
+
+- tool: `POST /v1/remember` with `overwrite: false` (`quarry remember
+  --no-overwrite`, the MCP `remember` default, `learn`) is now
+  create-if-absent: a document already stored under that name in the target
+  collection is left untouched and the task completes with `chunks: 0,
+  skipped: "exists"`, instead of a second chunk set being appended under
+  the same name. The check runs on the collection's single FIFO writer, so
+  it is race-free against any earlier write to that collection. A capture
+  whose page is already stored completes as that skip too, without
+  re-fetching the source URL: only a genuinely empty extraction (a
+  JS-rendered page) triggers the daemon-side re-fetch.
+  `ScrubbedIngestJob` and `CaptureIngestJob` move to `daemon/content_jobs`;
+  `daemon/ingest_jobs` keeps the URL job.
+  (quarry-fbj9)
+- tool: the ethos repo pin is read from `.punt-labs/ethos.yaml` first, then the
+  legacy `.punt-labs/ethos/config.yaml`, at each ancestor — the file current
+  ethos writes — so PreCompact/SessionEnd captures and `quarry doctor` attribute
+  to the pinned identity again instead of falling back to unattributed. The
+  walk stops at the repository boundary and never reads the operator's home.
+  (quarry-fbj9)
+- tool: `quarry mcp` (the only launcher) now configures the server's stderr
+  logging; `mcp_server.main()` no longer does, and its `__main__` block is gone.
+  The MCP tool-boundary decorator is `mcp_guard.ToolGuard.wrap`, shared by
+  `McpTools` and the sibling `MissionTools`. The hidden `quarry hooks` typer
+  sub-app is deleted — `quarry-hook` (`_hook_entry`) is the one dispatcher.
+  (quarry-fbj9)
+- infra: the web-search hook's shape/no-digest log lines moved from
+  `hooks_agent` onto `WebSearchPayload.log_shape`/`warn_no_digest`; the
+  `TranscriptReader` reads through one `_records()` seam; `EnableResult`
+  carries an `EthosMemoryResult` instead of six flattened ethos fields.
+  (quarry-fbj9)
+- infra: decomposed the ingestion god module `ingestion/pipeline.py`
+  (1,133 → ~140 lines) into focused modules — `ingest_context.py`
+  (`IngestContext`/`Progress`), `extracted_document.py`,
+  `format_strategies.py` (a `FormatStrategy` protocol + per-format
+  strategies), `chunk_store_funnel.py` (the single DES-036 embed/store
+  convergence point), and `web_ingest.py`/`bulk_ingest.py`/`sitemap_ingest.py`.
+  Ingest entry-point signatures now take value objects (`IngestContext`,
+  `ExtractedDocument`, `InlineIngest`, `BulkOptions`) instead of ~10-15
+  positional parameters. No behavior change on any surface; the fail-closed
+  overwrite-delete gate is preserved. (quarry-hb9u)
+- infra: decomposed the `hooks.py` god module (783 → ~420 lines) — extracted
+  `sync_lock.py` (`SyncLock`, the background-sync file lock, now injectable) and
+  `session_start_templates.py` (`SessionStartTemplates`); `_SessionStartContext`
+  retained in `hooks.py` absorbing its helpers; `_as_str`/`_as_dir` removed in
+  favor of `HookPayload.as_str`/`as_dir`. No behavior change on the
+  session-start / post-web-fetch / pre-compact hook surfaces. As part of the
+  extraction, `SyncLock` replaces the previous PID-lockfile staleness-reclaim
+  scheme — which carried a double-launch race (two concurrent SessionStart hooks
+  reading the same stale PID could both reclaim and launch a sync, one caller's
+  unconditional unlink deleting the other's freshly acquired lock) — with a
+  kernel `fcntl.flock` held for the sync subprocess's lifetime via `Popen`
+  `pass_fds` fd inheritance, eliminating the race class by construction (a dead
+  holder's lock is released by the kernel; no PID parsing, staleness detection,
+  or reclaim unlink). Hardened further with `O_NOFOLLOW` on the lockfile open
+  (CWE-59: a hostile/accidental `sync.pid` symlink can no longer redirect the
+  write), `BlockingIOError` (contention) distinguished from genuine `flock`
+  errors, and a fail-open probe. Single-flight is over the dispatch subprocess
+  only; the daemon enqueues each sync (DES-045, always 202) serialized
+  per-collection by the ingest queue (DES-042). (quarry-hb9u)
+
+- infra: bumped runtime dependencies `rapidocr` (3.6.0 → 3.9.2) and `uvicorn`
+  (0.51.0 → 0.52.4), plus the dev toolchain — `mypy` (2.3.0 → 2.3.1),
+  `pytest-asyncio` (1.3.0 → 1.4.0), and `types-pyyaml`
+  (6.0.12.20260724 → 6.0.12.20260815) — via Dependabot.
 
 ## [3.2.1] - 2026-09-03
 

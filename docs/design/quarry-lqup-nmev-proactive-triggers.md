@@ -212,8 +212,11 @@ exception hierarchy into the caller.
 
 ```python
 # src/quarry/hooks.py — new helper, same shape as _daemon_chunk_collections
-def _session_coverage(collection: str, captures_collection: str) -> CoverageCounts | None:
+def _session_coverage(
+    collection: str, captures_collection: str
+) -> CoverageCounts | None:
     from quarry.client import ClientConfigError, QuarryError, TargetResolver  # noqa: PLC0415
+
     try:
         return TargetResolver.connect().coverage(collection, captures_collection)
     except (ClientConfigError, QuarryError):

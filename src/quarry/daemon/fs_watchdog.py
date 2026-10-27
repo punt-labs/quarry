@@ -4,13 +4,12 @@ Everything else in the watch loop talks to the :class:`FsEventSource` Protocol
 (:mod:`~quarry.daemon.fs_events`), so watchdog stays confined to this module
 and its Linux collaborator :mod:`~quarry.daemon.inotify_prune_chain`.
 
-One recursive watch per registered root (DES-045e — supersedes DES-045d's
-per-directory scheduling, which was structurally wrong on Linux: every
-``ObservedWatch`` gets its own emitter, and each Linux emitter's ``Inotify``
-wrapper calls the libc ``inotify_init()`` — one kernel INSTANCE plus threads
-and fds per directory. ``fs.inotify.max_user_instances`` defaults to 128
-(per-user, shared with IDEs/editors), so per-directory scheduling exhausted
-it at ~120 directories).
+One recursive watch per registered root (per-directory scheduling is wrong on
+Linux: every ``ObservedWatch`` gets its own emitter, and each Linux emitter's
+``Inotify`` wrapper calls the libc ``inotify_init()`` — one kernel INSTANCE plus
+threads and fds per directory. ``fs.inotify.max_user_instances`` is a small
+per-user limit, shared with IDEs/editors, so per-directory scheduling exhausts
+it on a tree with only a modest number of directories).
 
 ``WatchdogSource`` instead picks the observer by platform (a module-scope
 ``platform.system()`` branch at the top of this file, so the import happens
@@ -25,7 +24,7 @@ in a quietly-larger fd/watch footprint.
   one inotify instance per root (comfortably inside
   ``max_user_instances``), whose internal directory walk skips ignored
   directories per the shared :mod:`~quarry.sync_discovery` ignore spec — so
-  the much larger ``max_user_watches`` budget (65,536, per-descriptor, no
+  the much larger ``max_user_watches`` budget (per-descriptor, with no
   per-user cap) is spent only on directories worth watching.
 * **macOS and other platforms** — watchdog's standard recursive observer
   (FSEvents on macOS: one stream per root, no per-directory kernel cost at
@@ -74,8 +73,8 @@ _JOIN_TIMEOUT_S = 5.0
 # The pruned Linux observer, or None off Linux -- imported at module scope
 # (not lazily inside a function) so this is a plain conditional import, not a
 # PLC0415 violation, and so pyright/mypy narrow the None-check below rather
-# than needing a suppression.  Branches explicitly on platform.system() (djb
-# major): a Linux host whose import fails (e.g. a future watchdog release
+# than needing a suppression.  Branches explicitly on platform.system(): a Linux
+# host whose import fails (e.g. a future watchdog release
 # renaming the private internals this module subclasses) is loud and
 # distinct from the expected, silent macOS/Windows fallback -- an
 # `except (ImportError, UnsupportedLibcError)` with no platform check would
@@ -172,12 +171,12 @@ class WatchdogSource:
 
     @staticmethod
     def _build_observer(*, use_polling: bool, poll_interval_s: float) -> BaseObserver:
-        """Return the platform-appropriate, not-yet-started observer (DES-045e).
+        """Return the platform-appropriate, not-yet-started observer.
 
         Picks the pruned Linux observer when the module-scope import at the
         top of this file succeeded (see ``_PrunedInotifyObserver``); falls
         back to watchdog's standard recursive observer everywhere else.
-        Logs the choice at ``INFO`` (djb minor) so "which watcher am I
+        Logs the choice at ``INFO`` so "which watcher am I
         running" is one grep-able line in the daemon's own log, rather than
         something only inferable from platform + the earlier import-failure
         ``logger.error`` (which fires only when the pruned path was tried
@@ -210,7 +209,7 @@ class WatchdogSource:
         the tree's ignore spec, which is written to never raise for a
         malformed ignore file
         (:meth:`~quarry.ignore_spec.IgnoreRules._compile_lines`); this is
-        caught anyway (djb/rev-silent finding) because this method's whole
+        caught anyway because this method's whole
         contract is "never crash the caller, return ``None`` instead" — a
         second layer here is cheap and this is the one boundary a
         surprising ignore-spec failure would otherwise reach
@@ -241,13 +240,13 @@ class WatchdogSource:
             self._observer.unschedule(cast("ObservedWatch", handle))
 
     def is_alive(self, handle: object | None) -> bool:
-        """Whether *handle*'s background emitter thread is still running (djb minor).
+        """Whether *handle*'s background emitter thread is still running.
 
         ``schedule()`` returning a handle only proves the watch was
         installed at that moment — it says nothing about later: an
-        unhandled exception on the emitter's own thread (this module now
-        hardens the ignore-spec paths against that, but a future watchdog
-        internals change is exactly the kind of surprise
+        unhandled exception on the emitter's own thread (the ignore-spec paths
+        here are hardened against that, but a future watchdog internals change
+        is exactly the kind of surprise
         ``test_pins_the_watchdog_internals_this_module_subclasses`` exists
         to catch, not prevent) leaves the thread dead while the handle
         still looks "present" to every other check. Each scheduled tree
@@ -283,3 +282,9 @@ class WatchdogSource:
         """Stop the observer and join its thread under a bounded timeout."""
         self._observer.stop()
         self._observer.join(timeout=_JOIN_TIMEOUT_S)
+        if self._observer.is_alive():
+            logger.warning(
+                "watch: the observer thread did not stop within %.1fs; "
+                "it may still be running",
+                _JOIN_TIMEOUT_S,
+            )

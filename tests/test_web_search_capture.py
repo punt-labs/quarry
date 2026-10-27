@@ -7,8 +7,52 @@ malformed or absent fields yield ``None`` (documented contract).
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from quarry.web_search_capture import WebSearchPayload
+
+if TYPE_CHECKING:
+    import pytest
+
+
+class TestShapeLogging:
+    """The payload logs its own shape -- metadata only, never contents (CWE-532)."""
+
+    def test_warn_no_digest_reports_query_metadata_not_text(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        payload = WebSearchPayload(
+            {"tool_input": {"query": "ghp_secret_token"}, "tool_response": 42}
+        )
+        with caplog.at_level("WARNING", logger="quarry.web_search_capture"):
+            payload.warn_no_digest()
+        line = caplog.records[0].getMessage()
+        assert "query_present=True" in line
+        assert "query_len=16" in line
+        assert "tool_response type=int" in line
+        assert "ghp_secret_token" not in line
+
+    def test_warn_no_digest_with_no_query(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING", logger="quarry.web_search_capture"):
+            WebSearchPayload({}).warn_no_digest()
+        line = caplog.records[0].getMessage()
+        assert "query_present=False" in line
+        assert "query_len=0" in line
+
+    def test_log_shape_lists_keys_and_response_type_only(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        payload = WebSearchPayload(
+            {"tool_input": {"query": "q"}, "tool_response": "secret body"}
+        )
+        with caplog.at_level("DEBUG", logger="quarry.web_search_capture"):
+            payload.log_shape()
+        line = caplog.records[0].getMessage()
+        assert "['tool_input', 'tool_response']" in line
+        assert "tool_response_type=str" in line
+        assert "secret body" not in line
 
 
 class TestQuery:

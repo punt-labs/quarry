@@ -55,11 +55,11 @@ Use `collections.abc` for generic type annotations:
 ```python
 from collections.abc import Sequence, Mapping, Callable, Iterator
 
-def process_items(items: Sequence[str]) -> list[str]:
-    ...
 
-def apply(fn: Callable[[str], int], values: Sequence[str]) -> list[int]:
-    ...
+def process_items(items: Sequence[str]) -> list[str]: ...
+
+
+def apply(fn: Callable[[str], int], values: Sequence[str]) -> list[int]: ...
 ```
 
 For custom generic classes, use `typing.Generic` and `TypeVar`:
@@ -68,6 +68,7 @@ For custom generic classes, use `typing.Generic` and `TypeVar`:
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
+
 
 class Stack(Generic[T]):
     def __init__(self) -> None:
@@ -88,8 +89,10 @@ Protocol if it has the right methods — no base class needed.
 ```python
 from typing import Protocol
 
+
 class Readable(Protocol):
     def read(self, n: int = -1) -> bytes: ...
+
 
 def process(source: Readable) -> bytes:
     return source.read()
@@ -127,6 +130,7 @@ def test_resolve_valid_handle():
     identity = resolve("mal")
     assert identity.name == "Mal Reynolds"
 
+
 def test_resolve_missing_handle():
     with pytest.raises(NotFoundError, match="nobody"):
         resolve("nobody")
@@ -143,6 +147,7 @@ def tmp_config(tmp_path: Path) -> Path:
     config = tmp_path / "config.yaml"
     config.write_text("handle: mal\nname: Mal Reynolds\n")
     return config
+
 
 def test_load_config(tmp_config: Path):
     cfg = load_config(tmp_config)
@@ -198,6 +203,7 @@ test. Automatically restored after the test.
 def test_home_dir(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("HOME", "/fake/home")
     assert get_home() == Path("/fake/home")
+
 
 def test_disabled_feature(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "FEATURE_ENABLED", False)
@@ -281,8 +287,10 @@ for the package so callers can catch broadly if they choose:
 class EthosError(Exception):
     """Base exception for all ethos errors."""
 
+
 class IdentityNotFoundError(EthosError):
     """Raised when an identity handle does not resolve."""
+
 
 class ValidationError(EthosError):
     """Raised when identity data fails validation."""
@@ -304,6 +312,7 @@ lightweight cases:
 
 ```python
 from contextlib import contextmanager
+
 
 @contextmanager
 def temporary_env(key: str, value: str):
@@ -513,8 +522,10 @@ def append_to(item, target=[]):
     target.append(item)
     return target
 
+
 # append_to(1) returns [1]
 # append_to(2) returns [1, 2] — not [2]
+
 
 # Fix:
 def append_to(item, target: list | None = None):
@@ -594,6 +605,7 @@ class Formatter:
     def format_name(identity):
         return f"{identity.first} {identity.last}"
 
+
 # Just a function:
 def format_name(identity: Identity) -> str:
     return f"{identity.first} {identity.last}"
@@ -610,16 +622,18 @@ def set_status(status: str) -> None:
     if status not in ("active", "inactive", "pending"):
         raise ValueError(status)
 
+
 # Good:
 from enum import Enum
+
 
 class Status(Enum):
     ACTIVE = "active"
     INACTIVE = "inactive"
     PENDING = "pending"
 
-def set_status(status: Status) -> None:
-    ...
+
+def set_status(status: Status) -> None: ...
 ```
 
 ## Async Patterns
@@ -632,6 +646,7 @@ subprocess management. Do not use it for CPU-bound work — use
 
 ```python
 import asyncio
+
 
 async def fetch_identity(handle: str) -> Identity:
     async with aiohttp.ClientSession() as session:
@@ -697,6 +712,7 @@ Resources that need async cleanup implement `__aenter__` and `__aexit__`:
 
 ```python
 from contextlib import asynccontextmanager
+
 
 @asynccontextmanager
 async def managed_connection(url: str):

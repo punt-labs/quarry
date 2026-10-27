@@ -69,7 +69,7 @@ def _mock_ocr_backend_single(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         )
     )
     monkeypatch.setattr(
-        "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+        "quarry.ingestion.format_strategies.get_ocr_backend", lambda _settings: backend
     )
     return backend
 
@@ -82,8 +82,8 @@ def _mock_single_page_pipeline(
 
     _mock_ocr_backend_single(monkeypatch)
     monkeypatch.setattr(
-        "quarry.ingestion.streaming.chunk_pages",
-        lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+        "quarry.ingestion.page_chunker.PageChunker.chunk",
+        lambda _self, _pages: chunks,
     )
     embedding_backend = MagicMock()
     embedding_backend.embed_texts.return_value = vectors
@@ -159,11 +159,12 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.format_strategies.get_ocr_backend",
+            lambda _settings: backend,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -201,11 +202,12 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.format_strategies.get_ocr_backend",
+            lambda _settings: backend,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -240,11 +242,12 @@ class TestIngestImageSinglePage:
 
         backend.ocr_image_bytes.side_effect = _ocr_bytes
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: backend
+            "quarry.ingestion.format_strategies.get_ocr_backend",
+            lambda _settings: backend,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: [],
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: [],
         )
 
         from quarry.ingestion.pipeline import ingest_document
@@ -322,11 +325,12 @@ class TestIngestImageMultiPage:
         ocr_backend = MagicMock()
         ocr_backend.ocr_document.return_value = ocr_pages
         monkeypatch.setattr(
-            "quarry.ingestion.pipeline.get_ocr_backend", lambda _settings: ocr_backend
+            "quarry.ingestion.format_strategies.get_ocr_backend",
+            lambda _settings: ocr_backend,
         )
         monkeypatch.setattr(
-            "quarry.ingestion.streaming.chunk_pages",
-            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+            "quarry.ingestion.page_chunker.PageChunker.chunk",
+            lambda _self, _pages: chunks,
         )
         embedding_backend = MagicMock()
         embedding_backend.embed_texts.return_value = vectors

@@ -8,29 +8,20 @@ than as a four-argument task function.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import final
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskState, task_terminal
+from quarry.daemon.tasks import TaskState
+from quarry.daemon.terminal import Terminal
 from quarry.http_guards import RequestGuards
 
 # Both bodies carry only small option dicts.
 MAX_MAINTENANCE_BODY_BYTES = 16 * 1024
-
-
-@dataclass(frozen=True, slots=True)
-class BackfillArgs:
-    """The validated backfill options, bundled as one value."""
-
-    dry_run: bool
-    collection: str
-    project: str
-    limit: int
 
 
 @final
@@ -99,7 +90,7 @@ class MaintenanceRoutes(RouteGroup):
         skip is ``False`` with a ``reason``, never a false success — and reads
         the fragment count from the outcome so the table is scanned only once.
         """
-        with task_terminal(state):
+        with Terminal.for_task(state).recording():
             opt = self.ctx.database.optimizer
             outcome = await run_in_threadpool(lambda: opt.optimize(force=force))
             state.status = "completed"
@@ -114,26 +105,10 @@ class MaintenanceRoutes(RouteGroup):
 
     async def _run_backfill(self, state: TaskState, args: BackfillArgs) -> None:
         """Run the transcript backfill in a worker thread and record its stats."""
-        from quarry.backfill import backfill_sessions  # noqa: PLC0415
+        from quarry.daemon.backfill_task import BackfillTask  # noqa: PLC0415
 
-        with task_terminal(state):
-            stats = await run_in_threadpool(
-                backfill_sessions,
-                self.ctx.settings,
-                dry_run=args.dry_run,
-                collection_override=args.collection,
-                project_filter=args.project,
-                limit=args.limit,
-            )
-            state.status = "completed"
-            state.results = {
-                "ingested": stats.ingested,
-                "skipped_existing": stats.skipped_existing,
-                "skipped_unregistered": stats.skipped_unregistered,
-                "skipped_empty": stats.skipped_empty,
-                "errors": list(stats.errors),
-                "dry_run": args.dry_run,
-            }
+        with Terminal.for_task(state).recording():
+            await BackfillTask(self.ctx).run(state, args)
 
     async def _body_flag(
         self, request: Request, key: str, *, default: bool

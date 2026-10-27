@@ -136,8 +136,10 @@ class AuditLog:
         if not self._path.exists():
             return ["No audit log found"]
         lines = [
-            f"\n{'Timestamp':<22} {'Commit':<10} {'Scored':>7} "
-            f"{'Improved':>9} {'Regressed':>10} {'Verdict':>8}",
+            (
+                f"\n{'Timestamp':<22} {'Commit':<10} {'Scored':>7} "
+                f"{'Improved':>9} {'Regressed':>10} {'Verdict':>8}"
+            ),
             "-" * 70,
         ]
         for entry in self._read():

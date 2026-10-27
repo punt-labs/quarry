@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quarry.home_paths import QuarryHome
 from quarry.remote import (
-    CA_CERT_PATH,
     delete_proxy_config,
     fetch_ca_cert,
     mask_token,
@@ -32,7 +32,7 @@ from quarry.remote import (
 @pytest.fixture
 def proxy_config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / ".punt-labs" / "mcp-proxy" / "quarry.toml"
-    monkeypatch.setattr("quarry.remote.MCP_PROXY_CONFIG_PATH", path)
+    monkeypatch.setattr(QuarryHome, "proxy_config", lambda: path)
     return path
 
 
@@ -529,14 +529,14 @@ class TestFetchCaCert:
 class TestStoreCaCert:
     def test_writes_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ca_path = tmp_path / "quarry-ca.crt"
-        monkeypatch.setattr("quarry.remote.CA_CERT_PATH", ca_path)
+        monkeypatch.setattr(QuarryHome, "proxy_ca", lambda: ca_path)
         pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
         store_ca_cert(pem)
         assert ca_path.read_bytes() == pem
 
     def test_chmod_0600(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         ca_path = tmp_path / "quarry-ca.crt"
-        monkeypatch.setattr("quarry.remote.CA_CERT_PATH", ca_path)
+        monkeypatch.setattr(QuarryHome, "proxy_ca", lambda: ca_path)
         store_ca_cert(b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
         mode = stat.S_IMODE(ca_path.stat().st_mode)
         assert mode == 0o600
@@ -545,13 +545,13 @@ class TestStoreCaCert:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         ca_path = tmp_path / "subdir" / "quarry-ca.crt"
-        monkeypatch.setattr("quarry.remote.CA_CERT_PATH", ca_path)
+        monkeypatch.setattr(QuarryHome, "proxy_ca", lambda: ca_path)
         store_ca_cert(b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
         assert ca_path.exists()
 
     def test_default_ca_cert_path(self) -> None:
         expected = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry-ca.crt"
-        assert expected == CA_CERT_PATH
+        assert expected == QuarryHome.proxy_ca()
 
 
 class TestWriteProxyConfigFdLeak:
@@ -664,7 +664,7 @@ class TestStoreCaCertFdLeak:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         ca_path = tmp_path / "quarry-ca.crt"
-        monkeypatch.setattr("quarry.remote.CA_CERT_PATH", ca_path)
+        monkeypatch.setattr(QuarryHome, "proxy_ca", lambda: ca_path)
         tmp = ca_path.with_suffix(".tmp")
         captured_fds: list[int] = []
         closed_fds: list[int] = []

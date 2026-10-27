@@ -15,9 +15,13 @@ exception or an in-process engine fallback.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, cast, final
+
+if TYPE_CHECKING:
+    import httpx
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -28,11 +32,16 @@ from quarry.client import QuarryClient, QuarryConnectionError
 from quarry.client.transport import HttpxTransport, Response
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.daemon.task_drain import TaskDrain
 from quarry.db_pointer import SELECTION
+from quarry.mcp_catalog import ResourceCatalog
+from quarry.mcp_documents import DocumentTools
 from quarry.mcp_server import McpTools, mcp
+from quarry.query_log import QueryLog, get_query_log
+from quarry.query_log_types import QueryEvent, QueryHit
 from quarry.results import SearchResult
 
-# The twelve tools the MCP surface exposes; a rename or removal is a regression.
+# The tools the MCP surface exposes; a rename or removal is a regression.
 _EXPECTED_TOOLS = {
     "find",
     "ingest",
@@ -45,7 +54,9 @@ _EXPECTED_TOOLS = {
     "deregister_directory",
     "sync_all_registrations",
     "status",
+    "insights",
     "use",
+    "missions_sync",
 }
 
 
@@ -54,6 +65,12 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.lancedb_path = tmp_path / "lancedb"
     s.lancedb_path.mkdir(parents=True)
     s.registry_path = tmp_path / "registry.db"
+    # A real Path, disabled by default -- see the identical note in
+    # test_http_server.py's _mock_settings.
+    s.telemetry_path = tmp_path / "telemetry.db"
+    s.telemetry_enabled = False
+    s.telemetry_retention_days = 90
+    s.telemetry_prune_cadence_s = 3600.0
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     s.ingest_queue_depth = 32
@@ -111,7 +128,10 @@ class _TestClientTransport:
             params=dict(params) if params else None,
             json=dict(json_body) if json_body is not None else None,
         )
-        return HttpxTransport._parse(resp)
+        # starlette's TestClient now returns an httpx2 Response (pulled in by the
+        # mcp 2.x dependency tree); it is structurally identical to the httpx
+        # Response _parse reads (.content, .status_code), so bridge the type here.
+        return HttpxTransport._parse(cast("httpx.Response", resp))
 
 
 @final
@@ -123,21 +143,33 @@ class _ToolHarness:
     over that same app — the tool round-trips through the real ``/v1`` handlers.
     """
 
-    __slots__ = ("_client", "_tools")
+    __slots__ = ("_catalog", "_client", "_documents", "_tools")
 
     _client: TestClient
     _tools: McpTools
+    _catalog: ResourceCatalog
+    _documents: DocumentTools
 
     def __new__(cls, tc: TestClient) -> Self:
         self = super().__new__(cls)
         self._client = tc
         quarry_client = QuarryClient(_TestClientTransport(tc))
         self._tools = McpTools(connect=lambda: quarry_client)
+        self._catalog = ResourceCatalog(connect=lambda: quarry_client)
+        self._documents = DocumentTools(connect=lambda: quarry_client)
         return self
 
     @property
     def tools(self) -> McpTools:
         return self._tools
+
+    @property
+    def catalog(self) -> ResourceCatalog:
+        return self._catalog
+
+    @property
+    def documents(self) -> DocumentTools:
+        return self._documents
 
     @property
     def http(self) -> TestClient:
@@ -149,7 +181,7 @@ class _ToolHarness:
 _TEARDOWN_DRAIN_TIMEOUT_S = 10.0
 
 
-async def _aclose_ingest_queue(ctx: DaemonContext) -> None:
+async def _drain_and_close_queue(ctx: DaemonContext) -> None:
     """Drain the ingest queue with the teardown timeout (keyword-only ``aclose``)."""
     await ctx.ingest_queue.aclose(drain_timeout=_TEARDOWN_DRAIN_TIMEOUT_S)
 
@@ -176,13 +208,15 @@ def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
             # be skipped -- that queue is the OTHER leak vector this teardown
             # guards, tracked independently of ``TaskRegistry._refs``.
             try:
-                portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
+                portal.call(
+                    TaskDrain(ctx.tasks.tracked()).run, _TEARDOWN_DRAIN_TIMEOUT_S
+                )
             finally:
-                portal.call(_aclose_ingest_queue, ctx)
+                portal.call(_drain_and_close_queue, ctx)
 
 
 class TestSurfaceComplete:
-    """The MCP surface must stay exactly the eleven documented tools."""
+    """The MCP surface must stay exactly the tools listed in `_EXPECTED_TOOLS`."""
 
     def test_all_tools_registered(self) -> None:
         names = {tool.name for tool in asyncio.run(mcp.list_tools())}
@@ -191,6 +225,10 @@ class TestSurfaceComplete:
     def test_every_tool_has_a_description(self) -> None:
         for tool in asyncio.run(mcp.list_tools()):
             assert tool.description, f"{tool.name} has no description"
+
+    def test_ingest_says_a_stored_url_is_skipped_without_overwrite(self) -> None:
+        [ingest] = [t for t in asyncio.run(mcp.list_tools()) if t.name == "ingest"]
+        assert "if false, skip it" in (ingest.description or "")
 
 
 class TestFind:
@@ -268,6 +306,68 @@ class TestStatus:
         assert "snowflake-arctic-embed-m-v1.5" in result
 
 
+class TestInsights:
+    def test_disabled_by_default_renders_without_keyerror(
+        self, harness: _ToolHarness
+    ) -> None:
+        """The harness disables telemetry -- proves the formatter handles the
+        disabled shape (zeroed fields) without a KeyError on shape drift."""
+        result = harness.tools.insights()
+        assert "Telemetry:        disabled" in result
+        assert "Total queries:    0" in result
+
+    def test_seeded_events_render_without_keyerror(self, tmp_path: Path) -> None:
+        """A second, telemetry-enabled daemon seeded with real events -- proves
+        the formatter also handles the enabled, non-zero shape."""
+        get_query_log.cache_clear()
+        settings = _mock_settings(tmp_path)
+        settings.telemetry_enabled = True
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        log = QueryLog(settings.telemetry_path)
+        log.record(
+            QueryEvent(
+                ts=datetime.now(UTC).isoformat(),
+                surface="cli",
+                agent_handle="rmh",
+                collection="default",
+                filters_json="{}",
+                limit_n=10,
+                latency_ms=12.0,
+                result_count=1,
+                query_scrubbed="hello",
+                query_len=5,
+            ),
+            [
+                QueryHit(
+                    rank=1,
+                    document_name="doc.pdf",
+                    collection="default",
+                    chunk_index=0,
+                    score=0.9,
+                    hit_agent_handle="",
+                    memory_type="",
+                )
+            ],
+        )
+        log.close()
+
+        with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
+            result = _ToolHarness(tc).tools.insights()
+        get_query_log.cache_clear()
+
+        assert "Telemetry:        enabled" in result
+        assert "Total queries:    1" in result
+        # The MCP tool must expose the same row breakdowns as the CLI and HTTP
+        # surfaces (Bug class 3), not just the scalar summary fields.
+        assert "Per-collection hits:" in result
+        assert "default: 1" in result
+        assert "Per-agent recall:" in result
+        assert "rmh: 1" in result
+        assert "Hit decay bands:" in result
+        assert "unknown: 1" in result
+
+
 class TestListResources:
     def test_documents(self, harness: _ToolHarness) -> None:
         docs = [
@@ -284,7 +384,7 @@ class TestListResources:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=docs
         ):
-            result = harness.tools.list_resources("documents")
+            result = harness.catalog.list_resources("documents")
         assert "a.pdf" in result
         assert "DOCUMENT" in result
 
@@ -292,7 +392,7 @@ class TestListResources:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
         ) as list_docs:
-            harness.tools.list_resources("documents", collection="math")
+            harness.catalog.list_resources("documents", collection="math")
         assert list_docs.call_args.kwargs["collection_filter"] == "math"
 
     def test_collections(self, harness: _ToolHarness) -> None:
@@ -300,21 +400,21 @@ class TestListResources:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=cols
         ):
-            result = harness.tools.list_resources("collections")
+            result = harness.catalog.list_resources("collections")
         assert "math" in result
         assert "COLLECTION" in result
 
     def test_databases(self, harness: _ToolHarness) -> None:
-        result = harness.tools.list_resources("databases")
+        result = harness.catalog.list_resources("databases")
         # The daemon reports the single database it is fixed to.
         assert "DATABASE" in result
 
     def test_registrations_empty(self, harness: _ToolHarness) -> None:
-        result = harness.tools.list_resources("registrations")
+        result = harness.catalog.list_resources("registrations")
         assert "No registered directories" in result
 
     def test_unknown_kind(self, harness: _ToolHarness) -> None:
-        result = harness.tools.list_resources("bogus")
+        result = harness.catalog.list_resources("bogus")
         assert "unknown kind" in result
 
 
@@ -324,7 +424,7 @@ class TestShow:
             "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
             return_value="The quick brown fox",
         ):
-            result = harness.tools.show("report.pdf", page_number=3)
+            result = harness.documents.show("report.pdf", page_number=3)
         assert "Page: 3" in result
         assert "The quick brown fox" in result
 
@@ -341,7 +441,7 @@ class TestShow:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[doc]
         ):
-            result = harness.tools.show("report.pdf")
+            result = harness.documents.show("report.pdf")
         assert "report.pdf" in result
         assert "math" in result
 
@@ -350,7 +450,7 @@ class TestShow:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
         ):
-            result = harness.tools.show("missing.pdf", page_number=99)
+            result = harness.documents.show("missing.pdf", page_number=99)
         assert result == "No data found for missing.pdf page 99"
 
     def test_missing_document_is_friendly_not_found(
@@ -359,7 +459,7 @@ class TestShow:
         with patch(
             "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
         ):
-            result = harness.tools.show("missing.pdf")
+            result = harness.documents.show("missing.pdf")
         assert result == "Document 'missing.pdf' not found"
 
 
@@ -420,6 +520,31 @@ class TestRemember:
 
         assert captured == ["memory-rmh"]
 
+    def test_memory_type_reaches_the_wire_unchanged(
+        self, harness: _ToolHarness
+    ) -> None:
+        """The MCP tool never rewrites ``memory_type``; the daemon owns validation."""
+        captured: list[str] = []
+        real_route = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._remember_job
+
+        def spy(self: object, body: dict[str, object]) -> object:
+            captured.append(str(body.get("memory_type", "<missing>")))
+            return real_route(self, body)
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._remember_job", spy):
+            harness.tools.remember(
+                "body", "n.md", agent_handle="rmh", memory_type="procedure"
+            )
+        assert captured == ["procedure"]
+
+    def test_unknown_memory_type_is_the_daemon_400(self, harness: _ToolHarness) -> None:
+        """The daemon's 400 body surfaces verbatim through the tool boundary."""
+        result = harness.tools.remember("body", "n.md", memory_type="facts")
+        assert result.startswith("Error:")
+        assert "unknown memory_type 'facts'" in result
+
 
 class TestIngest:
     def test_non_url_points_to_register(self, harness: _ToolHarness) -> None:
@@ -433,11 +558,11 @@ class TestIngest:
         # only gates the route, not the worker's later pipeline call).
         with (
             patch(
-                "quarry.daemon.routes.ingestion.UrlSafetyCheck.reject_reason",
+                "quarry.daemon.routes.content_group.UrlAdmission.reject_reason",
                 return_value=None,
             ),
             patch(
-                "quarry.ingestion.pipeline.ingest_auto",
+                "quarry.ingestion.sitemap_ingest.ingest_auto",
                 return_value={"document_name": "x", "collection": "c", "chunks": 1},
             ),
         ):
@@ -477,17 +602,17 @@ class TestLearn:
 
 class TestDelete:
     def test_document_dispatches(self, harness: _ToolHarness) -> None:
-        result = harness.tools.delete("report.pdf")
+        result = harness.documents.delete("report.pdf")
         assert "report.pdf" in result
         assert "task" in result
 
     def test_collection_dispatches(self, harness: _ToolHarness) -> None:
-        result = harness.tools.delete("math", kind="collection")
+        result = harness.documents.delete("math", kind="collection")
         assert "math" in result
         assert "task" in result
 
     def test_invalid_kind(self, harness: _ToolHarness) -> None:
-        result = harness.tools.delete("x", kind="bogus")
+        result = harness.documents.delete("x", kind="bogus")
         assert "Invalid kind" in result
 
 
@@ -499,7 +624,7 @@ class TestRegisterDeregister:
             "quarry.daemon.routes.registrations.RegistrationRoutes._server_home",
             return_value=(tmp_path, None),
         ):
-            result = harness.tools.register_directory(str(target), "my-course")
+            result = harness.documents.register_directory(str(target), "my-course")
         assert "my-course" in result
         assert "task" in result
 
@@ -512,17 +637,28 @@ class TestRegisterDeregister:
             "quarry.daemon.routes.registrations.RegistrationRoutes._server_home",
             return_value=(tmp_path / "elsewhere", None),
         ):
-            result = harness.tools.register_directory(str(target))
+            result = harness.documents.register_directory(str(target))
         assert result.startswith("Error:")
 
+    @pytest.mark.parametrize("home", ["", "relative/home"])
+    def test_register_with_an_unusable_home_is_a_clean_error(
+        self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch, home: str
+    ) -> None:
+        monkeypatch.setenv("HOME", home)
+
+        result = harness.documents.register_directory("~/proj")
+
+        assert result.startswith("Error:")
+        assert "home directory" in result
+
     def test_deregister_unknown_is_clean_error(self, harness: _ToolHarness) -> None:
-        result = harness.tools.deregister_directory("ghost")
+        result = harness.documents.deregister_directory("ghost")
         assert result.startswith("Error:")
 
 
 class TestSync:
     def test_dispatches(self, harness: _ToolHarness) -> None:
-        result = harness.tools.sync_all_registrations()
+        result = harness.documents.sync_all_registrations()
         assert "task" in result
 
 
@@ -698,11 +834,19 @@ class TestInputValidation:
     """
 
     @staticmethod
-    def _tools() -> McpTools:
+    def _connect_refuses() -> Callable[[], QuarryClient]:
         def _connect() -> QuarryClient:
             raise AssertionError("guard must short-circuit before connecting")
 
-        return McpTools(connect=_connect)
+        return _connect
+
+    @classmethod
+    def _tools(cls) -> McpTools:
+        return McpTools(connect=cls._connect_refuses())
+
+    @classmethod
+    def _documents(cls) -> DocumentTools:
+        return DocumentTools(connect=cls._connect_refuses())
 
     def test_find_blank_query(self) -> None:
         result = self._tools().find("   ")
@@ -725,17 +869,17 @@ class TestInputValidation:
         assert "document_name" in result
 
     def test_delete_blank_name(self) -> None:
-        result = self._tools().delete("")
+        result = self._documents().delete("")
         assert result.startswith("Error:")
         assert "name" in result
 
     def test_register_blank_directory(self) -> None:
-        result = self._tools().register_directory("   ")
+        result = self._documents().register_directory("   ")
         assert result.startswith("Error:")
         assert "directory" in result
 
     def test_deregister_blank_collection(self) -> None:
-        result = self._tools().deregister_directory("")
+        result = self._documents().deregister_directory("")
         assert result.startswith("Error:")
         assert "collection" in result
 
@@ -764,7 +908,7 @@ class TestInputValidation:
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents",
                 return_value=[],
             ):
-                result = harness.tools.show("missing.pdf", page_number=page)
+                result = harness.documents.show("missing.pdf", page_number=page)
             assert result == "Document 'missing.pdf' not found", page
 
 
@@ -806,6 +950,25 @@ class TestToolDocstringOpeners:
         assert doc is not None
         assert self._R3 in doc
 
+    def test_remember_docstring_carries_the_five_moments_and_attribution(
+        self,
+    ) -> None:
+        """The MCP surface states when to remember and why the handle is yours.
+
+        The same five moments live in the session_context guide and the recall
+        skill; the MCP docstring is the copy a model sees without either.
+        """
+        doc = " ".join((McpTools.remember.__doc__ or "").split())
+        assert "five moments" in doc
+        for moment in ("(fact)", "(procedure)", "(opinion)", "(observation)"):
+            assert moment in doc, moment
+        assert "Always pass your own agent_handle" in doc
+        assert "resolves to the repo's leader, not to you" in doc
+
+    def test_find_agent_handle_doc_says_your_own(self) -> None:
+        doc = McpTools.find.__doc__ or ""
+        assert "Your own handle to recall only your memories" in doc
+
     def test_remember_drops_clipboard_framing(self) -> None:
         """R3a: the clipboard/API-response framing is dropped entirely."""
         doc = McpTools.remember.__doc__ or ""
@@ -831,20 +994,30 @@ class TestToolDocstringOpeners:
         the occasion an agent would reach for it.
         """
         expected_openers = {
-            "ingest": "Use when you have a URL to add to the knowledge base",
-            "list_resources": "Use to see what's already indexed before ingesting",
-            "show": "Use to read a specific page, or to check whether a document",
-            "delete": "Use to remove stale or wrong content before re-ingesting",
-            "register_directory": (
+            (McpTools, "ingest"): (
+                "Use when you have a URL to add to the knowledge base"
+            ),
+            (ResourceCatalog, "list_resources"): (
+                "Use to see what's already indexed before ingesting"
+            ),
+            (DocumentTools, "show"): (
+                "Use to read a specific page, or to check whether a document"
+            ),
+            (DocumentTools, "delete"): (
+                "Use to remove stale or wrong content before re-ingesting"
+            ),
+            (DocumentTools, "register_directory"): (
                 "Use to track a local directory so future changes sync"
             ),
-            "deregister_directory": "Use to stop tracking a directory",
-            "sync_all_registrations": "Use after registering a new directory",
-            "status": "Use to check how much is indexed",
-            "use_database": "Use to point every other tool at a different",
+            (DocumentTools, "deregister_directory"): "Use to stop tracking a directory",
+            (DocumentTools, "sync_all_registrations"): (
+                "Use after registering a new directory"
+            ),
+            (McpTools, "status"): "Use to check how much is indexed",
+            (McpTools, "use_database"): "Use to point every other tool at a different",
         }
-        for name, opener in expected_openers.items():
-            doc = getattr(McpTools, name).__doc__
+        for (cls, name), opener in expected_openers.items():
+            doc = getattr(cls, name).__doc__
             assert doc is not None, name
             first_line = doc.lstrip().split("\n", 1)[0]
             assert opener in first_line, f"{name}: got {first_line!r}"

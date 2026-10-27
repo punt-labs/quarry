@@ -8,32 +8,51 @@ and the run dir are mocked.
 
 from __future__ import annotations
 
+import logging
 import resource
+import socket
 import ssl
+import struct
+import sys
+import threading
 from collections.abc import Generator
 from contextlib import contextmanager
-from pathlib import Path
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path, PosixPath
+from typing import final
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from quarry.api.meta import FdHealth
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.fd_headroom import FdHeadroom
+from quarry.tls import generate_ca, generate_server_cert
 
 
 @contextmanager
-def _run_dir_at(tmp_path: Path) -> Generator[None]:
-    """Patch Settings so the active-db run dir resolves to ``tmp_path``."""
-    fake_settings = MagicMock()
-    fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
-    with patch("quarry.doctor_daemon.Settings") as settings:
-        settings.load.return_value.resolve_db_paths.return_value = fake_settings
+def _run_dir_at(tmp_path: Path) -> Generator[MagicMock]:
+    """Yield settings whose active-db run dir resolves to ``tmp_path``."""
+    paths = MagicMock()
+    paths.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
+    settings = MagicMock()
+    settings.resolve_db_paths.return_value = paths
+    yield settings
+
+
+@contextmanager
+def _ca_at(tmp_path: Path, content: bytes) -> Generator[None]:
+    """Make ``tmp_path/ca.crt`` (holding *content*) the daemon's installed CA."""
+    ca = tmp_path / "ca.crt"
+    ca.write_bytes(content)
+    with patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca):
         yield
 
 
 class TestReachability:
     def test_no_port_file_reports_not_reachable(self, tmp_path: Path) -> None:
-        with _run_dir_at(tmp_path):
-            result = DaemonDiagnostics.reachability()
+        with _run_dir_at(tmp_path) as settings:
+            result = DaemonDiagnostics.reachability(settings)
         assert result.passed is False
         assert result.required is False  # advisory — a down daemon is not a crash
         assert "not reachable" in result.message
@@ -41,10 +60,10 @@ class TestReachability:
     def test_port_present_and_health_ready_passes(self, tmp_path: Path) -> None:
         (tmp_path / "serve.port").write_text("8420")
         with (
-            _run_dir_at(tmp_path),
+            _run_dir_at(tmp_path) as settings,
             patch.object(DaemonDiagnostics, "_probe_health", return_value=True),
         ):
-            result = DaemonDiagnostics.reachability()
+            result = DaemonDiagnostics.reachability(settings)
         assert result.passed is True
         assert "ready" in result.message
         assert "127.0.0.1:8420" in result.message
@@ -52,18 +71,18 @@ class TestReachability:
     def test_port_present_but_not_ready_fails(self, tmp_path: Path) -> None:
         (tmp_path / "serve.port").write_text("8420")
         with (
-            _run_dir_at(tmp_path),
+            _run_dir_at(tmp_path) as settings,
             patch.object(DaemonDiagnostics, "_probe_health", return_value=False),
         ):
-            result = DaemonDiagnostics.reachability()
+            result = DaemonDiagnostics.reachability(settings)
         assert result.passed is False
         assert "not ready" in result.message
 
     def test_corrupt_port_file_reports_not_reachable(self, tmp_path: Path) -> None:
         # A non-numeric serve.port raises ValueError in PortFile.read — fail soft.
         (tmp_path / "serve.port").write_text("not-a-port")
-        with _run_dir_at(tmp_path):
-            result = DaemonDiagnostics.reachability()
+        with _run_dir_at(tmp_path) as settings:
+            result = DaemonDiagnostics.reachability(settings)
         assert result.passed is False
         assert "not reachable" in result.message
 
@@ -80,18 +99,95 @@ class TestReachability:
             return conn
 
         with (
-            _run_dir_at(tmp_path),
+            _run_dir_at(tmp_path) as settings,
             patch("quarry.doctor_daemon.http.client.HTTPSConnection", _fake_conn),
         ):
-            result = DaemonDiagnostics.reachability()
+            result = DaemonDiagnostics.reachability(settings)
         assert captured["host"] == "127.0.0.1"
         assert result.passed is True
 
 
+@final
+class _DeniedPath(PosixPath):
+    """A path whose existence cannot even be asked about."""
+
+    __slots__ = ()
+
+    def exists(self, *, follow_symlinks: bool = True) -> bool:
+        del follow_symlinks
+        raise PermissionError(13, "Permission denied")
+
+
+class TestPinnedCa:
+    """An installed CA that cannot be used is a failed check, never CERT_NONE."""
+
+    def test_a_corrupt_ca_fails_reachability_naming_the_file(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with _run_dir_at(tmp_path) as settings, _ca_at(tmp_path, b"not a certificate"):
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is False
+        assert str(tmp_path / "ca.crt") in result.message
+        assert "not reachable" not in result.message
+
+    def test_an_unreadable_ca_fails_reachability_with_the_errno(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        ca = tmp_path / "ca.crt"
+        ca.write_bytes(b"x")
+        denied = PermissionError(13, "Permission denied")
+        with (
+            _run_dir_at(tmp_path) as settings,
+            patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
+            patch(
+                "quarry.doctor_daemon.ssl.SSLContext.load_verify_locations",
+                side_effect=denied,
+            ),
+        ):
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is False
+        assert "ca.crt" in result.message
+        assert "EACCES" in result.message
+
+    def test_a_corrupt_ca_fails_the_fd_check_too(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with _run_dir_at(tmp_path) as settings, _ca_at(tmp_path, b"junk"):
+            result = DaemonDiagnostics.fd_headroom(settings)
+
+        assert result.passed is False
+        assert "ca.crt" in result.message
+
+    def test_no_ca_at_all_still_probes_unverified(self, tmp_path: Path) -> None:
+        missing = tmp_path / "ca.crt"
+        with patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=missing):
+            pinned = DaemonDiagnostics._pinned_context()
+
+        assert pinned is None
+        assert DaemonDiagnostics._unverified_context().verify_mode == ssl.CERT_NONE
+
+    def test_a_ca_that_cannot_even_be_looked_up_names_the_file(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        ca = _DeniedPath(tmp_path / "ca.crt")
+        with (
+            _run_dir_at(tmp_path) as settings,
+            patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
+        ):
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is False
+        assert f"{ca} cannot be read (EACCES)" in result.message
+
+
 class TestServeToken:
     def test_missing_token_fails(self, tmp_path: Path) -> None:
-        with _run_dir_at(tmp_path):
-            result = DaemonDiagnostics.serve_token()
+        with _run_dir_at(tmp_path) as settings:
+            result = DaemonDiagnostics.serve_token(settings)
         assert result.passed is False
         assert result.required is False
         assert "missing or unreadable" in result.message
@@ -100,8 +196,8 @@ class TestServeToken:
         token = tmp_path / "serve.token"
         token.write_text("live-token")
         token.chmod(0o600)
-        with _run_dir_at(tmp_path):
-            result = DaemonDiagnostics.serve_token()
+        with _run_dir_at(tmp_path) as settings:
+            result = DaemonDiagnostics.serve_token(settings)
         assert result.passed is True
         assert "0600" in result.message
 
@@ -109,8 +205,8 @@ class TestServeToken:
         token = tmp_path / "serve.token"
         token.write_text("live-token")
         token.chmod(0o644)  # world-readable — not the 0600 the writer guarantees
-        with _run_dir_at(tmp_path):
-            result = DaemonDiagnostics.serve_token()
+        with _run_dir_at(tmp_path) as settings:
+            result = DaemonDiagnostics.serve_token(settings)
         assert result.passed is False
         assert "mode" in result.message and "0600" in result.message
 
@@ -118,8 +214,8 @@ class TestServeToken:
         token = tmp_path / "serve.token"
         token.write_text("   ")  # whitespace-only == empty credential
         token.chmod(0o600)
-        with _run_dir_at(tmp_path):
-            result = DaemonDiagnostics.serve_token()
+        with _run_dir_at(tmp_path) as settings:
+            result = DaemonDiagnostics.serve_token(settings)
         assert result.passed is False
         assert "empty" in result.message
 
@@ -155,14 +251,14 @@ class TestFdHeadroom:
         (tmp_path / "serve.port").write_text("8420")
         local_soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
         with (
-            _run_dir_at(tmp_path),
+            _run_dir_at(tmp_path) as settings,
             patch.object(
                 DaemonDiagnostics,
                 "_fetch_health",
                 return_value=self._ready_fd(100, 8192),
             ),
         ):
-            result = DaemonDiagnostics.fd_headroom()
+            result = DaemonDiagnostics.fd_headroom(settings)
         assert result.passed is True
         assert "100/8192 fds" in result.message  # the DAEMON's soft limit drives it
         if local_soft != 8192:
@@ -173,7 +269,7 @@ class TestFdHeadroom:
         # FdHeadroom.sample would blow up if the check fell back to it.
         (tmp_path / "serve.port").write_text("8420")
         with (
-            _run_dir_at(tmp_path),
+            _run_dir_at(tmp_path) as settings,
             patch.object(
                 FdHeadroom,
                 "sample",
@@ -185,13 +281,13 @@ class TestFdHeadroom:
                 return_value=self._ready_fd(100, 8192),
             ),
         ):
-            result = DaemonDiagnostics.fd_headroom()
+            result = DaemonDiagnostics.fd_headroom(settings)
         assert result.passed is True
 
     def test_unreachable_daemon_reports_unavailable(self, tmp_path: Path) -> None:
         # No serve.port → daemon not running: degrade clearly, no local fallback.
-        with _run_dir_at(tmp_path):
-            result = DaemonDiagnostics.fd_headroom()
+        with _run_dir_at(tmp_path) as settings:
+            result = DaemonDiagnostics.fd_headroom(settings)
         assert result.passed is False
         assert "unavailable" in result.message
         assert "not running" in result.message
@@ -199,10 +295,10 @@ class TestFdHeadroom:
     def test_health_unreadable_reports_unavailable(self, tmp_path: Path) -> None:
         (tmp_path / "serve.port").write_text("8420")
         with (
-            _run_dir_at(tmp_path),
+            _run_dir_at(tmp_path) as settings,
             patch.object(DaemonDiagnostics, "_fetch_health", return_value=None),
         ):
-            result = DaemonDiagnostics.fd_headroom()
+            result = DaemonDiagnostics.fd_headroom(settings)
         assert result.passed is False
         assert "unavailable" in result.message
 
@@ -211,24 +307,24 @@ class TestFdHeadroom:
         (tmp_path / "serve.port").write_text("8420")
         body: dict[str, object] = {"state": "ready", "fd": None}
         with (
-            _run_dir_at(tmp_path),
+            _run_dir_at(tmp_path) as settings,
             patch.object(DaemonDiagnostics, "_fetch_health", return_value=body),
         ):
-            result = DaemonDiagnostics.fd_headroom()
+            result = DaemonDiagnostics.fd_headroom(settings)
         assert result.passed is False
         assert "no fd headroom" in result.message
 
     def test_low_headroom_warns(self, tmp_path: Path) -> None:
         (tmp_path / "serve.port").write_text("8420")
         with (
-            _run_dir_at(tmp_path),
+            _run_dir_at(tmp_path) as settings,
             patch.object(
                 DaemonDiagnostics,
                 "_fetch_health",
                 return_value=self._ready_fd(250, 256),
             ),
         ):
-            result = DaemonDiagnostics.fd_headroom()
+            result = DaemonDiagnostics.fd_headroom(settings)
         assert result.passed is False
         assert "over 80%" in result.message
 
@@ -297,7 +393,7 @@ class TestProbeTransportFallback:
 
 
 class TestFdWireContract:
-    """FdHealth is the single owner of the fd wire shape (bug-class-3).
+    """FdHealth is the single owner of the fd wire shape.
 
     The daemon serializes an ``FdHealth``; doctor parses the same model back, so
     a field added to the contract cannot drift between the two hand-sites.
@@ -337,3 +433,243 @@ class TestFdWireContract:
             {"fd": {"open_fds": -1, "soft_limit": 8192}}
         )
         assert result is None
+
+
+class _Health(BaseHTTPRequestHandler):
+    """Answer ``/health`` with a ready daemon, quietly."""
+
+    def do_GET(self) -> None:
+        body = b'{"state":"ready"}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+class _Silent(BaseHTTPRequestHandler):
+    """Take the request and close the connection without answering it."""
+
+    def do_GET(self) -> None:
+        self.close_connection = True
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+@contextmanager
+def _health_server(
+    tls: tuple[bytes, bytes] | None,
+    root: Path,
+    handler: type[BaseHTTPRequestHandler] = _Health,
+) -> Generator[int]:
+    """Serve ``/health`` on the loopback, over TLS with *tls* (cert, key) if given."""
+    server = HTTPServer(("127.0.0.1", 0), handler)
+    if tls is not None:
+        cert, key = root / "server.crt", root / "server.key"
+        cert.write_bytes(tls[0])
+        key.write_bytes(tls[1])
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def _signed_by(ca: tuple[bytes, bytes]) -> tuple[bytes, bytes]:
+    return generate_server_cert(ca[0], ca[1], "127.0.0.1")
+
+
+@pytest.mark.network  # real loopback sockets: the fake resolver would break them
+class TestInstalledCaIsNeverBypassed:
+    """With the daemon CA installed, a probe that cannot verify it fails."""
+
+    def test_a_certificate_that_does_not_chain_to_the_ca_fails_the_check(
+        self, tmp_path: Path
+    ) -> None:
+        installed, impostor = generate_ca(), generate_ca()
+        with (
+            _health_server(_signed_by(impostor), tmp_path) as port,
+            _run_dir_at(tmp_path) as settings,
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is False
+        assert f"fails verification against {tmp_path / 'ca.crt'}" in result.message
+
+    def test_a_plaintext_listener_answering_ready_fails_the_check(
+        self, tmp_path: Path
+    ) -> None:
+        installed = generate_ca()
+        with (
+            _health_server(None, tmp_path) as port,
+            _run_dir_at(tmp_path) as settings,
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is False
+        assert (
+            f"does not complete TLS although {tmp_path / 'ca.crt'} is installed"
+            in result.message
+        )
+
+    def test_a_certificate_signed_by_the_ca_passes(self, tmp_path: Path) -> None:
+        installed = generate_ca()
+        with (
+            _health_server(_signed_by(installed), tmp_path) as port,
+            _run_dir_at(tmp_path) as settings,
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is True
+
+    def test_without_a_ca_a_plaintext_daemon_still_passes(self, tmp_path: Path) -> None:
+        with (
+            _health_server(None, tmp_path) as port,
+            _run_dir_at(tmp_path) as settings,
+            patch(
+                "quarry.home_paths.QuarryHome.daemon_ca",
+                return_value=tmp_path / "ca.crt",
+            ),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is True
+
+
+@contextmanager
+def _resetting_listener(*, resets: int = sys.maxsize) -> Generator[int]:
+    """Listen on the loopback and reset a connection once its handshake began.
+
+    The reset waits for the client's first bytes, so it always lands after the
+    TCP connection was made and the TLS handshake started.  Only *resets*
+    connections are reset; later ones are answered as a plain HTTP daemon that
+    is ready.
+    """
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.settimeout(0.05)
+    done = threading.Event()
+    seen = 0
+
+    def reset() -> None:
+        nonlocal seen
+        while not done.is_set():
+            try:
+                conn, _ = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            seen += 1
+            conn.settimeout(2)
+            if seen > resets:
+                conn.recv(4096)
+                conn.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\n"
+                    b"Connection: close\r\n\r\n"
+                    b'{"state":"ready"}'
+                )
+                conn.close()
+                continue
+            conn.recv(1)  # the client has started its handshake
+            conn.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            conn.close()
+
+    thread = threading.Thread(target=reset, daemon=True)
+    thread.start()
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        done.set()
+        thread.join()
+        listener.close()
+
+
+@pytest.mark.network
+class TestAResetHandshake:
+    def test_with_a_ca_installed_it_is_a_tls_fault_not_not_ready(
+        self, tmp_path: Path
+    ) -> None:
+        installed = generate_ca()
+        with (
+            _resetting_listener() as port,
+            _run_dir_at(tmp_path) as settings,
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is False
+        assert (
+            f"does not complete TLS although {tmp_path / 'ca.crt'} is installed"
+            in result.message
+        )
+
+    def test_without_a_ca_it_is_just_not_ready(self, tmp_path: Path) -> None:
+        with (
+            _resetting_listener() as port,
+            _run_dir_at(tmp_path) as settings,
+            patch(
+                "quarry.home_paths.QuarryHome.daemon_ca",
+                return_value=tmp_path / "ca.crt",
+            ),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is False
+        assert "not ready" in result.message
+        assert "the TLS attempt failed first" in result.message
+
+    def test_a_tls_daemon_that_closes_without_answering_is_not_ready_not_a_ca_fault(
+        self, tmp_path: Path
+    ) -> None:
+        installed = generate_ca()
+        with (
+            _health_server(_signed_by(installed), tmp_path, _Silent) as port,
+            _run_dir_at(tmp_path) as settings,
+            _ca_at(tmp_path, installed[0]),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is False
+        assert result.message.startswith("not ready on 127.0.0.1")
+        assert "ca.crt" not in result.message
+
+    def test_without_a_ca_a_reset_handshake_retries_over_plain_http(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with (
+            _resetting_listener(resets=1) as port,
+            _run_dir_at(tmp_path) as settings,
+            patch(
+                "quarry.home_paths.QuarryHome.daemon_ca",
+                return_value=tmp_path / "ca.crt",
+            ),
+            caplog.at_level(logging.INFO, logger="quarry.doctor_daemon"),
+        ):
+            (tmp_path / "serve.port").write_text(str(port))
+            result = DaemonDiagnostics.reachability(settings)
+
+        assert result.passed is True
+        assert "retrying over plain HTTP" in caplog.text

@@ -1,0 +1,122 @@
+{
+  "timestamp": "2026-10-25T23:30:00+00:00",
+  "spec": "backfill-run-lifecycle.spec.tex",
+  "note": "Written by hand from direct probcli runs (probcli 1.15.1). Commands: probcli backfill-run-lifecycle.spec.tex -model_check -p MAX_INITIALISATIONS 100 -p TIME_OUT 300000 -p MAX_OPERATIONS 100000 -nodead [-goal '<w> : wit'] [-ctlformula <f>]. The old build is the spec with the axdef `fixed = 0`; each ablation changes one line of the fixed build. CTL atoms are braced, e.g. -ctlformula 'AG(EF({task /= trunning & thr = treturned & out(1) /= onone & out(2) /= onone}))'. Trace lengths are the TRACE (length=N) probcli prints. In the fixed build probcli reports one operation not covered (AdmitTimeout).",
+  "fuzz": "OK",
+  "fixed": 1,
+  "initial_states": 18,
+  "states_analysed": 195277,
+  "transitions_fired": 529123,
+  "checks": [
+    {
+      "name": "model_check",
+      "status": "passed",
+      "detail": "all states visited; no invariant violation (-nodead)"
+    },
+    {
+      "name": "witness_goal",
+      "status": "passed",
+      "detail": "wOverlap, wLate, wReason, wUncounted, wRecord, wSecond, wStats, wMiscommit: -goal 'card(wit)>0' none reached (No counter example found. ALL states visited.)"
+    },
+    {
+      "name": "ctl_reaches_done",
+      "status": "passed",
+      "detail": "AG(EF(task /= trunning & thr = treturned & every transcript has an outcome)) TRUE"
+    },
+    {
+      "name": "ctl_no_early_deadlock",
+      "status": "passed",
+      "detail": "AG(done or EX true) TRUE"
+    },
+    {
+      "name": "ctl_holds",
+      "status": "passed",
+      "detail": "AG((thr = talive => holds = ztrue) & (inreg = zfalse => holds = zfalse)) TRUE: a live thread is always held, and a state that left the registry holds nothing"
+    }
+  ],
+  "old_build": {
+    "fixed": 0,
+    "witnesses_reached": [
+      {
+        "witness": "wOverlap",
+        "property": "L1",
+        "trace_length": 8,
+        "states_analysed": 66
+      },
+      {
+        "witness": "wLate",
+        "property": "L2",
+        "trace_length": 16,
+        "states_analysed": 3415
+      },
+      {
+        "witness": "wReason",
+        "property": "L3",
+        "trace_length": 6,
+        "states_analysed": 56
+      },
+      {
+        "witness": "wUncounted",
+        "property": "L4",
+        "trace_length": 7,
+        "states_analysed": 861
+      },
+      {
+        "witness": "wRecord",
+        "property": "L5",
+        "trace_length": 7,
+        "states_analysed": 7213
+      },
+      {
+        "witness": "wSecond",
+        "property": "L6",
+        "trace_length": 16,
+        "states_analysed": 4079
+      },
+      {
+        "witness": "wStats",
+        "property": "L7",
+        "trace_length": 10,
+        "states_analysed": 63
+      },
+      {
+        "witness": "wMiscommit",
+        "property": "L8",
+        "trace_length": 14,
+        "states_analysed": 4621
+      }
+    ]
+  },
+  "ablations": [
+    {
+      "change": "Evict ignores holds (TTL GC drops a held task)",
+      "witness": "wOverlap",
+      "trace_length": 9,
+      "states_analysed": 116
+    },
+    {
+      "change": "Bound does not record the outcomes so far",
+      "witness": "wStats",
+      "trace_length": 5,
+      "states_analysed": 102
+    },
+    {
+      "change": "a job that had just stored is counted failed at the withdraw",
+      "witness": "wStats",
+      "trace_length": 12,
+      "states_analysed": 10094
+    },
+    {
+      "change": "a running job is not withdrawn (no claim check before the commit)",
+      "witness": "wSecond",
+      "trace_length": 15,
+      "states_analysed": 11099
+    },
+    {
+      "change": "a job past its commit point is counted stored at the withdraw, not unconfirmed",
+      "witness": "wMiscommit",
+      "trace_length": 11,
+      "states_analysed": 18691
+    }
+  ]
+}

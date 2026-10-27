@@ -9,10 +9,10 @@ from quarry.doctor_memory import MemoryDiagnostics
 
 
 def _write_ethos_config(root: Path, agent: str) -> None:
-    """Deposit an ethos config at ``root/.punt-labs/ethos/config.yaml``."""
-    config_dir = root / ".punt-labs" / "ethos"
-    config_dir.mkdir(parents=True)
-    (config_dir / "config.yaml").write_text(f"agent: {agent}\n")
+    """Deposit the ethos repo pin at ``root/.punt-labs/ethos.yaml``."""
+    punt_labs = root / ".punt-labs"
+    punt_labs.mkdir(parents=True)
+    (punt_labs / "ethos.yaml").write_text(f"agent: {agent}\n")
 
 
 def _patch_rows(rows: list[dict[str, object]]) -> MagicMock:
@@ -94,7 +94,7 @@ class TestCorpus:
         with patch("quarry.db.facade.Database.connect", return_value=_patch_rows(rows)):
             result = MemoryDiagnostics.corpus(db_path)
         # ``rmh`` still tallies (handle non-empty) but ``chatter`` is not in
-        # ``_MEMORY_TYPES``, so it does not show under ``types:``.
+        # ``DECAYABLE_MEMORY_TYPES``, so it does not show under ``types:``.
         assert "memory: rmh=1" in result.message
         assert "types:" not in result.message
 
@@ -151,8 +151,10 @@ class TestCorpus:
 
 
 class TestIdentityActive:
-    def test_no_handle_when_config_missing(self, tmp_path: Path) -> None:
-        result = MemoryDiagnostics.identity_active(str(tmp_path), tmp_path / "lancedb")
+    def test_no_handle_when_config_missing(self, unpinned_root: Path) -> None:
+        result = MemoryDiagnostics.identity_active(
+            str(unpinned_root), unpinned_root / "lancedb"
+        )
         assert result.passed is True
         assert result.message == "no ethos identity active"
 
@@ -219,7 +221,11 @@ class TestIdentityActive:
         assert result.passed is False
         assert result.required is False
         assert "rmh" in result.message
+        # Both remedies are named: the leader's next PreCompact populates the
+        # handle passively, and a remember with the handle does so directly.
         assert "PreCompact" in result.message
+        assert "quarry remember --agent-handle rmh" in result.message
+        assert "other agents have 2" in result.message
 
     def test_db_error_returns_failed_check_not_raise(self, tmp_path: Path) -> None:
         _write_ethos_config(tmp_path, "rmh")

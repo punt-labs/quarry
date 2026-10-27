@@ -36,7 +36,15 @@ bd close <id>         # close an existing bead
 
 ## bd version
 
-This repo expects **bd 1.0.4 or newer** with the local TLS/init patch
-applied (see `.tmp/beads-fork/` in the meta-repo for source + build).
+This repo needs `bd` built from the punt-labs fork, branch
+`factory-fixes`, at or after punt-labs/beads#7 (commit `782b3928b`).
+Build it from the meta-repo with `.bin/install-bd.sh install`, which
+clones the fork into `.tmp/beads-fork/` and installs `~/.local/bin/bd`.
+
+Upstream `bd` and older fork builds ignore `linear.pull_label` in
+`config.yaml`. Their `bd linear sync --pull` fetches the whole Linear
+team and turns other repos' issues into `quarry-*` beads. Before
+pulling, check that `bd linear --help` lists `LINEAR_PULL_LABEL`; if it
+doesn't, rebuild.
 
 Upstream bd: <https://github.com/gastownhall/beads>

@@ -26,6 +26,7 @@ class Options:
     json: bool
     threshold: bool
     relax: str | None
+    relax_category: str | None
     justify: str
     base_ref: str | None
     require_base: bool
@@ -43,6 +44,7 @@ class Options:
             json=bool(ns.json),
             threshold=bool(ns.threshold),
             relax=ns.relax,
+            relax_category=ns.relax_category,
             justify=ns.justify or "",
             base_ref=ns.base_ref,
             require_base=bool(ns.require_base),
@@ -63,7 +65,14 @@ class Options:
         action.add_argument("--threshold", action="store_true", help="per-file table")
         action.add_argument("--json", action="store_true", help="emit JSON counts")
         action.add_argument("--relax", metavar="FILE", help="relax one file's baseline")
-        parser.add_argument("--justify", default="", help="justification for --relax")
+        action.add_argument(
+            "--relax-category",
+            metavar="NAME",
+            help="relax one config-level category's baseline (e.g. per_file_ignores)",
+        )
+        parser.add_argument(
+            "--justify", default="", help="justification for --relax/--relax-category"
+        )
         parser.add_argument("--base-ref", metavar="REF", help="comparison base commit")
         parser.add_argument(
             "--require-base", action="store_true", help="fail if base unresolvable"
@@ -128,6 +137,14 @@ class Cli:
             return baseline.relax(
                 report,
                 opts.relax,
+                justify=opts.justify,
+                allow_ci_write=opts.allow_ci_write,
+                source=opts.source,
+            )
+        if opts.relax_category is not None:
+            return baseline.relax_category(
+                report,
+                opts.relax_category,
                 justify=opts.justify,
                 allow_ci_write=opts.allow_ci_write,
                 source=opts.source,

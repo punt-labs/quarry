@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self, final
 
+from quarry.claude_permissions import PermissionChange, ProjectPermissions
+from quarry.ethos_memory import EthosMemoryBootstrap, EthosMemoryResult
+from quarry.home_paths import QuarryHome
 from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
@@ -45,23 +48,22 @@ class EnableResult:
 
     The four CLAUDE.md/.gitignore fields track the § 2.3 steps: guide
     deposit, ``enabled`` marker, ``@``-import line, and ``.gitignore`` entry.
+    ``ethos`` is the bootstrap's own per-handle outcome, carried whole rather
+    than flattened into parallel lists. ``permissions`` is the § 2.8 allow-rule
+    grant in the repo's ``.claude/settings.json`` (#552).
     """
 
     directory: str
     collection: str
     captures_collection: str
-    memory_collections: list[str] = field(default_factory=list)
     config_path: str = ""
     created_registration: bool = False
     guide_deposited: bool = False
     enabled_marker_written: bool = False
     import_registered: bool = False
     gitignore_ensured: bool = False
-    ethos_skipped: bool = False
-    ethos_updated: list[str] = field(default_factory=list)
-    ethos_already_set: list[str] = field(default_factory=list)
-    ethos_created: list[str] = field(default_factory=list)
-    ethos_failed: list[str] = field(default_factory=list)
+    ethos: EthosMemoryResult = field(default_factory=EthosMemoryResult)
+    permissions: PermissionChange = field(default_factory=PermissionChange)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +83,7 @@ class DisableResult:
     config_removed: bool = False
     import_pruned: bool = False
     enabled_marker_removed: bool = False
+    permissions: PermissionChange = field(default_factory=PermissionChange)
 
 
 _CONFIG_TEMPLATE = """\
@@ -132,12 +135,11 @@ def enable_project(
     are the client's and are written locally.
     """
     from quarry.enablement import Enablement  # noqa: PLC0415
-    from quarry.ethos_memory import EthosMemoryBootstrap  # noqa: PLC0415
     from quarry.registrar import Registrar  # noqa: PLC0415
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd
     # ("./~/proj"), targeting the wrong directory.
-    directory = directory.expanduser().resolve()
+    directory = QuarryHome.expanded(directory).resolve()
     if not directory.is_dir():
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
@@ -146,7 +148,9 @@ def enable_project(
 
     captures_collection = f"{collection}-captures"
 
-    ethos = EthosMemoryBootstrap().run()
+    # Global ext files are created and refreshed; the repo's vendored tree (a
+    # repo-only identity's actual source layer) is refreshed, never created.
+    ethos = EthosMemoryBootstrap.for_repo(directory).run()
 
     # Enablement runs BEFORE the config write: config.md's compaction flag
     # has no gitignore/marker dependency, so it makes hook-triggered capture
@@ -156,23 +160,22 @@ def enable_project(
     if claudemd.import_registered:
         logger.info("Registered quarry @-import in CLAUDE.md")
     config_path = _write_project_config(directory)
+    # Running enable is the operator's consent to quarry's allow rules (#552);
+    # they land last, once the project is otherwise fully enabled.
+    permissions = ProjectPermissions(directory).grant()
 
     return EnableResult(
         directory=str(directory),
         collection=collection,
         captures_collection=captures_collection,
-        memory_collections=ethos.memory_collections,
         config_path=config_path,
         created_registration=created,
         guide_deposited=claudemd.guide_deposited,
         enabled_marker_written=claudemd.enabled_marker_written,
         import_registered=claudemd.import_registered,
         gitignore_ensured=claudemd.gitignore_ensured,
-        ethos_skipped=ethos.skipped,
-        ethos_updated=ethos.updated,
-        ethos_already_set=ethos.already_set,
-        ethos_created=ethos.created,
-        ethos_failed=ethos.failed,
+        ethos=ethos,
+        permissions=permissions,
     )
 
 
@@ -203,7 +206,7 @@ def disable_project(
     """
     from quarry.registrations import Registrations  # noqa: PLC0415
 
-    directory = directory.expanduser().resolve()
+    directory = QuarryHome.expanded(directory).resolve()
     view = Registrations.from_list(client.list_registrations())
     return _DisableOrchestrator(directory, client, view, keep_data=keep_data).run()
 
@@ -254,6 +257,7 @@ class _DisableOrchestrator:
         """Drive the ordered steps and assemble the result."""
         config_removed = self._remove_config_file()
         claudemd = self._disable_enablement()
+        permissions = ProjectPermissions(self._directory).revoke()
         removed = self._deregister_covering()
         self._purge_captures()
         collection = self._covering.collection if self._covering is not None else ""
@@ -265,6 +269,7 @@ class _DisableOrchestrator:
             config_removed=config_removed,
             import_pruned=claudemd.import_pruned,
             enabled_marker_removed=claudemd.enabled_marker_removed,
+            permissions=permissions,
         )
 
     def _remove_config_file(self) -> bool:

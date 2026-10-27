@@ -99,6 +99,6 @@ class ProviderSelection:
         """
         try:
             return cls.from_environment().display()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("Provider detection failed", exc_info=True)
             return "?"

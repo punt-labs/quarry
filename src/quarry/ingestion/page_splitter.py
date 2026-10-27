@@ -1,0 +1,147 @@
+"""Split a page that exceeds the row budget into consecutive parts, never truncating."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, replace
+from itertools import count
+from typing import ClassVar, final
+
+from quarry.content_guard import UnindexableContentError
+from quarry.models import PageContent, PageType
+
+logger = logging.getLogger(__name__)
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class PageSplitter:
+    """Cut oversized logical sections so every part fits ``max_bytes``.
+
+    Only logical sections (text, markdown and HTML sections, code definitions, and
+    spreadsheet row groups) are split and renumbered.  A spreadsheet page is
+    logical: the extractor already cuts a sheet into row groups and numbers them
+    sequentially, so there is no physical sheet page to preserve, and one row
+    wider than the budget must not fail the file.  A paginated page (a PDF or OCR
+    page, a slide) keeps its physical number; one over the budget fails the
+    document, since real pages never approach it and later stages key rows by
+    ``page_number``.
+
+    The parts concatenate back to the original text exactly: a separator stays at
+    the end of the part it closes, so nothing is dropped or rewritten.  A cut
+    prefers a blank line, then a newline, then a sentence end, then whitespace,
+    and only falls back to a hard cut on a character boundary when the last half
+    of the window holds none of them.
+    """
+
+    max_bytes: int
+
+    _LOGICAL: ClassVar[frozenset[PageType]] = frozenset(
+        {PageType.SECTION, PageType.CODE, PageType.SPREADSHEET}
+    )
+    _FILL: ClassVar[float] = 0.5
+    _SENTENCE_ENDS: ClassVar[tuple[bytes, ...]] = (b". ", b"! ", b"? ")
+    _SPACES: ClassVar[tuple[bytes, ...]] = (b" ", b"\t")
+
+    def __post_init__(self) -> None:
+        if self.max_bytes < 4:
+            msg = (
+                f"max_bytes must hold one UTF-8 character (>= 4), got {self.max_bytes}"
+            )
+            raise ValueError(msg)
+
+    def expand(self, pages: list[PageContent]) -> list[PageContent]:
+        """Return *pages* unchanged, or split and renumbered if a section is oversized.
+
+        Section parts are renumbered sequentially, and only when a split happened,
+        so every other document keeps its extractor's numbering.  A paginated page
+        keeps its physical number whatever else splits, and a part never takes a
+        number a paginated page holds.
+
+        Raises:
+            UnindexableContentError: A paginated page exceeds the budget.
+        """
+        parts = [(page, self.split(page.text)) for page in pages]
+        self._refuse_split_physical(parts)
+        if all(len(texts) == 1 for _, texts in parts):
+            return pages
+        flat = [(page, text) for page, texts in parts for text in texts]
+        logger.info(
+            "split oversized pages: %d pages into %d parts", len(pages), len(flat)
+        )
+        return self._renumbered(pages, flat)
+
+    def _refuse_split_physical(
+        self, parts: list[tuple[PageContent, list[str]]]
+    ) -> None:
+        """Raise when a paginated page would have to be split."""
+        for page, texts in parts:
+            if len(texts) > 1 and page.page_type not in self._LOGICAL:
+                msg = (
+                    f"content rejected: page {page.page_number} exceeds the page "
+                    f"budget of {self.max_bytes:,} bytes"
+                )
+                raise UnindexableContentError(msg)
+
+    def _renumbered(
+        self, pages: list[PageContent], flat: list[tuple[PageContent, str]]
+    ) -> list[PageContent]:
+        """Number the section parts in order, leaving paginated pages as they are."""
+        claimed = self._claimed(pages)
+        free = (n for n in count(1) if n not in claimed)
+        return [
+            replace(page, page_number=next(free), total_pages=len(flat), text=text)
+            if page.page_type in self._LOGICAL
+            else page
+            for page, text in flat
+        ]
+
+    def _claimed(self, pages: list[PageContent]) -> frozenset[int]:
+        """Return the numbers physical pages hold, which no section part may take."""
+        return frozenset(
+            page.page_number for page in pages if page.page_type not in self._LOGICAL
+        )
+
+    def split(self, text: str) -> list[str]:
+        """Return *text* as consecutive parts of at most ``max_bytes`` UTF-8 bytes."""
+        if len(text) * 4 <= self.max_bytes:
+            return [text]
+        data = text.encode("utf-8", errors="surrogatepass")
+        if len(data) <= self.max_bytes:
+            return [text]
+        parts: list[str] = []
+        start = 0
+        while len(data) - start > self.max_bytes:
+            cut = self._cut(data, start)
+            parts.append(data[start:cut].decode("utf-8", errors="surrogatepass"))
+            start = cut
+        parts.append(data[start:].decode("utf-8", errors="surrogatepass"))
+        return parts
+
+    def _cut(self, data: bytes, start: int) -> int:
+        """Return the end of the part that begins at *start*."""
+        end = start + self.max_bytes
+        while end > start and data[end] & 0xC0 == 0x80:  # inside a character
+            end -= 1
+        if end == start:  # a single character wider than the budget cannot occur
+            return start + self.max_bytes
+        floor = start + int(self.max_bytes * self._FILL)
+        for cut in (
+            self._after(data, (b"\n\n",), floor, end),
+            self._after(data, (b"\n",), floor, end),
+            self._after(data, self._SENTENCE_ENDS, floor, end),
+            self._after(data, self._SPACES, floor, end),
+        ):
+            if cut > start:
+                return cut
+        return end
+
+    @staticmethod
+    def _after(data: bytes, needles: tuple[bytes, ...], floor: int, end: int) -> int:
+        """Return the index just past the last needle in ``[floor, end)``, or 0."""
+        best = 0
+        for needle in needles:
+            found = data.rfind(needle, floor, end)
+            if found != -1:
+                best = max(best, found + len(needle))
+        return best

@@ -67,6 +67,7 @@ class Chunk:
     agent_handle: str = ""
     memory_type: str = ""
     summary: str = ""
+    source_version: str = ""
 
 
 @dataclass(frozen=True, slots=True)

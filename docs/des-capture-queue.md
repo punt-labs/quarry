@@ -24,8 +24,8 @@ transcripts. Each POST becomes an independent asyncio task that runs
 Two things break under a burst:
 
 - **Write contention / lost update.** `_chunk_embed_store` does
-  `delete_document(...)` then `progressive_insert(...)` against one shared write
-  connection (`src/quarry/ingestion/pipeline.py:975-988`). DES-034's module-global
+  `delete_document(...)` then `DocumentStreamer.insert(...)` against one shared write
+  connection (`src/quarry/ingestion/chunk_store_funnel.py`). DES-034's module-global
   `chunk_store._write_lock` (`chunk_store.py:27`) serializes each individual
   `table.add()`/`table.delete()`, so there is no torn write and no LanceDB
   optimistic-commit conflict — but the lock is released *between* the
@@ -54,20 +54,20 @@ A `POST /v1/capture` reaches embedding + write like this:
 | Step | Location |
 |------|----------|
 | Route validates body, derives `<repo>-captures`, builds job | `daemon/routes/captures.py:31-79` |
-| `state = self.ctx.tasks.begin("capture")` (status `"running"`) | `daemon/routes/captures.py:43`; `daemon/tasks.py:84-98` |
+| `state = self.ctx.tasks.begin("capture")` (status `"running"`) | `daemon/routes/captures.py:43`; `daemon/tasks.py:77-83` |
 | `self.accept(state, job.run(self.ctx, state))` | `daemon/routes/captures.py:44` |
-| `accept` → **`asyncio.create_task(coro)`** + track, return 202 | `daemon/routes/base.py:116-127` |
-| `CaptureIngestJob.run` → `run_in_threadpool(self._capture, ctx)` | `daemon/ingest_jobs.py:174-186` |
-| `_capture` → `ScrubbedIngestJob.scrub_and_ingest` → `ingest_content` | `daemon/ingest_jobs.py:181-183`, `58-80` |
-| `ingest_content` → `_chunk_embed_store` (delete + `progressive_insert`) | `ingestion/pipeline.py:449-455`, `975-988` |
-| `progressive_insert` embeds via the **shared cached** write backend | `ingestion/streaming.py:111`; `ingestion/backends.py:36-43` |
+| `accept` → **`asyncio.create_task(coro)`** + track, return 202 | `daemon/routes/base.py:156-165` |
+| `CaptureIngestJob.run` → `run_in_threadpool(self._capture, ctx)` | `daemon/content_jobs.py` (`CaptureIngestJob.run`) |
+| `_capture` → `ScrubbedIngestJob.scrub_and_ingest` → `ingest_content` | `daemon/content_jobs.py` (`CaptureIngestJob._capture`, `ScrubbedIngestJob.scrub_and_ingest`) |
+| `ingest_content` → `_chunk_embed_store` (delete + `DocumentStreamer.insert`) | `ingestion/chunk_store_funnel.py` (`ChunkStoreFunnel._chunk_embed_store`) |
+| `DocumentStreamer.insert` embeds via the **shared cached** write backend | `ingestion/streaming.py`; `ingestion/backends.py:36-43` |
 
 `POST /v1/remember` (`daemon/routes/ingestion.py:30-43`) and `POST /v1/ingest`
 (`daemon/routes/ingestion.py:45-71`) take the identical `accept → create_task →
 run_in_threadpool → _chunk_embed_store` path.
 
 **Where unbounded concurrency enters:** `RouteGroup.accept`
-(`daemon/routes/base.py:122`) fires `asyncio.create_task` per request with no
+(`daemon/routes/base.py:160`) fires `asyncio.create_task` per request with no
 gate. Every accepted capture becomes a live task; each hops onto the AnyIO
 threadpool (≤ 40 slots) and runs embed + write immediately. Nothing serializes
 same-collection writers, and nothing bounds how many embed jobs run at once.
@@ -94,8 +94,8 @@ path:
   `sync_collection(...)` call (`sync.py:220`) and lives only for that sync's
   duration. This is the single consumer DES-034 §2 describes.
 - **Captures take a *different* writer.** `ingest_content` → `_chunk_embed_store`
-  (`pipeline.py:975-988`) → `progressive_insert` (`streaming.py:111`) constructs a
-  **fresh** `ProgressiveIndexer` with a `_PlainFlushTarget` (`streaming.py:87`)
+  (`ingestion/chunk_store_funnel.py`) → `DocumentStreamer.insert` (`ingestion/streaming.py`) constructs a
+  **fresh** `ProgressiveIndexer` with a `PlainFlushTarget` (`ingestion/plain_flush_target.py`)
   per call, with **no consumer thread and no queue**. `ProgressiveIndexer`'s own
   docstring states its writes are performed "by exactly one caller (the sync
   consumer thread or the single-doc path), so no lock is needed here —
@@ -150,9 +150,9 @@ class IngestQueue:
     """Daemon-owned queue: one FIFO writer per collection, bounded embed globally."""
 
     _ctx: DaemonContext
-    _workers: dict[str, CollectionWorker]   # collection -> its single worker
-    _embed_gate: asyncio.Semaphore          # global embed-concurrency bound
-    _admit: asyncio.Semaphore               # global queue-depth admission bound
+    _workers: dict[str, CollectionWorker]  # collection -> its single worker
+    _embed_gate: asyncio.Semaphore  # global embed-concurrency bound
+    _admit: asyncio.Semaphore  # global queue-depth admission bound
     _closing: bool
 
     def try_submit(self, collection: str, job: IngestUnit, state: TaskState) -> bool:
@@ -190,11 +190,11 @@ async def _run(self) -> None:
         try:
             if isinstance(item, _Stop):
                 return
-            item.state.status = "running"          # queued -> running here
-            async with self._embed_gate:           # global concurrency bound
-                await item.job.run(self._ctx, item.state)  # task_terminal inside
+            item.state.status = "running"  # queued -> running here
+            async with self._embed_gate:  # global concurrency bound
+                await item.job.run(self._ctx, item.state)  # Terminal inside
         finally:
-            self._admit_release()                  # free one queue-depth slot
+            self._admit_release()  # free one queue-depth slot
             self._queue.task_done()
 ```
 
@@ -210,10 +210,10 @@ async def _run(self) -> None:
 
 ### 3.3 Route change
 
-`accept(...)` (`daemon/routes/base.py:116`) splits into two paths:
+`accept(...)` (`daemon/routes/base.py:156`) splits into two paths:
 
 - **Sync/optimize/backfill/delete** keep `asyncio.create_task` — they are
-  already singleton-gated by `reject_if_running` (`base.py:95-114`) and don't
+  already singleton-gated by `reject_if_running` (`base.py:110-129`) and don't
   touch the shared embed session in a burst. Unchanged. (This is the same
   DES-026 409 concurrent-sync guard, untouched — see §4.1.)
 - **capture / remember / ingest** call a new `submit(collection, job, state)`
@@ -223,10 +223,13 @@ async def _run(self) -> None:
 ```python
 def submit(self, collection, job, state) -> JSONResponse:
     if not self._ctx.ingest_queue.try_submit(collection, job, state):
-        self._ctx.tasks.drop(state)               # no orphan task record
+        self._ctx.tasks.drop(state)  # no orphan task record
         return JSONResponse(
-            {"error": "ingest queue full; capture retained locally, retry via "
-                      "`quarry backfill`", "status": "rejected"},
+            {
+                "error": "ingest queue full; capture retained locally, retry via "
+                "`quarry backfill`",
+                "status": "rejected",
+            },
             status_code=503,
         )
     return JSONResponse({"task_id": state.task_id, "status": "accepted"}, 202)
@@ -235,7 +238,7 @@ def submit(self, collection, job, state) -> JSONResponse:
 The 202 accepted-body is byte-identical to today. The collection key is resolved
 **at the route** (capture already does this via `CapturesCollection` at
 `routes/captures.py:63-67`); the web-fetch-fallback collection derivation that
-currently lives inside `IngestJob._ingest` (`ingest_jobs.py:122-124`) hoists up
+currently lives inside `IngestJob._ingest` (`daemon/ingest_jobs.py`) hoists up
 to the route so the key is known before enqueue — a de-duplication that also
 lets all three jobs expose `collection` uniformly (OO cleanup, §8).
 
@@ -268,7 +271,7 @@ I-NOBLOCK and stalls the hook (the exact regression DES-041 removed).
 - **Later-wins for the same document**: two captures with the same stable
   `session-<id>` name (`routes/captures.py:98-113`), both `overwrite=True`, run
   strictly in order. The second's `_chunk_embed_store` deletes the first's
-  chunks then inserts its own (`pipeline.py:975-988`). No interleave, no lost
+  chunks then inserts its own (`ingestion/chunk_store_funnel.py`). No interleave, no lost
   update, no commit conflict — the serialization is what makes the chunk-gated
   delete correct under concurrency. This is exactly the §2.1 hazard, closed.
 - **No cross-collection starvation**: each collection has its own worker and
@@ -289,7 +292,7 @@ I-NOBLOCK and stalls the hook (the exact regression DES-041 removed).
   DES-026 guard, which filters on `"running"`; scoping the value to the queued
   path avoids that.)
 - The worker sets `status = "running"` when it dequeues the job (§3.2), before
-  `job.run`. `task_terminal` (`tasks.py:39-61`) then records
+  `job.run`. `Terminal.recording` (`terminal.py`) then records
   `completed`/`failed`/`cancelled→failed` exactly as today.
 
 This is a new status **value**, not a schema change. The client's `await_task`
@@ -312,13 +315,17 @@ request handler, i.e. under the running serving loop), so no lifespan start
 step is needed. The ASGI **lifespan** owns only the bounded shutdown drain:
 
 - `DaemonServer._lifespan` (`daemon/server.py`): in the `finally`, `await
-  ctx.aclose_ingest_queue()` (bounded by `ingest_drain_timeout_s`) **before** the sidecar
-  cleanup.
+  Teardown(ctx).run()` (`daemon/teardown.py`) **before** the sidecar cleanup. It
+  stops the watch loop, closes and drains the ingest queue, then drains the
+  tracked background tasks, all inside the one budget `ingest_drain_timeout_s`
+  (`ShutdownPolicy` splits it); each step runs on its own, so one that fails
+  cannot skip the next. The service stop timeout (`TimeoutStopSec` /
+  `ExitTimeOut`) is that budget plus a margin.
 - `aclose` sets `_closing` (rejects new submits with 503), enqueues a `_Stop`
   after each collection's pending jobs, and `await`s each queue's `join()` under
-  a bounded `DRAIN_TIMEOUT` (default 30 s) so queued captures are not silently
+  a bounded `DRAIN_TIMEOUT` so queued captures are not silently
   lost on a clean shutdown. On timeout, remaining workers are cancelled;
-  `task_terminal` records `cancelled → failed` and the durable artifact is
+  `Terminal.recording` records `cancelled → failed` and the durable artifact is
   recoverable via backfill. Drain is bounded so shutdown never hangs.
 
 **Resource-invariant interaction** (`tests/test_resource_invariants.py`): the
@@ -340,7 +347,7 @@ DES-026 rejected "queue concurrent sync requests" with the reason *"queuing hide
 the problem; the caller should know sync is already running."* That reasoning is
 specific to a **user-initiated** `quarry sync`: a human or agent issued the
 command and is waiting on its outcome, so the honest response is a `409` telling
-them a sync is already in flight (`routes/base.py:95-114`, `routes/sync.py:44`).
+them a sync is already in flight (`routes/base.py:110-129`, `routes/sync.py:44`).
 
 Captures are the opposite. A capture is a **fire-and-forget background event**:
 the compaction / web-fetch hook already received its `202` and moved on
@@ -357,14 +364,14 @@ The queue also **composes with DES-026's existing guards rather than duplicating
 them**:
 
 - **Server-side sync lock (409).** DES-026's lock gates `POST /v1/sync` only
-  (`reject_if_running`, `routes/base.py:95-114`). Captures never traverse that
+  (`reject_if_running`, `routes/base.py:110-129`). Captures never traverse that
   route, so the capture queue neither uses nor weakens the 409 path. A concurrent
   user `sync` during a capture burst still gets its 409 exactly as today.
 - **`PRAGMA busy_timeout=5000` on every `SyncRegistry` connection**
   (`sync_registry.py:83`). That bounded-wait guards the **registry** SQLite
   writes — sync's domain. Captures do **not** write the registry: their
-  single-document `_PlainFlushTarget.on_flush` is a deliberate no-op
-  (`streaming.py:107-109`), so no watermark / registry row is touched. The capture
+  single-document `PlainFlushTarget.on_flush` is a deliberate no-op
+  (`ingestion/plain_flush_target.py`), so no watermark / registry row is touched. The capture
   queue therefore governs a **different resource** (the chunks-table writes) from
   the busy_timeout guard, and the two do not overlap. Sync's registry writes and
   captures' chunk writes stay independently serialized — busy_timeout for the
@@ -377,8 +384,8 @@ safe *because* "exactly one consumer thread performs writes, and serializes
 producer overwrite-deletes against the consumer's adds." §2.1 shows, with
 file:line evidence, that this invariant is realized **only within a single sync
 run** (`CollectionIngestor`, `sync_ingest.py:41-137`); the daemon's capture path
-violates it, because every concurrent capture is an independent `progressive_insert`
-caller (`streaming.py:111`) with its own `ProgressiveIndexer` and no shared
+violates it, because every concurrent capture is an independent `DocumentStreamer.insert`
+caller (`ingestion/streaming.py`) with its own `ProgressiveIndexer` and no shared
 consumer.
 
 The per-collection queue is therefore **the daemon-scope generalization of
@@ -391,7 +398,7 @@ composition is layered, not parallel:
 - **`ProgressiveIndexer` (DES-034, `progressive.py`)** stays exactly as is — it
   still assumes one caller and needs no lock of its own. **Untouched.**
 - **The per-collection worker (this design)** supplies the missing top layer: for
-  a given collection there is only ever **one** `progressive_insert` caller in
+  a given collection there is only ever **one** `DocumentStreamer.insert` caller in
   flight, restoring the single-writer precondition DES-034's ingest primitives are
   built to trust. It is the same invariant DES-034 gives sync, now provided for
   captures.
@@ -400,8 +407,8 @@ composition is layered, not parallel:
 batch producer/consumer coupled to the sync **registry**: its `FlushTarget.on_flush`
 writes `files`-table watermarks and its `run(files: list[Path])` is a
 whole-collection sweep (`sync_ingest.py:44-137`, `265-298`). Captures are single
-inline documents that keep **no** resume watermark (`_PlainFlushTarget.on_flush`
-is a no-op, `streaming.py:107-109`). Forcing captures through `CollectionIngestor`
+inline documents that keep **no** resume watermark (`PlainFlushTarget.on_flush`
+is a no-op, `ingestion/plain_flush_target.py`). Forcing captures through `CollectionIngestor`
 would drag registry / resume machinery they do not use. And there is no persistent
 sync consumer to hang captures on — `CollectionIngestor` exists only for a sync's
 duration (`sync.py:220`), whereas captures arrive continuously *between* syncs and
@@ -502,7 +509,7 @@ counts (no real ONNX needed for the concurrency assertions):
 - **DES-034 composition (the §2.1 regression).** With the queue active, two
   same-document captures submitted concurrently to one collection produce a
   document with **only the last** writer's chunks. As a control, the pre-queue
-  path (concurrent `progressive_insert` under `_write_lock` alone) is shown to
+  path (concurrent `DocumentStreamer.insert` under `_write_lock` alone) is shown to
   leave **both** chunk sets resident — the exact interleave the queue closes. This
   test is the executable proof that op-level `_write_lock` does not subsume the
   job-level serializer.
@@ -511,7 +518,7 @@ counts (no real ONNX needed for the concurrency assertions):
   (== 1 at the default), and all complete.
 - **DES-026 non-interference.** A capture burst in flight does not affect
   `POST /v1/sync`'s 409 concurrent-sync guard (a concurrent sync still 409s), and
-  captures issue **no** `SyncRegistry` writes — assert the `_PlainFlushTarget.on_flush`
+  captures issue **no** `SyncRegistry` writes — assert the `PlainFlushTarget.on_flush`
   no-op path so the busy_timeout guard is never engaged by a capture.
 - **Backpressure.** Fill to `MAX_QUEUE_DEPTH`; assert the next submit returns
   `503` with `status: rejected` and creates **no** task; assert a submit after
@@ -539,7 +546,9 @@ queue via the lifespan; verify with the daemon stopped).
 
 ## 8. Proposed write-set
 
-The design mission owns the final set; this is the proposal.
+The design mission owns the final set; this is the proposal. (Historical: the
+edit list below is the design-time proposal, and `context.py` no longer holds an
+`aclose_ingest_queue`; the teardown is `daemon/teardown.py`.)
 
 - **NEW** `src/quarry/daemon/ingest_queue.py` — `IngestQueue`, `CollectionWorker`,
   `_Queued`/`_Stop`, the `IngestUnit` Protocol. One abstraction per module.
@@ -561,9 +570,10 @@ The design mission owns the final set; this is the proposal.
   for a rejected submit.
 - **EDIT** `src/quarry/config.py` — `ingest_embed_concurrency` (default 1; clamp
   ≤ 2, but see §9.1 — 2 conflicts with DES-032 and is not recommended),
-  `ingest_queue_depth` (default 32), `ingest_drain_timeout_s` (default 30).
+  `ingest_queue_depth` (default 32), `ingest_drain_timeout_s`.
 - **UNCHANGED (by design):** `chunk_store._write_lock`, `ProgressiveIndexer`
-  (`progressive.py`), and `streaming.progressive_insert` are **not** modified — the
+  (`progressive.py`), and the single-document insert path (then
+  `streaming.progressive_insert`, now `DocumentStreamer.insert`) are **not** modified — the
   per-collection worker layers *above* them (§4.2). The queue supplies the
   single-writer-per-collection precondition those DES-034 primitives already
   assume; it does not replace their op-level guarantees.

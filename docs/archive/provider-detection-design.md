@@ -161,9 +161,10 @@ optional — first-use download is the fallback.
 # provider.py
 @dataclass(frozen=True)
 class ProviderSelection:
-    provider: str       # e.g. "CUDAExecutionProvider"
-    model_file: str     # e.g. "onnx/model_fp16.onnx"
+    provider: str  # e.g. "CUDAExecutionProvider"
+    model_file: str  # e.g. "onnx/model_fp16.onnx"
     session: ort.InferenceSession
+
 
 def select_provider() -> ProviderSelection: ...
 ```
@@ -172,7 +173,9 @@ def select_provider() -> ProviderSelection: ...
 
 ```python
 # embeddings.py — signature changes
-def download_model_files(model_file: str = ONNX_MODEL_FILE_DEFAULT) -> tuple[str, str]: ...
+def download_model_files(
+    model_file: str = ONNX_MODEL_FILE_DEFAULT,
+) -> tuple[str, str]: ...
 def _load_model_files(model_file: str) -> tuple[str, str]: ...
 def _load_local_model_files(model_file: str) -> tuple[str, str]: ...
 ```

@@ -1,24 +1,24 @@
 {
-  "total": 215,
+  "total": 182,
   "by_category": {
-    "noqa": 179,
+    "noqa": 144,
     "type_ignore": 7,
     "pylint_disable": 0,
-    "pyright_ignore": 0,
-    "per_file_ignores": 29
+    "pyright_ignore": 1,
+    "per_file_ignores": 30
   },
   "by_file": {
     "src/quarry/__main__.py": {
-      "noqa": 12,
+      "noqa": 6,
       "type_ignore": 1
     },
     "src/quarry/_hook_entry.py": {
       "noqa": 8
     },
-    "src/quarry/backfill.py": {
-      "noqa": 1
+    "src/quarry/_hook_trace.py": {
+      "noqa": 3
     },
-    "src/quarry/capture_url.py": {
+    "src/quarry/active_session_context.py": {
       "noqa": 1
     },
     "src/quarry/captures_collection.py": {
@@ -33,8 +33,8 @@
     "src/quarry/collections.py": {
       "type_ignore": 1
     },
-    "src/quarry/daemon/ingest_jobs.py": {
-      "noqa": 8
+    "src/quarry/daemon/content_jobs.py": {
+      "noqa": 3
     },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
@@ -43,16 +43,13 @@
       "noqa": 1
     },
     "src/quarry/daemon/routes/meta.py": {
-      "noqa": 2
+      "noqa": 1
     },
     "src/quarry/daemon/routes/registrations.py": {
       "noqa": 1
     },
     "src/quarry/daemon/server.py": {
       "type_ignore": 1
-    },
-    "src/quarry/daemon/watch_reconcile.py": {
-      "noqa": 2
     },
     "src/quarry/daemon_capture.py": {
       "noqa": 1
@@ -62,28 +59,34 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 49
+      "noqa": 36
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
     },
-    "src/quarry/doctor_ethos.py": {
+    "src/quarry/doctor_inference.py": {
       "noqa": 1
     },
-    "src/quarry/doctor_inference.py": {
+    "src/quarry/doctor_mcp.py": {
       "noqa": 1
     },
     "src/quarry/doctor_memory.py": {
       "noqa": 2
     },
+    "src/quarry/doctor_model.py": {
+      "noqa": 1
+    },
+    "src/quarry/doctor_recall.py": {
+      "noqa": 1
+    },
     "src/quarry/doctor_sync.py": {
-      "noqa": 6
+      "noqa": 4
     },
     "src/quarry/embeddings.py": {
       "noqa": 3
     },
     "src/quarry/enable.py": {
-      "noqa": 8
+      "noqa": 7
     },
     "src/quarry/extractors/image_extractor.py": {
       "noqa": 1
@@ -99,13 +102,19 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 9
+      "noqa": 6
     },
     "src/quarry/hooks_agent.py": {
-      "noqa": 5
+      "noqa": 2
     },
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
+    },
+    "src/quarry/ingestion/bulk_ingest.py": {
+      "noqa": 1
+    },
+    "src/quarry/ingestion/chunk_store_funnel.py": {
+      "pyright_ignore": 1
     },
     "src/quarry/ingestion/image_prep.py": {
       "noqa": 2
@@ -116,16 +125,25 @@
     "src/quarry/ingestion/ocr_engine.py": {
       "noqa": 1
     },
-    "src/quarry/ingestion/pipeline.py": {
-      "noqa": 6
-    },
     "src/quarry/ingestion/provider.py": {
+      "noqa": 1
+    },
+    "src/quarry/ingestion/safe_entry_selector.py": {
+      "noqa": 1
+    },
+    "src/quarry/ingestion/sitemap_ingest.py": {
+      "noqa": 2
+    },
+    "src/quarry/ingestion/sitemap_reader.py": {
       "noqa": 2
     },
     "src/quarry/ingestion/web_fetch.py": {
       "noqa": 1
     },
-    "src/quarry/mcp_server.py": {
+    "src/quarry/install_directories.py": {
+      "noqa": 2
+    },
+    "src/quarry/lesson.py": {
       "noqa": 1
     },
     "src/quarry/onnx_session.py": {
@@ -133,9 +151,6 @@
     },
     "src/quarry/opencv_headless.py": {
       "noqa": 1
-    },
-    "src/quarry/proxy.py": {
-      "noqa": 2
     },
     "src/quarry/registrar.py": {
       "noqa": 2
@@ -153,7 +168,7 @@
       "noqa": 1
     },
     "src/quarry/sitemap.py": {
-      "noqa": 3,
+      "noqa": 1,
       "type_ignore": 1
     },
     "src/quarry/sitemap_web_client.py": {
@@ -168,9 +183,9 @@
     "src/quarry/web_fetch_loop_closer.py": {
       "noqa": 2
     },
-    "src/quarry/lesson.py": {
+    "src/quarry/web_fetch_name.py": {
       "noqa": 1
     }
   },
-  "updated_at": "2026-09-01T15:23:06Z"
+  "updated_at": "2026-10-26T13:13:24Z"
 }

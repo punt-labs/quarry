@@ -1,6 +1,6 @@
 [project]
 name = "punt-quarry"
-version = "3.2.1"
+version = "3.5.1"
 description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -24,15 +24,22 @@ dependencies = [
     "lancedb>=0.34.0",
     "tokenizers>=0.20.0",
     "huggingface-hub>=0.26.0",
-    "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
+    # 2.10.0 is the first pydantic whose default_factory receives the fields
+    # validated so far (config.py derives its paths from quarry_root with it);
+    # 2.9.2 raises TypeError on every Settings().  Tested with pydantic-settings
+    # 2.7.0, the first release that requires pydantic 2.7 and supports it.
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
     # 0.133.0 is the first fastapi that drops its own starlette ceiling
     # (starlette>=0.40.0, unbounded); every earlier release caps starlette below
     # 1.3.1 and so cannot coexist with the secure floor below.
     "fastapi>=0.133.0,<1.0.0",
     "typer>=0.15.0",
     "rich>=13.0.0",
-    "mcp>=1.0.0,<2.0.0",
+    # Floor is 2.x: the stdio server imports MCPServer from mcp.server.mcpserver,
+    # which exists only in mcp 2.x (FastMCP was removed in 2.0). A 1.x install
+    # satisfies the range and then fails at import, so the floor must exclude it.
+    "mcp>=2.2.0,<3.0.0",
     # 1.3.1 is the first release patched against all five advisories open here:
     # the request.form() DoS and StaticFiles UNC SSRF (high), the Host-header and
     # HTTPEndpoint getattr issues (medium), and request.url.hostname poisoning.
@@ -99,6 +106,8 @@ dev = [
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0",
     "types-PyYAML>=6.0.0",
+    # Oracle property test for the log redactor (tests/test_log_redactor_oracle.py).
+    "hypothesis>=6.100",
     # Enforces the DES-031 I1 client/engine package boundary (make check-imports).
     "import-linter>=2.0",
 ]
@@ -119,7 +128,7 @@ eval = [
 ]
 
 [project.scripts]
-quarry = "quarry.__main__:app"
+quarry = "quarry._cli_entry:main"
 quarryd = "quarry.daemon.launcher:entrypoint"
 quarry-hook = "quarry._hook_entry:main"
 
@@ -128,7 +137,7 @@ Homepage = "https://github.com/punt-labs/quarry"
 "Bug Tracker" = "https://github.com/punt-labs/quarry/issues"
 
 [build-system]
-requires = ["uv_build>=0.9.14,<0.10.0"]
+requires = ["uv_build>=0.9.14,<0.14.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -138,7 +147,10 @@ module-name = "quarry"
 line-length = 88
 target-version = "py313"
 # Eval fixtures are raw corpus data (sample source files), not project code.
-extend-exclude = ["tools/eval/fixtures"]
+# Markdown is excluded because ruff 0.16 formats fenced `python` blocks by
+# default and mangles illustrative snippets (loose comma-separated expressions
+# become one-element tuples). Markdown is markdownlint's job, not ruff's.
+extend-exclude = ["tools/eval/fixtures", "*.md"]
 
 [tool.ruff.lint]
 select = [
@@ -187,9 +199,10 @@ ignore = [
 "src/quarry/daemon/routes/*.py" = ["TC002"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
 "src/quarry/mcp_server.py" = ["FBT"]  # typer boolean flags
+"src/quarry/mcp_documents.py" = ["FBT"]  # MCP tool boolean kwargs (keep_data, overwrite)
 "src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_ingest.py" = ["FBT"]  # typer boolean CLI flags
-"src/quarry/cli_sync.py" = ["FBT"]  # typer boolean CLI flags
+"src/quarry/cli_directories.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_project.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_maintenance.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_remote.py" = ["FBT"]  # typer boolean CLI flags

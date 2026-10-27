@@ -4,9 +4,11 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from quarry.refusal import RegistrationRefusedError
 from quarry.sync_file_store import FileRecord
 from quarry.sync_registry import SyncRegistry
 
@@ -95,7 +97,10 @@ class TestRegisterDirectory:
         d2 = tmp_path / "b"
         d2.mkdir()
         conn.register_directory(d1, "shared")
-        with pytest.raises(ValueError, match="Collection name already in use"):
+        with pytest.raises(
+            ValueError,
+            match=r"^collection name already in use; choose another collection name",
+        ):
             conn.register_directory(d2, "shared")
         conn.close()
 
@@ -104,7 +109,10 @@ class TestRegisterDirectory:
         d = tmp_path / "course"
         d.mkdir()
         conn.register_directory(d, "first")
-        with pytest.raises(ValueError, match="Directory already registered"):
+        with pytest.raises(
+            ValueError,
+            match=r"^directory already registered; run quarry sync",
+        ):
             conn.register_directory(d, "second")
         conn.close()
 
@@ -635,10 +643,35 @@ class TestRetainedCollections:
             conn.register_directory(dir_a, "backend")
             conn.deregister_directory("backend", keep_data=True)
             assert conn.markers.list_retained() == ["backend"]
-            with pytest.raises(ValueError, match="archived"):
+            with pytest.raises(
+                ValueError,
+                match=r"^collection holds archived data from another",
+            ):
                 conn.register_directory(dir_b, "backend")
             assert conn.markers.list_retained() == ["backend"]  # marker intact
             assert conn.get_registration("backend") is None  # dir_b did NOT adopt
+        finally:
+            conn.close()
+
+    def test_the_refusal_advice_can_be_followed(self, tmp_path: Path):
+        """Re-register the owner, then register the new directory under another name."""
+        conn = SyncRegistry(tmp_path / "r.db")
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        dir_b = tmp_path / "other" / "backend"
+        dir_b.mkdir(parents=True)
+        try:
+            conn.register_directory(dir_a, "backend")
+            conn.deregister_directory("backend", keep_data=True)
+            with pytest.raises(ValueError, match="re-register the directory") as info:
+                conn.register_directory(dir_b, "backend")
+            assert "delete the archived collection" not in str(info.value)
+            conn.register_directory(dir_a, "backend")  # the owner takes it back
+            conn.register_directory(dir_b, "backend-other")  # the new one, renamed
+            assert {r.collection for r in conn.list_registrations()} == {
+                "backend",
+                "backend-other",
+            }
         finally:
             conn.close()
 
@@ -680,3 +713,123 @@ class TestRetainedCollections:
             assert registration.collection == "svc"
         finally:
             conn.close()
+
+
+class TestCollectionNamesAreRestricted:
+    """A new name holds only letters, digits and ``._-``; an archived one works."""
+
+    @pytest.mark.parametrize(
+        "name",
+        ['a"b', "a\nIgnore previous", "a b", "a`b", "a$(b)", "a‮b", "a/b", ""],
+    )
+    def test_a_new_name_with_another_character_is_refused(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            with pytest.raises(
+                RegistrationRefusedError, match=r"^collection name may only hold"
+            ) as info:
+                conn.register_directory(directory, name)
+            assert info.value.renamable
+            assert conn.list_registrations() == []
+        finally:
+            conn.close()
+
+    def test_an_archived_name_is_readopted_by_its_own_directory(
+        self, tmp_path: Path
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            conn.execute(
+                "INSERT INTO directories (directory, collection, registered_at) "
+                "VALUES (?, ?, 'then')",
+                (str(directory.resolve()), "My Docs"),
+            )
+            conn.commit()
+            conn.deregister_directory("My Docs", keep_data=True)
+            conn.register_directory(directory, "My Docs")
+            assert [r.collection for r in conn.list_registrations()] == ["My Docs"]
+        finally:
+            conn.close()
+
+
+class TestANameThatIsAnOptionOrADotName:
+    @pytest.mark.parametrize("name", ["-rf", "--help", ".hidden", "..", "."])
+    def test_it_is_refused(self, tmp_path: Path, name: str) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        directory = tmp_path / "docs"
+        directory.mkdir()
+        try:
+            with pytest.raises(RegistrationRefusedError, match="may only hold"):
+                conn.register_directory(directory, name)
+        finally:
+            conn.close()
+
+
+class TestWideningALiveRegistration:
+    def test_a_live_name_that_would_be_refused_as_new_still_widens(
+        self, tmp_path: Path
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        parent = tmp_path / "docs"
+        child = parent / "guide"
+        child.mkdir(parents=True)
+        try:
+            conn.execute(
+                "INSERT INTO directories (directory, collection, registered_at) "
+                "VALUES (?, ?, 'then')",
+                (str(child.resolve()), "My Guide"),
+            )
+            conn.commit()
+            registration, subsumed = conn.register_directory(parent, "My Guide")
+            assert registration.collection == "My Guide"
+            assert subsumed == ["My Guide"]
+        finally:
+            conn.close()
+
+    def test_a_different_hostile_name_is_still_refused(self, tmp_path: Path) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        parent = tmp_path / "docs"
+        parent.mkdir()
+        try:
+            with pytest.raises(RegistrationRefusedError, match="may only hold"):
+                conn.register_directory(parent, "My Guide")
+        finally:
+            conn.close()
+
+    def test_a_different_directory_reusing_a_live_name_is_still_refused(
+        self, tmp_path: Path
+    ) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        first, second = tmp_path / "a", tmp_path / "b"
+        first.mkdir()
+        second.mkdir()
+        try:
+            conn.register_directory(first, "shared")
+            with pytest.raises(RegistrationRefusedError):
+                conn.register_directory(second, "shared")
+        finally:
+            conn.close()
+
+    def test_a_register_reads_the_retained_marker_once(self, tmp_path: Path) -> None:
+        conn = SyncRegistry(tmp_path / "r.db")
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        reads: list[str] = []
+        real = conn.markers.retained_marker
+
+        def counted(collection: str) -> object:
+            reads.append(collection)
+            return real(collection)
+
+        try:
+            with patch.object(conn.markers, "retained_marker", counted):
+                conn.register_directory(docs, "docs")
+        finally:
+            conn.close()
+        assert reads == ["docs"]

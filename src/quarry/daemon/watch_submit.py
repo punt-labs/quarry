@@ -19,6 +19,7 @@ from quarry.daemon.finalize_job import CollectionFinalizeJob
 from quarry.daemon.finalize_throttle import FinalizeThrottle
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
+from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.scan_sweep import ScanSweep
 from quarry.daemon.shed_rearm import ShedEventRearmer
@@ -263,8 +264,7 @@ class WatchSubmitter:
         """Submit *job*, returning its task state (failed if the queue shed it)."""
         state = self._ctx.tasks.begin(kind)
         if not self._ctx.ingest_queue.try_submit(key, job, state):
-            state.status = "failed"
-            state.error = "ingest queue full"
+            JobLifecycle(state).settle_failed("ingest queue full")
         return state
 
     def _submit(self, key: RouteKey, job: IngestUnit, kind: str) -> bool:

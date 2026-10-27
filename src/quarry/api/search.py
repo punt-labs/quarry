@@ -23,6 +23,13 @@ class SearchRequest(BaseModel):
     source_format: str = ""
     agent_handle: str = ""
     memory_type: str = ""
+    # Provenance for recall telemetry (DES-056): which surface issued the
+    # query. Kept as an open ``str``, not a ``Literal["cli", "mcp", "http",
+    # "plugin"]`` (PY-TS-14), so a new caller can identify itself before this
+    # closed set is updated; the daemon's search route coerces anything
+    # outside {"cli", "mcp", "http", "plugin"} -- including a blank value --
+    # to "unknown" rather than rejecting the search.
+    surface: str = ""
 
 
 class SearchHit(BaseModel):

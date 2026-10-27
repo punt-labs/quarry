@@ -1,4 +1,4 @@
-"""Background-task bookkeeping for the daemon: state, GC, and terminal recording.
+"""Background-task bookkeeping for the daemon: state and GC.
 
 Every long-running REST operation (sync, ingest, remember, delete, register,
 deregister) runs as an asyncio task and reports progress through a ``TaskState``
@@ -10,60 +10,70 @@ completed states after a TTL so a long-lived daemon does not leak them.
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 import uuid
-from collections.abc import Generator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Self, final
+from typing import TYPE_CHECKING, Literal, Self, final
 
-logger = logging.getLogger(__name__)
+from quarry.daemon.owner_lock import Claim, OwnerLock
+
+if TYPE_CHECKING:
+    from quarry.daemon.store_run import StoreRun
 
 # Task GC: completed/failed tasks are evicted after this many seconds.
 TASK_TTL_SECONDS = 3600  # 1 hour
 
-# Terminal statuses eligible for GC.  A "queued" or "running" task is still live
-# and must never be evicted out from under a client polling it (DES-042 adds the
-# interim "queued" state that a worker flips to "running" on dequeue).
-_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+# The one status vocabulary of a background task and of a queued job.  ``new``,
+# ``queued``, ``running``, ``committing``, ``aborted`` and ``withdrawn`` belong to
+# a queued job's life (:class:`~quarry.daemon.job_lifecycle.JobLifecycle`); a
+# polled task is ``running`` until it is ``completed`` or ``failed``.
+TaskStatus = Literal[
+    "new",
+    "queued",
+    "running",
+    "committing",
+    "aborted",
+    "withdrawn",
+    "completed",
+    "failed",
+]
+
+# Terminal statuses, eligible for GC.  A task in any other status is still live
+# and must never be evicted out from under a client polling it, and a job whose
+# body exits in one of them did not finish.
+TERMINAL_STATUSES: frozenset[TaskStatus] = frozenset({"completed", "failed"})
 
 
 @dataclass(slots=True)
 class TaskState:
-    """Tracks the state of an in-progress or completed background task."""
+    """Tracks the state of an in-progress or completed background task.
+
+    ``holds_thread`` is set while a scan thread this task started is alive: the
+    singleton guard counts the task as running until the thread has returned,
+    whatever ``status`` says.  ``claim`` is the lock under which the status moves:
+    a queued job is run or withdrawn, never both
+    (:class:`~quarry.daemon.job_lifecycle.JobLifecycle`); any other task is only
+    ``running``, ``completed`` or ``failed``
+    (:class:`~quarry.daemon.task_lifecycle.TaskLifecycle`).
+    """
 
     task_id: str
     kind: str  # "sync", "ingest", "remember", "delete", "register", "deregister"
-    status: str = "running"
+    status: TaskStatus = "running"
     results: dict[str, object] = field(default_factory=dict)
     error: str = ""
     created_at: float = field(default_factory=time.monotonic)
+    holds_thread: bool = False
+    # The job's store, kept so a cancelled worker's store can still be read when
+    # it ends.  ``None`` until the job starts one: absence is the contract.
+    store: StoreRun | None = field(default=None, init=False, repr=False, compare=False)
+    claim: Claim = field(
+        default_factory=OwnerLock, init=False, repr=False, compare=False
+    )
 
-
-@contextmanager
-def task_terminal(state: TaskState) -> Generator[None]:
-    """Record *state*'s terminal status when its background body exits.
-
-    Cancellation is recorded then re-raised so the event loop still observes
-    it; any other exception is logged and recorded as the failure reason; a
-    body that exits without setting a terminal status is marked failed so no
-    task is ever left stuck in ``running`` (a guard for future code paths).
-    """
-    try:
-        yield
-    except asyncio.CancelledError:
-        state.status = "failed"
-        state.error = "task was cancelled"
-        raise
-    except Exception as exc:
-        logger.exception("Background %s failed", state.kind)
-        state.status = "failed"
-        state.error = str(exc)
-    finally:
-        if state.status == "running":
-            state.status = "failed"
-            state.error = "task exited without setting terminal status"
+    def reason_or(self, default: str) -> str:
+        """Return the reason the task has already given, else *default*."""
+        return self.error or default
 
 
 @final
@@ -100,12 +110,16 @@ class TaskRegistry:
         expired = [
             tid
             for tid, task in self._states.items()
-            if task.status in _TERMINAL_STATUSES
-            and (now - task.created_at) > TASK_TTL_SECONDS
+            if self._is_idle(task) and (now - task.created_at) > TASK_TTL_SECONDS
         ]
         for tid in expired:
             del self._states[tid]
             self._refs.pop(tid, None)
+
+    @staticmethod
+    def _is_idle(task: TaskState) -> bool:
+        """Return whether *task* ended and nothing of it, a scan thread, still runs."""
+        return task.status in TERMINAL_STATUSES and not task.holds_thread
 
     def drop(self, state: TaskState) -> None:
         """Discard a task record so a rejected submit leaves no orphan behind."""
@@ -118,54 +132,13 @@ class TaskRegistry:
         self._refs[tid] = task
         task.add_done_callback(lambda _t: self._refs.pop(tid, None))
 
-    async def drain(self, timeout: float) -> None:
-        """Await every tracked task's real completion within *timeout*.
+    def tracked(self) -> list[asyncio.Task[None]]:
+        """Return the live task handles, for a teardown to await."""
+        return list(self._refs.values())
 
-        Cancelling the wrapping ``asyncio.Task`` does not stop a
-        ``run_in_threadpool`` job's underlying OS thread — Python has no way to
-        interrupt a running thread — so a cancel-only teardown lets that thread
-        keep executing (a real ingest, a real network fetch, a real log call)
-        well after the caller believes the task is gone.  A daemon/test-harness
-        teardown that only cancels can therefore race: the thread finishes later,
-        inside a *different* context (a later test's mocks, a closed log stream).
-        Waiting for genuine completion is the only way to close that race.
-
-        A task that outlives the drain window is a genuine straggler: its
-        ``asyncio.Task`` wrapper is best-effort cancelled (to release the
-        reference and unblock event-loop bookkeeping), but — per the paragraph
-        above — that does **not** stop the underlying thread, so the race is
-        NOT closed for a straggler.  Pretending otherwise (swallowing the
-        timeout and returning normally) would silently reintroduce the exact
-        bug this method exists to fix.  So this fails closed: log the straggler
-        and re-raise ``TimeoutError`` rather than let the caller believe drain
-        succeeded. Must be called on the registry's own event-loop thread.
-        """
-        tasks = list(self._refs.values())
-        if not tasks:
-            return
-        try:
-            async with asyncio.timeout(timeout):
-                await asyncio.gather(*tasks, return_exceptions=True)
-        except TimeoutError:
-            await self._cancel_stragglers(tasks)
-            logger.error(
-                "TaskRegistry.drain: %d task(s) did not complete within %.1fs; "
-                "their wrapper was cancelled but the underlying thread may still "
-                "be running",
-                len(tasks),
-                timeout,
-            )
-            raise
-
-    async def _cancel_stragglers(self, tasks: list[asyncio.Task[None]]) -> None:
-        """Best-effort cancel *tasks* that outlived the drain window, then await them.
-
-        Only releases each wrapper's ``asyncio.Task`` reference — it does NOT
-        stop the underlying ``run_in_threadpool`` OS thread (see :meth:`drain`).
-        """
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    def holding_threads(self) -> list[TaskState]:
+        """Return the tasks whose scan thread is still alive, finished or not."""
+        return [state for state in self._states.values() if state.holds_thread]
 
     def seed(self, state: TaskState) -> None:
         """Insert a pre-built *state* keyed by its ``task_id``.
@@ -192,6 +165,8 @@ class TaskRegistry:
     def running_of_kind(self, kind: str) -> TaskState | None:
         """Return a still-running task of *kind*, or ``None`` if none is active.
 
+        A task whose scan thread is still alive is running, however it ended.
+
         ``None`` is the documented contract — the sync route uses it to decide
         whether to reject a concurrent request with 409.
         """
@@ -199,7 +174,7 @@ class TaskRegistry:
             (
                 t
                 for t in self._states.values()
-                if t.kind == kind and t.status == "running"
+                if t.kind == kind and (t.status == "running" or t.holds_thread)
             ),
             None,
         )

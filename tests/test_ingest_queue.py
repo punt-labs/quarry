@@ -10,23 +10,34 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
+import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
+from unittest.mock import patch
 
 from quarry.daemon import ingest_queue as iq
+from quarry.daemon.abort_reason import Aborted
+from quarry.daemon.abort_tally import AbortTally, AbortTerm
 from quarry.daemon.ingest_queue import IngestQueue
-from quarry.daemon.job_spool import SpoolRecord
+from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskRegistry, TaskState, task_terminal
+from quarry.daemon.tasks import TaskRegistry, TaskState
+from quarry.daemon.terminal import Terminal
+from tests.job_states import JobStates
 
 if TYPE_CHECKING:
+    import pytest
     from pytest import MonkeyPatch
 
+    from quarry.daemon.collection_worker import CollectionWorker
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
 
@@ -39,6 +50,27 @@ def _rk(collection: str) -> RouteKey:
     to distinct workers, same collection to the same worker.
     """
     return RouteKey("db", collection)
+
+
+class _IdleWorker:
+    """What a double of a worker answers when the drain after an abort asks it.
+
+    It has taken no store that is still unread and has no spool record being
+    removed; a double that needs more says so itself.
+    """
+
+    @staticmethod
+    def unobserved_stores() -> tuple[object, ...]:
+        return ()
+
+    @staticmethod
+    def straggling_stores() -> tuple[object, ...]:
+        return ()
+
+    @staticmethod
+    async def drain_removals(timeout: float) -> tuple[Path, ...]:
+        del timeout
+        return ()
 
 
 @final
@@ -94,7 +126,7 @@ class _StubUnit:
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Record entry, wait as configured, then record a terminal status."""
         del ctx  # the stub ignores the daemon context; the queue passes it through
-        with task_terminal(state):
+        with Terminal.for_job(state).recording():
             self.ledger.enter(self.collection)
             try:
                 if self.gate is not None:
@@ -106,7 +138,7 @@ class _StubUnit:
                 if self.boom:
                     msg = "stub failure"
                     raise RuntimeError(msg)
-                state.status = "completed"
+                JobLifecycle(state).settle_stored({})
             finally:
                 self.ledger.leave(self.collection, self.name)
 
@@ -159,6 +191,11 @@ def _make_queue(
         settings.spool_tmp = spool_tmp
     ctx = SimpleNamespace(settings=settings)
     return IngestQueue(cast("DaemonContext", ctx))
+
+
+def _status(state: TaskState) -> str:
+    """Return *state*'s status, read fresh (a mutable attribute is not narrowed)."""
+    return state.status
 
 
 def _state(name: str) -> TaskState:
@@ -254,6 +291,24 @@ def test_full_queue_rejects_without_dropping() -> None:
     asyncio.run(_run())
 
 
+def test_a_job_withdrawn_before_it_is_queued_gives_its_slot_back() -> None:
+    """The worker never runs a withdrawn job, so admission must not keep its slot."""
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(depth=1, concurrency=1)
+        withdrawn = JobStates.reaching("withdrawn")
+        assert queue.try_submit(_rk("c"), _StubUnit("c", "gone", ledger), withdrawn)
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(
+            _rk("c"), _StubUnit("c", "next", ledger), _state("next")
+        )
+        await queue.aclose(drain_timeout=2.0)
+        assert ledger.completions == ["next"]
+
+    asyncio.run(_run())
+
+
 def test_hot_collection_does_not_starve_a_cold_one() -> None:
     """A deep backlog on one collection does not delay a lone cold-collection job."""
 
@@ -290,10 +345,10 @@ def test_status_moves_queued_then_running_then_completed() -> None:
         assert queue.try_submit(_rk("c"), unit, state)
         assert state.status == "queued"
         await asyncio.sleep(0.02)  # worker dequeues and flips to running
-        assert state.status == "running"
+        assert _status(state) == "running"
         gate.set()
         await queue.aclose(drain_timeout=2.0)
-        assert state.status == "completed"
+        assert _status(state) == "completed"
 
     asyncio.run(_run())
 
@@ -411,12 +466,84 @@ def test_drain_abort_fails_a_job_blocked_on_the_embed_gate() -> None:
         await asyncio.sleep(0.02)  # A's worker takes the gate and enters job.run
         assert queue.try_submit(_rk("cB"), _StubUnit("cB", "b", ledger), b)
         await asyncio.sleep(0.02)  # B's worker dequeues and blocks awaiting the gate
-        assert b.status == "running"  # dequeued + gate-blocked (the #7 gap)
+        assert b.status == "queued"  # dequeued, but not running until it has the gate
         await queue.aclose(drain_timeout=0.05)  # drain times out -> abort
-        assert b.status == "failed"  # gate-blocked job now reaches a terminal state
+        assert _status(b) == "failed"  # gate-blocked job now reaches a terminal state
         assert a.status == "failed"
 
     asyncio.run(_run())
+
+
+def test_a_drain_that_times_out_says_the_window_and_what_it_aborted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(concurrency=1)
+        held = asyncio.Event()
+        a, b = _state("a"), _state("b")
+        assert queue.try_submit(_rk("cA"), _StubUnit("cA", "a", ledger, gate=held), a)
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(_rk("cB"), _StubUnit("cB", "b", ledger), b)
+        await asyncio.sleep(0.02)
+        with caplog.at_level(logging.WARNING, logger="quarry.daemon"):
+            await queue.aclose(drain_timeout=0.05)
+
+    asyncio.run(_run())
+
+    [record] = [r for r in caplog.records if "drain did not finish" in r.getMessage()]
+    assert "0.1s" in record.getMessage() or "0.0s" in record.getMessage()
+    assert "aborted 2 job(s)" in record.getMessage()
+    assert "0 spooled for recovery, 0 spooled but not recoverable" in (
+        record.getMessage()
+    )
+    assert "0 not written (spool write failed)" in record.getMessage()
+    assert "0 unbuilt (record could not be built), 2 needed no spool" in (
+        record.getMessage()
+    )
+
+
+def test_the_wait_after_an_abort_is_bounded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Stubborn(_IdleWorker):
+        tally = AbortTally()
+        pending_jobs = 0
+
+        def __init__(self) -> None:
+            self.task: asyncio.Task[None] | None = None
+            self.release = asyncio.Event()
+
+        def abort_off_loop(self) -> asyncio.Task[None]:
+            async def ignores() -> None:
+                while not self.release.is_set():
+                    try:
+                        await asyncio.sleep(0.05)
+                    except asyncio.CancelledError:
+                        continue
+
+            self.task = asyncio.ensure_future(ignores())
+            return self.task
+
+    async def _run() -> float:
+        queue = _make_queue(concurrency=1)
+        stubborn = _Stubborn()
+        started = time.monotonic()
+        with (
+            patch.object(IngestQueue, "ABORT_WAIT_S", 0.2),
+            caplog.at_level(logging.WARNING, logger="quarry.daemon"),
+        ):
+            await queue._abort([cast("CollectionWorker", stubborn)], 0.05)
+        elapsed = time.monotonic() - started
+        assert stubborn.task is not None
+        stubborn.release.set()
+        await stubborn.task
+        return elapsed
+
+    elapsed = asyncio.run(_run())
+
+    assert elapsed < 1.0
+    assert "did not stop within" in caplog.text
 
 
 def test_idle_workers_are_reaped_so_client_keys_cannot_accrue() -> None:
@@ -435,7 +562,7 @@ def test_idle_workers_are_reaped_so_client_keys_cannot_accrue() -> None:
             unit = _StubUnit(collection, collection, ledger)
             assert queue.try_submit(_rk(collection), unit, _state(f"j{i}"))
             await asyncio.sleep(0.02)  # let the worker finish and go idle
-            assert len(queue._workers) <= 1  # prior idle worker reaped on next submit
+            assert len(queue._pool) <= 1  # prior idle worker reaped on next submit
         await queue.aclose(drain_timeout=2.0)
         assert len(ledger.completions) == 6
 
@@ -447,7 +574,7 @@ def test_reaped_worker_task_is_retained_then_discarded() -> None:
 
     asyncio keeps only a weak reference to a task, so dropping a reaped worker
     without retaining its still-pending task risks 'Task was destroyed but it is
-    pending'. The queue retains it in ``_reaped`` and the done-callback discards
+    pending'. The pool retains it and the done-callback discards
     it once the cancellation runs out.
     """
 
@@ -457,9 +584,9 @@ def test_reaped_worker_task_is_retained_then_discarded() -> None:
         assert queue.try_submit(_rk("c0"), _StubUnit("c0", "c0", ledger), _state("j0"))
         await asyncio.sleep(0.02)  # c0 finishes its job and goes idle
         assert queue.try_submit(_rk("c1"), _StubUnit("c1", "c1", ledger), _state("j1"))
-        assert queue._reaped  # the reaped c0 task is retained, not garbage
+        assert queue._pool.retains_tasks()  # the reaped c0 task is retained
         await asyncio.sleep(0.02)  # let the cancellation complete
-        assert not queue._reaped  # done-callback discarded the finished task
+        assert not queue._pool.retains_tasks()  # the done-callback discarded it
         await queue.aclose(drain_timeout=2.0)
 
     asyncio.run(_run())
@@ -476,9 +603,9 @@ def test_cancel_workers_retains_aborted_tasks_until_done() -> None:
         assert queue.try_submit(_rk("c"), unit, _state("j"))
         await asyncio.sleep(0.02)  # worker dequeues and runs the blocked job
         queue.cancel_workers()
-        assert queue._reaped  # the aborted task is retained
+        assert queue._pool.retains_tasks()  # the aborted task is retained
         await asyncio.sleep(0.02)  # cancellation runs out
-        assert not queue._reaped  # done-callback discarded it
+        assert not queue._pool.retains_tasks()  # done-callback discarded it
 
     asyncio.run(_run())
 
@@ -486,7 +613,7 @@ def test_cancel_workers_retains_aborted_tasks_until_done() -> None:
 def test_aborted_queued_job_without_durable_copy_is_spooled(tmp_path: Path) -> None:
     """A drain-aborted remember/ingest is spooled, never silently dropped.
 
-    quarry-atsz: job A holds the worker (blocked) so B stays queued; the drain
+    Job A holds the worker (blocked) so B stays queued; the drain
     times out and aborts. B has no durable client copy, so it must be recorded
     in the server-side spool with its recoverable content, and its task records
     the spooled reason rather than a silent 'failed'.
@@ -518,7 +645,7 @@ def test_aborted_queued_job_without_durable_copy_is_spooled(tmp_path: Path) -> N
 def test_aborted_in_flight_job_without_durable_copy_is_spooled(tmp_path: Path) -> None:
     """The single in-flight job (not in the FIFO) is spooled on a hard abort.
 
-    quarry-atsz: the already-dequeued job is tracked as ``_current``; a hard
+    The already-dequeued job is tracked as ``_current``; a hard
     drain-timeout abort must spool it too, else the one in-flight remember/ingest
     is silently lost even though the queued ones are recovered.
     """
@@ -539,6 +666,75 @@ def test_aborted_in_flight_job_without_durable_copy_is_spooled(tmp_path: Path) -
         assert json.loads(files[0].read_text())["payload"] == "in-flight content"
 
     asyncio.run(_run())
+
+
+def test_abort_time_spool_writes_run_off_the_event_loop(tmp_path: Path) -> None:
+    """Spooling syncs files, so no aborted job (queued or in flight) blocks the loop."""
+    threads: list[int] = []
+    real_write = JobSpool.write
+
+    def recording_write(self: JobSpool, record: SpoolRecord) -> Path | None:
+        threads.append(threading.get_ident())
+        return real_write(self, record)
+
+    async def _run() -> int:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()  # never set -> A is in flight, B stays queued
+        a = _StubUnit(
+            "c", "a", ledger, gate=gate, spool=SpoolRecord("remember", "c", "a", "pa")
+        )
+        b = _StubUnit(
+            "c", "b", ledger, gate=gate, spool=SpoolRecord("remember", "c", "b", "pb")
+        )
+        assert queue.try_submit(_rk("c"), a, _state("a"))
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(_rk("c"), b, _state("b"))
+        with patch.object(JobSpool, "write", recording_write):
+            await queue.aclose(drain_timeout=0.05)
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(_run())
+
+    assert len(threads) == 2  # both jobs spooled
+    assert loop_thread not in threads
+    assert len(list((tmp_path / "spool").glob("remember-*.json"))) == 2
+
+
+def test_a_second_cancel_while_spooling_never_skips_the_record(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> list[str]:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()
+        unit = _StubUnit(
+            "c", "a", ledger, gate=gate, spool=SpoolRecord("remember", "c", "a", "pa")
+        )
+        state = _state("a")
+        assert queue.try_submit(_rk("c"), unit, state)
+        await asyncio.sleep(0.02)
+        real_write = JobSpool.write
+        spooling = threading.Event()
+        release = threading.Event()
+
+        def slow_write(self: JobSpool, record: SpoolRecord) -> Path | None:
+            spooling.set()
+            release.wait(5)
+            return real_write(self, record)
+
+        with patch.object(JobSpool, "write", slow_write):
+            worker = next(iter(queue._pool._workers.values()))
+            worker._task.cancel()  # the drain timeout's cancel
+            while not spooling.is_set():
+                await asyncio.sleep(0.005)
+            worker._task.cancel()  # the abort's cancel, mid-spool
+            release.set()
+            await asyncio.wait({worker._task}, timeout=5)
+        return [state.status]
+
+    assert asyncio.run(_run()) == ["failed"]
+    assert len(list((tmp_path / "spool").glob("remember-*.json"))) == 1
 
 
 def test_aborted_queued_job_with_durable_copy_is_not_spooled(tmp_path: Path) -> None:
@@ -626,7 +822,7 @@ def test_same_route_key_serializes_under_an_interleaved_burst(
     """Four rapid submits on one (database, collection) run one-at-a-time, FIFO.
 
     The single-writer-per-table invariant, re-asserted through the composite
-    RouteKey the watch loop uses (DES-045): even with the embed gate lifted, one
+    RouteKey the watch loop uses: even with the embed gate lifted, one
     ``(database, collection)`` never has two in-flight runs.
     """
     _lift_ceiling(monkeypatch, 4)
@@ -669,3 +865,184 @@ def test_same_collection_in_two_databases_runs_on_two_workers(
         assert ledger.peak == 2  # both inside the embed section -> distinct workers
 
     asyncio.run(_run())
+
+
+def test_an_unrecoverable_job_never_claims_to_be_spooled(tmp_path: Path) -> None:
+    """A URL job whose query was not persisted is told apart from a recoverable one."""
+
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()
+        a = _StubUnit("c", "a", ledger, gate=gate)
+        record = SpoolRecord(
+            "ingest-unrecoverable", "c", "https://x.test/a", "note", recoverable=False
+        )
+        b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
+        state_b = _state("b")
+        assert queue.try_submit(_rk("c"), a, _state("a"))
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(_rk("c"), b, state_b)
+        await queue.aclose(drain_timeout=0.05)
+        assert state_b.status == "failed"
+        assert "spooled for recovery" not in state_b.error
+        assert "query or parameters not persisted" in state_b.error
+        assert "re-run the ingest" in state_b.error
+
+    asyncio.run(_run())
+
+
+def test_a_recoverable_job_still_says_it_was_spooled(tmp_path: Path) -> None:
+    async def _run() -> None:
+        ledger = _Ledger()
+        queue = _make_queue(quarry_root=tmp_path)
+        gate = asyncio.Event()
+        a = _StubUnit("c", "a", ledger, gate=gate)
+        record = SpoolRecord("ingest", "c", "https://x.test/a", "https://x.test/a")
+        b = _StubUnit("c", "b", ledger, gate=gate, spool=record)
+        state_b = _state("b")
+        assert queue.try_submit(_rk("c"), a, _state("a"))
+        await asyncio.sleep(0.02)
+        assert queue.try_submit(_rk("c"), b, state_b)
+        await queue.aclose(drain_timeout=0.05)
+        assert "spooled for recovery" in state_b.error
+
+    asyncio.run(_run())
+
+
+def test_a_worker_that_died_of_anything_but_the_cancel_is_named(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Dying(_IdleWorker):
+        tally = AbortTally()
+        pending_jobs = 0
+
+        def abort_off_loop(self) -> asyncio.Task[None]:
+            async def dies() -> None:
+                msg = "worker secret detail"
+                raise RuntimeError(msg)
+
+            return asyncio.ensure_future(dies())
+
+    async def _run() -> None:
+        queue = _make_queue(concurrency=1)
+        with caplog.at_level(logging.ERROR, logger="quarry.daemon"):
+            await queue._abort([cast("CollectionWorker", _Dying())], 0.05)
+
+    asyncio.run(_run())
+
+    assert "a worker task failed while aborting" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "worker secret detail" not in caplog.text  # class and frames only
+
+
+def test_the_drain_summary_terms_add_up_to_the_aborted_jobs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Counted(_IdleWorker):
+        pending_jobs = 0
+
+        def __init__(self, outcomes: list[Aborted]) -> None:
+            self.tally = AbortTally()
+            for outcome in outcomes:
+                job = object()
+                self.tally.take(job)
+                self.tally.move(job, outcome.term)
+
+        def abort_off_loop(self) -> asyncio.Task[None]:
+            async def done() -> None:
+                return None
+
+            return asyncio.ensure_future(done())
+
+    async def _run() -> None:
+        queue = _make_queue(concurrency=1)
+        recoverable = Aborted("r", AbortTerm.SPOOLED)
+        unrecoverable = Aborted("u", AbortTerm.UNRECOVERABLE)
+        lost = Aborted("l", AbortTerm.NOT_WRITTEN)
+        none = Aborted("n")
+        workers = [
+            _Counted([recoverable, recoverable, unrecoverable, lost, none]),
+            _Counted([lost, lost, lost]),
+        ]
+        with caplog.at_level(logging.WARNING, logger="quarry.daemon"):
+            await queue._abort([cast("CollectionWorker", w) for w in workers], 1.0)
+
+    asyncio.run(_run())
+
+    assert (
+        "aborted 8 job(s): 2 spooled for recovery, 1 spooled but not recoverable, "
+        "4 not written (spool write failed), 0 unbuilt (record could not be built), "
+        "1 needed no spool, 0 kept"
+    ) in caplog.text
+
+
+def test_the_abort_summary_counts_jobs_not_yet_accounted_for_and_names_late_ends(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A slow spool and a short wait: the terms still add up and nothing leaks."""
+
+    class _Slow(_IdleWorker):
+        tally = AbortTally()
+        pending_jobs = 2
+
+        def __init__(self) -> None:
+            self.release = asyncio.Event()
+
+        def abort_off_loop(self) -> asyncio.Task[None]:
+            async def slow() -> None:
+                await self.release.wait()
+                msg = "late failure detail"
+                raise RuntimeError(msg)
+
+            return asyncio.ensure_future(slow())
+
+    async def _run() -> None:
+        queue = _make_queue(concurrency=1)
+        slow = _Slow()
+        with (
+            patch.object(IngestQueue, "ABORT_WAIT_S", 0.05),
+            caplog.at_level(logging.INFO, logger="quarry.daemon"),
+        ):
+            await queue._abort([cast("CollectionWorker", slow)], 0.1)
+        slow.release.set()
+        await asyncio.sleep(0.05)  # the late failure lands
+
+    asyncio.run(_run())
+
+    assert "2 job(s) not yet accounted for" in caplog.text
+    assert "1 worker(s) did not stop within" in caplog.text
+    assert "a worker that outlived the abort wait failed: 0 job(s)" in caplog.text
+    assert "2 job(s) pending" in caplog.text
+    assert "late failure detail" not in caplog.text
+
+
+def test_a_worker_that_outlives_the_abort_wait_and_is_cancelled_says_so_at_info(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Late(_IdleWorker):
+        tally = AbortTally()
+        pending_jobs = 0
+
+        def abort_off_loop(self) -> asyncio.Task[None]:
+            async def waits() -> None:
+                await asyncio.sleep(60)
+
+            self.task = asyncio.ensure_future(waits())
+            return self.task
+
+    async def _run() -> None:
+        queue = _make_queue(concurrency=1)
+        late = _Late()
+        with (
+            patch.object(IngestQueue, "ABORT_WAIT_S", 0.05),
+            caplog.at_level(logging.INFO, logger="quarry.daemon"),
+        ):
+            await queue._abort([cast("CollectionWorker", late)], 0.1)
+            late.task.cancel()
+            await asyncio.sleep(0.05)
+
+    asyncio.run(_run())
+
+    [record] = [r for r in caplog.records if "was cancelled" in r.getMessage()]
+    assert record.levelno == logging.INFO

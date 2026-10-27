@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,10 +18,12 @@ if TYPE_CHECKING:
 
 from quarry.db import ChunkSearch, ChunkStore, Database, SchemaManager, get_db
 from quarry.db.schema import TABLE_NAME
+from quarry.http_url import HttpUrl
 from quarry.models import Chunk
 from quarry.results import SearchFilter, SearchResult
 from quarry.retrieval import HybridRetriever, RetrievalConfig
 from quarry.retrieval.fusion import RrfFusion
+from quarry.send_outcome import SendOutcome
 
 
 def _hybrid(
@@ -135,6 +138,7 @@ class TestSchemaMigration:
         assert "agent_handle" in field_names
         assert "memory_type" in field_names
         assert "summary" in field_names
+        assert "source_version" in field_names
 
     def test_migration_is_idempotent(self, tmp_path: Path) -> None:
         """Running migration twice does not raise or duplicate columns."""
@@ -304,9 +308,9 @@ class TestNewColumnsInPipeline:
 
 
 class TestChunkerThreading:
-    def test_chunk_pages_passes_new_fields(self) -> None:
-        """chunk_pages threads agent_handle, memory_type, summary to Chunks."""
-        from quarry.ingestion.chunker import chunk_pages
+    def test_page_chunker_passes_new_fields(self) -> None:
+        """PageChunker threads agent_handle, memory_type, summary to Chunks."""
+        from quarry.ingestion.page_chunker import ChunkLabels, PageChunker
         from quarry.models import PageContent, PageType
 
         pages = [
@@ -319,20 +323,21 @@ class TestChunkerThreading:
                 page_type=PageType.TEXT,
             )
         ]
-        chunks = chunk_pages(
-            pages,
-            agent_handle="kpz",
-            memory_type="observation",
-            summary="Test observation",
-        )
+        chunks = PageChunker(
+            labels=ChunkLabels(
+                agent_handle="kpz",
+                memory_type="observation",
+                summary="Test observation",
+            )
+        ).chunk(pages)
         assert len(chunks) >= 1
         assert chunks[0].agent_handle == "kpz"
         assert chunks[0].memory_type == "observation"
         assert chunks[0].summary == "Test observation"
 
-    def test_chunk_pages_defaults_new_fields(self) -> None:
-        """chunk_pages defaults new fields to empty strings."""
-        from quarry.ingestion.chunker import chunk_pages
+    def test_page_chunker_defaults_new_fields(self) -> None:
+        """PageChunker defaults new fields to empty strings."""
+        from quarry.ingestion.page_chunker import PageChunker
         from quarry.models import PageContent, PageType
 
         pages = [
@@ -345,7 +350,7 @@ class TestChunkerThreading:
                 page_type=PageType.TEXT,
             )
         ]
-        chunks = chunk_pages(pages)
+        chunks = PageChunker().chunk(pages)
         assert len(chunks) >= 1
         assert chunks[0].agent_handle == ""
         assert chunks[0].memory_type == ""
@@ -636,10 +641,10 @@ class TestTemporalDecay:
 
 
 def _make_ethos_config(project_dir: Path, agent: str) -> None:
-    """Create a .punt-labs/ethos/config.yaml with given agent handle."""
-    ethos_dir = project_dir / ".punt-labs" / "ethos"
-    ethos_dir.mkdir(parents=True, exist_ok=True)
-    (ethos_dir / "config.yaml").write_text(f"agent: {agent}\n")
+    """Create the ethos repo pin (.punt-labs/ethos.yaml) with the given handle."""
+    punt_labs = project_dir / ".punt-labs"
+    punt_labs.mkdir(parents=True, exist_ok=True)
+    (punt_labs / "ethos.yaml").write_text(f"agent: {agent}\nresolution: repo-only\n")
 
 
 def _make_transcript(tmp_path: Path, text: str = "test message") -> Path:
@@ -684,7 +689,7 @@ class TestPreCompactEthosTagging:
             patch("quarry.capture.CaptureWriter.write"),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -713,7 +718,7 @@ class TestPreCompactEthosTagging:
             ),
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
-                return_value=True,
+                return_value=SendOutcome(sent=True),
             ) as cap,
         ):
             handle_pre_compact(
@@ -732,39 +737,46 @@ class TestPreCompactEthosTagging:
 
 class TestIngestUrlThreadsAgentHandle:
     def test_ingest_url_passes_agent_handle(self) -> None:
-        """ingest_url threads agent_handle/memory_type/summary to _chunk_embed_store."""
+        """ingest_url threads agent_handle/memory_type/summary to the chunker."""
         from unittest.mock import MagicMock
 
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.page_chunker import ChunkLabels
+        from quarry.ingestion.streaming import DocumentStreamer
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         html = "<html><body>hi</body></html>"
-        result = {
-            "document_name": "x",
-            "collection": "c",
-            "chunks": 0,
-        }
+        seen: dict[str, object] = {}
+
+        def _capture_build_chunks(
+            _self: DocumentStreamer, pages: list[object], labels: ChunkLabels
+        ) -> list[object]:
+            seen.update(asdict(labels))
+            return []
+
         with (
             patch("quarry.ingestion.web_fetch.WebFetcher.fetch", return_value=html),
             patch(
                 "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
                 return_value=[],
             ),
-            patch("quarry.ingestion.pipeline._chunk_embed_store") as mock_ces,
+            patch.object(DocumentStreamer, "build_chunks", _capture_build_chunks),
             patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
-            mock_ces.return_value = result
             ingest_url(
-                "https://example.com",
-                Database(MagicMock()),
-                MagicMock(),
-                agent_handle="rmh",
-                memory_type="fact",
-                summary="test summary",
+                UrlIngest(HttpUrl("https://example.com")),
+                Progress(None),
+                IngestContext(
+                    Database(MagicMock()),
+                    MagicMock(),
+                    agent_handle="rmh",
+                    memory_type="fact",
+                    summary="test summary",
+                ),
             )
-            _, kwargs = mock_ces.call_args
-            assert kwargs["agent_handle"] == "rmh"
-            assert kwargs["memory_type"] == "fact"
-            assert kwargs["summary"] == "test summary"
+            assert seen["agent_handle"] == "rmh"
+            assert seen["memory_type"] == "fact"
+            assert seen["summary"] == "test summary"
 
 
 class TestTemporalWeightEdgeCases:
