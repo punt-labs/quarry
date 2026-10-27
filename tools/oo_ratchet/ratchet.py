@@ -103,8 +103,15 @@ class Ratchet:
         ]
         if not candidates:
             return {}
-        origins = [path for path in touched if path in base_baseline]
-        changes = self._git.line_changes(base, [*origins, *candidates])
+        origins = [
+            path
+            for path in touched
+            if path in base_baseline or renames.get(path) in base_baseline
+        ]
+        # A renamed origin's predecessor must be in the pathspec too, or git
+        # cannot pair the rename and reports the whole file as added.
+        predecessors = [renames[path] for path in origins if path in renames]
+        changes = self._git.line_changes(base, [*origins, *predecessors, *candidates])
         detector = ExtractionDetector(self._removed_by_origin(origins, changes))
         return self._detect_waivers(candidates, changes, detector)
 
@@ -129,9 +136,15 @@ class Ratchet:
     def _removed_by_origin(
         origins: list[str], changes: dict[str, LineChange]
     ) -> dict[str, frozenset[str]]:
-        """Return each baselined origin's removed lines, substantive-filtered."""
+        """Return the substantive lines that actually left each origin.
+
+        Lines the origin re-added (a re-indent, a wrap in a class) only moved
+        within it, so they are subtracted: only genuinely departed code can
+        have been extracted.
+        """
         return {
             path: ExtractionDetector.substantive_lines(changes[path].removed)
+            - ExtractionDetector.substantive_lines(changes[path].added)
             for path in origins
             if path in changes
         }

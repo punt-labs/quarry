@@ -51,13 +51,16 @@ class Diff:
 class LineChange:
     """The raw content lines added to and removed from one touched path.
 
+    Lines keep their diff order: docstring detection needs to see an opening
+    delimiter before the prose it encloses.
+
     Feeds ``provenance.ExtractionDetector``: a new file's ``added`` lines can
     be compared against a baselined origin's ``removed`` lines from the same
     diff to prove (or disprove) that the new file is an honest extraction.
     """
 
-    removed: frozenset[str] = frozenset()
-    added: frozenset[str] = frozenset()
+    removed: tuple[str, ...] = ()
+    added: tuple[str, ...] = ()
 
     @staticmethod
     def parse_patch(patch: str) -> dict[str, LineChange]:
@@ -101,4 +104,4 @@ class LineChange:
         """Split one path's raw hunk lines into added and removed content."""
         added = [line[1:] for line in lines if line.startswith("+")]
         removed = [line[1:] for line in lines if line.startswith("-")]
-        return LineChange(removed=frozenset(removed), added=frozenset(added))
+        return LineChange(removed=tuple(removed), added=tuple(added))

@@ -603,6 +603,256 @@ class TestExtractionProvenance:
         assert "avg_params" in out
 
 
+# --- provenance means moved code, not boilerplate ---
+
+_IMPORTY_ORIGIN = """\
+from __future__ import annotations
+
+import json
+import textwrap
+from pathlib import Path
+
+
+def format_body(text: str) -> str:
+    return text.strip()
+
+
+def format_summary(total: int) -> str:
+    return f"total: {total}"
+"""
+
+# The three imports leave the origin; the body functions stay.
+_IMPORTY_ORIGIN_AFTER = """\
+from __future__ import annotations
+
+
+def format_body(text: str) -> str:
+    return text.strip()
+
+
+def format_summary(total: int) -> str:
+    return f"total: {total}"
+"""
+
+# Shares only the imports with the origin; its function is its own.
+_IMPORTS_ONLY_NEW_MODULE = """\
+from __future__ import annotations
+
+import json
+import textwrap
+from pathlib import Path
+
+
+def compute_total(values: list[int]) -> int:
+    return sum(values)
+"""
+
+# format_header's signature is copied; the body is a stub.
+_STUB_BODY_NEW_MODULE = """\
+from __future__ import annotations
+
+
+def format_header(title: str) -> str:
+    pass
+"""
+
+# The origin keeps every helper but wraps them in a class (a re-indent).
+_GOD_MODULE_REINDENTED = """\
+from __future__ import annotations
+
+
+class Reports:
+    @staticmethod
+    def format_header(title: str) -> str:
+        return f"== {title} =="
+
+    @staticmethod
+    def format_footer(note: str) -> str:
+        return f"-- {note} --"
+
+    @staticmethod
+    def format_body(text: str) -> str:
+        return text.strip()
+
+    @staticmethod
+    def format_summary(total: int) -> str:
+        return f"total: {total}"
+"""
+
+# One short helper moved verbatim; the new file also needs a future import
+# and type imports, which must not dilute the overlap.
+_ONE_HELPER_ORIGIN = """\
+from __future__ import annotations
+
+
+def format_header(title: str) -> str:
+    return f"== {title} =="
+
+
+def format_body(text: str) -> str:
+    return text.strip()
+
+
+def format_summary(total: int) -> str:
+    return f"total: {total}"
+"""
+
+_ONE_HELPER_ORIGIN_AFTER = """\
+from __future__ import annotations
+
+
+def format_body(text: str) -> str:
+    return text.strip()
+
+
+def format_summary(total: int) -> str:
+    return f"total: {total}"
+"""
+
+_ONE_HELPER_EXTRACTED = """\
+from __future__ import annotations
+
+from collections.abc import Iterable
+from pathlib import Path
+
+
+def format_header(title: str) -> str:
+    return f"== {title} =="
+"""
+
+_RENAMED_NAMES = ("alpha", "beta", "gamma", "delta", "epsilon", "zeta")
+
+
+def _renamed_origin_source(names: tuple[str, ...]) -> str:
+    """Return a module of one-line formatters, big enough for git to pair a rename."""
+    funcs = [
+        f'def format_{name}(text: str) -> str:\n    return f"{name}: {{text}}"\n'
+        for name in names
+    ]
+    return "from __future__ import annotations\n\n\n" + "\n\n".join(funcs)
+
+
+_RENAMED_EXTRACTED = """\
+from __future__ import annotations
+
+
+def format_epsilon(text: str) -> str:
+    return f"epsilon: {text}"
+
+
+def format_zeta(text: str) -> str:
+    return f"zeta: {text}"
+"""
+
+
+def _extract(
+    sandbox: GitSandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    stages: tuple[str, str],
+    new_module: str,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[int, str]:
+    """Baseline stages[0] as src/mod.py, then check stages[1] plus a new module."""
+    monkeypatch.chdir(sandbox.root)
+    sandbox.write("src/mod.py", stages[0])
+    assert _seat(["src", "--rebaseline"]) == 0
+    base = sandbox.commit("base")
+    sandbox.write("src/mod.py", stages[1])
+    sandbox.write("src/extracted.py", new_module)
+    sandbox.run_git("add", "-A")
+    assert _seat(["src", "--rebaseline"]) == 0
+    code = _check(base)
+    return code, capsys.readouterr().out
+
+
+class TestProvenanceMeansMovedCode:
+    """Boilerplate overlap and in-origin shuffles never prove an extraction."""
+
+    def test_imports_only_overlap_gets_no_waiver(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        code, out = _extract(
+            git_sandbox,
+            monkeypatch,
+            (_IMPORTY_ORIGIN, _IMPORTY_ORIGIN_AFTER),
+            _IMPORTS_ONLY_NEW_MODULE,
+            capsys,
+        )
+        assert code == 1, out
+        assert "src/extracted.py: method_ratio" in out
+
+    def test_copied_signature_with_pass_body_gets_no_waiver(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        code, out = _extract(
+            git_sandbox,
+            monkeypatch,
+            (_GOD_MODULE_SOURCE, _GOD_MODULE_AFTER_EXTRACTION),
+            _STUB_BODY_NEW_MODULE,
+            capsys,
+        )
+        assert code == 1, out
+        assert "src/extracted.py: method_ratio" in out
+
+    def test_reindented_origin_block_gets_no_waiver(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        code, out = _extract(
+            git_sandbox,
+            monkeypatch,
+            (_GOD_MODULE_SOURCE, _GOD_MODULE_REINDENTED),
+            _EXTRACTED_MODULE_SOURCE,
+            capsys,
+        )
+        assert code == 1, out
+        assert "src/extracted.py: method_ratio" in out
+
+    def test_short_helper_with_setup_imports_gets_the_waiver(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        code, out = _extract(
+            git_sandbox,
+            monkeypatch,
+            (_ONE_HELPER_ORIGIN, _ONE_HELPER_ORIGIN_AFTER),
+            _ONE_HELPER_EXTRACTED,
+            capsys,
+        )
+        assert code == 0, out
+        assert "EXTRACTED" in out
+
+    def test_renamed_origin_still_counts_as_an_origin(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        git_sandbox.write("src/mod.py", _renamed_origin_source(_RENAMED_NAMES))
+        assert _seat(["src", "--rebaseline"]) == 0
+        base = git_sandbox.commit("base")
+        git_sandbox.run_git("mv", "src/mod.py", "src/core.py")
+        git_sandbox.write("src/core.py", _renamed_origin_source(_RENAMED_NAMES[:4]))
+        git_sandbox.write("src/extracted.py", _RENAMED_EXTRACTED)
+        git_sandbox.run_git("add", "-A")
+        assert _seat(["src", "--rebaseline"]) == 0
+        code = _check(base)
+        out = capsys.readouterr().out
+        assert code == 0, out
+        assert "EXTRACTED" in out
+
+
 class TestExtractionDetector:
     """Unit coverage for the pure overlap-detection logic (no git)."""
 
@@ -649,10 +899,8 @@ class TestLineChangeParsing:
             ]
         )
         result = LineChange.parse_patch(patch)
-        assert result["src/mod.py"].removed == frozenset(
-            {"def old_func():", "    return 1"}
-        )
-        assert result["src/mod.py"].added == frozenset({"def new_func():"})
+        assert result["src/mod.py"].removed == ("def old_func():", "    return 1")
+        assert result["src/mod.py"].added == ("def new_func():",)
 
     def test_new_file_has_only_added_lines(self) -> None:
         patch = "\n".join(
@@ -667,8 +915,8 @@ class TestLineChangeParsing:
             ]
         )
         result = LineChange.parse_patch(patch)
-        assert result["src/new.py"].removed == frozenset()
-        assert result["src/new.py"].added == frozenset({"def f():"})
+        assert result["src/new.py"].removed == ()
+        assert result["src/new.py"].added == ("def f():",)
 
     def test_empty_patch_yields_no_paths(self) -> None:
         assert LineChange.parse_patch("") == {}

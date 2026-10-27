@@ -122,7 +122,23 @@ class GitRepo:
         path_list = list(paths)
         if not path_list:
             return {}
-        args = ["diff", "--no-color", "-M", "--unified=0", base, "--", *path_list]
+        # Pin every config-dependent part of the output the parser reads: an
+        # external diff driver, custom or suppressed a/ b/ prefixes, and
+        # quoted non-ASCII paths would each silently break attribution.
+        args = [
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "-M",
+            "--unified=0",
+            base,
+            "--",
+            *path_list,
+        ]
         out = self._git(args)
         if out is None:
             msg = f"git diff (unified=0) against {base} failed"
