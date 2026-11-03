@@ -71,7 +71,7 @@ def _check_python_version() -> CheckResult:
     v = sys.version_info
     version = f"{v.major}.{v.minor}.{v.micro}"
     return CheckResult(
-        name="Python version",
+        name="Python version (quarry venv)",
         passed=True,
         message=version,
         required=False,

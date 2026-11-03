@@ -159,7 +159,9 @@ if command -v python3 >/dev/null 2>&1; then
   PY_MAJOR=$(python3 -c 'import sys; print(sys.version_info.major)')
   PY_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
   if [ "$PY_MAJOR" -gt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -ge 13 ]; }; then
-    ok "Python ${PY_MAJOR}.${PY_MINOR}"
+    # Fail-fast gate only: this is uv's ambient default, not the interpreter
+    # the quarry tool venv is built with (reported after the install below).
+    ok "uv default Python: ${PY_MAJOR}.${PY_MINOR} (the quarry venv is resolved by uv)"
     HAVE_PYTHON=1
   fi
 fi
@@ -244,6 +246,20 @@ if ! command -v "$BINARY" >/dev/null 2>&1; then
   fi
 fi
 
+# The interpreter the tool venv actually runs on: the shebang of the installed
+# entry point.  This is what version-sensitive failures depend on, and it can
+# differ from the ambient python3 checked in Step 3.
+TOOL_PYTHON="$(head -1 "$(command -v "$BINARY")" | sed 's/^#!//')"
+TOOL_PY_VERSION=""
+if [ -f "$TOOL_PYTHON" ]; then
+  TOOL_PY_VERSION="$("$TOOL_PYTHON" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null)" || TOOL_PY_VERSION=""
+fi
+if [ -n "$TOOL_PY_VERSION" ]; then
+  ok "quarry tool venv Python: $TOOL_PY_VERSION"
+else
+  warn "Could not determine the quarry tool venv Python"
+fi
+
 # --- Step 4b: Swap onnxruntime for onnxruntime-gpu when an NVIDIA GPU is present ---
 #
 # MUST run AFTER `uv tool install --force` (which re-pins the CPU wheel from
@@ -257,7 +273,6 @@ fi
 # the venv that owns that interpreter.
 if [ "$HAS_NVIDIA" = "1" ]; then
   info "Installing CUDA support (onnxruntime-gpu)..."
-  TOOL_PYTHON="$(head -1 "$(command -v "$BINARY")" | sed 's/^#!//')"
   if [ -f "$TOOL_PYTHON" ]; then
     uv pip uninstall --python "$TOOL_PYTHON" onnxruntime < /dev/null 2>/dev/null || true
     if uv pip install --python "$TOOL_PYTHON" "onnxruntime-gpu>=1.18.0" < /dev/null; then

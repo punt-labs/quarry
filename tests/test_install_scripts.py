@@ -139,7 +139,7 @@ def mock_bin(tmp_path: Path) -> Path:
     fake_tool_python = bin_dir / "fake-tool-python"
     _write_mock(
         fake_tool_python,
-        'exec /bin/sh "$@"\n',
+        'if [ "$1" = "-c" ]; then printf "3.13.13\\n"; exit 0; fi\nexec /bin/sh "$@"\n',
     )
     quarry_path.write_text(
         f"#!{fake_tool_python}\n" + log_header + "exit 0\n",
@@ -1048,3 +1048,23 @@ def test_overrides_tempfile_cleaned_up_on_success(
     )
     leftovers = list(tmpdir.iterdir())
     assert leftovers == [], f"overrides temp file leaked on success: {leftovers}"
+
+
+def test_python_versions_are_labeled_ambient_vs_tool_venv(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """The ambient python3 gate and the tool venv interpreter differ; each
+    line carries its own label and version, so neither reads as the other."""
+    _write_mock(
+        mock_bin / "python3",
+        'case "$2" in\n'
+        '  *major*) printf "3\\n" ;;\n'
+        '  *minor*) printf "14\\n" ;;\n'
+        "esac\n",
+    )
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "uv default Python: 3.14 (the quarry venv is resolved by uv)" in out
+    assert "quarry tool venv Python: 3.13.13" in out
+    assert "Python 3.14\n" not in out
