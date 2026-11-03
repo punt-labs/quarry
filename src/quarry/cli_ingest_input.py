@@ -54,8 +54,11 @@ class Utf8Source:
 
     def read_stdin(self) -> str:
         """Return all of stdin, refusing bytes that are not UTF-8."""
+        # Decode the raw bytes ourselves: the text layer's codec and error
+        # handler depend on the locale (surrogateescape under UTF-8 mode,
+        # latin-1 under a legacy locale) and would let binary through.
         try:
-            return sys.stdin.read()
+            return sys.stdin.buffer.read().decode("utf-8")
         except UnicodeDecodeError:
             self._refuse("stdin")
 
