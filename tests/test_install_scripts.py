@@ -1065,6 +1065,24 @@ def test_python_versions_are_labeled_ambient_vs_tool_venv(
     result = _run_script(INSTALL_SH, env)
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    assert "uv default Python: 3.14 (the quarry venv is resolved by uv)" in out
+    assert "python3 on PATH: 3.14 (the quarry venv is resolved by uv)" in out
     assert "quarry tool venv Python: 3.13.13" in out
     assert "Python 3.14\n" not in out
+
+
+def test_failing_tool_interpreter_warns_with_its_output(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """A tool-venv interpreter that cannot report its version produces a warning
+    naming the path and the interpreter's own output; the install still succeeds."""
+    _write_mock(
+        mock_bin / "fake-tool-python",
+        'if [ "$1" = "-c" ]; then printf "boom: broken venv\\n" >&2; exit 1; fi\n'
+        'exec /bin/sh "$@"\n',
+    )
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout + result.stderr
+    assert "fake-tool-python" in out
+    assert "failed to report its version: boom: broken venv" in out
+    assert "quarry tool venv Python:" not in out
