@@ -25,6 +25,14 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- tool: `quarry remember` refuses stdin that is not UTF-8 text with one line,
+  `Error: stdin is not UTF-8 text; binary content is refused`, and exit 1,
+  under any locale. Previously it printed a traceback. `quarry learn` refuses
+  a lesson that is not UTF-8 the same way.
+- infra: `install.sh` labels its Python versions. The prerequisite line names
+  the `python3` on `PATH`, and a separate line reports the quarry tool venv's
+  Python. If the tool venv's interpreter cannot be read, the warning says why.
+  `quarry doctor` reports `Python version (quarry venv)`.
 - index: `quarry backfill-sessions` no longer races live ingests. Backfill
   runs through the same per-collection ingest queue as captures and
   `remember`.
