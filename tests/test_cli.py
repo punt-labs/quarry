@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Self, final
+from typing import TYPE_CHECKING, Self, final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +26,9 @@ from quarry.client import (
     TargetResolver,
 )
 from quarry.client.transport import Response
+
+if TYPE_CHECKING:
+    from click.testing import Result
 
 runner = CliRunner()
 
@@ -576,3 +579,27 @@ class TestMcpCommand:
         # The CLI callback's default level first, then the launcher's INFO.
         assert calls[-1] == "INFO"
         serve.assert_called_once()
+
+
+class TestNonUtf8Input:
+    """Binary input is refused with one clean line: no traceback, exit 1."""
+
+    _BINARY = b"%PDF-1.7\n\xff\xfe\x00\x80binary"
+    _REFUSAL = "is not UTF-8 text; binary content is refused"
+
+    def _assert_clean_refusal(
+        self, result: Result, transport: RecordingTransport
+    ) -> None:
+        assert result.exit_code == 1, result.output
+        assert self._REFUSAL in result.output
+        assert "Traceback" not in result.output
+        assert transport.requests == []
+
+    def test_remember_refuses_binary_stdin(self, transport: RecordingTransport) -> None:
+        result = runner.invoke(app, ["remember", "--name", "x"], input=self._BINARY)
+        self._assert_clean_refusal(result, transport)
+
+    def test_learn_refuses_binary_lesson(self, transport: RecordingTransport) -> None:
+        lesson = self._BINARY.decode("utf-8", errors="surrogateescape")
+        result = runner.invoke(app, ["learn", lesson])
+        self._assert_clean_refusal(result, transport)
