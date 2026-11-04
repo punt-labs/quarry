@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.5.2] - 2026-11-04
+
 ### Changed
 
 - infra: requires `pydantic>=2.10` and `pydantic-settings>=2.7`.
