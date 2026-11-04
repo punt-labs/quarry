@@ -155,24 +155,36 @@ def mock_bin(tmp_path: Path) -> Path:
     # curl -- used for health checks.  Emit the ready health body so the
     # install gate (which now requires state=="ready", not a bare 200)
     # matches and the loop terminates fast.
-    # A fetch of install-constraints.txt (``-o FILE URL``) writes pins to FILE,
-    # or fails like ``curl -f`` on a 404 (exit 22) when CURL_FAIL_CONSTRAINTS is
-    # set or CURL_EMPTY_CONSTRAINTS makes it write nothing.
+    # A fetch of install-constraints.txt (``-o FILE ... -w %{http_code}``) is
+    # steered by CURL_PINS_MODE: unset serves valid pins with HTTP 200; ``404`` /
+    # ``500`` reply with that status and an error body; ``network`` exits 6 like
+    # an unresolvable host; ``empty`` serves a 200 with no body; ``html`` serves
+    # a 200 captive-portal page.  The mock prints the status like ``curl -w``.
     _write_mock(
         bin_dir / "curl",
         log_header
-        + 'out=""; prev=""\n'
-        + 'for a in "$@"; do\n'
-        + '  if [ "$prev" = "-o" ]; then out="$a"; fi\n'
-        + '  prev="$a"\n'
-        + "done\n"
-        + 'if [ -n "$out" ]; then\n'
-        + '  [ -n "${CURL_FAIL_CONSTRAINTS:-}" ] && exit 22\n'
-        + '  [ -n "${CURL_EMPTY_CONSTRAINTS:-}" ] && : > "$out" && exit 0\n'
-        + '  printf "lancedb==0.40.0\\npyarrow==26.0.0\\n" > "$out"\n'
-        + "  exit 0\n"
-        + "fi\n"
-        + 'printf \'{"state":"ready"}\\n\'\nexit 0\n',
+        + dedent("""\
+            out=""; prev=""
+            for a in "$@"; do
+              if [ "$prev" = "-o" ]; then out="$a"; fi
+              prev="$a"
+            done
+            if [ -n "$out" ]; then
+              code=200
+              case "${CURL_PINS_MODE:-}" in
+                network) echo "curl: (6) Could not resolve host" >&2; exit 6 ;;
+                404) code=404; printf "404: Not Found" > "$out" ;;
+                500) code=500; printf "oops" > "$out" ;;
+                empty) : > "$out" ;;
+                html) printf "<html>Sign in to Wi-Fi</html>\\n" > "$out" ;;
+                *) printf "# pins\\nlancedb==0.40.0\\npyarrow==26.0.0\\n" > "$out" ;;
+              esac
+              printf "%s" "$code"
+              exit 0
+            fi
+            printf '{"state":"ready"}\\n'
+            exit 0
+        """),
     )
 
     # ssh -- the script tests SSH to github.com for HTTPS fallback.
@@ -184,11 +196,12 @@ def mock_bin(tmp_path: Path) -> Path:
         + "exit 0\n",
     )
 
-    # systemctl / launchctl -- used by the belt-and-suspenders restart block.
-    # Both keep a fake daemon PID in $LOG_FILE.pid (starts at 100).  A restart
-    # bumps it, unless SERVICE_RESTART_NOOP (restart "succeeds" but the process
-    # is unchanged), SERVICE_RESTART_FAIL (restart errors) or SERVICE_BUS_DOWN
-    # (the service manager cannot be queried) say otherwise.
+    # systemctl / launchctl -- used by the daemon-restart block.  Both keep a
+    # fake daemon PID in $LOG_FILE.pid (starts at 100).  A restart bumps it,
+    # unless SERVICE_RESTART_NOOP (restart "succeeds" but the process is
+    # unchanged), SERVICE_RESTART_FAIL (restart errors) or SERVICE_BUS_DOWN (the
+    # service manager cannot be queried) say otherwise.  The unit file / plist
+    # under $HOME decides whether the manager reports the service as loaded.
     pid_logic = dedent("""\
         pidf="$LOG_FILE.pid"
         [ -f "$pidf" ] || printf "100" > "$pidf"
@@ -204,25 +217,38 @@ def mock_bin(tmp_path: Path) -> Path:
         bin_dir / "systemctl",
         log_header
         + pid_logic
-        + 'case "$*" in\n'
-        + '  *show*) cat "$pidf"; printf "\\n"; exit 0 ;;\n'
-        + "  *restart*)\n"
+        + dedent("""\
+            unit="$HOME/.config/systemd/user/quarry.service"
+            case "$*" in
+              *LoadState*)
+                if [ -f "$unit" ]; then echo loaded; else echo not-found; fi
+                exit 0 ;;
+              *MainPID*) cat "$pidf"; printf "\\n"; exit 0 ;;
+              *restart*)
+        """)
         + bump
-        + "  ;;\n"
-        + "esac\n"
-        + "exit 0\n",
+        + "  ;;\nesac\nexit 0\n",
     )
     _write_mock(
         bin_dir / "launchctl",
         log_header
         + pid_logic
-        + 'case "$1" in\n'
-        + '  list) printf \'{\\n\\t"PID" = %s;\\n}\\n\' "$(cat "$pidf")"; exit 0 ;;\n'
-        + "  kickstart)\n"
+        + dedent("""\
+            plist="$HOME/Library/LaunchAgents/com.punt-labs.quarry.plist"
+            case "$1" in
+              print)
+                if [ -n "${SERVICE_PRINT_FAIL_AFTER_DETECT:-}" ]; then
+                  [ -f "$LOG_FILE.pc" ] && { echo "denied" >&2; exit 1; }
+                  : > "$LOG_FILE.pc"
+                fi
+                [ -f "$plist" ] || { echo "Could not find service" >&2; exit 113; }
+                printf 'gui/501/com.punt-labs.quarry = {\\n\\tstate = running\\n'
+                printf '\\tpid = %s\\n}\\n' "$(cat "$pidf")"
+                exit 0 ;;
+              kickstart)
+        """)
         + bump
-        + "  ;;\n"
-        + "esac\n"
-        + "exit 0\n",
+        + "  ;;\nesac\nexit 0\n",
     )
 
     # head / sed / id -- real utilities from the host; we add them to the
@@ -583,13 +609,22 @@ def test_network_mode_fails_when_daemon_never_becomes_ready(
     ``sleep`` symlink is replaced with an instant no-op so the loop drains fast.
     """
     # /health always reports warming, never ready.
-    # The pin fetch (``-o FILE``) still succeeds so the run reaches the gate.
+    # The pin fetch (``-o FILE ... -w``) still succeeds so the run reaches the gate.
     _write_mock(
         mock_bin / "curl",
-        'if [ "$1" = "-fsSL" ] && [ "$2" = "-o" ]; then\n'
-        '  printf "lancedb==0.40.0\\n" > "$3"; exit 0\n'
-        "fi\n"
-        'printf \'{"state":"starting"}\\n\'\nexit 0\n',
+        dedent("""\
+            case "$*" in
+              *" -o "*)
+                prev=""
+                for a in "$@"; do
+                  [ "$prev" = "-o" ] && printf "lancedb==0.40.0\\n" > "$a"
+                  prev="$a"
+                done
+                printf 200; exit 0 ;;
+            esac
+            printf '{"state":"starting"}\\n'
+            exit 0
+        """),
     )
     # Replace the real-sleep symlink with an instant no-op so the retry budget
     # drains in milliseconds (write_text would follow the symlink to /bin/sleep).
@@ -1203,7 +1238,7 @@ def test_constraints_fetch_failure_aborts_without_unpinned_install(
 ) -> None:
     """A failed pin fetch must stop the installer loudly; uv is never invoked
     for the install, so nothing is installed unpinned."""
-    result = _run_script(INSTALL_SH, {**env, "CURL_FAIL_CONSTRAINTS": "1"})
+    result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "network"})
     assert result.returncode != 0, "a failed pin fetch must fail the install"
     combined = result.stdout + result.stderr
     assert "install-constraints.txt" in combined, combined
@@ -1218,7 +1253,7 @@ def test_empty_constraints_abort_without_unpinned_install(
     env: dict[str, str],
 ) -> None:
     """A fetch that succeeds with an empty body is as bad as none: abort."""
-    result = _run_script(INSTALL_SH, {**env, "CURL_EMPTY_CONSTRAINTS": "1"})
+    result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "empty"})
     assert result.returncode != 0
     assert not _any_line_contains(_read_log(env), "uv tool install")
 
@@ -1249,8 +1284,81 @@ def test_constraints_tempfile_cleaned_up_on_fetch_failure(
     tmpdir = tmp_path / "cst-tmp"
     tmpdir.mkdir()
     result = _run_script(
-        INSTALL_SH, {**env, "TMPDIR": str(tmpdir), "CURL_FAIL_CONSTRAINTS": "1"}
+        INSTALL_SH, {**env, "TMPDIR": str(tmpdir), "CURL_PINS_MODE": "network"}
     )
+    assert result.returncode != 0
+    assert list(tmpdir.iterdir()) == []
+
+
+def test_constraints_404_installs_unpinned_with_loud_warning(
+    env: dict[str, str],
+) -> None:
+    """A release that predates pinned installs (no file at its tag) must stay
+    installable: warn loudly, install without --constraints."""
+    result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "404"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "predates pinned installs; installing without dependency pins" in (
+        result.stdout
+    )
+    install = _tool_install_line(_read_log(env))
+    assert "--constraints" not in install, install
+
+
+def test_constraints_server_error_is_a_hard_failure_naming_the_cause(
+    env: dict[str, str],
+) -> None:
+    result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "500"})
+    assert result.returncode != 0
+    assert "HTTP 500" in result.stdout + result.stderr
+    assert not _any_line_contains(_read_log(env), "uv tool install")
+
+
+def test_constraints_network_error_names_the_cause(env: dict[str, str]) -> None:
+    result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "network"})
+    assert result.returncode != 0
+    assert "network error" in result.stdout + result.stderr
+
+
+def test_constraints_captive_portal_body_is_rejected(env: dict[str, str]) -> None:
+    """A 200 whose body is not a constraints file must never reach uv."""
+    result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "html"})
+    assert result.returncode != 0
+    assert "not a constraints file" in result.stdout + result.stderr
+    assert not _any_line_contains(_read_log(env), "uv tool install")
+
+
+def test_local_wheel_without_working_tree_pins_warns_with_path(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    """With QUARRY_LOCAL_WHEEL and no pins file beside the script, the fallback
+    to the fetch is announced and names the path that was checked."""
+    script_dir = tmp_path / "scriptdir"
+    script_dir.mkdir()
+    script = script_dir / "install.sh"
+    shutil.copy(INSTALL_SH, script)
+    wheel = tmp_path / "punt_quarry-9.9.9-py3-none-any.whl"
+    wheel.write_bytes(b"PK\x03\x04 non-empty")
+    result = _run_script(script, {**env, "QUARRY_LOCAL_WHEEL": str(wheel)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"{script_dir}/install-constraints.txt was not found" in result.stdout
+    assert _any_line_contains(_read_log(env), "raw.githubusercontent.com")
+
+
+def test_overrides_tempfile_cleaned_up_when_constraints_mktemp_fails(
+    env: dict[str, str], mock_bin: Path, tmp_path: Path
+) -> None:
+    """The trap covers both temp files before either is created: a failing
+    second mktemp must not leak the first."""
+    tmpdir = tmp_path / "mk-tmp"
+    tmpdir.mkdir()
+    real = shutil.which("mktemp")
+    assert real is not None
+    (mock_bin / "mktemp").unlink()
+    _write_mock(
+        mock_bin / "mktemp",
+        f'case "$1" in *constraints*) exit 1 ;; esac\nexec {real} "$@"\n',
+    )
+    result = _run_script(INSTALL_SH, {**env, "TMPDIR": str(tmpdir)})
     assert result.returncode != 0
     assert list(tmpdir.iterdir()) == []
 
@@ -1300,6 +1408,12 @@ def test_constraints_drift_check_fails_on_mismatch(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _instant_sleep(mock_bin: Path) -> None:
+    """Replace the real-sleep symlink so retry/poll loops drain instantly."""
+    (mock_bin / "sleep").unlink()
+    _write_mock(mock_bin / "sleep", "exit 0\n")
+
+
 def _register_systemd_unit(env: dict[str, str]) -> None:
     unit = Path(env["HOME"]) / ".config" / "systemd" / "user" / "quarry.service"
     unit.parent.mkdir(parents=True)
@@ -1332,22 +1446,90 @@ def test_restart_command_failure_is_reported_not_swallowed(
     assert "Failed to restart the quarry service" in result.stdout + result.stderr
 
 
-def test_restart_that_leaves_the_pid_unchanged_fails(env: dict[str, str]) -> None:
+def test_restart_that_leaves_the_pid_unchanged_fails(
+    env: dict[str, str], mock_bin: Path
+) -> None:
     """The reported incident: restart exits 0 yet the old process survives."""
     _register_systemd_unit(env)
+    _instant_sleep(mock_bin)
     result = _run_script(INSTALL_SH, {**env, "SERVICE_RESTART_NOOP": "1"})
     assert result.returncode != 0
     assert "kept PID 100" in result.stdout + result.stderr
 
 
-def test_unreachable_service_manager_fails_instead_of_skipping(
+def test_unreachable_service_manager_warns_and_skips_restart(
     env: dict[str, str],
 ) -> None:
-    """No user bus (a bare ssh/agent shell) is not "no service registered"."""
+    """A unit file on disk with no reachable manager (ssh, container) is the
+    degrade ``quarry install`` already makes: warn, skip, do not fail."""
     _register_systemd_unit(env)
     result = _run_script(INSTALL_SH, {**env, "SERVICE_BUS_DOWN": "1"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "unreachable -- skipping the daemon restart" in result.stdout
+    assert not _any_line_contains(_read_log(env), "systemctl --user restart")
+
+
+def test_unit_file_not_loaded_by_manager_is_not_registered(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """Only the manager's LoadState counts: no loaded unit, no restart."""
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0
+    log = _read_log(env)
+    assert _any_line_contains(log, "LoadState")
+    assert not _any_line_contains(log, "systemctl --user restart")
+
+
+def test_registered_daemon_that_never_becomes_ready_fails(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """A new PID proves replacement, not health: after a verified restart the
+    readiness gate must fail rather than warn."""
+    _register_systemd_unit(env)
+    _instant_sleep(mock_bin)
+    _write_mock(
+        mock_bin / "curl",
+        dedent("""\
+            case "$*" in
+              *" -o "*)
+                prev=""
+                for a in "$@"; do
+                  [ "$prev" = "-o" ] && printf "lancedb==0.40.0\\n" > "$a"
+                  prev="$a"
+                done
+                printf 200; exit 0 ;;
+            esac
+            printf '{"state":"starting"}\\n'
+            exit 0
+        """),
+    )
+    result = _run_script(INSTALL_SH, env)
     assert result.returncode != 0
-    assert "Cannot query the quarry systemd service" in result.stdout + result.stderr
+    assert "did not become ready" in result.stdout + result.stderr
+
+
+def test_unregistered_daemon_not_ready_only_warns(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    _instant_sleep(mock_bin)
+    _write_mock(
+        mock_bin / "curl",
+        dedent("""\
+            case "$*" in
+              *" -o "*)
+                prev=""
+                for a in "$@"; do
+                  [ "$prev" = "-o" ] && printf "lancedb==0.40.0\\n" > "$a"
+                  prev="$a"
+                done
+                printf 200; exit 0 ;;
+            esac
+            exit 7
+        """),
+    )
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Daemon did not respond" in result.stdout
 
 
 def test_restart_is_a_noop_without_a_registered_service(env: dict[str, str]) -> None:
@@ -1373,6 +1555,60 @@ def test_launchd_restart_runs_and_verifies_pid(
 def test_launchd_pid_unchanged_fails(env: dict[str, str], mock_bin: Path) -> None:
     (mock_bin / "systemctl").unlink()
     _register_launchd_plist(env)
+    _instant_sleep(mock_bin)
     result = _run_script(INSTALL_SH, {**env, "SERVICE_RESTART_NOOP": "1"})
     assert result.returncode != 0
     assert "kept PID 100" in result.stdout + result.stderr
+
+
+def test_launchd_query_failure_message_has_no_session_bus(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """Detection passes, then the PID query fails: launchd gets its own message."""
+    (mock_bin / "systemctl").unlink()
+    _register_launchd_plist(env)
+    result = _run_script(INSTALL_SH, {**env, "SERVICE_PRINT_FAIL_AFTER_DETECT": "1"})
+    assert result.returncode != 0
+    assert "Cannot query the quarry launchd service" in result.stdout
+    assert "bus" not in result.stdout
+
+
+def test_launchd_pid_is_read_from_the_restart_domain(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """The PID comes from ``launchctl print gui/<uid>/<label>`` (the domain the
+    kickstart targets), never ``launchctl list`` (the caller's own domain)."""
+    (mock_bin / "systemctl").unlink()
+    _register_launchd_plist(env)
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    log = _read_log(env)
+    assert _any_line_contains(log, "launchctl print gui/")
+    assert not _any_line_contains(log, "launchctl list")
+
+
+def test_launchd_waits_for_the_new_pid_after_kickstart(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """kickstart may return before launchd publishes the new pid: the installer
+    polls rather than reading the stale pid once."""
+    (mock_bin / "systemctl").unlink()
+    _register_launchd_plist(env)
+    _instant_sleep(mock_bin)
+    # Publish the bumped pid only on the third ``print`` after the kickstart.
+    real_print = (mock_bin / "launchctl").read_text()
+    _write_mock(
+        mock_bin / "launchctl",
+        real_print.replace(
+            "print)",
+            'print)\n                if [ -f "$LOG_FILE.ks" ]; then'
+            ' n=$(($(cat "$LOG_FILE.ks") + 1)); echo $n > "$LOG_FILE.ks";'
+            ' [ $n -lt 4 ] && { printf "\\tpid = 100\\n"; exit 0; }; fi',
+            1,
+        ).replace(
+            "kickstart)", 'kickstart)\n                echo 0 > "$LOG_FILE.ks"', 1
+        ),
+    )
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PID 100 -> 101" in result.stdout

@@ -290,7 +290,7 @@ touches disk. Turn it off with `telemetry_enabled: false` in `Settings`
 
 ## Managing the Daemon
 
-`quarry install` registers `quarryd` as a per-user service that starts at login and restarts on crash (launchd on macOS, systemd on Linux). Re-running the [Quick Start](#quick-start) installer does this for you on every upgrade — it pins every dependency to the tested `uv.lock` versions (via `install-constraints.txt` from the release tag), calls `quarry install`, then force-restarts the service and checks that the daemon's PID changed — a restart that did not take fails the install instead of passing silently — so a plain `curl | sh` re-run is enough.
+`quarry install` registers `quarryd` as a per-user service that starts at login and restarts on crash (launchd on macOS, systemd on Linux). Re-running the [Quick Start](#quick-start) installer does this for you on every upgrade — it pins every dependency to the tested `uv.lock` versions (via `install-constraints.txt` from the release tag), calls `quarry install`, then force-restarts the service, checks that the daemon's PID changed, and waits for it to report ready — a restart that did not take, or a daemon that never becomes ready, fails the install instead of passing silently — so a plain `curl | sh` re-run is enough.
 
 **After upgrading the package some other way** (`uv tool install --force`, a local wheel), restart the service yourself — a running daemon holds the old engine in memory until restarted.
 
