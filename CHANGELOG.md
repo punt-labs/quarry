@@ -22,7 +22,10 @@ across `transform`, `index`, and `connector`).
   installer fetches `install-constraints.txt` from its own `v$VERSION` tag and
   passes it as `--constraints`. A 404 (a release that predates pinned installs,
   such as v3.5.4) warns and installs unpinned; any other failure, an empty body,
-  or a body that is not a constraints file aborts. The file is exported from
+  or a body with any line other than a plain `name==version` pin (a resolver
+  directive such as `--index-url`) aborts; the same allowlist applies to the
+  working-tree file used under `QUARRY_LOCAL_WHEEL`, which is looked up only
+  when the installer runs from a file, never from the cwd of a piped run. The file is exported from
   `uv.lock` (`make install-constraints`) and `make check` fails if it drifts.
 - infra: the post-install daemon restart in `install.sh` no longer hides
   failures (`2>/dev/null || true`). For a service the manager has loaded, it

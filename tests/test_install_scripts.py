@@ -176,6 +176,7 @@ def mock_bin(tmp_path: Path) -> Path:
                 404) code=404; printf "404: Not Found" > "$out" ;;
                 500) code=500; printf "oops" > "$out" ;;
                 empty) : > "$out" ;;
+                index) printf "lancedb==0.40.0\\n--index-url http://e/s\\n" > "$out" ;;
                 html) printf "<html>Sign in to Wi-Fi</html>\\n" > "$out" ;;
                 *) printf "# pins\\nlancedb==0.40.0\\npyarrow==26.0.0\\n" > "$out" ;;
               esac
@@ -1323,7 +1324,7 @@ def test_constraints_captive_portal_body_is_rejected(env: dict[str, str]) -> Non
     """A 200 whose body is not a constraints file must never reach uv."""
     result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "html"})
     assert result.returncode != 0
-    assert "not a constraints file" in result.stdout + result.stderr
+    assert "non-pin line" in result.stdout + result.stderr
     assert not _any_line_contains(_read_log(env), "uv tool install")
 
 
@@ -1361,6 +1362,73 @@ def test_overrides_tempfile_cleaned_up_when_constraints_mktemp_fails(
     result = _run_script(INSTALL_SH, {**env, "TMPDIR": str(tmpdir)})
     assert result.returncode != 0
     assert list(tmpdir.iterdir()) == []
+
+
+def test_fetched_pins_with_a_later_directive_line_are_rejected(
+    env: dict[str, str],
+) -> None:
+    """A valid first line must not vouch for the rest: an --index-url further
+    down would redirect uv's resolution."""
+    result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "index"})
+    assert result.returncode != 0
+    assert "pins file contains a non-pin line: --index-url" in result.stdout
+    assert not _any_line_contains(_read_log(env), "uv tool install")
+
+
+def test_local_pins_with_a_directive_line_are_rejected(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    script_dir = tmp_path / "scriptdir"
+    script_dir.mkdir()
+    script = script_dir / "install.sh"
+    shutil.copy(INSTALL_SH, script)
+    (script_dir / "install-constraints.txt").write_text(
+        "lancedb==0.40.0\n--extra-index-url https://evil.example/simple\n"
+    )
+    wheel = tmp_path / "punt_quarry-9.9.9-py3-none-any.whl"
+    wheel.write_bytes(b"PK\x03\x04 non-empty")
+    result = _run_script(script, {**env, "QUARRY_LOCAL_WHEEL": str(wheel)})
+    assert result.returncode != 0
+    assert "non-pin line: --extra-index-url" in result.stdout
+    assert not _any_line_contains(_read_log(env), "uv tool install")
+
+
+def test_piped_installer_ignores_constraints_in_cwd(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    """Under ``curl | sh`` $0 is not a file and dirname is the caller's cwd: a
+    planted install-constraints.txt there must not be used."""
+    cwd = tmp_path / "planted"
+    cwd.mkdir()
+    (cwd / "install-constraints.txt").write_text("evilpkg==6.6.6\n")
+    wheel = tmp_path / "punt_quarry-9.9.9-py3-none-any.whl"
+    wheel.write_bytes(b"PK\x03\x04 non-empty")
+    result = subprocess.run(
+        ["sh", "-s"],  # argv[0] is the bare name `sh`, as under `curl | sh`
+        executable="/bin/sh",
+        input=INSTALL_SH.read_text(),
+        env={**env, "QUARRY_LOCAL_WHEEL": str(wheel)},
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(cwd),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    log = _read_log(env)
+    assert _any_line_contains(log, "raw.githubusercontent.com"), (
+        "a piped install must fetch the pins from the tag"
+    )
+    assert not _any_line_contains(log, "evilpkg")
+
+
+def test_committed_constraints_pass_the_installer_allowlist() -> None:
+    """Every line of the committed file matches the installer's PIN_RE."""
+    match = re.search(r"^PIN_RE='(.*?)'\"'\"'(.*?)'$", INSTALL_SH.read_text(), re.M)
+    assert match is not None, "PIN_RE not found in install.sh"
+    pattern = re.compile(match.group(1) + "'" + match.group(2))
+    lines = (REPO_ROOT / "install-constraints.txt").read_text().splitlines()
+    bad = [ln for ln in lines if ln.strip() and not pattern.match(ln)]
+    assert bad == [], bad
 
 
 # ---------------------------------------------------------------------------

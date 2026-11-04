@@ -253,14 +253,34 @@ fi
 #     is the bug this step exists to prevent.
 # QUARRY_LOCAL_WHEEL installs use the working-tree file next to this script when
 # present (the tag may not exist for an unreleased branch); with none they warn
-# and fetch like any other install.
+# and fetch like any other install.  The lookup runs only when $0 is a real file:
+# under `curl | sh` $0 is `sh`, its dirname is the caller's cwd, and a planted
+# install-constraints.txt there must never be trusted.
+#
+# A constraints file is not inert: uv honours directives inside it
+# (--index-url, --extra-index-url, --find-links, --no-index, -r/-c, URLs) that
+# redirect package resolution.  So EVERY line of EITHER source must be a plain
+# pin -- `name==version`, optionally ` ; <environment marker>`, the exact shape
+# `uv export --no-annotate --no-header` emits -- or a comment/blank line.
+PIN_RE='^[A-Za-z0-9._-]+==[A-Za-z0-9._+!*-]+( ; [A-Za-z0-9._ "()<>=!~,*'"'"'-]+)?$'
+
+check_pins_file() {
+  _bad="$(grep -Ev -e '^[[:space:]]*$' -e '^[[:space:]]*#' -e "$PIN_RE" "$1" | head -1)"
+  if [ -n "$_bad" ]; then
+    fail "pins file contains a non-pin line: $_bad"
+  fi
+}
+
 CONSTRAINTS_URL="https://raw.githubusercontent.com/punt-labs/quarry/v$VERSION/install-constraints.txt"
 USE_CONSTRAINTS=0
-if [ -n "${QUARRY_LOCAL_WHEEL:-}" ]; then
+if [ -n "${QUARRY_LOCAL_WHEEL:-}" ] && [ ! -f "$0" ]; then
+  warn "QUARRY_LOCAL_WHEEL is set but the installer is not running from a file (piped) -- fetching the pins for v$VERSION instead of trusting the current directory"
+elif [ -n "${QUARRY_LOCAL_WHEEL:-}" ]; then
   SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
   if [ -s "$SCRIPT_DIR/install-constraints.txt" ]; then
     cp "$SCRIPT_DIR/install-constraints.txt" "$CONSTRAINTS_FILE" ||
       fail "Could not read $SCRIPT_DIR/install-constraints.txt"
+    check_pins_file "$CONSTRAINTS_FILE"
     USE_CONSTRAINTS=1
     ok "dependency pins: $SCRIPT_DIR/install-constraints.txt (working tree)"
   else
@@ -278,12 +298,9 @@ if [ "$USE_CONSTRAINTS" = "0" ]; then
       if [ ! -s "$CONSTRAINTS_FILE" ]; then
         fail "Dependency pins fetched from $CONSTRAINTS_URL are empty -- refusing to install unpinned dependencies."
       fi
-      # First non-comment, non-blank line must look like `name==version`; a
-      # captive-portal or error page served with a 200 must not reach uv.
-      PINS_FIRST="$(sed -n -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' -e 'p;q' "$CONSTRAINTS_FILE")"
-      if ! printf '%s\n' "$PINS_FIRST" | grep -Eq '^[A-Za-z0-9._-]+=='; then
-        fail "The pins file fetched from $CONSTRAINTS_URL is not a constraints file (first entry: '$PINS_FIRST') -- refusing to install unpinned dependencies."
-      fi
+      # Every line must be a plain pin: a captive-portal page, or a file with
+      # resolver-redirecting directives, must not reach uv.
+      check_pins_file "$CONSTRAINTS_FILE"
       USE_CONSTRAINTS=1
       ok "dependency pins: v$VERSION install-constraints.txt"
       ;;
