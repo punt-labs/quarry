@@ -5,7 +5,6 @@ from __future__ import annotations
 from quarry.artifacts import (
     SessionArtifacts,
     extract_artifacts,
-    format_artifacts_frontmatter,
     format_artifacts_header,
 )
 
@@ -213,7 +212,7 @@ def test_empty_artifacts_returns_empty() -> None:
     assert format_artifacts_header(arts) == ""
 
 
-# -- format_artifacts_frontmatter -------------------------------------------
+# -- SessionArtifacts.format_frontmatter ----------------------------------
 
 
 def test_frontmatter_all_fields() -> None:
@@ -223,7 +222,7 @@ def test_frontmatter_all_fields() -> None:
         branch_names=("fix/status-performance",),
         bead_ids=("quarry-vdh6",),
     )
-    fm = format_artifacts_frontmatter("ed821224-abcd", "2026-05-12T21:44:17Z", arts)
+    fm = arts.format_frontmatter("ed821224-abcd", "2026-05-12T21:44:17Z")
     assert fm.startswith("---\n")
     assert fm.endswith("\n---")
     assert "session_id: ed821224-abcd" in fm
@@ -241,7 +240,7 @@ def test_frontmatter_partial() -> None:
         branch_names=(),
         bead_ids=(),
     )
-    fm = format_artifacts_frontmatter("sess-1234", "2026-01-01T00:00:00Z", arts)
+    fm = arts.format_frontmatter("sess-1234", "2026-01-01T00:00:00Z")
     assert "commits:" in fm
     assert "prs:" not in fm
     assert "branches:" not in fm
@@ -255,7 +254,7 @@ def test_frontmatter_empty_artifacts() -> None:
         branch_names=(),
         bead_ids=(),
     )
-    fm = format_artifacts_frontmatter("sess-1234", "2026-01-01T00:00:00Z", arts)
+    fm = arts.format_frontmatter("sess-1234", "2026-01-01T00:00:00Z")
     assert fm.startswith("---\n")
     assert "session_id: sess-1234" in fm
 
@@ -267,4 +266,4 @@ def test_frontmatter_empty_session_id() -> None:
         branch_names=(),
         bead_ids=(),
     )
-    assert format_artifacts_frontmatter("", "2026-01-01T00:00:00Z", arts) == ""
+    assert arts.format_frontmatter("", "2026-01-01T00:00:00Z") == ""
