@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.5.5] - 2026-11-04
+
 ### Fixed
 
 - infra: `install.sh` now pins every dependency to the versions `uv.lock` names.
