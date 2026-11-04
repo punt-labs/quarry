@@ -14,6 +14,12 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- infra: package metadata now pins the storage stack to the tested versions
+  (`lancedb>=0.40,<0.41`, `pyarrow>=26,<27`), so `pip install`, `uv tool
+  install` and Homebrew resolve them too, not only `install.sh`.
+
 ## [3.5.5] - 2026-11-04
 
 ### Fixed
