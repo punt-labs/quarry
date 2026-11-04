@@ -118,6 +118,10 @@ def mock_bin(tmp_path: Path) -> Path:
         + "    while IFS= read -r ovl; do"
         + ' printf "uv-override %s\\n" "$ovl" >> "$LOG_FILE"; done < "$a"\n'
         + "  fi\n"
+        + '  if [ "$prev" = "--constraints" ] && [ -f "$a" ]; then\n'
+        + "    while IFS= read -r cst; do"
+        + ' printf "uv-constraint %s\\n" "$cst" >> "$LOG_FILE"; done < "$a"\n'
+        + "  fi\n"
         + '  prev="$a"\n'
         + "done\n"
         + "exit 0\n",
@@ -151,9 +155,24 @@ def mock_bin(tmp_path: Path) -> Path:
     # curl -- used for health checks.  Emit the ready health body so the
     # install gate (which now requires state=="ready", not a bare 200)
     # matches and the loop terminates fast.
+    # A fetch of install-constraints.txt (``-o FILE URL``) writes pins to FILE,
+    # or fails like ``curl -f`` on a 404 (exit 22) when CURL_FAIL_CONSTRAINTS is
+    # set or CURL_EMPTY_CONSTRAINTS makes it write nothing.
     _write_mock(
         bin_dir / "curl",
-        log_header + 'printf \'{"state":"ready"}\\n\'\nexit 0\n',
+        log_header
+        + 'out=""; prev=""\n'
+        + 'for a in "$@"; do\n'
+        + '  if [ "$prev" = "-o" ]; then out="$a"; fi\n'
+        + '  prev="$a"\n'
+        + "done\n"
+        + 'if [ -n "$out" ]; then\n'
+        + '  [ -n "${CURL_FAIL_CONSTRAINTS:-}" ] && exit 22\n'
+        + '  [ -n "${CURL_EMPTY_CONSTRAINTS:-}" ] && : > "$out" && exit 0\n'
+        + '  printf "lancedb==0.40.0\\npyarrow==26.0.0\\n" > "$out"\n'
+        + "  exit 0\n"
+        + "fi\n"
+        + 'printf \'{"state":"ready"}\\n\'\nexit 0\n',
     )
 
     # ssh -- the script tests SSH to github.com for HTTPS fallback.
@@ -166,8 +185,45 @@ def mock_bin(tmp_path: Path) -> Path:
     )
 
     # systemctl / launchctl -- used by the belt-and-suspenders restart block.
-    _write_mock(bin_dir / "systemctl", log_header + "exit 0\n")
-    _write_mock(bin_dir / "launchctl", log_header + "exit 0\n")
+    # Both keep a fake daemon PID in $LOG_FILE.pid (starts at 100).  A restart
+    # bumps it, unless SERVICE_RESTART_NOOP (restart "succeeds" but the process
+    # is unchanged), SERVICE_RESTART_FAIL (restart errors) or SERVICE_BUS_DOWN
+    # (the service manager cannot be queried) say otherwise.
+    pid_logic = dedent("""\
+        pidf="$LOG_FILE.pid"
+        [ -f "$pidf" ] || printf "100" > "$pidf"
+        [ -n "${SERVICE_BUS_DOWN:-}" ] && { echo "bus unavailable" >&2; exit 1; }
+    """)
+    bump = dedent("""\
+        [ -n "${SERVICE_RESTART_FAIL:-}" ] && { echo "restart failed" >&2; exit 1; }
+        [ -n "${SERVICE_RESTART_NOOP:-}" ] ||
+          printf "%s" "$(($(cat "$pidf") + 1))" > "$pidf"
+        exit 0
+    """)
+    _write_mock(
+        bin_dir / "systemctl",
+        log_header
+        + pid_logic
+        + 'case "$*" in\n'
+        + '  *show*) cat "$pidf"; printf "\\n"; exit 0 ;;\n'
+        + "  *restart*)\n"
+        + bump
+        + "  ;;\n"
+        + "esac\n"
+        + "exit 0\n",
+    )
+    _write_mock(
+        bin_dir / "launchctl",
+        log_header
+        + pid_logic
+        + 'case "$1" in\n'
+        + '  list) printf \'{\\n\\t"PID" = %s;\\n}\\n\' "$(cat "$pidf")"; exit 0 ;;\n'
+        + "  kickstart)\n"
+        + bump
+        + "  ;;\n"
+        + "esac\n"
+        + "exit 0\n",
+    )
 
     # head / sed / id -- real utilities from the host; we add them to the
     # mock PATH so scripts don't pick up something unexpected.  Symlink to
@@ -184,6 +240,11 @@ def mock_bin(tmp_path: Path) -> Path:
         # headless override written before `uv tool install`).
         "mktemp",
         "rm",
+        # dirname + cp locate and copy the working-tree install-constraints.txt.
+        "dirname",
+        "cp",
+        # cat reads the systemctl/launchctl mocks' fake PID file.
+        "cat",
     ):
         real = shutil.which(util)
         if real is not None:
@@ -522,8 +583,12 @@ def test_network_mode_fails_when_daemon_never_becomes_ready(
     ``sleep`` symlink is replaced with an instant no-op so the loop drains fast.
     """
     # /health always reports warming, never ready.
+    # The pin fetch (``-o FILE``) still succeeds so the run reaches the gate.
     _write_mock(
         mock_bin / "curl",
+        'if [ "$1" = "-fsSL" ] && [ "$2" = "-o" ]; then\n'
+        '  printf "lancedb==0.40.0\\n" > "$3"; exit 0\n'
+        "fi\n"
         'printf \'{"state":"starting"}\\n\'\nexit 0\n',
     )
     # Replace the real-sleep symlink with an instant no-op so the retry budget
@@ -1086,3 +1151,228 @@ def test_failing_tool_interpreter_warns_with_its_output(
     assert "fake-tool-python" in out
     assert "failed to report its version: boom: broken venv" in out
     assert "quarry tool venv Python:" not in out
+
+
+# ---------------------------------------------------------------------------
+# Dependency pins: install-constraints.txt, fetched for the installer's own tag
+# ---------------------------------------------------------------------------
+
+_PINS_URL_RE = re.compile(r"^VERSION=\"([^\"]+)\"", re.MULTILINE)
+
+
+def _installer_version() -> str:
+    match = _PINS_URL_RE.search(INSTALL_SH.read_text())
+    assert match is not None, "install.sh has no VERSION= line"
+    return match.group(1)
+
+
+def _tool_install_line(log: list[str]) -> str:
+    return log[_index_of(log, "uv tool install")]
+
+
+def test_constraints_fetched_for_own_tag_and_passed_to_uv(
+    env: dict[str, str],
+) -> None:
+    """The pins come from the immutable v$VERSION tag, and reach ``uv tool
+    install`` as ``--constraints`` next to the opencv ``--overrides`` -- so the
+    install gets the tested lock's versions, not whatever PyPI serves today."""
+    version = _installer_version()
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    log = _read_log(env)
+    url = (
+        "https://raw.githubusercontent.com/punt-labs/quarry/"
+        f"v{version}/install-constraints.txt"
+    )
+    fetch_idx = _index_of(log, url)
+    assert fetch_idx < _index_of(log, "uv tool install"), (
+        "the pins must be fetched before the install"
+    )
+    install = _tool_install_line(log)
+    assert " --constraints " in install, install
+    assert " --overrides " in install, install
+    assert _any_line_contains(log, "uv-constraint lancedb==0.40.0"), (
+        "the constraints file uv received must carry the fetched pins"
+    )
+
+
+def test_constraints_fetch_failure_aborts_without_unpinned_install(
+    env: dict[str, str],
+) -> None:
+    """A failed pin fetch must stop the installer loudly; uv is never invoked
+    for the install, so nothing is installed unpinned."""
+    result = _run_script(INSTALL_SH, {**env, "CURL_FAIL_CONSTRAINTS": "1"})
+    assert result.returncode != 0, "a failed pin fetch must fail the install"
+    combined = result.stdout + result.stderr
+    assert "install-constraints.txt" in combined, combined
+    assert "unpinned" in combined, combined
+    log = _read_log(env)
+    assert not _any_line_contains(log, "uv tool install"), (
+        "uv tool install must not run when the pins could not be fetched"
+    )
+
+
+def test_empty_constraints_abort_without_unpinned_install(
+    env: dict[str, str],
+) -> None:
+    """A fetch that succeeds with an empty body is as bad as none: abort."""
+    result = _run_script(INSTALL_SH, {**env, "CURL_EMPTY_CONSTRAINTS": "1"})
+    assert result.returncode != 0
+    assert not _any_line_contains(_read_log(env), "uv tool install")
+
+
+def test_local_wheel_uses_working_tree_constraints_without_fetching(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    """QUARRY_LOCAL_WHEEL installs take the working-tree install-constraints.txt
+    next to the script (the tag may not exist yet for an unreleased branch)."""
+    wheel = tmp_path / "punt_quarry-9.9.9-py3-none-any.whl"
+    wheel.write_bytes(b"PK\x03\x04 non-empty")
+    result = _run_script(INSTALL_SH, {**env, "QUARRY_LOCAL_WHEEL": str(wheel)})
+    assert result.returncode == 0, result.stderr
+    log = _read_log(env)
+    assert not _any_line_contains(log, "raw.githubusercontent.com"), (
+        "a working-tree constraints file must be used instead of a fetch"
+    )
+    assert " --constraints " in _tool_install_line(log)
+    tree_pins = (REPO_ROOT / "install-constraints.txt").read_text().splitlines()
+    pinned = [ln for ln in tree_pins if ln.startswith("lancedb==")]
+    assert pinned and _any_line_contains(log, f"uv-constraint {pinned[0]}")
+
+
+def test_constraints_tempfile_cleaned_up_on_fetch_failure(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    """The constraints temp file is removed by the same trap as the overrides."""
+    tmpdir = tmp_path / "cst-tmp"
+    tmpdir.mkdir()
+    result = _run_script(
+        INSTALL_SH, {**env, "TMPDIR": str(tmpdir), "CURL_FAIL_CONSTRAINTS": "1"}
+    )
+    assert result.returncode != 0
+    assert list(tmpdir.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# Drift check: install-constraints.txt must match uv.lock
+# ---------------------------------------------------------------------------
+
+
+def test_committed_constraints_match_uv_lock() -> None:
+    result = subprocess.run(
+        ["make", "-C", str(REPO_ROOT), "check-install-constraints"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_constraints_drift_check_fails_on_mismatch(tmp_path: Path) -> None:
+    stale = tmp_path / "install-constraints.txt"
+    stale.write_text(
+        (REPO_ROOT / "install-constraints.txt")
+        .read_text()
+        .replace("lancedb==0.40.0", "lancedb==0.41.0")
+    )
+    result = subprocess.run(
+        [
+            "make",
+            "-C",
+            str(REPO_ROOT),
+            "check-install-constraints",
+            f"INSTALL_CONSTRAINTS={stale}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0, "a stale constraints file must fail the check"
+    assert "lancedb==0.41.0" in result.stdout, "the diff must show the drift"
+    assert "make install-constraints" in result.stderr
+    assert not Path(f"{stale}.check.tmp").exists(), "scratch file must be removed"
+
+
+# ---------------------------------------------------------------------------
+# Daemon restart after upgrade: real, verified, loud on failure
+# ---------------------------------------------------------------------------
+
+
+def _register_systemd_unit(env: dict[str, str]) -> None:
+    unit = Path(env["HOME"]) / ".config" / "systemd" / "user" / "quarry.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("[Service]\nExecStart=/bin/true\n")
+
+
+def _register_launchd_plist(env: dict[str, str]) -> None:
+    plist = (
+        Path(env["HOME"]) / "Library" / "LaunchAgents" / "com.punt-labs.quarry.plist"
+    )
+    plist.parent.mkdir(parents=True)
+    plist.write_text("<plist/>\n")
+
+
+def test_restart_runs_and_reports_pid_change(env: dict[str, str]) -> None:
+    _register_systemd_unit(env)
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, result.stderr
+    log = _read_log(env)
+    assert _any_line_contains(log, "systemctl --user restart quarry")
+    assert "daemon restarted (PID 100 -> 101)" in result.stdout
+
+
+def test_restart_command_failure_is_reported_not_swallowed(
+    env: dict[str, str],
+) -> None:
+    _register_systemd_unit(env)
+    result = _run_script(INSTALL_SH, {**env, "SERVICE_RESTART_FAIL": "1"})
+    assert result.returncode != 0, "a failed restart must fail the install"
+    assert "Failed to restart the quarry service" in result.stdout + result.stderr
+
+
+def test_restart_that_leaves_the_pid_unchanged_fails(env: dict[str, str]) -> None:
+    """The reported incident: restart exits 0 yet the old process survives."""
+    _register_systemd_unit(env)
+    result = _run_script(INSTALL_SH, {**env, "SERVICE_RESTART_NOOP": "1"})
+    assert result.returncode != 0
+    assert "kept PID 100" in result.stdout + result.stderr
+
+
+def test_unreachable_service_manager_fails_instead_of_skipping(
+    env: dict[str, str],
+) -> None:
+    """No user bus (a bare ssh/agent shell) is not "no service registered"."""
+    _register_systemd_unit(env)
+    result = _run_script(INSTALL_SH, {**env, "SERVICE_BUS_DOWN": "1"})
+    assert result.returncode != 0
+    assert "Cannot query the quarry systemd service" in result.stdout + result.stderr
+
+
+def test_restart_is_a_noop_without_a_registered_service(env: dict[str, str]) -> None:
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, result.stderr
+    log = _read_log(env)
+    assert not _any_line_contains(log, "systemctl --user restart")
+    assert not _any_line_contains(log, "launchctl kickstart")
+
+
+def test_launchd_restart_runs_and_verifies_pid(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    (mock_bin / "systemctl").unlink()
+    _register_launchd_plist(env)
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, result.stderr
+    log = _read_log(env)
+    assert _any_line_contains(log, "launchctl kickstart -k gui/")
+    assert "daemon restarted (PID 100 -> 101)" in result.stdout
+
+
+def test_launchd_pid_unchanged_fails(env: dict[str, str], mock_bin: Path) -> None:
+    (mock_bin / "systemctl").unlink()
+    _register_launchd_plist(env)
+    result = _run_script(INSTALL_SH, {**env, "SERVICE_RESTART_NOOP": "1"})
+    assert result.returncode != 0
+    assert "kept PID 100" in result.stdout + result.stderr

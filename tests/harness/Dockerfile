@@ -70,6 +70,9 @@ COPY --from=modelcache --chown=tester:tester /opt/hf-cache /home/tester/.cache/h
 # builds; install.sh installs it via QUARRY_LOCAL_WHEEL, so THIS branch's package
 # is what runs — not the released curl|sh version.
 COPY --chown=tester:tester install.sh /home/tester/install.sh
+# install.sh pins dependencies from the working-tree constraints beside it under
+# QUARRY_LOCAL_WHEEL (the release tag does not exist for an unreleased branch).
+COPY --chown=tester:tester install-constraints.txt /home/tester/install-constraints.txt
 # The wheel keeps its real PEP 427 name (uv rejects a renamed wheel); guide.sh
 # globs $HOME/wheel/*.whl. `uv build --wheel` puts exactly one wheel in .stage/.
 COPY --chown=tester:tester tests/harness/.stage/ /home/tester/wheel/

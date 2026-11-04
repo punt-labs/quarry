@@ -1,4 +1,4 @@
-# Build context for tests/harness/Dockerfile. The image copies only install.sh,
+# Build context for tests/harness/Dockerfile. The image copies only install.sh, install-constraints.txt,
 # tests/harness/guide.sh, and the staged wheel (tests/harness/.stage/), so deny
 # everything and re-include just those paths — the repo carries multi-hundred-MB
 # dirs (.git, .venv, .tmp, htmlcov) that would otherwise stream to the daemon on
@@ -6,6 +6,7 @@
 # contents re-excluded (Docker .dockerignore precedence rules).
 *
 !install.sh
+!install-constraints.txt
 !tests
 tests/*
 !tests/harness

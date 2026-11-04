@@ -14,6 +14,21 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- infra: `install.sh` now pins every dependency to the versions `uv.lock` names.
+  `uv tool install punt-quarry==X` ignored the lock, so v3.5.4 installed
+  lancedb 0.41.0 / pyarrow 26.0.1 instead of the tested 0.40.0 / 26.0.0. The
+  installer fetches `install-constraints.txt` from its own `v$VERSION` tag and
+  passes it as `--constraints`; a failed or empty fetch aborts instead of
+  installing unpinned. The file is exported from `uv.lock` (`make
+  install-constraints`) and `make check` fails if it drifts.
+- infra: the post-install daemon restart in `install.sh` no longer hides
+  failures (`2>/dev/null || true`). It reads the service's PID before and after
+  and fails the install when the restart command errors, the service manager is
+  unreachable, the daemon is not running afterwards, or the PID is unchanged.
+  It remains a no-op when no service is registered.
+
 ## [3.5.4] - 2026-11-04
 
 ### Changed

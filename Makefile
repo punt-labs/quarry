@@ -1,4 +1,4 @@
-.PHONY: help test test-slow lint lint-docs lint-slash-mcp lint-hook-mcp-matcher type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline logs-errors logs-tail
+.PHONY: help test test-slow lint lint-docs lint-slash-mcp lint-hook-mcp-matcher type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi install-constraints check-install-constraints report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline logs-errors logs-tail
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -77,13 +77,32 @@ OO_BASE ?=
 COUPLING_BASE ?=
 SUPPRESSION_BASE ?=
 
-check: lint type test check-oo check-coupling check-suppressions check-imports check-openapi ## Run all quality gates
+check: lint type test check-oo check-coupling check-suppressions check-imports check-openapi check-install-constraints ## Run all quality gates
 
 openapi: ## Regenerate docs/openapi.json from the daemon FastAPI app
 	uv run python tools/generate_openapi.py
 
 check-openapi: ## Fail if docs/openapi.json is stale vs the daemon app
 	uv run python tools/generate_openapi.py --check
+
+# install.sh pins the tool venv to the versions uv.lock names, by passing this
+# file to `uv tool install --constraints`.  Without it `uv tool install
+# punt-quarry==X` resolves each dependency afresh (v3.5.4 shipped lancedb 0.41.0
+# and pyarrow 26.0.1 while the tested lock said 0.40.0 and 26.0.0).  The file is
+# derived from uv.lock, never hand-edited: run `make install-constraints` after
+# any `uv lock` (dependency bump, release relock) and commit the result.
+# `--no-emit-project` leaves out punt-quarry itself, so a release version bump
+# does not change the file; `--no-header` keeps the output free of the command
+# line, so the check and the regenerate target produce identical bytes.
+INSTALL_CONSTRAINTS ?= install-constraints.txt
+INSTALL_CONSTRAINTS_EXPORT = uv export --frozen --no-hashes --no-dev --no-emit-project --no-annotate --no-header
+
+install-constraints: ## Regenerate install-constraints.txt from uv.lock (run after any uv lock)
+	$(INSTALL_CONSTRAINTS_EXPORT) --output-file $(INSTALL_CONSTRAINTS)
+
+check-install-constraints: ## Fail if install-constraints.txt has drifted from uv.lock
+	@$(INSTALL_CONSTRAINTS_EXPORT) > "$(INSTALL_CONSTRAINTS).check.tmp" || { rm -f "$(INSTALL_CONSTRAINTS).check.tmp"; exit 1; }
+	@if diff -u "$(INSTALL_CONSTRAINTS)" "$(INSTALL_CONSTRAINTS).check.tmp"; then rm -f "$(INSTALL_CONSTRAINTS).check.tmp"; else rm -f "$(INSTALL_CONSTRAINTS).check.tmp"; echo "$(INSTALL_CONSTRAINTS) is stale vs uv.lock: run 'make install-constraints' and commit it" >&2; exit 1; fi
 
 check-oo: ## OO ratchet — touched files must not regress vs the merge-base baseline
 	uv run python tools/oo_score.py src/quarry/ --check $(OO_BASE)
