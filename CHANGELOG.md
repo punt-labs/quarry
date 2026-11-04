@@ -16,9 +16,12 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
-- tool: `quarry enable` also allows the `quarry` CLI (`Bash(quarry:*)`) in the
-  project's `.claude/settings.json`, alongside the MCP and `Skill(...)` rules;
-  `quarry disable` removes it with the rest.
+- tool: `quarry enable` also allows the data-plane `quarry` CLI subcommands
+  (`Bash(quarry find:*)`, plus `show`, `list`, `status`, `ingest`, `remember`,
+  `learn`, `doctor`) in the project's `.claude/settings.json`, alongside the
+  MCP and `Skill(...)` rules; `quarry disable` removes exactly those rules.
+  There is no `Bash(quarry:*)` wildcard, so `login`, `logout`, `install`,
+  `uninstall`, `enable`, `disable`, `captures`, and `skills` still prompt.
 
 ## [3.5.2] - 2026-11-04
 

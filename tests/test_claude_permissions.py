@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import pytest
+
 from quarry.claude_permissions import QUARRY_RULES, ProjectPermissions
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def _settings(root: Path) -> Path:
@@ -38,6 +38,32 @@ class TestRuleSet:
         assert "Skill(ingest)" in QUARRY_RULES
         assert not any("plugin_quarry" in rule for rule in QUARRY_RULES)
         assert not any(rule.endswith("-dev)") for rule in QUARRY_RULES)
+
+    def test_cli_rules_are_the_explicit_data_plane_prefixes(self) -> None:
+        cli = [rule for rule in QUARRY_RULES if rule.startswith("Bash(")]
+        assert cli == [
+            f"Bash(quarry {name}:*)"
+            for name in (
+                "doctor",
+                "find",
+                "ingest",
+                "learn",
+                "list",
+                "remember",
+                "show",
+                "status",
+            )
+        ]
+
+    @pytest.mark.parametrize(
+        "command", ["login", "logout", "install", "uninstall", "enable", "disable"]
+    )
+    def test_no_rule_matches_an_admin_command(self, command: str) -> None:
+        for rule in QUARRY_RULES:
+            if rule.startswith("Bash("):
+                prefix = rule.removeprefix("Bash(").removesuffix(":*)")
+                assert not f"quarry {command} host --yes".startswith(prefix + " ")
+                assert prefix != "quarry"
 
 
 class TestGrant:
