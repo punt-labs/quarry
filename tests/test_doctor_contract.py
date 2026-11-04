@@ -748,7 +748,7 @@ def test_doctor_runs_its_real_checks_without_a_home(
 
     assert done.returncode == 1
     assert "Traceback" not in done.stdout
-    assert "Python version" in done.stdout
+    assert "Python version (quarry venv)" in done.stdout
     assert "✗ Home directory" in done.stdout
     assert "set HOME" in done.stdout
     assert "invalid settings" not in done.stdout  # one fault, reported once
@@ -890,7 +890,7 @@ def test_a_working_directory_without_permission_says_so(
 _CHECKS = (
     "Home directory",
     "Settings",
-    "Python version",
+    "Python version (quarry venv)",
     "Data directory",
     "Embedding model",
     "ONNX provider",
