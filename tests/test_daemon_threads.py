@@ -243,11 +243,14 @@ async def test_work_stranded_by_a_replacement_that_cannot_start_fails_in_order(
         results = await asyncio.wait_for(
             asyncio.gather(first, second, third, return_exceptions=True), 5
         )
+        # The thread reports after its future has failed, so wait while the
+        # excepthook patch is still installed: once it is restored the report
+        # goes to the real hook and `died` stays empty.
+        for _ in range(200):
+            if died:
+                break
+            await asyncio.sleep(0.01)
 
-    for _ in range(200):  # the thread reports after its future has failed
-        if died:
-            break
-        await asyncio.sleep(0.01)
     assert "could not replace an ended thread (no thread for the replacement)" in (
         caplog.text
     )
