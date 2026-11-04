@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass, field
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Self
+
+from .diffmodel import Diff, LineChange
 
 _TIMEOUT = 10
 
@@ -17,22 +19,6 @@ class GitError(Exception):
     Raised instead of degrading to a benign default, so an enforcement gate
     fails closed: a failed ``git diff`` can never masquerade as "no changes".
     """
-
-
-@dataclass(frozen=True, slots=True)
-class Diff:
-    """Files changed across a commit range, with rename provenance.
-
-    ``renames`` maps a new path to the old path it was renamed from, so a
-    renamed file can inherit its predecessor's baseline entry (S8).
-    """
-
-    touched: frozenset[str]
-    renames: dict[str, str] = field(default_factory=dict)
-
-    def python_files(self) -> frozenset[str]:
-        """Return the touched paths that are Python modules."""
-        return frozenset(p for p in self.touched if p.endswith(".py"))
 
 
 class GitRepo:
@@ -121,21 +107,43 @@ class GitRepo:
         if out is None:
             msg = f"git diff against {base} failed"
             raise GitError(msg)
-        touched: set[str] = set()
-        renames: dict[str, str] = {}
-        for line in out.splitlines():
-            if not line.strip():
-                continue
-            parts = line.split("\t")
-            status = parts[0]
-            if status.startswith(("R", "C")) and len(parts) >= 3:
-                old, new = parts[1], parts[2]
-                touched.add(new)
-                if status.startswith("R"):
-                    renames[new] = old
-            elif len(parts) >= 2:
-                touched.add(parts[1])
-        return Diff(frozenset(touched), renames)
+        return Diff.from_name_status(out)
+
+    def line_changes(self, base: str, paths: Iterable[str]) -> dict[str, LineChange]:
+        """Return, per touched path, the raw content lines added and removed.
+
+        Powers extraction-provenance detection (``provenance.py``): a new
+        file's added lines can be checked for overlap against a still-present
+        baselined file's removed lines from the *same* diff, so an honest
+        extraction is distinguishable from invented content. ``--unified=0``
+        keeps the patch to changed lines only, so the parse is exact and
+        cheap even on a large touched set.
+        """
+        path_list = list(paths)
+        if not path_list:
+            return {}
+        # Pin every config-dependent part of the output the parser reads: an
+        # external diff driver, custom or suppressed a/ b/ prefixes, and
+        # quoted non-ASCII paths would each silently break attribution.
+        args = [
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "-M",
+            "--unified=0",
+            base,
+            "--",
+            *path_list,
+        ]
+        out = self._git(args)
+        if out is None:
+            msg = f"git diff (unified=0) against {base} failed"
+            raise GitError(msg)
+        return LineChange.parse_patch(out)
 
     def show_baseline(self, ref: str) -> dict[str, dict[str, float]] | None:
         """Return the baseline JSON committed at ``ref``, or ``None`` if absent.

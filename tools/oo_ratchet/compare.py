@@ -34,6 +34,11 @@ class FileReview:
     handed its predecessor's baseline, so its history cannot be laundered.
     A regression is *waived* only when the in-tree baseline has locked the
     current value (S4) and the audit log records a matching relaxation (S7).
+    A new file's shape metrics (method_ratio, class_to_func_ratio) are
+    *extracted*, never counted as regressed, when the caller has proven the
+    file's content traces to a baselined origin in this diff (see
+    ``provenance.py``); every other new-file metric keeps its full absolute
+    bar regardless.
     """
 
     _path: str
@@ -41,6 +46,7 @@ class FileReview:
     _rows: tuple[Row, ...]
     _regressed: tuple[str, ...]
     _waived: tuple[str, ...]
+    _extracted: tuple[str, ...]
     _improved: bool
     _new_passes: bool
 
@@ -51,31 +57,41 @@ class FileReview:
         base: dict[str, float] | None,
         intree: dict[str, float] | None,
         waivable: frozenset[tuple[str, str]],
+        extraction_waived: frozenset[str] = frozenset(),
     ) -> Self:
         self = super().__new__(cls)
         self._path = path
         self._base_present = base is not None
         if base is None:
-            self._review_new(current)
+            self._review_new(current, extraction_waived)
         else:
             self._review_tracked(current, base, intree, waivable)
         return self
 
-    def _review_new(self, current: dict[str, float]) -> None:
+    def _review_new(
+        self, current: dict[str, float], extraction_waived: frozenset[str]
+    ) -> None:
         rows: list[Row] = []
         regressed: list[str] = []
+        extracted: list[str] = []
         for metric in Thresholds.names():
             if metric not in current:
                 continue
             val = current[metric]
             passed = Thresholds.meets(metric, val)
-            grade = "PASS" if passed else "FAIL"
-            rows.append(Row(self._path, metric, "NEW", f"{val:.3f}", "--", grade))
-            if not passed:
+            if passed:
+                grade = "PASS"
+            elif metric in extraction_waived:
+                grade = "EXTRACTED"
+                extracted.append(metric)
+            else:
+                grade = "FAIL"
                 regressed.append(metric)
+            rows.append(Row(self._path, metric, "NEW", f"{val:.3f}", "--", grade))
         self._rows = tuple(rows)
         self._regressed = tuple(regressed)
         self._waived = ()
+        self._extracted = tuple(extracted)
         self._improved = False
         self._new_passes = not regressed
 
@@ -116,6 +132,7 @@ class FileReview:
         self._rows = tuple(rows)
         self._regressed = tuple(regressed)
         self._waived = tuple(waived)
+        self._extracted = ()
         self._improved = improved
         self._new_passes = False
 
@@ -160,6 +177,17 @@ class FileReview:
     def waived(self) -> tuple[str, ...]:
         """Return the metrics whose regression was waived by a relaxation."""
         return self._waived
+
+    @property
+    def extracted(self) -> tuple[str, ...]:
+        """Return the new-file shape metrics granted the extraction carve-out.
+
+        Distinct from ``waived``: an extraction carve-out is a provenance
+        fact about a new file (see ``provenance.py``), not an audited
+        relaxation of a tracked file's regression, so it never feeds
+        ``Review.has_waiver``.
+        """
+        return self._extracted
 
     @property
     def improved(self) -> bool:

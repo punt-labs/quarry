@@ -8,56 +8,36 @@ rather than an in-process file loader (there is no engine in the CLI).
 
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING, Annotated, NoReturn, Self, final
 
 import typer
 
 from quarry.api import IngestRequest, RememberRequest
-from quarry.memory_types import MemoryType
+from quarry.cli_ingest_input import (
+    AgentHandleOption,
+    MemoryTypeOption,
+    SummaryOption,
+    Utf8Source,
+)
 
 if TYPE_CHECKING:
     from quarry.api import TaskAccepted
     from quarry.cli_captures import CliPlumbing
-
-# The three agent-memory options ``ingest`` and ``remember`` share, declared
-# once so their help text (and the vocabulary it names) cannot drift between
-# the two commands. The daemon cannot infer an agent's identity — a
-# subagent's working directory resolves to the repo's leader — so the handle
-# is always the caller's own statement.
-_AgentHandleOption = Annotated[
-    str,
-    typer.Option(
-        "--agent-handle",
-        help="Your own agent handle; routes to memory-<handle> unless --collection",
-    ),
-]
-_MemoryTypeOption = Annotated[
-    str,
-    typer.Option(
-        "--memory-type",
-        help=(
-            f"Memory type: {MemoryType.agent_choices()} "
-            f"('{MemoryType.LESSON}' is reserved for quarry learn)"
-        ),
-    ),
-]
-_SummaryOption = Annotated[
-    str, typer.Option("--summary", help="One-line summary of the content")
-]
 
 
 @final
 class IngestCli:
     """Register and serve ``ingest``/``remember`` around an injected plumbing bundle."""
 
-    __slots__ = ("_p",)
+    __slots__ = ("_p", "_text")
 
     _p: CliPlumbing
+    _text: Utf8Source
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
         self = super().__new__(cls)
         self._p = plumbing
+        self._text = Utf8Source(self._fail)
         return self
 
     def register(self, app: typer.Typer) -> None:
@@ -75,9 +55,9 @@ class IngestCli:
         collection: Annotated[
             str, typer.Option("--collection", "-c", help="Collection name")
         ] = "",
-        agent_handle: _AgentHandleOption = "",
-        memory_type: _MemoryTypeOption = "",
-        summary: _SummaryOption = "",
+        agent_handle: AgentHandleOption = "",
+        memory_type: MemoryTypeOption = "",
+        summary: SummaryOption = "",
     ) -> None:
         """Ingest a URL into the knowledge base.
 
@@ -130,9 +110,9 @@ class IngestCli:
                 help="Replace existing document with same name",
             ),
         ] = True,
-        agent_handle: _AgentHandleOption = "",
-        memory_type: _MemoryTypeOption = "",
-        summary: _SummaryOption = "",
+        agent_handle: AgentHandleOption = "",
+        memory_type: MemoryTypeOption = "",
+        summary: SummaryOption = "",
     ) -> None:
         """Ingest inline content from stdin.
 
@@ -145,7 +125,7 @@ class IngestCli:
         """
         if not name:
             self._fail("Error: --name is required for remember.")
-        content = sys.stdin.read()
+        content = self._text.read_stdin()
         if not content.strip():
             self._fail("Error: no content on stdin.")
         req = RememberRequest(
@@ -177,6 +157,7 @@ class IngestCli:
         distilled lesson that gets retrieval preference. Lessons are capped
         at 500 characters -- use remember for anything longer.
         """
+        self._text.require(lesson, "lesson")
         accepted = self._p.client().learn(lesson, topic=topic, name=name)
         self._emit_accepted("Learn", accepted)
 
