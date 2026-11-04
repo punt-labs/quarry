@@ -14,7 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- infra: lancedb 0.36.0 → 0.40.0 and pyarrow 25.0.0 → 26.0.0. Verified against
+  a copy of a production database: open, hybrid search, store/find/delete,
+  and the optimize/compaction path all succeed.
+
 ## [3.5.3] - 2026-11-04
+
+### Security
+
+- infra: filelock 3.20.3 → 4.2.1 fixes two moderate advisories (UnixFileLock
+  truncating a file renamed or hard-linked onto the lock path; WindowsFileLock
+  ignoring the lock-file mode).
 
 ### Changed
 
