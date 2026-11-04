@@ -14,6 +14,30 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- infra: `install.sh` now pins every dependency to the versions `uv.lock` names.
+  `uv tool install punt-quarry==X` ignored the lock, so v3.5.4 installed
+  lancedb 0.41.0 / pyarrow 26.0.1 instead of the tested 0.40.0 / 26.0.0. The
+  installer fetches `install-constraints.txt` from its own `v$VERSION` tag and
+  passes it as `--constraints`. A 404 (a release that predates pinned installs,
+  such as v3.5.4) warns and installs unpinned; any other failure, an empty body,
+  or a body with any line other than a plain `name==version` pin (a resolver
+  directive such as `--index-url`) aborts; the same allowlist applies to the
+  working-tree file used under `QUARRY_LOCAL_WHEEL`, which is looked up only
+  when the installer runs from a file, never from the cwd of a piped run. The file is exported from
+  `uv.lock` (`make install-constraints`) and `make check` fails if it drifts.
+- infra: the post-install daemon restart in `install.sh` no longer hides
+  failures (`2>/dev/null || true`). For a service the manager has loaded, it
+  reads the PID before and after and fails the install when the restart command
+  errors, the manager cannot be queried, or the PID is unchanged, which proves
+  the process was replaced. Health is proven separately: with a registered
+  service the readiness check now fails, rather than warns, when the daemon
+  never becomes ready. A unit file or plist the manager cannot reach (SSH,
+  containers) warns and skips the restart; with nothing registered it is a
+  no-op. On macOS the PID is read from the same `gui/<uid>` domain the restart
+  targets, and the installer waits up to 10 s for the new PID.
+
 ## [3.5.4] - 2026-11-04
 
 ### Changed

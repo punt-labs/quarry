@@ -17,7 +17,7 @@ Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (sn
 Install the CLI, the daemon, the MCP server, and the Claude Code plugin:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/9fbc886/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/bb58936/install.sh | sh
 ```
 
 Restart Claude Code. Your current project is auto-indexed at session start, so you can search it by meaning right away — see [What It Looks Like](#what-it-looks-like).
@@ -74,13 +74,13 @@ Use one distribution channel per machine — mixing Homebrew with the `curl | sh
 For non-Claude harnesses (Codex, Cursor, a plain terminal) or Claude Code users whose org policy blocks marketplace/plugin installs, `--no-plugin` installs everything except the marketplace-register and plugin-install steps:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/9fbc886/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/bb58936/install.sh | sh -s -- --no-plugin
 ```
 
 Where a flag cannot be passed (CI templating a bare `curl … | sh`), set `QUARRY_NO_PLUGIN=1` — honored only when exactly `1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/9fbc886/install.sh | QUARRY_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/bb58936/install.sh | QUARRY_NO_PLUGIN=1 sh
 ```
 
 Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server directly; both talk to the resident `quarryd`. Re-run the installer without `--no-plugin` to add the plugin later.
@@ -93,7 +93,7 @@ Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server di
 Download the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/9fbc886/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/bb58936/install.sh -o install.sh
 ```
 
 Check its digest (`shasum -a 256 install.sh` on macOS):
@@ -290,7 +290,7 @@ touches disk. Turn it off with `telemetry_enabled: false` in `Settings`
 
 ## Managing the Daemon
 
-`quarry install` registers `quarryd` as a per-user service that starts at login and restarts on crash (launchd on macOS, systemd on Linux). Re-running the [Quick Start](#quick-start) installer does this for you on every upgrade — it calls `quarry install` and then force-restarts the service as a belt-and-suspenders step, so a plain `curl | sh` re-run is enough.
+`quarry install` registers `quarryd` as a per-user service that starts at login and restarts on crash (launchd on macOS, systemd on Linux). Re-running the [Quick Start](#quick-start) installer does this for you on every upgrade — it pins every dependency to the tested `uv.lock` versions (via `install-constraints.txt` from the release tag), calls `quarry install`, then force-restarts the service, checks that the daemon's PID changed, and waits for it to report ready — a restart that did not take, or a daemon that never becomes ready, fails the install instead of passing silently — so a plain `curl | sh` re-run is enough.
 
 **After upgrading the package some other way** (`uv tool install --force`, a local wheel), restart the service yourself — a running daemon holds the old engine in memory until restarted.
 

@@ -22,7 +22,8 @@
 # QUARRY_LOCAL_WHEEL=/path/to/wheel installs a working-tree wheel instead of the
 # PyPI-pinned release -- for offline/air-gapped installs, pre-release testing,
 # and the clean-machine harness (tests/harness/), which must exercise THIS
-# branch's package, not the shipped version.
+# branch's package, not the shipped version.  Its dependency pins come from
+# install-constraints.txt in the working tree when present (else the v$VERSION tag).
 set -eu
 
 # --- Argument parsing ---
@@ -205,15 +206,21 @@ info "Installing $PACKAGE..."
 # where `mktemp` requires a template argument -- under `set -eu` that aborts the
 # installer before `uv tool install`, breaking every macOS install.  An absolute
 # template with trailing X's is portable across BSD and GNU mktemp.
-OPENCV_OVERRIDE="$(mktemp "${TMPDIR:-/tmp}/quarry-opencv-override.XXXXXX")"
-# Class-1 temp-file cleanup: remove the overrides file on ANY exit from here on
-# -- normal completion, a `fail` (which exits), or a SIGINT/SIGTERM in the window
+#
+# Class-1 temp-file cleanup: remove the temp files on ANY exit from here on --
+# normal completion, a `fail` (which exits), or a SIGINT/SIGTERM in the window
 # before the install.  A per-branch `rm` would leak on an interrupt or on any
-# command that fails between the mktemp and the install.  The trap is released
-# right after `uv tool install` (below), before Step 8 registers its own EXIT
-# trap for the HTTPS rewrite -- a shell holds only one handler per signal, so the
-# two must not overlap.
-trap 'rm -f "$OPENCV_OVERRIDE"' EXIT INT TERM
+# command that fails between a mktemp and the install.  Both variables are
+# initialised empty and the trap is registered BEFORE either mktemp, so a signal
+# or failure between the two mktemps cannot leak the first file (`rm -f ""` is a
+# silent no-op).  The trap is released right after `uv tool install` (below),
+# before Step 8 registers its own EXIT trap for the HTTPS rewrite -- a shell
+# holds only one handler per signal, so the two must not overlap.
+OPENCV_OVERRIDE=""
+CONSTRAINTS_FILE=""
+trap 'rm -f "$OPENCV_OVERRIDE" "$CONSTRAINTS_FILE"' EXIT INT TERM
+OPENCV_OVERRIDE="$(mktemp "${TMPDIR:-/tmp}/quarry-opencv-override.XXXXXX")"
+CONSTRAINTS_FILE="$(mktemp "${TMPDIR:-/tmp}/quarry-constraints.XXXXXX")"
 printf '%s\n' 'opencv-python ; sys_platform == "never"' > "$OPENCV_OVERRIDE"
 
 # QUARRY_LOCAL_WHEEL installs a working-tree wheel instead of the PyPI pin --
@@ -231,13 +238,97 @@ else
   INSTALL_TARGET="$PACKAGE==$VERSION"
 fi
 
-# shellcheck disable=SC2086
-uv tool install --force --overrides "$OPENCV_OVERRIDE" $PYTHON_FLAG "$INSTALL_TARGET" ||
-  fail "Failed to install $INSTALL_TARGET"
+# Pin every dependency to the versions uv.lock names.  `uv tool install` does not
+# read uv.lock, so without constraints each dependency resolves to the newest
+# release PyPI offers that day (v3.5.4 shipped lancedb 0.41.0 / pyarrow 26.0.1
+# while the tested lock said 0.40.0 / 26.0.0).  install-constraints.txt is
+# exported from uv.lock at release time (`make install-constraints`) and fetched
+# here from the immutable v$VERSION tag, so an old installer always pairs with
+# the pins it shipped with.  Failure modes are kept apart:
+#   - HTTP 404: the release predates pinned installs (v3.5.4 and earlier have no
+#     such file).  Warn loudly and install without pins -- the only way those
+#     releases stay installable.
+#   - anything else (network error, 5xx, empty body, a captive-portal page): a
+#     hard failure naming the cause.  Installing unpinned on a transient fault
+#     is the bug this step exists to prevent.
+# QUARRY_LOCAL_WHEEL installs use the working-tree file next to this script when
+# present (the tag may not exist for an unreleased branch); with none they warn
+# and fetch like any other install.  The lookup runs only when $0 is a real file:
+# under `curl | sh` $0 is `sh`, its dirname is the caller's cwd, and a planted
+# install-constraints.txt there must never be trusted.
+#
+# A constraints file is not inert: uv honours directives inside it
+# (--index-url, --extra-index-url, --find-links, --no-index, -r/-c, URLs) that
+# redirect package resolution.  So EVERY line of EITHER source must be a plain
+# pin -- `name==version`, optionally ` ; <environment marker>`, the exact shape
+# `uv export --no-annotate --no-header` emits -- or a comment/blank line.
+PIN_RE='^[A-Za-z0-9._-]+==[A-Za-z0-9._+!*-]+( ; [A-Za-z0-9._ "()<>=!~,*'"'"'-]+)?$'
 
-# Overrides file is no longer needed: remove it and release the trap so Step 8's
-# EXIT trap (registered only on the plugin path) is uncontested.
-rm -f "$OPENCV_OVERRIDE"
+check_pins_file() {
+  _bad="$(grep -Ev -e '^[[:space:]]*$' -e '^[[:space:]]*#' -e "$PIN_RE" "$1" | head -1)"
+  if [ -n "$_bad" ]; then
+    fail "pins file contains a non-pin line: $_bad"
+  fi
+}
+
+CONSTRAINTS_URL="https://raw.githubusercontent.com/punt-labs/quarry/v$VERSION/install-constraints.txt"
+USE_CONSTRAINTS=0
+if [ -n "${QUARRY_LOCAL_WHEEL:-}" ] && [ ! -f "$0" ]; then
+  warn "QUARRY_LOCAL_WHEEL is set but the installer is not running from a file (piped) -- fetching the pins for v$VERSION instead of trusting the current directory"
+elif [ -n "${QUARRY_LOCAL_WHEEL:-}" ]; then
+  SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+  if [ -s "$SCRIPT_DIR/install-constraints.txt" ]; then
+    cp "$SCRIPT_DIR/install-constraints.txt" "$CONSTRAINTS_FILE" ||
+      fail "Could not read $SCRIPT_DIR/install-constraints.txt"
+    check_pins_file "$CONSTRAINTS_FILE"
+    USE_CONSTRAINTS=1
+    ok "dependency pins: $SCRIPT_DIR/install-constraints.txt (working tree)"
+  else
+    warn "QUARRY_LOCAL_WHEEL is set but $SCRIPT_DIR/install-constraints.txt was not found -- fetching the pins for v$VERSION instead"
+  fi
+fi
+
+if [ "$USE_CONSTRAINTS" = "0" ]; then
+  info "Fetching dependency pins for v$VERSION..."
+  # No -f: the status code must be readable to tell a 404 from an outage.
+  PINS_STATUS="$(curl -sSL -o "$CONSTRAINTS_FILE" -w '%{http_code}' "$CONSTRAINTS_URL")" ||
+    fail "Could not fetch dependency pins from $CONSTRAINTS_URL (network error) -- refusing to install unpinned dependencies. Check your network and re-run."
+  case "$PINS_STATUS" in
+    200)
+      if [ ! -s "$CONSTRAINTS_FILE" ]; then
+        fail "Dependency pins fetched from $CONSTRAINTS_URL are empty -- refusing to install unpinned dependencies."
+      fi
+      # Every line must be a plain pin: a captive-portal page, or a file with
+      # resolver-redirecting directives, must not reach uv.
+      check_pins_file "$CONSTRAINTS_FILE"
+      USE_CONSTRAINTS=1
+      ok "dependency pins: v$VERSION install-constraints.txt"
+      ;;
+    404)
+      warn "release v$VERSION predates pinned installs; installing without dependency pins"
+      ;;
+    *)
+      fail "Could not fetch dependency pins from $CONSTRAINTS_URL (HTTP $PINS_STATUS) -- refusing to install unpinned dependencies. Re-run later."
+      ;;
+  esac
+fi
+
+# --constraints is passed only when pins were obtained; an unpinned install
+# happens only on the explicit 404 path above.
+if [ "$USE_CONSTRAINTS" = "1" ]; then
+  # shellcheck disable=SC2086
+  uv tool install --force --overrides "$OPENCV_OVERRIDE" --constraints "$CONSTRAINTS_FILE" $PYTHON_FLAG "$INSTALL_TARGET" ||
+    fail "Failed to install $INSTALL_TARGET"
+else
+  # shellcheck disable=SC2086
+  uv tool install --force --overrides "$OPENCV_OVERRIDE" $PYTHON_FLAG "$INSTALL_TARGET" ||
+    fail "Failed to install $INSTALL_TARGET"
+fi
+
+# Overrides and constraints files are no longer needed: remove them and release
+# the trap so Step 8's EXIT trap (registered only on the plugin path) is
+# uncontested.
+rm -f "$OPENCV_OVERRIDE" "$CONSTRAINTS_FILE"
 trap - EXIT INT TERM
 ok "$INSTALL_TARGET installed"
 
@@ -313,19 +404,99 @@ else
 fi
 printf '\n'
 
-# Belt-and-suspenders restart of the service-managed daemon.
+# Restart the service-managed daemon and verify the process was replaced.
 #
-# `quarry install` (above) calls `_launchd_install` / `_systemd_install`,
-# which DO restart the service when one was already registered.  If a stale
-# daemon from a previous install is running with the old in-memory
-# onnxruntime imports, force a restart here so it picks up the tool-venv
-# swap from Step 4b before the health check.  Both commands are idempotent
-# no-ops when the service is not registered.
+# `quarry install` (above) restarts a registered service, but this step is the
+# one that guarantees a daemon from before the upgrade is not left holding the
+# old engine (and the pre-swap onnxruntime) in memory.  The restart used to be
+# `systemctl --user restart quarry 2>/dev/null || true`: any failure -- no user
+# bus in a non-login shell, a unit that failed to start, launchd refusing the
+# kickstart -- vanished, and the installer reported success over a stale daemon.
+# Now the service's main PID is read before and after.  An unchanged PID, a dead
+# daemon, or a failing restart command fails the install with the reason.  A new
+# PID proves only that the process was REPLACED, not that it is healthy: with
+# Restart=always a daemon that dies at import still shows a new PID.  Health is
+# proven by the Step 6 readiness check, which fails (not warns) once a service
+# is registered here.
+#
+# "Registered" means the service MANAGER has the unit loaded (systemd LoadState
+# == loaded; `launchctl print` succeeds), not merely that a unit file or plist
+# is on disk: `quarry install` writes the file and then degrades best-effort
+# when systemctl/launchctl is unreachable (SSH, containers).  File present but
+# manager unreachable => warn and skip, matching that degrade.  Nothing on disk
+# and nothing loaded => silent no-op (a CLI-only install has no service).
+SYSTEMD_UNIT="$HOME/.config/systemd/user/quarry.service"
+LAUNCHD_LABEL="com.punt-labs.quarry"  # must match _LABEL in src/quarry/service.py
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+SERVICE_REGISTERED=0
+
+# Print the service's main PID, or 0 when it is not running.  Exits non-zero
+# when the service manager cannot be queried.  launchd is read from the same
+# gui/<uid> domain the restart targets (`launchctl list` reads the caller's own
+# domain, which differs under ssh/sudo).
+service_pid() {
+  if [ "$1" = "systemd" ]; then
+    _pid="$(systemctl --user show quarry --property=MainPID --value)" || return 1
+  else
+    _out="$(launchctl print "gui/$(id -u)/$LAUNCHD_LABEL")" || return 1
+    _pid="$(printf '%s\n' "$_out" | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)[[:space:]]*$/\1/p' | head -1)"
+  fi
+  printf '%s\n' "${_pid:-0}"
+}
+
+query_error() {
+  if [ "$1" = "systemd" ]; then
+    fail "Cannot query the quarry systemd service (is the user session bus available?)"
+  fi
+  fail "Cannot query the quarry launchd service (launchctl print gui/$(id -u)/$LAUNCHD_LABEL failed)"
+}
+
+restart_service() {
+  _mgr="$1"
+  _before="$(service_pid "$_mgr")" || query_error "$_mgr"
+  if [ "$_mgr" = "systemd" ]; then
+    systemctl --user restart quarry ||
+      fail "Failed to restart the quarry service: systemctl --user restart quarry"
+  else
+    launchctl kickstart -k "gui/$(id -u)/$LAUNCHD_LABEL" ||
+      fail "Failed to restart the quarry service: launchctl kickstart -k gui/$(id -u)/$LAUNCHD_LABEL"
+  fi
+  # kickstart can return before launchd publishes the new pid: poll up to ~10 s
+  # for a running pid that differs from the old one.
+  _after=0
+  _n=0
+  while [ "$_n" -lt 10 ]; do
+    _after="$(service_pid "$_mgr")" || query_error "$_mgr"
+    if [ "$_after" != "0" ] && [ "$_after" != "$_before" ]; then
+      break
+    fi
+    _n=$((_n + 1))
+    sleep 1
+  done
+  if [ "$_after" = "0" ]; then
+    fail "The quarry daemon is not running after restart -- check the service logs"
+  fi
+  if [ "$_after" = "$_before" ]; then
+    fail "The quarry daemon kept PID $_before across the restart -- it is still the pre-upgrade process. Restart it by hand: see README 'Managing the Daemon'."
+  fi
+  SERVICE_REGISTERED=1
+  ok "daemon restarted (PID $_before -> $_after)"
+}
+
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl --user restart quarry 2>/dev/null || true
+  if _load="$(systemctl --user show quarry --property=LoadState --value 2>/dev/null)"; then
+    if [ "$_load" = "loaded" ]; then
+      restart_service systemd
+    fi
+  elif [ -f "$SYSTEMD_UNIT" ]; then
+    warn "$SYSTEMD_UNIT exists but systemctl --user is unreachable -- skipping the daemon restart (restart it by hand after login)"
+  fi
 elif command -v launchctl >/dev/null 2>&1; then
-  # Label must match _LABEL in src/quarry/service.py.
-  launchctl kickstart -k "gui/$(id -u)/com.punt-labs.quarry" 2>/dev/null || true
+  if launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1; then
+    restart_service launchd
+  elif [ -f "$LAUNCHD_PLIST" ]; then
+    warn "$LAUNCHD_PLIST exists but launchd does not have the service loaded -- skipping the daemon restart"
+  fi
 fi
 
 # --- Step 6: Health-check the service-managed daemon ---
@@ -372,6 +543,11 @@ else
     _i=$((_i + 1))
   done
   if [ $_i -eq 15 ]; then
+    if [ "$SERVICE_REGISTERED" = "1" ]; then
+      # A registered, just-restarted daemon that never reports ready crashed
+      # (or hung) after the restart: a new PID does not prove health.
+      fail "Daemon did not become ready within 30s after the restart -- check service logs (journalctl --user -u quarry on Linux; the quarry-stderr.log under the launchd log dir on macOS)"
+    fi
     warn "Daemon did not respond after 30s -- login may fail (will retry automatically)"
   fi
 fi
