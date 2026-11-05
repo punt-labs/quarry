@@ -16,6 +16,7 @@ class Quarry < Formula
   depends_on "cmake" => :build # pyarrow sdist builds against apache-arrow
   depends_on "rust" => :build # cryptography, pydantic-core, rpds-py, tokenizers
   depends_on "apache-arrow" # pyarrow links against the system Arrow C++
+  depends_on "freetype" # pillow
   depends_on "geos" # shapely
   depends_on "jpeg-turbo" # pillow
   depends_on "libyaml" # pyyaml
