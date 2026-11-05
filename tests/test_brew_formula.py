@@ -86,6 +86,13 @@ def test_main_package_comes_from_pypi_json(formula: str) -> None:
     assert f'  url "{MAIN_URL}"\n  sha256 "{MAIN_SHA}"\n' in formula
 
 
+def test_formula_depends_on_cmake_to_build_pyarrow_sdist(formula: str) -> None:
+    assert (
+        '  depends_on "cmake" => :build # pyarrow sdist builds against apache-arrow\n'
+        in formula
+    )
+
+
 def test_current_lock_pins_lancedb_and_pyarrow_with_lock_hashes(
     formula: str, lock: dict[str, Any]
 ) -> None:

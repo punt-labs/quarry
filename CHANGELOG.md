@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- infra: the generated Homebrew formula restores `depends_on "cmake" => :build`; the pyarrow sdist builds against Homebrew's apache-arrow and needs CMake, so a clean `brew install` failed without it.
+
 ## [3.6.0] - 2026-11-04
 
 ### Added
