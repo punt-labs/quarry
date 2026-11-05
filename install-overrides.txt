@@ -1,0 +1,2 @@
+# Drops the GUI opencv-python build, which conflicts with the headless cv2 build.
+opencv-python ; sys_platform == "never"

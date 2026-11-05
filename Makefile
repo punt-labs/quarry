@@ -1,4 +1,4 @@
-.PHONY: help test test-slow lint lint-docs lint-slash-mcp lint-hook-mcp-matcher type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi install-constraints check-install-constraints report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline logs-errors logs-tail
+.PHONY: help test test-slow lint lint-docs lint-slash-mcp lint-hook-mcp-matcher type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi install-constraints check-install-constraints brew-formula report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline logs-errors logs-tail
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -103,6 +103,16 @@ install-constraints: ## Regenerate install-constraints.txt from uv.lock (run aft
 check-install-constraints: ## Fail if install-constraints.txt has drifted from uv.lock
 	@$(INSTALL_CONSTRAINTS_EXPORT) > "$(INSTALL_CONSTRAINTS).check.tmp" || { rm -f "$(INSTALL_CONSTRAINTS).check.tmp"; exit 1; }
 	@if diff -u "$(INSTALL_CONSTRAINTS)" "$(INSTALL_CONSTRAINTS).check.tmp"; then rm -f "$(INSTALL_CONSTRAINTS).check.tmp"; else rm -f "$(INSTALL_CONSTRAINTS).check.tmp"; echo "$(INSTALL_CONSTRAINTS) is stale vs uv.lock: run 'make install-constraints' and commit it" >&2; exit 1; fi
+
+# Render the Homebrew formula from uv.lock + pyproject.toml (the project's own
+# sdist url/sha256 is read from the PyPI JSON API, so the version must already
+# be published).  With FORMULA_OUT set the formula is written there, e.g.
+#   make brew-formula FORMULA_OUT=../homebrew-tap/Formula/quarry.rb
+# With FORMULA_OUT unset it is printed to stdout.
+FORMULA_OUT ?=
+
+brew-formula: ## Render Formula/quarry.rb from uv.lock (FORMULA_OUT=<path>, default stdout)
+	uv run python scripts/brew_formula.py --overrides install-overrides.txt $(if $(FORMULA_OUT),--output $(FORMULA_OUT))
 
 check-oo: ## OO ratchet — touched files must not regress vs the merge-base baseline
 	uv run python tools/oo_score.py src/quarry/ --check $(OO_BASE)
