@@ -25,6 +25,16 @@ across `transform`, `index`, and `connector`).
   at the locked version, so the generated formula installs their wheels and
   no longer needs cmake.
 
+### Fixed
+
+- infra: package metadata now pins the storage stack to the tested versions
+  (`lancedb>=0.40,<0.41`, `pyarrow>=26,<27`), so `pip install`, `uv tool
+  install` and Homebrew resolve them too, not only `install.sh`.
+- install: `install.sh` now fails on an HTTP 404 for the pins file instead of
+  installing unpinned, stops after Ctrl-C/SIGTERM (exit 130/143) instead of
+  cleaning up and carrying on, and fails when `grep` itself errors while
+  validating the pins file instead of treating it as clean.
+
 ## [3.5.5] - 2026-11-04
 
 ### Fixed
