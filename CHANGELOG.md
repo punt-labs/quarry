@@ -14,6 +14,17 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- infra: `make brew-formula [FORMULA_OUT=<path>]` renders the Homebrew
+  `Formula/quarry.rb` from `uv.lock` and `pyproject.toml`
+  (`scripts/brew_formula.py`). Every resource is the locked version with the
+  lock's url and sha256, so Homebrew users get the code quarry tested rather
+  than whatever `brew update-python-resources` resolved. Output goes to stdout
+  when `FORMULA_OUT` is unset. opencv-python(-headless) have no sdist on PyPI
+  at the locked version, so the generated formula installs their wheels and
+  no longer needs cmake.
+
 ## [3.5.5] - 2026-11-04
 
 ### Fixed
