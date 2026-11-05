@@ -209,16 +209,21 @@ info "Installing $PACKAGE..."
 #
 # Class-1 temp-file cleanup: remove the temp files on ANY exit from here on --
 # normal completion, a `fail` (which exits), or a SIGINT/SIGTERM in the window
-# before the install.  A per-branch `rm` would leak on an interrupt or on any
-# command that fails between a mktemp and the install.  Both variables are
-# initialised empty and the trap is registered BEFORE either mktemp, so a signal
-# or failure between the two mktemps cannot leak the first file (`rm -f ""` is a
-# silent no-op).  The trap is released right after `uv tool install` (below),
+# before the install.  The cleanup trap is EXIT-only: INT and TERM turn into an
+# `exit` (130 / 143, the shell convention) so the EXIT trap runs the cleanup and
+# the installer STOPS -- a cleanup handler on INT/TERM alone would run and then
+# carry on to `uv tool install` after Ctrl-C.  A per-branch `rm` would leak on an
+# interrupt or on any command that fails between a mktemp and the install.  Both
+# variables are initialised empty and the traps are registered BEFORE either
+# mktemp, so a signal or failure between the two mktemps cannot leak the first
+# file (`rm -f ""` is a silent no-op).  The trap is released right after `uv tool install` (below),
 # before Step 8 registers its own EXIT trap for the HTTPS rewrite -- a shell
 # holds only one handler per signal, so the two must not overlap.
 OPENCV_OVERRIDE=""
 CONSTRAINTS_FILE=""
-trap 'rm -f "$OPENCV_OVERRIDE" "$CONSTRAINTS_FILE"' EXIT INT TERM
+trap 'rm -f "$OPENCV_OVERRIDE" "$CONSTRAINTS_FILE"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 OPENCV_OVERRIDE="$(mktemp "${TMPDIR:-/tmp}/quarry-opencv-override.XXXXXX")"
 CONSTRAINTS_FILE="$(mktemp "${TMPDIR:-/tmp}/quarry-constraints.XXXXXX")"
 printf '%s\n' 'opencv-python ; sys_platform == "never"' > "$OPENCV_OVERRIDE"
@@ -244,13 +249,11 @@ fi
 # while the tested lock said 0.40.0 / 26.0.0).  install-constraints.txt is
 # exported from uv.lock at release time (`make install-constraints`) and fetched
 # here from the immutable v$VERSION tag, so an old installer always pairs with
-# the pins it shipped with.  Failure modes are kept apart:
-#   - HTTP 404: the release predates pinned installs (v3.5.4 and earlier have no
-#     such file).  Warn loudly and install without pins -- the only way those
-#     releases stay installable.
-#   - anything else (network error, 5xx, empty body, a captive-portal page): a
-#     hard failure naming the cause.  Installing unpinned on a transient fault
-#     is the bug this step exists to prevent.
+# the pins it shipped with.  VERSION is 3.5.5 or later and every such tag ships
+# the file, so there is no unpinned path: any failure to obtain valid pins (HTTP
+# 404 for a missing tag or file, other HTTP errors, network error, empty body, a
+# captive-portal page) is a hard failure naming the cause.  Installing unpinned
+# is the bug this step exists to prevent.
 # QUARRY_LOCAL_WHEEL installs use the working-tree file next to this script when
 # present (the tag may not exist for an unreleased branch); with none they warn
 # and fetch like any other install.  The lookup runs only when $0 is a real file:
@@ -265,10 +268,15 @@ fi
 PIN_RE='^[A-Za-z0-9._-]+==[A-Za-z0-9._+!*-]+( ; [A-Za-z0-9._ "()<>=!~,*'"'"'-]+)?$'
 
 check_pins_file() {
-  _bad="$(grep -Ev -e '^[[:space:]]*$' -e '^[[:space:]]*#' -e "$PIN_RE" "$1" | head -1)"
-  if [ -n "$_bad" ]; then
-    fail "pins file contains a non-pin line: $_bad"
-  fi
+  # grep's own status is read directly (no pipe): 0 = a non-pin line exists,
+  # 1 = every line is a pin, >=2 = grep failed and nothing was validated.
+  _grep_rc=0
+  _bad="$(grep -Ev -e '^[[:space:]]*$' -e '^[[:space:]]*#' -e "$PIN_RE" "$1")" || _grep_rc=$?
+  case "$_grep_rc" in
+    1) ;;
+    0) fail "pins file contains a non-pin line: $(printf '%s\n' "$_bad" | head -1)" ;;
+    *) fail "Could not validate pins file $1" ;;
+  esac
 }
 
 CONSTRAINTS_URL="https://raw.githubusercontent.com/punt-labs/quarry/v$VERSION/install-constraints.txt"
@@ -305,7 +313,7 @@ if [ "$USE_CONSTRAINTS" = "0" ]; then
       ok "dependency pins: v$VERSION install-constraints.txt"
       ;;
     404)
-      warn "release v$VERSION predates pinned installs; installing without dependency pins"
+      fail "Dependency pins not found at $CONSTRAINTS_URL (HTTP 404) -- v$VERSION should ship install-constraints.txt; refusing to install unpinned dependencies. Check the release tag exists."
       ;;
     *)
       fail "Could not fetch dependency pins from $CONSTRAINTS_URL (HTTP $PINS_STATUS) -- refusing to install unpinned dependencies. Re-run later."
@@ -313,17 +321,11 @@ if [ "$USE_CONSTRAINTS" = "0" ]; then
   esac
 fi
 
-# --constraints is passed only when pins were obtained; an unpinned install
-# happens only on the explicit 404 path above.
-if [ "$USE_CONSTRAINTS" = "1" ]; then
-  # shellcheck disable=SC2086
-  uv tool install --force --overrides "$OPENCV_OVERRIDE" --constraints "$CONSTRAINTS_FILE" $PYTHON_FLAG "$INSTALL_TARGET" ||
-    fail "Failed to install $INSTALL_TARGET"
-else
-  # shellcheck disable=SC2086
-  uv tool install --force --overrides "$OPENCV_OVERRIDE" $PYTHON_FLAG "$INSTALL_TARGET" ||
-    fail "Failed to install $INSTALL_TARGET"
-fi
+# Every path above either obtained valid pins or exited, so the install is
+# always constrained.
+# shellcheck disable=SC2086
+uv tool install --force --overrides "$OPENCV_OVERRIDE" --constraints "$CONSTRAINTS_FILE" $PYTHON_FLAG "$INSTALL_TARGET" ||
+  fail "Failed to install $INSTALL_TARGET"
 
 # Overrides and constraints files are no longer needed: remove them and release
 # the trap so Step 8's EXIT trap (registered only on the plugin path) is
