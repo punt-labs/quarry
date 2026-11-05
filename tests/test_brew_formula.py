@@ -24,6 +24,8 @@ OVERRIDES_TEXT = (
 
 
 def _load() -> ModuleType:
+    # Running the script puts scripts/ on sys.path; loading by file path does not.
+    sys.path.insert(0, str(SCRIPT.parent))
     spec = importlib.util.spec_from_file_location("brew_formula", SCRIPT)
     assert spec is not None
     assert spec.loader is not None
@@ -34,6 +36,7 @@ def _load() -> ModuleType:
 
 
 bf = _load()
+brew_lock = importlib.import_module("brew_lock")  # on sys.path via _load()
 
 
 def fake_pypi(path: str) -> Mapping[str, Any]:
@@ -247,12 +250,12 @@ wheels = [
     ],
 )
 def test_marker_holds(*, marker: str | None, expected: bool) -> None:
-    assert bf.marker_holds(marker) is expected
+    assert brew_lock.marker_holds(marker) is expected
 
 
 def test_unsupported_marker_is_an_error() -> None:
     with pytest.raises(bf.FormulaError, match="unsupported"):
-        bf.marker_holds("python_version >= '3.9'")
+        brew_lock.marker_holds("python_version >= '3.9'")
 
 
 def test_overridden_package_is_excluded_and_headless_stays(tmp_path: Path) -> None:
