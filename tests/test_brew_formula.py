@@ -254,6 +254,30 @@ wheels = [
         bf.generate(lock, ROOT / "pyproject.toml", fake_pypi, overrides)
 
 
+def test_universal_pin_without_universal_wheel_is_an_error(
+    tmp_path: Path, overrides: Path
+) -> None:
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        """
+[[package]]
+name = "punt-quarry"
+version = "1.0.0"
+dependencies = [{ name = "omegaconf" }]
+
+[[package]]
+name = "omegaconf"
+version = "2.3.0"
+wheels = [
+    { url = "https://h/omegaconf-2.3.0-cp310-abi3-win_amd64.whl", hash = "sha256:aa" },
+]
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(bf.FormulaError, match="omegaconf: no universal wheel"):
+        bf.generate(lock, ROOT / "pyproject.toml", fake_pypi, overrides)
+
+
 @pytest.mark.parametrize(
     ("marker", "expected"),
     [
