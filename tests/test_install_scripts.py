@@ -41,8 +41,10 @@ from __future__ import annotations
 
 import re
 import shutil
+import signal
 import stat
 import subprocess
+import time
 from pathlib import Path
 from textwrap import dedent
 
@@ -157,7 +159,8 @@ def mock_bin(tmp_path: Path) -> Path:
     # matches and the loop terminates fast.
     # A fetch of install-constraints.txt (``-o FILE ... -w %{http_code}``) is
     # steered by CURL_PINS_MODE: unset serves valid pins with HTTP 200; ``404`` /
-    # ``500`` reply with that status and an error body; ``network`` exits 6 like
+    # ``500`` reply with that status and an error body; ``slow`` touches
+    # $LOG_FILE.slow and serves valid pins after 2s; ``network`` exits 6 like
     # an unresolvable host; ``empty`` serves a 200 with no body; ``html`` serves
     # a 200 captive-portal page.  The mock prints the status like ``curl -w``.
     _write_mock(
@@ -173,6 +176,8 @@ def mock_bin(tmp_path: Path) -> Path:
               code=200
               case "${CURL_PINS_MODE:-}" in
                 network) echo "curl: (6) Could not resolve host" >&2; exit 6 ;;
+                slow) : > "$LOG_FILE.slow"; sleep 2
+                      printf "lancedb==0.40.0\\n" > "$out" ;;
                 404) code=404; printf "404: Not Found" > "$out" ;;
                 500) code=500; printf "oops" > "$out" ;;
                 empty) : > "$out" ;;
@@ -1116,7 +1121,8 @@ def test_overrides_tempfile_cleaned_up_on_failure(
     env: dict[str, str], tmp_path: Path
 ) -> None:
     """The uv overrides temp file is removed even when install.sh aborts between
-    the mktemp and the install (Class-1 cleanup via an EXIT/INT/TERM trap).
+    the mktemp and the install (Class-1 cleanup via an EXIT trap that INT/TERM
+    exit into).
 
     A missing QUARRY_LOCAL_WHEEL trips the validation branch, which no longer has
     a manual ``rm`` — only the trap can clean the temp file. With TMPDIR pointed
@@ -1291,18 +1297,64 @@ def test_constraints_tempfile_cleaned_up_on_fetch_failure(
     assert list(tmpdir.iterdir()) == []
 
 
-def test_constraints_404_installs_unpinned_with_loud_warning(
+def test_constraints_404_is_a_hard_failure(
     env: dict[str, str],
 ) -> None:
-    """A release that predates pinned installs (no file at its tag) must stay
-    installable: warn loudly, install without --constraints."""
+    """Every release this installer can name ships install-constraints.txt, so a
+    404 means the tag or file is missing: abort, never install unpinned."""
     result = _run_script(INSTALL_SH, {**env, "CURL_PINS_MODE": "404"})
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "predates pinned installs; installing without dependency pins" in (
-        result.stdout
+    assert result.returncode != 0, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "HTTP 404" in combined, combined
+    assert "install-constraints.txt" in combined, combined
+    assert not _any_line_contains(_read_log(env), "uv tool install"), (
+        "uv tool install must not run when the pins file is missing"
     )
-    install = _tool_install_line(_read_log(env))
-    assert "--constraints" not in install, install
+
+
+def test_pins_validation_fails_when_grep_itself_errors(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """A grep that cannot run (exit >= 2) must not read as a clean pins file."""
+    real = shutil.which("grep", path=str(mock_bin))
+    assert real is not None
+    (mock_bin / "grep").unlink()
+    _write_mock(
+        mock_bin / "grep",
+        f'case "$1" in -Ev) echo "grep: boom" >&2; exit 2 ;; esac\nexec {real} "$@"\n',
+    )
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "Could not validate pins file" in result.stdout + result.stderr
+    assert not _any_line_contains(_read_log(env), "uv tool install")
+
+
+@pytest.mark.parametrize(("sig", "code"), [(signal.SIGTERM, 143), (signal.SIGINT, 130)])
+def test_signal_during_install_window_aborts_and_cleans_up(
+    env: dict[str, str], tmp_path: Path, sig: signal.Signals, code: int
+) -> None:
+    """Ctrl-C / SIGTERM between the trap and the install must stop the installer
+    (130 / 143), not clean up and carry on to ``uv tool install``."""
+    tmpdir = tmp_path / "sig-tmp"
+    tmpdir.mkdir()
+    marker = Path(env["LOG_FILE"] + ".slow")
+    proc = subprocess.Popen(
+        ["/bin/sh", str(INSTALL_SH)],
+        env={**env, "TMPDIR": str(tmpdir), "CURL_PINS_MODE": "slow"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(INSTALL_SH.parent),
+    )
+    deadline = time.monotonic() + 20
+    while not marker.exists():
+        assert time.monotonic() < deadline, "the pins fetch never started"
+        time.sleep(0.05)
+    proc.send_signal(sig)
+    out, err = proc.communicate(timeout=30)
+    assert proc.returncode == code, out + err
+    assert not _any_line_contains(_read_log(env), "uv tool install")
+    assert list(tmpdir.iterdir()) == []
 
 
 def test_constraints_server_error_is_a_hard_failure_naming_the_cause(

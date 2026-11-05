@@ -17,11 +17,14 @@ classifiers = [
 ]
 dependencies = [
     "pymupdf>=1.25.0",
-    # 0.34.0 is the first release carrying create_index(column, config=...);
-    # every earlier version raises TypeError on the call db/schema.py and
-    # db/optimizer.py make, so a resolver landing below this floor produces an
-    # artifact that imports cleanly and fails at the first index build.
-    "lancedb>=0.34.0",
+    # lancedb and pyarrow (below) are the storage stack: they are bounded to the
+    # tested minor, not just floored, so pip, uv tool install and Homebrew
+    # resolve the versions uv.lock names. An untested newer lance build can
+    # corrupt reads (Arrow offset overflow). Widen the ceiling only after a
+    # migration test on a copy of a real database.
+    # 0.34.0 was the first release carrying create_index(column, config=...);
+    # the tested floor is now the same minor as the ceiling.
+    "lancedb>=0.40,<0.41",
     "tokenizers>=0.20.0",
     "huggingface-hub>=0.26.0",
     # 2.10.0 is the first pydantic whose default_factory receives the fields
@@ -49,7 +52,7 @@ dependencies = [
     "starlette>=1.3.1",
     "uvicorn>=0.32.0",
     "websockets>=13.0",
-    "pyarrow>=18.0.0",
+    "pyarrow>=26,<27",
     "numpy>=1.26.0",
     "Pillow>=10.0.0",
     "python-docx>=1.1.0",
