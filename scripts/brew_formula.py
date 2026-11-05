@@ -89,6 +89,7 @@ TARGET_ENVIRONMENTS: tuple[dict[str, str], ...] = (
     },
 )
 
+_NEVER = re.compile(r"^sys_platform\s*==\s*'never'$")
 _CLAUSE = re.compile(r"^\s*(\w+)\s*(==|!=)\s*'([^']*)'\s*$")
 _WHEEL_NAME = re.compile(
     r"^(?P<dist>[^-]+)-(?P<ver>[^-]+)(?:-(?P<build>\d[^-]*))?"
@@ -280,7 +281,9 @@ class Lock:
         with path.open("rb") as handle:
             return cls(tomllib.load(handle))
 
-    def runtime_closure(self, root: str) -> list[str]:
+    def runtime_closure(
+        self, root: str, excluded: frozenset[str] = frozenset()
+    ) -> list[str]:
         """Sorted names reachable from ``root`` over non-optional edges.
 
         Edges whose marker never holds on a supported platform (colorama on
@@ -302,7 +305,11 @@ class Lock:
                     edges.extend(optional.get(extra, []))
             for dep in edges:
                 dep_name = str(dep["name"])
-                if marker_holds(dep.get("marker")) and dep_name not in seen:
+                if (
+                    dep_name not in excluded
+                    and marker_holds(dep.get("marker"))
+                    and dep_name not in seen
+                ):
                     seen.add(dep_name)
                     stack.append(dep_name)
         seen.discard(root)
@@ -420,12 +427,36 @@ def project_version(pyproject: Path) -> str:
         return str(tomllib.load(handle)["project"]["version"])
 
 
-def generate(lock_path: Path, pyproject_path: Path, fetch: Fetcher) -> str:
+def never_installed(overrides: Path) -> frozenset[str]:
+    """Packages ``overrides`` pins to a never-true marker (install.sh drops them).
+
+    The file uses uv's override syntax, ``name ; sys_platform == "never"``.
+    A missing file means no overrides.  Any other override is ignored here:
+    the formula installs the lock's version, which a version override does not
+    change.
+    """
+    if not overrides.is_file():
+        return frozenset()
+    names: set[str] = set()
+    for raw in overrides.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        name, _, marker = line.partition(";")
+        if _NEVER.match(marker.strip().replace('"', "'")):
+            names.add(name.strip().lower().replace("_", "-"))
+    return frozenset(names)
+
+
+def generate(
+    lock_path: Path,
+    pyproject_path: Path,
+    fetch: Fetcher,
+    overrides: Path = ROOT / "install-overrides.txt",
+) -> str:
     """Render the formula text for the lock at ``lock_path``."""
     lock = Lock.load(lock_path)
     main = sdist_from_pypi(fetch, PROJECT_NAME, project_version(pyproject_path))
     builder = ResourceBuilder(lock)
-    names = lock.runtime_closure(PROJECT_NAME)
+    names = lock.runtime_closure(PROJECT_NAME, never_installed(overrides))
     return FormulaRenderer(main, [builder.build(n) for n in names]).render()
 
 
@@ -436,9 +467,15 @@ def main(argv: list[str] | None = None, fetch: Fetcher = pypi_json) -> int:
     )
     parser.add_argument("--lock", type=Path, default=ROOT / "uv.lock")
     parser.add_argument("--pyproject", type=Path, default=ROOT / "pyproject.toml")
+    parser.add_argument(
+        "--overrides",
+        type=Path,
+        default=ROOT / "install-overrides.txt",
+        help="install.sh override file; absent means no overrides",
+    )
     args = parser.parse_args(argv)
     try:
-        text = generate(args.lock, args.pyproject, fetch)
+        text = generate(args.lock, args.pyproject, fetch, args.overrides)
     except (FormulaError, OSError, KeyError, ValueError) as exc:
         sys.stderr.write(f"brew-formula: {exc!r}\n")
         return 1

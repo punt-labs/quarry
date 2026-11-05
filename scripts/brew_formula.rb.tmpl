@@ -57,10 +57,10 @@ class Quarry < Formula
     # hf-xet only accelerates model downloads; huggingface-hub soft-imports
     # it and falls back to plain HTTP when absent, so it's dropped rather
     # than fought. See punt-kit/patterns/homebrew-pypi-formula.md.
-    # opencv-python and opencv-python-headless (full is a hard dependency of
-    # rapidocr, headless is quarry's own -- both genuinely required per
-    # uv.lock, not redundant) have no sdist on PyPI at the locked version, so
-    # they are wheel resources like lancedb; no cmake or ffmpeg build is needed.
+    # opencv-python-headless provides cv2; the GUI opencv-python build is
+    # excluded exactly as install.sh excludes it (install-overrides.txt), since
+    # it breaks import on headless Linux. opencv has no sdist on PyPI at the
+    # locked version, so it is a wheel resource like lancedb; no cmake build.
     # tokenizers (pyo3 + tokio) fails to link on macOS: Py_NewRef/Py_DecRef/
     # etc. come up undefined because it isn't picking up the
     # -undefined,dynamic_lookup linker flag other pyo3 crates in this build

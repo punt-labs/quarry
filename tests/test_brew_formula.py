@@ -235,3 +235,44 @@ def test_marker_holds(*, marker: str | None, expected: bool) -> None:
 def test_unsupported_marker_is_an_error() -> None:
     with pytest.raises(bf.FormulaError, match="unsupported"):
         bf.marker_holds("python_version >= '3.9'")
+
+
+def test_overridden_package_is_excluded_and_headless_stays(tmp_path: Path) -> None:
+    overrides = tmp_path / "install-overrides.txt"
+    overrides.write_text(
+        "# GUI build breaks import on headless hosts\n"
+        'opencv-python ; sys_platform == "never"\n',
+        encoding="utf-8",
+    )
+    text = bf.generate(ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi, overrides)
+    names = set(_resource_blocks(text))
+    assert "opencv-python" not in names
+    assert "opencv-python-headless" in names
+    assert "opencv-python\n" not in text
+    assert "      opencv-python-headless\n" in text
+
+
+def test_absent_overrides_file_means_no_overrides(tmp_path: Path) -> None:
+    assert bf.never_installed(tmp_path / "absent.txt") == frozenset()
+    names = set(
+        _resource_blocks(
+            bf.generate(
+                ROOT / "uv.lock",
+                ROOT / "pyproject.toml",
+                fake_pypi,
+                tmp_path / "absent.txt",
+            )
+        )
+    )
+    assert {"opencv-python", "opencv-python-headless"} <= names
+
+
+def test_only_never_true_markers_are_overrides(tmp_path: Path) -> None:
+    overrides = tmp_path / "o.txt"
+    overrides.write_text(
+        "numpy>=2 \nfoo ; sys_platform == 'never'\n"
+        'Bar_Baz ; sys_platform == "never"\n'
+        "qux ; sys_platform == 'linux'\n",
+        encoding="utf-8",
+    )
+    assert bf.never_installed(overrides) == {"foo", "bar-baz"}
