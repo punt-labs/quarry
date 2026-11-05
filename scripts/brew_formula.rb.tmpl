@@ -57,10 +57,11 @@ class Quarry < Formula
     # hf-xet only accelerates model downloads; huggingface-hub soft-imports
     # it and falls back to plain HTTP when absent, so it's dropped rather
     # than fought. See punt-kit/patterns/homebrew-pypi-formula.md.
-    # opencv-python-headless provides cv2; the GUI opencv-python build is
-    # excluded exactly as install.sh excludes it (install-overrides.txt), since
-    # it breaks import on headless Linux. opencv has no sdist on PyPI at the
-    # locked version, so it is a wheel resource like lancedb; no cmake build.
+    # opencv-python-headless provides cv2; the generator excludes the GUI
+    # opencv-python build via the repo's install-overrides.txt, the same file
+    # install.sh reads, since it breaks import on headless Linux. opencv has no
+    # sdist on PyPI at the locked version, so it is a wheel resource like
+    # lancedb; no cmake build.
     # tokenizers (pyo3 + tokio) fails to link on macOS: Py_NewRef/Py_DecRef/
     # etc. come up undefined because it isn't picking up the
     # -undefined,dynamic_lookup linker flag other pyo3 crates in this build
@@ -74,7 +75,7 @@ class Quarry < Formula
     wheel_names = %w[
 @@WHEEL_NAMES@@
     ]
-    venv = virtualenv_install_with_resources without: wheel_names + %w[hf-xet]
+    venv = virtualenv_install_with_resources without: wheel_names + %w[@@DROPPED_NAMES@@]
     wheel_names.each do |name|
       resource(name).stage do
         whl = Pathname.pwd.glob("*.whl").first

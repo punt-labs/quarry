@@ -112,7 +112,7 @@ check-install-constraints: ## Fail if install-constraints.txt has drifted from u
 FORMULA_OUT ?=
 
 brew-formula: ## Render Formula/quarry.rb from uv.lock (FORMULA_OUT=<path>, default stdout)
-	uv run python scripts/brew_formula.py $(if $(FORMULA_OUT),--output $(FORMULA_OUT))
+	uv run python scripts/brew_formula.py --overrides install-overrides.txt $(if $(FORMULA_OUT),--output $(FORMULA_OUT))
 
 check-oo: ## OO ratchet — touched files must not regress vs the merge-base baseline
 	uv run python tools/oo_score.py src/quarry/ --check $(OO_BASE)

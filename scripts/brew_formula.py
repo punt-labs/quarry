@@ -66,6 +66,10 @@ tree-sitter-embedded-template has no external scanner and built fine
 from sdist, but yaml does and hits the identical dlopen symbol failure.""",
 }
 
+# Resources the formula declares but never installs (see the hf-xet comment in
+# the template's install block).  Each must be in the resolved closure.
+DROPPED_RESOURCES: tuple[str, ...] = ("hf-xet",)
+
 # Environments a Homebrew user can run on; a dependency edge is kept when its
 # marker holds in at least one of them.  Intel macOS is excluded: unsupported.
 TARGET_ENVIRONMENTS: tuple[dict[str, str], ...] = (
@@ -400,6 +404,22 @@ class FormulaRenderer:
         self._main = main
         self._resources = sorted(resources, key=lambda r: r.name)
 
+    def _dropped_names(self) -> list[str]:
+        """The resources the formula declares but never installs.
+
+        Every name is checked against the resolved closure: Homebrew raises
+        ArgumentError at install time for a ``without:`` entry that is not a
+        defined resource, so a relock that drops one must fail here instead.
+        """
+        defined = {r.name for r in self._resources}
+        missing = sorted(set(DROPPED_RESOURCES) - defined)
+        if missing:
+            raise FormulaError(
+                f"formula drops {', '.join(missing)} but no such resource is "
+                "in the resolved closure; update DROPPED_RESOURCES"
+            )
+        return sorted(DROPPED_RESOURCES)
+
     def render(self) -> str:
         wheels = [r for r in self._resources if r.is_wheel_pinned]
         plain = [r for r in self._resources if not r.is_wheel_pinned]
@@ -410,6 +430,7 @@ class FormulaRenderer:
             "@@WHEEL_RESOURCES@@": "".join(self._wheel_block(r) for r in wheels),
             "@@PLAIN_RESOURCES@@": "".join(f"{r.render()}\n\n" for r in plain),
             "@@WHEEL_NAMES@@": "\n".join(f"      {r.name}" for r in wheels),
+            "@@DROPPED_NAMES@@": " ".join(self._dropped_names()),
         }
         for marker, value in fills.items():
             text = text.replace(marker, value)
@@ -427,36 +448,47 @@ def project_version(pyproject: Path) -> str:
         return str(tomllib.load(handle)["project"]["version"])
 
 
-def never_installed(overrides: Path) -> frozenset[str]:
-    """Packages ``overrides`` pins to a never-true marker (install.sh drops them).
+@dataclass(frozen=True)
+class InstallOverrides:
+    """The packages install.sh's override file pins to a never-true marker.
 
     The file uses uv's override syntax, ``name ; sys_platform == "never"``.
-    A missing file means no overrides.  Any other override is ignored here:
-    the formula installs the lock's version, which a version override does not
-    change.
+    Any other override is ignored here: the formula installs the lock's
+    version, which a version override does not change.
     """
-    if not overrides.is_file():
-        return frozenset()
-    names: set[str] = set()
-    for raw in overrides.read_text(encoding="utf-8").splitlines():
-        line = raw.split("#", 1)[0].strip()
-        name, _, marker = line.partition(";")
-        if _NEVER.match(marker.strip().replace('"', "'")):
-            names.add(name.strip().lower().replace("_", "-"))
-    return frozenset(names)
+
+    excluded: frozenset[str]
+
+    @classmethod
+    def from_file(cls, path: Path) -> InstallOverrides:
+        """Parse ``path``; a missing file is an error, never "no overrides".
+
+        Silently treating a missing file as empty would let the formula keep
+        packages (the GUI opencv build) that install.sh deliberately drops.
+        """
+        if not path.is_file():
+            raise FormulaError(f"overrides file not found: {path}")
+        names: set[str] = set()
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.split("#", 1)[0].strip()
+            name, _, marker = line.partition(";")
+            if _NEVER.match(marker.strip().replace('"', "'")):
+                names.add(name.strip().lower().replace("_", "-"))
+        return cls(frozenset(names))
 
 
 def generate(
     lock_path: Path,
     pyproject_path: Path,
     fetch: Fetcher,
-    overrides: Path = ROOT / "install-overrides.txt",
+    overrides_path: Path,
 ) -> str:
     """Render the formula text for the lock at ``lock_path``."""
     lock = Lock.load(lock_path)
     main = sdist_from_pypi(fetch, PROJECT_NAME, project_version(pyproject_path))
     builder = ResourceBuilder(lock)
-    names = lock.runtime_closure(PROJECT_NAME, never_installed(overrides))
+    overrides = InstallOverrides.from_file(overrides_path)
+    names = lock.runtime_closure(PROJECT_NAME, overrides.excluded)
     return FormulaRenderer(main, [builder.build(n) for n in names]).render()
 
 
@@ -471,7 +503,7 @@ def main(argv: list[str] | None = None, fetch: Fetcher = pypi_json) -> int:
         "--overrides",
         type=Path,
         default=ROOT / "install-overrides.txt",
-        help="install.sh override file; absent means no overrides",
+        help="install.sh override file (required to exist)",
     )
     args = parser.parse_args(argv)
     try:

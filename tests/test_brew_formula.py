@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "brew_formula.py"
 MAIN_URL = "https://files.pythonhosted.org/packages/aa/bb/punt_quarry-9.9.9.tar.gz"
 MAIN_SHA = "ab" * 32
+OVERRIDES_TEXT = (
+    "# GUI build breaks import on headless hosts\n"
+    'opencv-python ; sys_platform == "never"\n'
+)
 
 
 def _load() -> ModuleType:
@@ -51,8 +55,17 @@ def lock() -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def formula() -> str:
-    return str(bf.generate(ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi))
+def overrides(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("overrides") / "install-overrides.txt"
+    path.write_text(OVERRIDES_TEXT, encoding="utf-8")
+    return path
+
+
+@pytest.fixture(scope="module")
+def formula(overrides: Path) -> str:
+    return str(
+        bf.generate(ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi, overrides)
+    )
 
 
 def _resource_blocks(text: str) -> dict[str, str]:
@@ -151,6 +164,7 @@ def test_install_block_without_list_matches_wheel_set(formula: str) -> None:
     listed = "\n".join(f"      {n}" for n in wheel_names)
     assert f"    wheel_names = %w[\n{listed}\n    ]\n" in formula
     assert "without: wheel_names + %w[hf-xet]" in formula
+    assert "hf-xet" in _resource_blocks(formula)
     assert 'assert_match version.to_s, shell_output("#{bin}/quarry version")' in formula
 
 
@@ -160,41 +174,45 @@ def test_plain_resources_are_sorted(formula: str) -> None:
     assert names == sorted(names)
 
 
-def test_generation_is_deterministic() -> None:
-    first = bf.generate(ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi)
-    second = bf.generate(ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi)
+def test_generation_is_deterministic(overrides: Path) -> None:
+    first = bf.generate(ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi, overrides)
+    second = bf.generate(
+        ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi, overrides
+    )
     assert first == second
     assert first.endswith("end\n")
 
 
 def test_main_writes_output_file_and_stdout(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, overrides: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     out = tmp_path / "quarry.rb"
-    assert bf.main(["--output", str(out)], fake_pypi) == 0
+    args = ["--overrides", str(overrides)]
+    assert bf.main([*args, "--output", str(out)], fake_pypi) == 0
     assert out.read_text(encoding="utf-8").startswith("# typed: false")
-    assert bf.main([], fake_pypi) == 0
+    assert bf.main(args, fake_pypi) == 0
     assert capsys.readouterr().out == out.read_text(encoding="utf-8")
 
 
 def test_main_fails_loudly_when_pypi_has_no_sdist(
-    capsys: pytest.CaptureFixture[str],
+    overrides: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def no_sdist(path: str) -> Mapping[str, Any]:
         return {"urls": [{"packagetype": "bdist_wheel"}]}
 
-    assert bf.main([], no_sdist) == 1
+    assert bf.main(["--overrides", str(overrides)], no_sdist) == 1
     assert "no sdist" in capsys.readouterr().err
 
 
 def test_main_fails_loudly_when_lock_is_missing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, overrides: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert bf.main(["--lock", str(tmp_path / "absent.lock")], fake_pypi) == 1
+    argv = ["--lock", str(tmp_path / "absent.lock"), "--overrides", str(overrides)]
+    assert bf.main(argv, fake_pypi) == 1
     assert "brew-formula" in capsys.readouterr().err
 
 
-def test_missing_platform_wheel_is_an_error(tmp_path: Path) -> None:
+def test_missing_platform_wheel_is_an_error(tmp_path: Path, overrides: Path) -> None:
     lock = tmp_path / "uv.lock"
     lock.write_text(
         """
@@ -213,7 +231,7 @@ wheels = [
         encoding="utf-8",
     )
     with pytest.raises(bf.FormulaError, match="no macOS arm64 wheel"):
-        bf.generate(lock, ROOT / "pyproject.toml", fake_pypi)
+        bf.generate(lock, ROOT / "pyproject.toml", fake_pypi, overrides)
 
 
 @pytest.mark.parametrize(
@@ -252,19 +270,16 @@ def test_overridden_package_is_excluded_and_headless_stays(tmp_path: Path) -> No
     assert "      opencv-python-headless\n" in text
 
 
-def test_absent_overrides_file_means_no_overrides(tmp_path: Path) -> None:
-    assert bf.never_installed(tmp_path / "absent.txt") == frozenset()
-    names = set(
-        _resource_blocks(
-            bf.generate(
-                ROOT / "uv.lock",
-                ROOT / "pyproject.toml",
-                fake_pypi,
-                tmp_path / "absent.txt",
-            )
-        )
-    )
-    assert {"opencv-python", "opencv-python-headless"} <= names
+def test_missing_overrides_file_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    absent = tmp_path / "absent.txt"
+    with pytest.raises(bf.FormulaError, match="overrides file not found"):
+        bf.InstallOverrides.from_file(absent)
+    with pytest.raises(bf.FormulaError, match=r"absent\.txt"):
+        bf.generate(ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi, absent)
+    assert bf.main(["--overrides", str(absent)], fake_pypi) == 1
+    assert "absent.txt" in capsys.readouterr().err
 
 
 def test_only_never_true_markers_are_overrides(tmp_path: Path) -> None:
@@ -275,4 +290,35 @@ def test_only_never_true_markers_are_overrides(tmp_path: Path) -> None:
         "qux ; sys_platform == 'linux'\n",
         encoding="utf-8",
     )
-    assert bf.never_installed(overrides) == {"foo", "bar-baz"}
+    assert bf.InstallOverrides.from_file(overrides).excluded == {"foo", "bar-baz"}
+
+
+def test_dropped_resource_missing_from_closure_is_an_error(
+    tmp_path: Path, overrides: Path
+) -> None:
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        """
+[[package]]
+name = "punt-quarry"
+version = "1.0.0"
+dependencies = [{ name = "plain" }]
+
+[[package]]
+name = "plain"
+version = "1.0"
+sdist = { url = "https://h/plain-1.0.tar.gz", hash = "sha256:aa" }
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(bf.FormulaError, match="drops hf-xet"):
+        bf.generate(lock, ROOT / "pyproject.toml", fake_pypi, overrides)
+
+
+def test_without_list_is_derived_from_dropped_resources(
+    monkeypatch: pytest.MonkeyPatch, overrides: Path
+) -> None:
+    monkeypatch.setattr(bf, "DROPPED_RESOURCES", ("hf-xet", "certifi"))
+    text = bf.generate(ROOT / "uv.lock", ROOT / "pyproject.toml", fake_pypi, overrides)
+    assert "without: wheel_names + %w[certifi hf-xet]" in text
+    assert "@@" not in text
