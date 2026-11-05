@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-11-04
+
 ### Added
 
 - infra: `make brew-formula [FORMULA_OUT=<path>]` renders the Homebrew
