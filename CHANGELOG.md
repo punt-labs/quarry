@@ -14,6 +14,11 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- infra: the generated Homebrew formula restores `depends_on "cmake" => :build`; the pyarrow sdist builds against Homebrew's apache-arrow and needs CMake, so a clean `brew install` failed without it.
+- infra: the generated Homebrew formula installs omegaconf from its universal wheel (its sdist imports `pkg_resources` and cannot build under Homebrew's no-build-isolation pip) and depends on `freetype` so the pillow sdist finds `ft2build.h`.
+
 ## [3.6.0] - 2026-11-04
 
 ### Added

@@ -86,6 +86,23 @@ def test_main_package_comes_from_pypi_json(formula: str) -> None:
     assert f'  url "{MAIN_URL}"\n  sha256 "{MAIN_SHA}"\n' in formula
 
 
+def test_formula_depends_on_cmake_to_build_pyarrow_sdist(formula: str) -> None:
+    assert (
+        '  depends_on "cmake" => :build # pyarrow sdist builds against apache-arrow\n'
+        in formula
+    )
+
+
+def test_formula_depends_on_freetype_for_pillow_sdist(formula: str) -> None:
+    assert '  depends_on "freetype" # pillow\n' in formula
+
+
+def test_omegaconf_is_a_universal_wheel_not_an_sdist(formula: str) -> None:
+    body = _resource_blocks(formula)["omegaconf"]
+    assert "omegaconf-2.3.0-py3-none-any.whl" in body
+    assert ".tar.gz" not in body
+
+
 def test_current_lock_pins_lancedb_and_pyarrow_with_lock_hashes(
     formula: str, lock: dict[str, Any]
 ) -> None:
@@ -234,6 +251,30 @@ wheels = [
         encoding="utf-8",
     )
     with pytest.raises(bf.FormulaError, match="no macOS arm64 wheel"):
+        bf.generate(lock, ROOT / "pyproject.toml", fake_pypi, overrides)
+
+
+def test_universal_pin_without_universal_wheel_is_an_error(
+    tmp_path: Path, overrides: Path
+) -> None:
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        """
+[[package]]
+name = "punt-quarry"
+version = "1.0.0"
+dependencies = [{ name = "omegaconf" }]
+
+[[package]]
+name = "omegaconf"
+version = "2.3.0"
+wheels = [
+    { url = "https://h/omegaconf-2.3.0-cp310-abi3-win_amd64.whl", hash = "sha256:aa" },
+]
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(bf.FormulaError, match="omegaconf: no universal wheel"):
         bf.generate(lock, ROOT / "pyproject.toml", fake_pypi, overrides)
 
 
