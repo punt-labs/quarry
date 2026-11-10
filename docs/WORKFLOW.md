@@ -262,11 +262,17 @@ function pr_loop(unit):
                                                # never a foreground sleep loop
 
 # poll_tick and merge_gate are NOT redefined here. They are
-# pr-review.md's, run exactly as written there — including every term
-# (round, qodo_in, bugbot_in, rerun, pending, finding, answered,
-# escalation, skipped, reviewed_head, delta_head/delta_base/delta range,
-# bugbot_open/bugbot_stuck, demoed_head, demo_exempt, demo_ok, the "ledger
-# comment"), the Qodo-outage local fallback, the round-2 Qodo+Bugbot
+# pr-review.md's, pinned at punt-kit commit
+# ca3365f8ead1701ec87545e7473c75d00356b81e (the links below point at that
+# SHA, not blob/main) so a change to the gate requires a visible bump of
+# this pin, not a silent edit in another repo. Run them exactly as written
+# there — including every term (round, qodo_in, bugbot_in, copilot_in,
+# rerun, pending, finding, answered, escalation, skipped, reviewed_head,
+# delta_head/delta_base/delta range, bugbot_open/bugbot_stuck, demoed_head,
+# demo_exempt, demo_ok, the "ledger comment"), the pending(pr) clause's
+# `or not copilot_in` term (a requested Copilot review must arrive before
+# the gate opens, PR #577), the Qodo-outage local fallback, the round-2
+# Qodo+Bugbot
 # trigger after a round-1 High fix, the reviewed_head / local delta-review
 # transition that keeps a changed head from merging unreviewed, the
 # separate check for queued or in-progress Bugbot runs, and the demo
@@ -303,7 +309,7 @@ function close_out():
 
 The local review sequence `local_review` runs — reviewer selection, round
 limits, the dismissal standard, and when a review counts as blocked — is
-[punt-kit/standards/pr-review.md](https://github.com/punt-labs/punt-kit/blob/main/standards/pr-review.md)'s;
+[punt-kit/standards/pr-review.md](https://github.com/punt-labs/punt-kit/blob/ca3365f8ead1701ec87545e7473c75d00356b81e/standards/pr-review.md)'s;
 this repo's selection is in [Local review before the PR](#local-review-before-the-pr) below.
 
 Entry and exit for one PR iteration. The pre-merge gate is pr-review.md's
@@ -349,7 +355,7 @@ Full-diff local review is where issues die cheaply. A local round costs
 seconds; a remote review cycle costs minutes to hours. The `local_review`
 sequence — the round structure, the dismissal standard, and when a review
 counts as blocked — is
-[punt-kit/standards/pr-review.md](https://github.com/punt-labs/punt-kit/blob/main/standards/pr-review.md)'s.
+[punt-kit/standards/pr-review.md](https://github.com/punt-labs/punt-kit/blob/ca3365f8ead1701ec87545e7473c75d00356b81e/standards/pr-review.md)'s.
 For quarry: `code-reviewer`, `silent-failure-hunter`, and `qodo review` run on
 the unit's first full diff and on every fix diff of 20 lines or more; a fix
 diff under 20 lines gets `qodo review` alone. `djb` joins any diff that touches
@@ -379,7 +385,7 @@ bead.
 
 Remote review is automated-only and runs on already-clean code, so findings
 should be few. The full specification is
-[`punt-kit/standards/pr-review.md`](https://github.com/punt-labs/punt-kit/blob/main/standards/pr-review.md);
+[`punt-kit/standards/pr-review.md`](https://github.com/punt-labs/punt-kit/blob/ca3365f8ead1701ec87545e7473c75d00356b81e/standards/pr-review.md);
 this section names what quarry does with it.
 
 Qodo is the primary remote reviewer (`.pr_agent.toml`). It reviews when the PR
