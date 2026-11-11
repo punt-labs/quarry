@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Self, final
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
 from quarry.home_paths import QuarryHome
+from quarry.transcript_snapshot import TranscriptSnapshot
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
@@ -125,9 +126,16 @@ class SessionTranscriptCapture:
             format_artifacts_header,
         )
 
-        # Taken before the transcript is read: anything written after this instant
-        # is newer than the capture, whatever the daemon does with it later.
-        snapshot = datetime.now(UTC)
+        # Both taken before the transcript is read: anything written after
+        # this instant is newer than the capture, whatever the daemon does
+        # with it later.  The version rides CaptureIngestRequest.source_version
+        # so the daemon's own StoredSessions gate (captures.py) can recognize an
+        # unchanged transcript and skip the delete+re-embed — the comparison
+        # is intentionally daemon-side, not a client-side cache, so two
+        # concurrent captures of the same session cannot both read a stale
+        # "already sent" answer and both skip (or both miss each other's write).
+        captured_at = datetime.now(UTC)
+        source_version = TranscriptSnapshot.taken(self._source.transcript_path).version
         archived = self._archive()
 
         raw_text = self._reader.text()
@@ -142,7 +150,12 @@ class SessionTranscriptCapture:
         wire_text = f"{header}\n\n{raw_text}" if header else raw_text
 
         written = self._write_local_capture(artifacts, raw_text)
-        send = self._send(wire_text, archived=archived, snapshot=snapshot)
+        send = self._send(
+            wire_text,
+            archived=archived,
+            captured_at=captured_at,
+            source_version=source_version,
+        )
         return TranscriptCaptureOutcome(
             archived=archived,
             sent=bool(send),
@@ -184,7 +197,12 @@ class SessionTranscriptCapture:
         )
 
     def _send(
-        self, wire_text: str, *, archived: bool, snapshot: datetime
+        self,
+        wire_text: str,
+        *,
+        archived: bool,
+        captured_at: datetime,
+        source_version: str,
     ) -> SendOutcome:
         """Post the wire text to the daemon; return the send's outcome."""
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
@@ -196,7 +214,8 @@ class SessionTranscriptCapture:
             agent_handle=self._agent_handle,
             summary=self._summary,
             format_hint="markdown",
-            captured_at=snapshot.isoformat(),
+            captured_at=captured_at.isoformat(),
+            source_version=source_version,
         )
         note = "archived, run backfill-sessions to index it"
         down = f"{self._source.label}: daemon unreachable; transcript " + (

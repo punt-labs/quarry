@@ -127,6 +127,10 @@ class TestUnchangedTranscriptReembedsEveryChunk:
                         "content": _TRANSCRIPT_TEXT,
                         "session_id": _SESSION_ID,
                         "cwd": str(tmp_path),
+                        # The client's pre-read snapshot of the (unchanged)
+                        # transcript file -- the same value every pass, as a
+                        # real hook would compute from a file that never grew.
+                        "source_version": "500000:1700000000000000000",
                     },
                 )
                 assert accepted.status_code == 202
@@ -145,6 +149,41 @@ class TestUnchangedTranscriptReembedsEveryChunk:
             f"got {len(backend.embedded)} -- the capture route re-embedded "
             "the whole transcript on every POST instead of recognizing a "
             "no-op capture of already-stored content"
+        )
+
+    def test_a_changed_transcript_version_still_reingests(self, tmp_path: Path) -> None:
+        """The gate must not over-suppress: a GROWN transcript re-embeds.
+
+        Each pass carries a distinct ``source_version``, as a real hook would
+        after the transcript file grew between captures -- the gate must see
+        these as distinct versions and ingest every one.
+        """
+        daemon = InProcessDaemon(tmp_path)
+        backend = FakeEmbeddingBackend()
+
+        with (
+            TestClient(daemon.app, raise_server_exceptions=False) as http,
+            patch(
+                "quarry.ingestion.streaming.get_embedding_backend", lambda _s: backend
+            ),
+        ):
+            for pass_num in range(_REINGEST_PASSES):
+                accepted = http.post(
+                    "/v1/capture",
+                    json={
+                        "content": _TRANSCRIPT_TEXT,
+                        "session_id": _SESSION_ID,
+                        "cwd": str(tmp_path),
+                        "source_version": f"{500000 + pass_num}:1700000000000000000",
+                    },
+                )
+                assert accepted.status_code == 202
+                task = _await_terminal(http, accepted.json()["task_id"])
+                assert task["status"] == "completed", task
+
+        assert len(backend.embedded) == 3 * _REINGEST_PASSES, (
+            "a distinct source_version each pass must re-ingest every time -- "
+            "the unchanged-version gate must not suppress a genuine change"
         )
 
     def test_stored_chunk_count_never_exceeds_one_documents_worth(
