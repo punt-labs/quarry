@@ -27,7 +27,9 @@ and what must be true to leave it. The state those schemas observe:
 ```text
 LoopState
   signals       : ℙ SIGNAL  -- issues, alerts, messages not yet triaged
-  open          : ℙ BEAD    -- open beads: the single work funnel
+  open          : ℙ BEAD    -- open items in the tracker (Linear where
+                            --   migrated, observed through the beads
+                            --   mirror)
   validated     : ℙ BEAD    -- re-proven against current main
   claimed       : ℙ BEAD    -- the current batch
   closed        : ℙ BEAD    -- beads completed by a merged PR
@@ -61,8 +63,7 @@ ran, not review of the diff.
 ## Level 1 — The backlog loop
 
 The backlog loop keeps the bead tracker true and decides what to work on next.
-Beads (`bd`, one shared DoltDB across the org, `quarry-` prefix) are the single
-funnel: every piece of work, whatever its origin, is a bead before it is
+The tracker is the single funnel: every piece of work, whatever its origin, is a bead before it is
 anything else. One iteration selects and completes one batch of work. The loop
 runs at session start and again whenever the current batch is done. Start every
 session with `/loop 2m /biff:read` and a `bd ready --limit=99` sweep.
@@ -77,7 +78,9 @@ function backlog_loop():
                    # never filed — only genuinely NEW scope arrives here
         if duplicate(signal):  close_at_door(signal, link_existing_bead)
         elif invalid(signal):  close_at_door(signal, stated_reason)
-        else:                  bd_create(signal, labels, link_back_to_source)
+        else:                  tracker_create(signal, labels, link_back_to_source)
+                               # Linear save_issue where migrated; bd create
+                               #   otherwise
 
     # 2. VALIDATE — a bead must be true before it is workable
     for bead in candidates(bd_ready):
@@ -645,7 +648,7 @@ change in one of these areas is not accepted until its class is tested.
 
 ## Invariants
 
-1. **Beads are the single funnel.** Every piece of work is a bead before it is
+1. **The tracker is the single funnel.** Every piece of work is a bead before it is
    anything else; external queues (issues, alerts) drain into it at intake.
    `TaskCreate` is session-visible display only, never the durable record.
 2. **A satisfied merge gate means merge now.** The gate is the only path to a
