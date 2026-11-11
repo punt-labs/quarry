@@ -194,3 +194,7 @@ There is no WebSocket endpoint — the daemon serves REST only. Every `/v1` requ
 - [`docs/design/agent-memory-loop.md`](docs/design/agent-memory-loop.md) — the agent-memory write loop: persist habit, `missions sync`, SubagentStop distillation (DES-055)
 - [`DESIGN.md`](DESIGN.md) — architectural decision records
 - [`README.md`](README.md) — user-facing documentation
+
+## Issue tracking
+
+Read `.punt-labs/punt/CLAUDE.md` before planning or writing to the issue tracker. Linear is the tracker of record where this repo is migrated. Beads is a local mirror there and the tracker of record elsewhere.
