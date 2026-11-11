@@ -39,3 +39,8 @@ class CaptureIngestRequest(BaseModel):
     # stores it as the capture's ingestion time (queue time when absent), so a
     # transcript written after the read is newer than the stored document.
     captured_at: str = ""
+    # What the transcript was (``"<size>:<mtime_ns>"``) when the hook snapshotted
+    # it, before reading — see ``TranscriptSnapshot``.  Empty means the sender
+    # took no snapshot (an older client, or a non-transcript capture), so the
+    # daemon cannot vouch for it being unchanged and always re-ingests.
+    source_version: str = ""

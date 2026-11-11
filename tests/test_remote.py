@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import os
+import re
 import ssl
 import stat
 import tomllib
@@ -99,7 +100,7 @@ class TestReadProxyConfig:
     def test_malformed_toml_raises(self, proxy_config_path: Path) -> None:
         proxy_config_path.parent.mkdir(parents=True, exist_ok=True)
         proxy_config_path.write_text("not valid toml ][[\n")
-        with pytest.raises(ValueError, match=str(proxy_config_path)):
+        with pytest.raises(ValueError, match=re.escape(str(proxy_config_path))):
             read_proxy_config()
 
 
