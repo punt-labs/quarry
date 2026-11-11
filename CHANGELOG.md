@@ -16,6 +16,7 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- index: a session-transcript capture no longer deletes and re-embeds every chunk when the transcript is unchanged. The hook snapshots the transcript's version (`<size>:<mtime_ns>`) before reading and sends it on the capture; the daemon skips re-ingest when the stored version matches and the stored document is page-complete. All three capture hooks (PreCompact, SessionEnd, SubagentStop) share this path, so a live session captured repeatedly stops re-embedding on every cycle.
 - infra: the generated Homebrew formula restores `depends_on "cmake" => :build`; the pyarrow sdist builds against Homebrew's apache-arrow and needs CMake, so a clean `brew install` failed without it.
 - infra: the generated Homebrew formula installs omegaconf from its universal wheel (its sdist imports `pkg_resources` and cannot build under Homebrew's no-build-isolation pip) and depends on `freetype` so the pillow sdist finds `ft2build.h`.
 
