@@ -13,6 +13,12 @@
 # no-auto-flush, no-auto-import, sync-branch) were removed in bd 1.0+
 # and reading them would be misleading.
 
+# Beads mirrors Linear (the planning source of truth). issue-prefix names
+# pulled-in beads; linear.pull_label scopes pulls to this repo's issues so a
+# bulk/auto pull never imports the whole PL team into quarry.
+issue-prefix: quarry
+linear.pull_label: repo:quarry
+
 directory:
   labels:
     quarry: repo:quarry
