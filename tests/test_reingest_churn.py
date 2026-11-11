@@ -34,6 +34,15 @@ ALSO what drives #622's disk-growth report (quarry-b9c4) -- see
 ``TestVersionChurnGrowsWithRepeatedReingest`` below, which measures table
 version count, fragment count, and on-disk byte size growing linearly with N
 re-ingests of byte-IDENTICAL content, with no change to the document at all.
+
+The planned fix adds a ``source_version`` change-detection gate ABOVE
+``ingest_content``/``ChunkStoreFunnel`` -- in the capture route and the
+session-transcript hook, not inside the funnel itself (the funnel's
+delete-then-reembed under ``overwrite=True`` is its documented, correct
+contract). ``TestUnchangedTranscriptReembedsEveryChunk`` therefore drives the
+real ``POST /v1/capture`` route end-to-end, not ``ingest_content`` directly,
+so it exercises the layer the fix actually touches and will flip from red to
+green once that gate lands.
 """
 
 from __future__ import annotations
@@ -43,6 +52,7 @@ from unittest.mock import patch
 
 import lancedb
 import pytest
+from starlette.testclient import TestClient
 
 from quarry.config import Settings
 from quarry.db import Database
@@ -51,6 +61,10 @@ from quarry.ingestion.ingest_context import IngestContext, Progress
 from quarry.ingestion.web_ingest import InlineIngest, ingest_content
 from quarry.results import IngestResult
 from tests.fakes import FakeEmbeddingBackend
+from tests.inproc_daemon import InProcessDaemon
+from tests.test_content_routes import _await_terminal
+
+_SESSION_ID = "abcd1234ef"
 
 _REINGEST_PASSES = 6
 _TRANSCRIPT_TEXT = (
@@ -77,25 +91,47 @@ def _ingest_capture_once(db: Database, settings: Settings) -> IngestResult:
 
 
 class TestUnchangedTranscriptReembedsEveryChunk:
-    """Deliverable 1: the embed count must stay flat across N unchanged re-ingests.
+    """Deliverable 1: the embed count must stay flat across N unchanged re-captures.
+
+    Drives the real ``POST /v1/capture`` route end-to-end (``InProcessDaemon``
+    + ``TestClient``, the harness already established in
+    ``test_content_routes.py::TestCaptureRoute``) -- the layer the fix
+    (quarry-uq95 findings §3: a ``source_version`` gate ahead of
+    ``ingest_content``) actually touches. A test that instead called
+    ``ingest_content``/``ChunkStoreFunnel`` directly would exercise a layer
+    the fix never changes -- those are correctly doing what they are told;
+    they are just told to do it every time -- and would still fail after the
+    fix landed, which is a false finish line for the next mission.
 
     FAILS on current main: nothing short-circuits an identical capture, so
-    ``embed_texts`` is called with the SAME three chunks on every pass and the
-    cumulative embedded-text count scales linearly with N.
+    the fake backend embeds the SAME chunks on every POST and the cumulative
+    embedded-text count scales linearly with N.
     """
 
     def test_embed_call_count_stays_flat_across_repeated_unchanged_captures(
         self, tmp_path: Path
     ) -> None:
-        db = Database.connect(tmp_path / "lancedb")
+        daemon = InProcessDaemon(tmp_path)
         backend = FakeEmbeddingBackend()
-        settings = Settings()
 
-        with patch(
-            "quarry.ingestion.streaming.get_embedding_backend", lambda _s: backend
+        with (
+            TestClient(daemon.app, raise_server_exceptions=False) as http,
+            patch(
+                "quarry.ingestion.streaming.get_embedding_backend", lambda _s: backend
+            ),
         ):
             for _ in range(_REINGEST_PASSES):
-                _ingest_capture_once(db, settings)
+                accepted = http.post(
+                    "/v1/capture",
+                    json={
+                        "content": _TRANSCRIPT_TEXT,
+                        "session_id": _SESSION_ID,
+                        "cwd": str(tmp_path),
+                    },
+                )
+                assert accepted.status_code == 202
+                task = _await_terminal(http, accepted.json()["task_id"])
+                assert task["status"] == "completed", task
 
         chunks_per_pass = 3
         # This is the defect: embedded grows by chunks_per_pass EVERY pass
@@ -104,9 +140,11 @@ class TestUnchangedTranscriptReembedsEveryChunk:
         # other (_REINGEST_PASSES - 1) passes as no-ops.
         assert len(backend.embedded) == chunks_per_pass, (
             f"expected a flat embed count of {chunks_per_pass} across "
-            f"{_REINGEST_PASSES} re-ingests of UNCHANGED content; got "
-            f"{len(backend.embedded)} -- every pass re-embedded the whole "
-            "transcript instead of skipping a no-op capture"
+            f"{_REINGEST_PASSES} POSTs of /v1/capture carrying the SAME "
+            f"unchanged transcript (same session_id, byte-identical content); "
+            f"got {len(backend.embedded)} -- the capture route re-embedded "
+            "the whole transcript on every POST instead of recognizing a "
+            "no-op capture of already-stored content"
         )
 
     def test_stored_chunk_count_never_exceeds_one_documents_worth(
