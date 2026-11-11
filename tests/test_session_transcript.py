@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.api import TaskAccepted
+from quarry.api import CaptureIngestRequest, TaskAccepted
 from quarry.client import QuarryClient
 from quarry.send_outcome import SendOutcome
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
@@ -209,8 +209,10 @@ class TestSnapshotOrderingAgainstAGrowingFile:
         accepted_ids: list[str] = []
         real_capture = client.capture
 
-        def capture_and_record(*args: object, **kwargs: object) -> TaskAccepted:
-            accepted = real_capture(*args, **kwargs)  # type: ignore[arg-type]
+        def capture_and_record(
+            req: CaptureIngestRequest, *, timeout: float | None = None
+        ) -> TaskAccepted:
+            accepted = real_capture(req, timeout=timeout)
             accepted_ids.append(accepted.task_id)
             return accepted
 

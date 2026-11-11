@@ -6,8 +6,6 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.stored_sessions import StoredSessions
-
 if TYPE_CHECKING:
     from quarry.db import Database
     from quarry.results import IngestResult
@@ -42,12 +40,14 @@ class UnchangedTranscript:
         ``""`` means the sender took no snapshot (an older client, or a
         non-transcript capture), so the caller must always ingest; ``None`` is
         this lookup's own contract for every other case nothing currently
-        vouches for (PY-EH-8): the caller writes.
+        vouches for (PY-EH-8): the caller writes. ``matches_complete`` also
+        requires every page indexed, so a died-midway partial insert cannot
+        match forever.
         """
         if not version:
             return None
-        docs = database.catalog.list_documents(collection_filter=collection)
-        if not StoredSessions(docs).is_current_version(name, version):
+        stored = database.catalog.document_version(name, collection)
+        if not stored.matches_complete(version):
             return None
         return cls(name, collection)
 

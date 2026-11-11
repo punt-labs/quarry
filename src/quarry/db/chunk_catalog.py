@@ -6,9 +6,11 @@ import logging
 from typing import Self
 
 from quarry._sql import escape_sql
+from quarry.db.document_summary_builder import DocumentSummaryBuilder
+from quarry.db.document_version import DocumentVersion
 from quarry.db.schema import TABLE_NAME
 from quarry.results import CollectionSummary, CoverageCounts, DocumentSummary
-from quarry.types import LanceDB
+from quarry.types import LanceDB, LanceTable
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +18,8 @@ logger = logging.getLogger(__name__)
 # rows).  Non-vector filtered queries must set an explicit limit large enough
 # to cover the full table so the WHERE clause is evaluated against every row.
 _FULL_SCAN_LIMIT = 1_000_000
-_DOCUMENT_COLUMNS = (
-    "document_name",
-    "document_path",
-    "collection",
-    "total_pages",
-    "page_number",
-    "ingestion_timestamp",
-)
+# The columns a single document's version-and-completeness check needs.
+_VERSION_COLUMNS = ("total_pages", "page_number", "source_version")
 
 # A compaction transcript is filed under ``session-<session_id[:8]>``
 # (api/capture_ingest.py); a URL capture is not.  The session archive is the
@@ -44,64 +40,70 @@ class ChunkCatalog:
         self._db = db
         return self
 
+    @staticmethod
+    def _table_or_none(db: LanceDB) -> LanceTable | None:
+        """Return *db*'s chunks table, or ``None`` when it does not exist yet.
+
+        Every read in this class starts here — an absent table means an
+        empty answer, never an error (the collection simply has nothing
+        indexed).
+        """
+        if TABLE_NAME not in db.list_tables().tables:
+            return None
+        return db.open_table(TABLE_NAME)
+
     def list_documents(
         self,
         collection_filter: str | None = None,
     ) -> list[DocumentSummary]:
         """List all indexed documents with metadata."""
-        if TABLE_NAME not in self._db.list_tables().tables:
+        table = self._table_or_none(self._db)
+        if table is None:
             return []
 
-        table = self._db.open_table(TABLE_NAME)
         query = table.search().limit(_FULL_SCAN_LIMIT)
-        query = query.select(self._document_columns(table.schema.names))
+        query = query.select(DocumentSummaryBuilder.columns(table.schema.names))
         if collection_filter:
             query = query.where(f"collection = '{escape_sql(collection_filter)}'")
-        grouped: dict[str, list[dict[str, object]]] = {}
-        for row in query.to_list():
-            grouped.setdefault(str(row["document_name"]), []).append(row)
-        return [self._summary(name, chunks) for name, chunks in grouped.items()]
+        return DocumentSummaryBuilder.group_by_name(query.to_list())
 
-    @staticmethod
-    def _document_columns(present: list[str]) -> list[str]:
-        """Return the columns a document summary reads that *present* holds.
+    def document_version(self, name: str, collection: str) -> DocumentVersion:
+        """Return *name*'s shared version and page completeness in *collection*.
 
-        A table not yet migrated predates ``source_version``; its rows report none.
+        Reads only the columns an unchanged-capture check needs, filtered by
+        both ``document_name`` and ``collection`` — unlike
+        :meth:`list_documents`, which materializes every document in the
+        collection to answer one document's question. A table not yet
+        migrated predates ``source_version``; its rows report none.
         """
-        wanted = [*_DOCUMENT_COLUMNS, "source_version"]
-        return [column for column in wanted if column in present]
+        table = self._table_or_none(self._db)
+        if table is None:
+            return DocumentVersion.absent()
+        columns = [c for c in _VERSION_COLUMNS if c in table.schema.names]
+        rows = (
+            table.search()
+            .where(self._by_name_and_collection(name, collection))
+            .limit(_FULL_SCAN_LIMIT)
+            .select(columns)
+            .to_list()
+        )
+        return DocumentVersion.of_rows(rows)
 
     @staticmethod
-    def _summary(name: str, chunks: list[dict[str, object]]) -> DocumentSummary:
-        """Summarise document *name* from its *chunks* rows."""
-        first = chunks[0]
-        return {
-            "document_name": name,
-            "document_path": str(first["document_path"]),
-            "collection": str(first["collection"]),
-            "total_pages": int(str(first["total_pages"])),
-            "chunk_count": len(chunks),
-            "indexed_pages": len({int(str(c["page_number"])) for c in chunks}),
-            "ingestion_timestamp": max(str(c["ingestion_timestamp"]) for c in chunks),
-            "source_version": ChunkCatalog._shared_version(chunks),
-        }
-
-    @staticmethod
-    def _shared_version(chunks: list[dict[str, object]]) -> str:
-        """Return the ``source_version`` all *chunks* carry; ``""`` when they differ.
-
-        Two overwrites of one document that interleave can leave rows from both;
-        such a document vouches for no single version.
-        """
-        versions = {str(c.get("source_version", "")) for c in chunks}
-        return versions.pop() if len(versions) == 1 else ""
+    def _by_name_and_collection(name: str, collection: str) -> str:
+        """Return the ``document_name``+``collection`` predicate every exact
+        single-document lookup in this file shares."""
+        return (
+            f"document_name = '{escape_sql(name)}'"
+            f" AND collection = '{escape_sql(collection)}'"
+        )
 
     def list_collections(self) -> list[CollectionSummary]:
         """List all collections with document and chunk counts."""
-        if TABLE_NAME not in self._db.list_tables().tables:
+        table = self._table_or_none(self._db)
+        if table is None:
             return []
 
-        table = self._db.open_table(TABLE_NAME)
         rows = (
             table.search()
             .limit(_FULL_SCAN_LIMIT)
@@ -146,9 +148,9 @@ class ChunkCatalog:
             "transcripts_captured": 0,
             "memories_saved": 0,
         }
-        if TABLE_NAME not in self._db.list_tables().tables:
+        table = self._table_or_none(self._db)
+        if table is None:
             return empty
-        table = self._db.open_table(TABLE_NAME)
         predicate = (
             f"collection IN ('{escape_sql(collection)}', "
             f"'{escape_sql(captures_collection)}')"
@@ -186,13 +188,10 @@ class ChunkCatalog:
         ``limit(1)`` can miss a real match. Use the same full-scan limit as
         every other filtered read in this file.
         """
-        if TABLE_NAME not in self._db.list_tables().tables:
+        table = self._table_or_none(self._db)
+        if table is None:
             return False
-        predicate = (
-            f"document_name = '{escape_sql(document_name)}'"
-            f" AND collection = '{escape_sql(collection)}'"
-        )
-        table = self._db.open_table(TABLE_NAME)
+        predicate = self._by_name_and_collection(document_name, collection)
         query = table.search().where(predicate).limit(_FULL_SCAN_LIMIT)
         return bool(query.select(["document_name"]).to_list())
 
@@ -205,7 +204,8 @@ class ChunkCatalog:
         """Retrieve the full raw text for a specific page."""
         logger.debug("get_page_text: document=%s, page=%d", document_name, page_number)
 
-        if TABLE_NAME not in self._db.list_tables().tables:
+        table = self._table_or_none(self._db)
+        if table is None:
             logger.debug("get_page_text: table %s not found", TABLE_NAME)
             return None
 
@@ -216,7 +216,6 @@ class ChunkCatalog:
         if collection:
             predicate += f" AND collection = '{escape_sql(collection)}'"
 
-        table = self._db.open_table(TABLE_NAME)
         results = (
             table.search()
             .where(predicate)

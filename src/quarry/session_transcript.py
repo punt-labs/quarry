@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Self, final
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
 from quarry.home_paths import QuarryHome
+from quarry.transcript_intake import TranscriptIntake
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
@@ -116,8 +117,6 @@ class SessionTranscriptCapture:
         version is snapshotted before the reader parses the file — see that
         class for why the ordering matters.
         """
-        from quarry.transcript_intake import TranscriptIntake  # noqa: PLC0415
-
         handle = EthosConfig.agent_handle_at(source.cwd) if source.cwd else ""
         intake = TranscriptIntake.taken(source.transcript_path)
         return cls(
