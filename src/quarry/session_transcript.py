@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Self, final
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
 from quarry.home_paths import QuarryHome
+from quarry.transcript_intake import TranscriptIntake
 
 if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
@@ -74,12 +75,13 @@ class SessionTranscriptCapture:
     still routes to ``<repo>-captures`` either way.
     """
 
-    __slots__ = ("_agent_handle", "_reader", "_source", "_summary")
+    __slots__ = ("_agent_handle", "_reader", "_source", "_source_version", "_summary")
 
     _source: TranscriptSource
     _reader: TranscriptReader
     _agent_handle: str
     _summary: str
+    _source_version: str
 
     def __new__(
         cls,
@@ -88,6 +90,10 @@ class SessionTranscriptCapture:
         *,
         agent_handle: str = "",
         summary: str = "",
+        # The caller's pre-read snapshot (see for_session/SubagentCapture) —
+        # "" means no snapshot was taken, so the daemon's version gate never
+        # fires for this capture (UnchangedTranscript.look_for's own contract).
+        source_version: str = "",
     ) -> Self:
         self = super().__new__(cls)
         self._source = source
@@ -96,6 +102,7 @@ class SessionTranscriptCapture:
         self._reader = reader
         self._agent_handle = agent_handle
         self._summary = summary
+        self._source_version = source_version
         return self
 
     @classmethod
@@ -105,12 +112,19 @@ class SessionTranscriptCapture:
         The one place a parent-session hook resolves identity, so PreCompact
         and SessionEnd cannot drift. A subagent's capture must not come through
         here — its ``cwd`` is the repo and the pin would name the leader.
-        """
-        from quarry.transcript_reader import TranscriptReader  # noqa: PLC0415
 
+        Goes through :class:`~quarry.transcript_intake.TranscriptIntake` so the
+        version is snapshotted before the reader parses the file — see that
+        class for why the ordering matters.
+        """
         handle = EthosConfig.agent_handle_at(source.cwd) if source.cwd else ""
-        reader = TranscriptReader(source.transcript_path)
-        return cls(source, reader, agent_handle=handle)
+        intake = TranscriptIntake.taken(source.transcript_path)
+        return cls(
+            source,
+            intake.reader,
+            agent_handle=handle,
+            source_version=intake.snapshot.version,
+        )
 
     def capture(self) -> TranscriptCaptureOutcome:
         """Run archive → scrub → daemon-post; return what actually happened.
@@ -125,9 +139,16 @@ class SessionTranscriptCapture:
             format_artifacts_header,
         )
 
-        # Taken before the transcript is read: anything written after this instant
-        # is newer than the capture, whatever the daemon does with it later.
-        snapshot = datetime.now(UTC)
+        # ``_source_version`` was taken by the caller (``for_session`` /
+        # ``SubagentCapture.capture``) before its ``TranscriptReader`` read the
+        # file — see those call sites for why the ordering matters.  It rides
+        # CaptureIngestRequest.source_version so the daemon's own
+        # StoredSessions gate (captures.py) can recognize an unchanged
+        # transcript and skip the delete+re-embed — the comparison is
+        # intentionally daemon-side, not a client-side cache, so two
+        # concurrent captures of the same session cannot both read a stale
+        # "already sent" answer and both skip (or both miss each other's write).
+        captured_at = datetime.now(UTC)
         archived = self._archive()
 
         raw_text = self._reader.text()
@@ -142,7 +163,7 @@ class SessionTranscriptCapture:
         wire_text = f"{header}\n\n{raw_text}" if header else raw_text
 
         written = self._write_local_capture(artifacts, raw_text)
-        send = self._send(wire_text, archived=archived, snapshot=snapshot)
+        send = self._send(wire_text, archived=archived, captured_at=captured_at)
         return TranscriptCaptureOutcome(
             archived=archived,
             sent=bool(send),
@@ -184,7 +205,7 @@ class SessionTranscriptCapture:
         )
 
     def _send(
-        self, wire_text: str, *, archived: bool, snapshot: datetime
+        self, wire_text: str, *, archived: bool, captured_at: datetime
     ) -> SendOutcome:
         """Post the wire text to the daemon; return the send's outcome."""
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
@@ -196,7 +217,8 @@ class SessionTranscriptCapture:
             agent_handle=self._agent_handle,
             summary=self._summary,
             format_hint="markdown",
-            captured_at=snapshot.isoformat(),
+            captured_at=captured_at.isoformat(),
+            source_version=self._source_version,
         )
         note = "archived, run backfill-sessions to index it"
         down = f"{self._source.label}: daemon unreachable; transcript " + (

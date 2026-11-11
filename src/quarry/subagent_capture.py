@@ -13,7 +13,7 @@ from quarry.session_transcript import (
     TranscriptSource,
 )
 from quarry.subagent_report import SubagentReport
-from quarry.transcript_reader import TranscriptReader
+from quarry.transcript_intake import TranscriptIntake
 
 
 @final
@@ -63,16 +63,23 @@ class SubagentCapture:
         for one agent never disagree about whether the session had content.
         """
         handle = EthosConfig.subagent_handle_at(self._agent_type, self._source.cwd)
-        reader = TranscriptReader(self._source.transcript_path)
+        # TranscriptIntake snapshots the version before parsing the file, so
+        # this capture's version can never describe content a later write
+        # already grew past — see TranscriptIntake for the failure it avoids.
+        intake = TranscriptIntake.taken(self._source.transcript_path)
         report = SubagentReport.from_transcript(
-            reader,
+            intake.reader,
             handle=handle,
             agent_id=self._source.session_id,
             parent_session_id=self._parent_session_id,
             agent_type=self._agent_type,
         )
         raw = SessionTranscriptCapture(
-            self._source, reader, agent_handle=handle, summary=report.summary
+            self._source,
+            intake.reader,
+            agent_handle=handle,
+            summary=report.summary,
+            source_version=intake.snapshot.version,
         ).capture()
         if not (handle and not report.is_empty and raw.text_captured):
             return SubagentCaptureOutcome(raw=raw, handle=handle, distillation="")
