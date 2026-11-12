@@ -5,6 +5,9 @@
     // The vendored ethos registry (DES-054) is copied verbatim from
     // punt-labs/team — upstream's markdown is not ours to lint.
     ".punt-labs/ethos/",
+    // Gitignored ethos runtime trace (DES-079): mission prompts and
+    // reflections, never committed and not ours to lint.
+    ".punt-labs/local/",
     ".punt-labs/quarry/captures/",
     ".venv/",
     ".tmp/",

@@ -81,6 +81,7 @@ class CaptureRoutes(ContentRouteGroup):
             "capture",
             url_sourced=is_page,
             captured_at=snapshot,
+            source_version=self._str_field(body, "source_version"),
         )
         return CaptureIngestJob(inline=inline, source_url=source if is_page else None)
 

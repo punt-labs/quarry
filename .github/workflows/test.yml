@@ -12,7 +12,11 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The pytest step alone takes 9 minutes on a healthy runner (run
+    # 42922109313), so a 10-minute cap left one minute for checkout, uv sync,
+    # and the shellcheck apt install. On 2026-11-11 a slow apt mirror ate
+    # 3-4 minutes and cancelled the required check four times (PL-316).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

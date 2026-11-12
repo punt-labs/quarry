@@ -278,5 +278,4 @@ uv.toml
 .punt-labs/ethos/sessions/
 .punt-labs/ethos/.biff
 
-# ethos runtime (never track) — DES-058 live zone + mission locks
-.punt-labs/**/*.ethos-tmp*
+# ethos: shared machine-local zone (never track)

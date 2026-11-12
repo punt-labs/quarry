@@ -33,6 +33,27 @@ before writing code.
 
 @docs/WORKFLOW.md
 
+## On-demand rules
+
+Detail that used to live inline here now loads only when it applies, via
+repo-local `.claude/rules/` (path-scoped, auto-loaded when a matching file is
+touched) or on-read pointers. This keeps per-session context small without
+losing any rule.
+
+- [`.claude/rules/code-quality.md`](.claude/rules/code-quality.md) — module
+  size limits, class/function design, the three OO/coupling/suppression
+  ratchets (DES-040), the "debt amortization, not a limbo bar" philosophy, the
+  database-facade and test-patching conventions. Auto-loads on any `.py`,
+  `tools/`, or `Makefile` change.
+- [`.claude/rules/testing.md`](.claude/rules/testing.md) — the test pyramid,
+  the hermetic-and-bounded suite (DES-047), the five recurring bug classes
+  (file I/O, exception boundaries, remote/local divergence, TLS, install
+  scripts) as evaluator checklists, and the six testing rules. Auto-loads on
+  any test, `conftest.py`, or install-script change.
+- [`.claude/rules/delegation.md`](.claude/rules/delegation.md) — the
+  design→implementation mission split, the worker/evaluator pairing table, and
+  pipeline selection. Read before dispatching a mission.
+
 ## Architecture
 
 ### How a query works
@@ -74,163 +95,22 @@ Quarry has two operational modes. **Local mode**: direct LanceDB access via the 
 | `memory_types.py` | The `MemoryType` closed vocabulary + server-side validation |
 | `__main__.py` | Typer CLI: find, ingest, remember, learn, sync, missions, serve, doctor, etc. |
 
-See `docs/architecture.tex` for the full system description.
-
-## Code Quality
-
-**Module size limits.** No module over 500 lines without a design reason. The modules still over the cap are `doctor.py` (decomposition tracked as quarry-ywh5) and `mcp_server.py`; check current sizes with `make report` or `wc -l src/quarry/*.py`. (`http_server.py`, `database.py`, and `search.py` are retired — decomposed into the `api/`+`daemon/`, `db/`, and `retrieval/` packages; `__main__.py`, `ingestion/pipeline.py`, and `hooks.py` are back under the cap after their decompositions.) When a module grows past the limit, the next change to that module must include extraction.
-
-**Class design.** Classes have a single responsibility. Prefer composition over inheritance. Use `Protocol` for structural typing at boundaries. A module with zero classes and 20+ module-level functions is procedural — it needs a design pass, not more functions.
-
-**Function design.** Functions that share a pattern signal a missing abstraction. Extract the pattern after the third occurrence. Use `make metrics` to measure ABC complexity — high-magnitude functions need decomposition.
-
-**No copy-paste.** If the same structure appears a third time, extract it.
-
-**Known pyright debt:** 6 `reportUnknown*` checks are suppressed project-wide because lancedb, rapidocr, onnxruntime, pymupdf, and pyarrow ship no type stubs. This means pyright cannot catch unknown-type bugs in modules that don't import these libraries either. The suppressions should be narrowed as these libraries add stubs. Pyright's `executionEnvironments` scopes by directory, not by import, so the only current alternative is 591 inline `# pyright: ignore` comments.
-
-**OO ratchet (merge-base scored — DES-040):** `make check-oo` (part of `make check`) scores the touched files in the working tree against the OO baseline **committed at the merge-base** (`git show <base>:.oo-baseline.json`), where `base` defaults to `git merge-base origin/main HEAD`. It passes only if no metric regressed on touched files and at least one metric improved; it fails otherwise. Because the comparison floor is the immutable base-commit blob, a regression cannot be laundered by hand-editing the in-tree baseline within a PR. The tooling lives in the `tools/oo_ratchet/`, `tools/coupling/`, and `tools/suppression/` packages (adopted from vox); the old `tools/oo_score.py` / `oo_coupling.py` / `suppression_ratchet.py` are thin shims. `make check` runs **three** merge-base ratchets — `check-oo`, `check-coupling`, `check-suppressions`.
-
-Workflow:
-
-1. Write code that improves OO quality on the files you touch.
-2. `make check` runs the three ratchets automatically. If one fails, fix the regression.
-3. After all checks pass, run `make update-oo` (and `make update-coupling` / `make update-suppressions` if those changed) to re-record the touched files' baselines.
-4. Stage the regenerated baselines + audit logs with your commit: `.oo-baseline.json` + `.oo-audit.jsonl`, `.oo-coupling-baseline.json` + `.oo-coupling-audit.jsonl`, `.suppression-baseline.json` + `.suppression-audit.jsonl`. The in-tree baseline is a per-commit **integrity lock**: a touched file whose in-tree baseline ≠ its current score fails the gate until you update.
-
-CI injects `--base-ref <merge-base> --require-base` (with `fetch-depth: 0`) on PRs and a `HEAD~1` tripwire on push to main; `make audit-oo` is the CI completeness guard (every scored file must be in the baseline). `--require-base` is mandatory so an unresolvable base fails **closed**, never open.
-
-**Do not negotiate with the ratchet.** Do not suppress `check-oo`. Do not argue a regression is "acceptable." If the ratchet fails, improve the code until it passes. The ratchet is the quality standard's enforcement — working around it defeats the purpose.
-
-**NEVER compress, reword, or delete a comment to move a metric.** Trimming a two-line comment to one line to hold `module_size` at baseline is the single worst form of ratchet-gaming: it corrupts the code, destroys explanatory or security-rationale intent, retires zero debt, and wastes review cycles. Comment formatting is never a lever. The same goes for any cosmetic micro-edit whose only purpose is to nudge a metric — squeezing whitespace, inlining a well-named local, merging statements. If you catch yourself hunting for the cheapest legal change to clear the gate, stop: you have misread what the ratchet is for.
-
-**"No metric improved" means do a real good deed, not a rebaseline.** When a change (e.g. a genuine +1 line of feature substance) causes an unavoidable regression on the file you touched, the answer is to pay real principal down — here or in unrelated nearby debt. Find the worst offender with `radon cc -s -n C -o SCORE src/quarry/` and cut a high-complexity function down, extract a class, or split a god module. `.oo-baseline.json` may be changed ONLY as a **scoped** rebaseline: the specific `file+metric` entries that must grow to carry real feature substance, each with a one-line justification of why it is unavoidable, and every *improved* metric left at its old baseline so it still registers as IMPROVED. A **blanket** rebaseline that records all growth and retires nothing is the negotiation this section forbids — ask the leader before any rebaseline. Escalate to the leader rather than burn time gaming a metric.
-
-**The ratchet is debt amortization, not a limbo bar.** Its purpose is to pay the codebase's OO debt down incrementally: every commit should *fund a medium-scale improvement* — to the file you're touching or to unrelated code nearby — the way you amortize a loan a chunk at a time. This deliberately takes on additional scope, and that is intended. Do **not** treat the ratchet as a constraint to squeak under. Offsetting a two-line addition with a micro-simplification, hunting for `module_size` headroom to avoid an extraction, or gaming a single metric by the minimum all satisfy the letter and waste the intent — and they burn time. When you open a file, make a *real* improvement sized to the opportunity (extract a class, split a god module, internalize public attributes, cut a complex function down), not the smallest change that clears the gate. Bias toward making the improvement, never toward avoiding it. **The test is simple: if the file you touched is meaningfully cleaner than you found it, the ratchet did its job — if you spent that time trying to change as little as possible (or worse, editing comments to move a number), you used it wrong.** This philosophy is org-wide; see the fuller statement in `../vox/CLAUDE.md` and the workspace rule `../.claude/rules/python-oo-adoption.md`.
-
-**Org standards override review tools.** Qodo, Bugbot, and Copilot are advisory. When a review suggestion conflicts with rules in `../.claude/rules/python-*.md`, the rules win. Read the rules before accepting a reviewer's suggestion. PY-CC-1 (`__new__` as constructor) is the most common conflict.
-
-**Verify outputs, not just metrics.** After writing a file, open it and read the content. After backfilling transcripts, search them and confirm the results make sense. `make check` passing does not mean the feature works — it means the code compiles and tests pass. Those are necessary but not sufficient.
-
-**Metrics tools:**
-
-- `make check-oo` — OO ratchet against baseline (11 metrics: method_ratio, encapsulation, params, complexity, module size, class ratios, init violations, public attribute violations, future_annotations).
-- `make update-oo` — update baseline and append to audit log after improvements.
-- `make report` — full diagnostics including per-file OO breakdown (no fail-fast).
-- `make metrics` — ABC complexity analysis. Any module over magnitude 200 needs attention.
-- `make coverage` — test coverage with HTML report in `htmlcov/`.
-- `make check-coupling` — coupling/cohesion ratchet (efferent coupling, public API surface, circular imports, LCOM class cohesion), merge-base scoped. **In the `make check` chain** and CI-enforced (DES-040).
-- `make update-coupling` — update coupling baseline after improvements.
-- `make audit-oo` — CI completeness guard: every scored file must be in the baseline (fails closed on a phantom).
-
-### Database facade convention
-
-Functions in the `src/quarry/ingestion/` package (e.g. `pipeline.py`, `web_ingest.py`) accept `database: Database`, NOT `db: LanceDB`. Callers pass their existing `Database` instance — don't extract `.db` to pass the raw LanceDB connection. Re-wrapping via `Database(db)` re-instantiates the full facade (ChunkStore, ChunkSearch, ChunkCatalog, SchemaManager, TableOptimizer) per call. (Cursor Bugbot flagged this on PR #289; the fix landed in the same PR.)
-
-**When mocking `get_db` in tests, patch `quarry.db.facade.get_db`, not `quarry.db.storage.get_db`.** `Database.connect()` imports `get_db` at module scope into `quarry.db.facade`'s namespace. Patching the storage definition site leaves the facade's bound reference untouched and the mock becomes a silent no-op — tests still pass because they hit the real LanceDB.
-
-### Suppression ratchet uses `tokenize`, not regex/AST heuristic
-
-`tools/suppression/patterns.py` counts suppressions by walking `tokenize` tokens (`tools/suppression_ratchet.py` is now a thin shim over the `tools/suppression/` package). A line is "code" iff it carries any non-trivial token; a `COMMENT` token is the only real suppression source. This is the **one** quarry-origin change on top of vox's otherwise-verbatim ratchet packages (DES-040): don't revert to vox's older regex + `_CODE_START_RE` heuristic — it has documented blind spots (`async def`, attribute assignments, tuple targets, triple-quoted single-line docstrings containing `# noqa` text). The tokenize version handles all of those correctly, and is being upstreamed to vox (quarry-njmr).
-
-## Testing
-
-### Pyramid
-
-| Layer | Make target | Runs in CI | What it covers |
-|-------|-------------|------------|----------------|
-| Unit | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, enable/disable, service, install scripts |
-| Resource-invariant | `make test` (marker `resource`) | yes | Long-lived-process leak guards: a single connection over many optimize cycles must not leak file descriptors (`tests/test_resource_invariants.py`). The daemon holds a connection for its whole lifetime; `create_fts_index(replace=True)` supersedes an index generation and LanceDB's Rust core never evicts the deleted-file readers, so a leak here is invisible to short-lived CLI tests and only surfaces as EMFILE → HTTP 500 in the daemon. |
-| Integration | `make test-slow` | no (needs real ONNX model) | Real filesystem + ONNX model end-to-end. Carries both `slow` and `embedding`; the `embedding` marker is what lets the real model load, so removing it silently reroutes the tier through the fake. |
-| Shell scripts | `make test` (via pytest) | yes | Install script ordering, shellcheck |
-| HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
-| Wheel install | `make test-wheel` | local pre-PR gate | Build wheel → isolated venv → serve on 8422 → smoke checks |
-| MCP smoke test | `docs/smoke-test.md` | post-release manual | MCP + CLI + enable/disable + install verification (see `docs/smoke-test.md` for the current check count) |
-
-`make check-full` = `make check` + `make test-wheel`. Full test suite needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
-
-### The suite is hermetic and bounded (DES-047)
-
-A run writes nothing under the operator's real `~/.punt-labs/quarry/` and loads no ONNX model. Four mechanisms enforce that; none of them are optional, and each exists because the obvious cheaper version was measured and does not work.
-
-- **`HOME` is redirected** to a session temp directory by `tests/hermetic_env.py`, which the **rootdir** `conftest.py` imports. That location is load-bearing: `tests/conftest.py` imports quarry at module scope, and quarry decides its home-derived paths when its modules are imported, so `pytest_configure` is too late and a `-p` plugin is too early (the rootdir is not yet on `sys.path`). Setting the variable rather than patching `Path.home` is also required — `os.path.expanduser` reads `$HOME` and ignores the patched classmethod.
-- **The embedding fake is installed at the factory**, not at import sites. An autouse fixture replaces `get_embedding_backend`, `new_embedding_backend`, *and* `quarry.embeddings.OnnxEmbeddingBackend`; the third is the one that does the work, because `streaming` and `http_resources` bind their factory with a module-scope from-import. An `onnxruntime.InferenceSession` guard fails any unmarked test that reaches a real model. **Do not add a `patch("...get_embedding_backend")` to dodge a model load** — it is already handled, and ~40 such patches were deleted. Patch locally only to assert on specific vectors.
-- **Two distinct opt-outs.** `@pytest.mark.embedding` grants the real 410 MB model and is deselected by default alongside `slow`. The `real_embedding_factory` fixture keeps the real factory for tests that assert on what it *builds* (`test_backends`, `test_embeddings`, doctor's install path); those stay in the default run and still may not load a model.
-- **Two session invariants**: no non-daemon thread outlives the run, and the production `config.toml` is unchanged. The thread check is session-scoped because LanceDB starts its tokio pool lazily — a per-test check fails on correct code. The file guard watches only that one quiescent **file**: the log and `registry.db` were dropped because the live daemon and MCP clients write them continuously (the guard sees files, not writers, so every firing accused an innocent test) while the `HOME`/`QUARRY_ROOT`/`QUARRY_LOG_DIR` redirects already make them unreachable from tests. A directory `mtime` does not move when a file below it is written, and a recursive walk of the operator's 15 GB tree does not finish — do not "improve" the guard into a tree fingerprint, and do not re-add the daemon-written files.
-
-Two standing rejections, so they are not reinvented: **no `pytest-xdist`** (the suite is I/O-bound at 0.69 average cores; workers multiply the footprint for no gain) and **no workspace-wide test-concurrency lock** (it would bake the punt-labs checkout layout into a shipped product). Both are rejected, not deferred. See DES-047.
-
-### What good testing means in this project
-
-Quarry has four surfaces (CLI, MCP, HTTP, plugin) backed by the same core. Every feature must work on all surfaces or explicitly document which surfaces it applies to. The recurring failure mode is surfaces drifting — a parameter added to the CLI but missing from the HTTP API, or a response field present locally but omitted remotely. The testing rules below exist because these bugs appeared repeatedly and were expensive to find.
-
-**Never retry a command that produces no output.** Diagnose first — empty output usually means a silent exception or a missing code path, not a transient failure.
-
-### Recurring bug classes (quarry-ccji-tls, 10 review rounds)
-
-Ten review cycles on the TLS remote-access feature revealed five classes of bugs that appeared repeatedly. Each class points to a testing gap that must be closed with any future change in that area. These are evaluator checklists — every code review must check for these.
-
-**Class 1 — File I/O safety.** `os.write()` is not guaranteed to write all bytes. `os.fdopen()` can raise before taking ownership of the fd, leaking it. Atomic rename must be inside the try block or the temp file leaks on failure. Permissions race: creating a file then chmoding it leaves a window.
-
-*Required tests:* Every function that uses `os.open()`/`os.fdopen()` must have tests covering (a) successful write, (b) fd explicitly closed when `os.fdopen()` raises, (c) temp file removed on any write failure, (d) file created with correct mode from the start (not chmod after). Mock `os.fdopen` to raise and assert the fd is closed and the temp file is gone.
-
-**Class 2 — Exception boundaries.** Functions that promise `(bool, str)` or a clean fallback can silently propagate exceptions when a dependency raises before the `try` block. `ssl_ctx.load_verify_locations()` outside the try block crashes instead of returning `(False, reason)`. `read_proxy_config()` raising `ValueError` on a malformed TOML crashes CLI commands that should fall back to local mode. Install scripts that do not gate on subprocess exit codes print success after failure.
-
-*Required tests:* Every function returning `(bool, str)` must have a test that makes the underlying call raise and verifies the function returns `(False, <non-empty string>)` rather than propagating. Every CLI command that reads optional config must have a test with malformed config that verifies fallback (exit 0, warning printed) not crash.
-
-**Class 3 — Remote/local divergence.** The same logical operation (e.g. `quarry find`) has two code paths: local (DB) and remote (HTTP). These paths drift: the HTTP `/search` endpoint used the vector-only `search()` while the CLI used `hybrid_search()`; the `/search` route ignored `agent_handle`, `memory_type`, `document` params that the CLI sent; the remote JSON response omitted `page_number`, `page_type`, `source_format` that the local response included.
-
-*Required tests:* For every CLI command with a remote path, write an equivalence test: call the command twice (once mocked to local, once mocked to remote HTTP), assert the JSON output contains exactly the same field names. For every query param the CLI encodes into the URL, write an HTTP server test asserting the server reads that param and passes it to the database query. A new filter on the local path must fail a test until it is also on the remote path.
-
-**Class 4 — TLS semantics.** IP addresses require `x509.IPAddress()`, not `x509.DNSName()` — TLS clients reject the latter per RFC 5280. `not_valid_before(now)` causes "not yet valid" rejections on clients with minor clock skew; certificates should backdate by at least 5 minutes. A new CA cert context must exclude system roots entirely (`ssl.PROTOCOL_TLS_CLIENT` + `load_verify_locations` only) — using `ssl.create_default_context()` accepts any system-trusted cert, defeating pinning. CA cert and key must be verified to match before reusing them.
-
-*Required tests:* Cert generation tests must assert: (a) IP hostnames produce `x509.IPAddress` SANs, not `x509.DNSName`; (b) `not_valid_before` is at least 1 second in the past relative to `datetime.now(UTC)`; (c) the SSL context used for pinned-CA connections has no system roots (verify by checking `ctx.verify_mode == CERT_REQUIRED` and that `ctx.get_ca_certs()` returns only the pinned cert); (d) mismatched CA cert/key raises `ValueError` before any cert is written.
-
-**Class 5 — Install script logic.** Shell scripts have no test coverage beyond shellcheck. Logic bugs — checking API key after a slow download, service registering on loopback while the script runs on 0.0.0.0, never creating `quarry.toml` so the plugin silently falls back — are invisible to shellcheck and only caught by manual testing or Bugbot.
-
-*Required tests:* At minimum, every install script must pass `shellcheck -x`. For logic correctness: write integration tests that invoke the scripts with a mock `quarry` binary (a shell function that records its invocations and returns success/failure). Assert: (a) QUARRY_API_KEY is checked before any slow step; (b) the service command baked into launchd/systemd includes `--host 0.0.0.0` when `QUARRY_SERVE_HOST=0.0.0.0` is set; (c) the script exits non-zero when the daemon fails to start; (d) `quarry login localhost --yes` is called after the daemon starts.
-
-### Testing rules
-
-1. **No new `os.open()`/`os.fdopen()` pattern without a failure-injection test** covering fd closure and temp file cleanup.
-2. **No new `(bool, str)` return function without a raises-then-returns-false test.**
-3. **No new CLI filter param without a matching HTTP server test** asserting the param reaches the database query.
-4. **No new remote code path without an equivalence test** asserting JSON field names match the local path.
-5. **No new cert generation call without asserting** SAN type (IP vs DNS), `not_valid_before` is in the past, and pinned context excludes system roots.
-6. **Shell scripts must pass `shellcheck -x` in CI.** Logic tests via mock quarry binary for any script with conditional branching on quarry subcommand results.
+See `docs/architecture.tex` for the full system description. Code-quality
+conventions (module size limits, the OO ratchets, the database-facade rule)
+are in [`.claude/rules/code-quality.md`](.claude/rules/code-quality.md);
+testing (the pyramid, the hermetic suite, the five bug classes) is in
+[`.claude/rules/testing.md`](.claude/rules/testing.md).
 
 ## Ethos & Delegation
 
 Identity: `agent: claude`, `team: quarry`, `resolution: repo-only` per `.punt-labs/ethos.yaml`. Sub-agent calls (`Agent(subagent_type=…)`) match ethos identity handles.
 
-**The identity registry is a vendored, self-contained copy at `.punt-labs/ethos/`** — plain committed files (the `lux`/`cryptd` pattern). A clone of this repo resolves every identity from files in the repo alone: no dependency on the developer's `~/.punt-labs/ethos/`, on the `..` workspace, or on the `../team` registry. It carries the 8-member `quarry` team (jfreeman, claude, rmh, gvr, kpz, djb, mdm, adb — the roster the pairing tables below use), their personalities, writing styles, talents, roles, and `teams/quarry.yaml`. `.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`, `resolution: repo-only` — which bounds SessionStart context injection to this roster and forbids any global fallback. There is deliberately **no `.vendor.yaml`**. To refresh the roster, edit `.punt-labs/ethos/teams/quarry.yaml` and re-run the vendor+prune (`ethos vendor claude jfreeman rmh gvr kpz djb mdm adb --apply`, then prune back to the quarry-team closure: drop non-roster identities and their unreferenced attributes, keep `.punt-labs/ethos/teams/quarry.yaml`, re-run `ethos doctor`); the `../team` registry is not in this loop. The `ethos vendor` seed handles must match the roster in the team file — when you add or drop a member, change both together, or the vendor run reproduces the old set. Runtime state (`missions/`, `missions.jsonl`, `sessions/`, `.biff`) stays gitignored. **Do not add the `punt-labs/team` submodule here** — Claude Code clones plugin repos with `--recurse-submodules`, and `ethos enable` v4.15.0+ refuses submodule mounts outright (`ethos-e29s`).
+**The identity registry is a vendored, self-contained copy at `.punt-labs/ethos/`** — plain committed files (the `lux`/`cryptd` pattern). A clone of this repo resolves every identity from files in the repo alone: no dependency on the developer's `~/.punt-labs/ethos/`, on the `..` workspace, or on the `../team` registry. It carries the 8-member `quarry` team (jfreeman, claude, rmh, gvr, kpz, djb, mdm, adb — the roster the pairing table uses), their personalities, writing styles, talents, roles, and `teams/quarry.yaml`. `.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`, `resolution: repo-only` — which bounds SessionStart context injection to this roster and forbids any global fallback. There is deliberately **no `.vendor.yaml`**. To refresh the roster, edit `.punt-labs/ethos/teams/quarry.yaml` and re-run the vendor+prune (`ethos vendor claude jfreeman rmh gvr kpz djb mdm adb --apply`, then prune back to the quarry-team closure: drop non-roster identities and their unreferenced attributes, keep `.punt-labs/ethos/teams/quarry.yaml`, re-run `ethos doctor`); the `../team` registry is not in this loop. The `ethos vendor` seed handles must match the roster in the team file — when you add or drop a member, change both together, or the vendor run reproduces the old set. Runtime state (`missions/`, `missions.jsonl`, `sessions/`, `.biff`) stays gitignored. **Do not add the `punt-labs/team` submodule here** — Claude Code clones plugin repos with `--recurse-submodules`, and `ethos enable` v4.15.0+ refuses submodule mounts outright (`ethos-e29s`).
 
-All code delegation uses ethos missions. Every non-trivial delegation has two phases: (1) **design mission** — describes the problem, constraints, and invariants but does NOT prescribe a write set; (2) **implementation mission** — uses the write set produced by the design phase. The design mission's output IS the write set — the specialist decides what to create, split, or extract. This is critical: prescribing a write set before design prevents refactoring and forces code into existing modules (which is how `__main__.py` reached 2,008 lines).
-
-**Every implementation mission MUST direct the worker to make a real OO improvement on the files it touches** — sized to the opportunity (extract a class, split a god module, internalize public attributes, cut complexity), not minimal ratchet-clearing. The ratchet is debt amortization; every mission pays some down (see the "debt amortization" note in Code Quality). A worker that offsets a small addition with a micro-simplification, or hunts for `module_size` headroom to dodge an extraction, has missed the point. Purity is not a goal: an adjacent improvement riding along the mission's diff is welcome.
-
-### Why these pairings
-
-Quarry spans four technical domains that require distinct expertise: (1) **ML/numerical** — ONNX embedding, quantization, GPU dispatch, search algorithm design — owned by `kpz` because these are inference pipeline and hardware abstraction problems; (2) **data infrastructure** — LanceDB schema, migrations, chunk storage, agent memory — owned by `rmh` because these are Python data-layer problems with strict type contracts; (3) **network trust** — TLS cert generation, pinned CA contexts, HTTP API contracts — owned by `djb` because TLS semantics are security-critical and the bug class history proves subtle mistakes recur; (4) **user surface** — CLI commands, install scripts, system service lifecycle — split between `mdm` (CLI design) and `adb` (infrastructure/service).
-
-| Task type | Worker | Evaluator |
-|-----------|--------|-----------|
-| Embedding pipeline / ONNX provider selection | `kpz` (Karpathy) | `rmh` (Hettinger) |
-| Quantization, GPU/CPU dispatch, model loading | `kpz` | `gvr` (van Rossum) |
-| Search algorithm (hybrid, RRF, temporal decay, BM25) | `kpz` | `rmh` |
-| LanceDB schema / chunks table / migrations | `rmh` | `gvr` |
-| Python implementation (CLI commands, library API) | `rmh` | `gvr` |
-| MCP server (stdio) | `rmh` | `mdm` (Pike) |
-| HTTP API / `/search` endpoint / param contracts | `rmh` | `djb` (Bernstein) |
-| TLS / cert generation / pinned-CA contexts | `djb` | `rmh` |
-| Install scripts / launchd / systemd service | `adb` (Lovelace) | `djb` |
-| Agent memory: identity tagging, summary, decay | `rmh` | `kpz` |
-| Document loaders / format ingestion (20+ types) | `gvr` | `rmh` |
-| CLI surface (`quarry find`, `ingest`, `remember`) | `mdm` | `rmh` |
-| Performance / latency / index-build benchmarks | `kpz` | `adb` |
-
-### Pipeline selection
-
-Use `standard` pipeline (design → implement → test → review) for any change touching `/search`, the embedding pipeline, TLS, or work that crosses the local/remote boundary. Use `quick` (implement → review) only for documented bugfixes inside a single module that don't cross boundaries. Apply the five bug classes from the Testing section as evaluator checklists on every review. Review-cycle fix rounds (Qodo/Bugbot findings) use bare `Agent()`, not missions.
+The design→implementation mission split, the worker/evaluator pairing table,
+and pipeline selection live in
+[`.claude/rules/delegation.md`](.claude/rules/delegation.md) — read it before
+dispatching a mission.
 
 ## Development Loop
 
@@ -292,3 +172,4 @@ Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — re
 @.punt-labs/vox/CLAUDE.md
 @.punt-labs/ethos/CLAUDE.md
 @.punt-labs/beadle/CLAUDE.md
+@.punt-labs/punt/CLAUDE.md

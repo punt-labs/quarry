@@ -1,5 +1,5 @@
 name: security-engineer
-model: sonnet
+model: opus
 responsibilities:
   - threat modeling and security review
   - credential management audit
