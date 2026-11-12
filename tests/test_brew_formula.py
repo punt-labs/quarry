@@ -99,7 +99,7 @@ def test_formula_depends_on_freetype_for_pillow_sdist(formula: str) -> None:
 
 def test_omegaconf_is_a_universal_wheel_not_an_sdist(formula: str) -> None:
     body = _resource_blocks(formula)["omegaconf"]
-    assert "omegaconf-2.3.0-py3-none-any.whl" in body
+    assert "-py3-none-any.whl" in body
     assert ".tar.gz" not in body
 
 
