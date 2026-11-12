@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quarry.api import CaptureIngestRequest, TaskAccepted
+from quarry.client import QuarryClient
 from quarry.send_outcome import SendOutcome
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
 from quarry.transcript_reader import TranscriptReader
@@ -159,6 +161,132 @@ class TestAnOversizedMessageIsNeverEmptyText:
 
         assert outcome.text_captured is True
         assert sender.call_args[0][0].content.endswith("TAIL")
+
+
+class TestSnapshotOrderingAgainstAGrowingFile:
+    """quarry-uq95 round 3: the version must be taken BEFORE the file is read.
+
+    ``TranscriptReader.__new__`` reads the file synchronously at construction.
+    A snapshot taken any later than that read can describe a file a writer
+    already grew past the content this capture actually sends — the stored
+    row is then tagged with a version the NEXT, now-quiescent capture already
+    matches, so that capture is skipped and the growth it would have ingested
+    is silently lost forever.
+
+    Reproduces the race by making the file grow the instant
+    ``TranscriptSnapshot.taken`` is invoked: the unfixed code calls it
+    AFTER building the reader (so the growth already landed by the time the
+    snapshot is taken, and the stale, pre-growth text ends up tagged with the
+    post-growth version); the fixed code calls it BEFORE building the reader
+    (so the snapshot describes the pre-growth file, and the reader's own read
+    -- whatever it sees -- is tagged honestly).
+    """
+
+    @staticmethod
+    def _capture_once(
+        transcript: Path, client: QuarryClient, *, grow_on_snapshot: str | None
+    ) -> None:
+        """Run one real ``for_session().capture()``, then await its task.
+
+        *grow_on_snapshot*, when given, is appended to the transcript the
+        instant ``TranscriptSnapshot.taken`` runs -- the earliest point a
+        real writer's append could land relative to this capture's own
+        read/stat pair.  ``capture()`` fires the daemon POST and returns
+        before the background store finishes (the production fire-and-forget
+        contract), so the real task id is captured off the wrapped client and
+        awaited to a terminal state before this returns.
+        """
+        from quarry.transcript_snapshot import TranscriptSnapshot
+
+        real_taken = TranscriptSnapshot.taken
+
+        def taken_and_maybe_grow(path: Path) -> TranscriptSnapshot:
+            if grow_on_snapshot is not None:
+                with path.open("a") as f:
+                    f.write(grow_on_snapshot)
+            return real_taken(path)
+
+        accepted_ids: list[str] = []
+        real_capture = client.capture
+
+        def capture_and_record(
+            req: CaptureIngestRequest, *, timeout: float | None = None
+        ) -> TaskAccepted:
+            accepted = real_capture(req, timeout=timeout)
+            accepted_ids.append(accepted.task_id)
+            return accepted
+
+        source = TranscriptSource("", "abcd1234ef", transcript, "test")
+        with (
+            patch(
+                "quarry.transcript_snapshot.TranscriptSnapshot.taken",
+                side_effect=taken_and_maybe_grow,
+            ),
+            patch.object(client, "capture", side_effect=capture_and_record),
+        ):
+            outcome = SessionTranscriptCapture.for_session(source).capture()
+        assert outcome.sent, outcome
+        task = client.await_task(accepted_ids[0])
+        assert task.is_completed, task
+
+    def test_growth_between_the_read_and_the_stat_is_not_permanently_lost(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.api import ShowRequest
+        from tests.inproc_daemon import InProcessDaemon
+
+        transcript = _write_transcript(tmp_path / "s.jsonl", "first turn content")
+        daemon = InProcessDaemon(tmp_path / "daemon")
+
+        with (
+            daemon.client() as client,
+            patch("quarry.client.TargetResolver.connect", return_value=client),
+        ):
+            # Pass 1: the file grows by one line the instant the snapshot is
+            # taken (relative to this capture's own read -- the earliest a
+            # concurrent writer's append could land under the buggy ordering,
+            # where the stat runs after the reader has already parsed the
+            # file).
+            grown_line = json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "second turn, appended mid-capture",
+                            }
+                        ],
+                    },
+                }
+            )
+            self._capture_once(transcript, client, grow_on_snapshot=f"\n{grown_line}")
+
+            # Pass 2: the file is now quiescent at its grown size. If pass 1's
+            # stored version already describes this grown size (the bug), the
+            # gate sees "unchanged" and skips -- the second turn is never
+            # ingested on ANY pass.
+            self._capture_once(transcript, client, grow_on_snapshot=None)
+
+            info = client.show_document(
+                ShowRequest(document="session-abcd1234", collection="default-captures")
+            )
+            text = "\n".join(
+                client.show_page(
+                    ShowRequest(
+                        document="session-abcd1234",
+                        collection="default-captures",
+                        page=page,
+                    )
+                ).text
+                for page in range(1, info.total_pages + 1)
+            )
+        assert "second turn, appended mid-capture" in text, (
+            "the growth written between the read and the stat was never "
+            "ingested by either pass -- the version gate matched it as "
+            "already-stored and silently dropped it for good"
+        )
 
 
 class TestUnreachableText:

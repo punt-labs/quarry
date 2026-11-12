@@ -145,7 +145,7 @@ class TestSingleParse:
         capture = _capture(project, _turn("user", "go"), _turn("assistant", "Done."))
         with (
             patch(
-                "quarry.subagent_capture.TranscriptReader", wraps=TranscriptReader
+                "quarry.transcript_intake.TranscriptReader", wraps=TranscriptReader
             ) as reader_cls,
             patch(
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",

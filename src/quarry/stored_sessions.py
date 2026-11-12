@@ -54,8 +54,20 @@ class StoredSessions:
         A transcript that could not be examined, or an unversioned row, is
         never current.
         """
-        stored = self._stored.get(snapshot.document_name(), "")
-        return bool(snapshot.version) and stored == snapshot.version
+        return self.is_current_version(snapshot.document_name(), snapshot.version)
+
+    def is_current_version(self, document_name: str, version: str) -> bool:
+        """Return whether *document_name* is stored at *version*.
+
+        The daemon-side half of the gate: a capture route holds no
+        :class:`~quarry.transcript_snapshot.TranscriptSnapshot` (it has no
+        filesystem path, only the version string the client sent), so it
+        compares by name and version directly rather than building one.  An
+        empty *version* never matches — a row stored with no version cannot
+        vouch for being complete either.
+        """
+        stored = self._stored.get(document_name, "")
+        return bool(version) and stored == version
 
     def record(self, snapshot: TranscriptSnapshot) -> None:
         """Note that *snapshot*'s session has just been stored, in full, at it."""

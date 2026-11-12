@@ -20,6 +20,7 @@ from quarry.daemon.captured_body_ingest import CapturedBodyIngest
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.store_run import StoreRun
+from quarry.ingestion.unchanged_transcript import UnchangedTranscript
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -110,11 +111,18 @@ class ScrubbedIngestJob:
         return scrub_and_log(text, self.scrub_label)
 
     def scrub_and_ingest(self, ctx: DaemonContext) -> dict[str, object]:
-        """Ingest with a scrubber, or skip an existing document when not overwriting.
+        """Ingest with a scrubber, or skip an unchanged or already-held document.
 
-        The pipeline redacts content AND metadata.  The existence check uses the
-        name the pipeline stores (:meth:`InlineIngest.stored_name`), computed once,
-        and a skip reports the name the store holds, never the name as sent.
+        The pipeline redacts content AND metadata.  Two distinct skips share one
+        shape (zero chunks, no delete, no embed) but answer different questions:
+        :class:`~quarry.ingestion.unchanged_transcript.UnchangedTranscript` asks
+        "is this exact version already stored?" (the capture's ``source_version``
+        gate — a transcript capture carries ``overwrite=True``, so the
+        create-if-absent check below never fires for it); the existence check
+        asks "is ANY copy already stored?" (a create-if-absent
+        ``remember``/``learn``).  Both use the name the pipeline stores
+        (:meth:`InlineIngest.stored_name`), computed once, so a skip reports the
+        name the store holds, never the name as sent.
         """
         from quarry.ingestion.ingest_context import Progress  # noqa: PLC0415
         from quarry.ingestion.web_ingest import (  # noqa: PLC0415
@@ -122,6 +130,11 @@ class ScrubbedIngestJob:
             ingest_content,
         )
 
+        stored_name = self._stored_name()
+        if unchanged := UnchangedTranscript.look_for(
+            stored_name, self.source_version, self.collection, ctx.database
+        ):
+            return dict(unchanged.skip())
         inline = InlineIngest(
             self.content,
             format_hint=self.format_hint,
@@ -129,7 +142,7 @@ class ScrubbedIngestJob:
             url_sourced=self.url_sourced,
         )
         if existing := self.labels.existing(
-            ctx, self._stored_name(), url_sourced=self.url_sourced
+            ctx, stored_name, url_sourced=self.url_sourced
         ):
             return dict(existing.skip())
         return dict(

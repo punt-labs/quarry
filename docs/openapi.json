@@ -959,6 +959,11 @@
                     "title": "Source Url",
                     "type": "string"
                   },
+                  "source_version": {
+                    "default": "",
+                    "title": "Source Version",
+                    "type": "string"
+                  },
                   "summary": {
                     "default": "",
                     "title": "Summary",

@@ -300,15 +300,24 @@ class TestIngestRoute:
 _GAP_REASON = "binary content rejected: page 1 non-text ratio 0.40 exceeds 0.25"
 _ROUTE_LOGGER = "quarry.daemon.routes.content_group"
 _GUARD_LOGGER = "quarry.mcp_guard"
+_TERMINAL_LOGGER = "quarry.daemon.refusal_aware_terminal"
+
+
+def _records(caplog: pytest.LogCaptureFixture, name: str) -> list[logging.LogRecord]:
+    """Return the WARNING-or-worse records one logger emitted.
+
+    Full-suite runs can bleed a concurrent test's WARNING (e.g. the
+    huggingface_hub "unauthenticated requests" notice) into this caplog;
+    scoping by logger name is what keeps that foreign record out.
+    """
+    return [
+        r for r in caplog.records if r.name == name and r.levelno >= logging.WARNING
+    ]
 
 
 def _messages(caplog: pytest.LogCaptureFixture, name: str) -> list[str]:
     """Return the WARNING-or-worse messages one logger emitted."""
-    return [
-        r.getMessage()
-        for r in caplog.records
-        if r.name == name and r.levelno >= logging.WARNING
-    ]
+    return [r.getMessage() for r in _records(caplog, name)]
 
 
 def _gap_binary() -> str:
@@ -370,7 +379,7 @@ class TestRefusedAfterTheSniff:
 
         assert task["status"] == "failed"
         assert task["error"] == _GAP_REASON
-        [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        [record] = _records(caplog, _TERMINAL_LOGGER)
         assert record.levelno == logging.WARNING
         assert record.exc_info is None
         assert record.getMessage() == (
@@ -404,7 +413,7 @@ async def test_a_capture_job_fails_quietly_on_gap_binary_inline_text(
 
     assert state.status == "failed"
     assert state.error == _GAP_REASON
-    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    [record] = _records(caplog, _TERMINAL_LOGGER)
     assert record.exc_info is None
     assert daemon.ctx.database.store.count() == 0
 
@@ -549,7 +558,9 @@ class TestOversizedLabels:
                 "/v1/remember",
                 json={"name": "n.md", "content": _CLEAN, "summary": self._BIG},
             )
-        assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+        assert [
+            (r.levelname, r.getMessage()) for r in _records(caplog, _ROUTE_LOGGER)
+        ] == [
             (
                 "WARNING",
                 "remember refused: row budget exceeded: summary 8,193 bytes > 8,192",
