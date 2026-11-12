@@ -29,7 +29,7 @@ tools:
   - mcp__plugin_quarry_quarry__show
   - mcp__plugin_quarry_quarry__status
   - mcp__plugin_quarry_quarry__use
-model: "sonnet"
+model: "opus"
 skills:
   - "baseline-ops"
 ---
