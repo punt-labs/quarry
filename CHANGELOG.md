@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.6.1] - 2026-11-11
+
 ### Fixed
 
 - index: a session-transcript capture no longer deletes and re-embeds every chunk when the transcript is unchanged. The hook snapshots the transcript's version (`<size>:<mtime_ns>`) before reading and sends it on the capture; the daemon skips re-ingest when the stored version matches and the stored document is page-complete. All three capture hooks (PreCompact, SessionEnd, SubagentStop) share this path, so a live session captured repeatedly stops re-embedding on every cycle.
