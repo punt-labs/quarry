@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.6.2] - 2026-11-12
+
 ### Changed
 
 - infra: refresh the pinned runtime dependencies — omegaconf 2.3.0 → 2.4.0 (drops the antlr4-python3-runtime transitive dependency), pyjwt 2.15.0 → 2.15.1, pycparser 3.0 → 3.12. No quarry behavior change; the installed dependency set (`uv.lock` and `install-constraints.txt`) now carries the current versions.
