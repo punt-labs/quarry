@@ -604,9 +604,14 @@ the canonical choice.
 
 ### 5.1 SubagentStop distillation
 
-In the session, spawn a registered identity with a trivial task, e.g.
-`Agent(subagent_type="rmh", prompt="Reply with exactly one line: platypus-subagent-token smoke report.")`,
-and wait for it to stop. Then, from a terminal:
+In the session, spawn a registered identity with a small task that makes it
+write **substantive assistant text** (not only a `SubagentHandback` call), e.g.
+`Agent(subagent_type="rmh", prompt="Read pyproject.toml and, in your reply text (not only the handback), write 2-3 sentences stating the package name and the requires-python value, including the exact token platypus-subagent-token. Then hand back.")`,
+and wait for it to stop. The distill step reads the subagent's **last assistant
+text turn**: a subagent whose entire output is a bare `SubagentHandback` with no
+assistant-text turn produces an empty report and is correctly captured-only (no
+`memory-<handle>` row) — so the task must force real reply text, or this check
+tests nothing. Then, from a terminal:
 
 ```bash
 quarry list documents --collection memory-rmh
