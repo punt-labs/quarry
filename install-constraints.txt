@@ -72,7 +72,7 @@ rpds-py==0.30.0
 shapely==2.1.2
 shellingham==1.5.4
 six==1.17.0
-soupsieve==2.9
+soupsieve==4.0
 sse-starlette==3.2.0
 starlette==1.5.0
 sympy==1.14.0
