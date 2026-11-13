@@ -618,6 +618,13 @@ if [ "$SKIP_PLUGIN" = "0" ]; then
   ok "$PLUGIN_NAME plugin installed"
 
   cleanup_https_rewrite
+
+  # The plugin now owns the quarry MCP server (tool-enable-disable.md
+  # §2.6/§2.8).  An older install, or a `quarry install` run above, may have
+  # left a user-scope shadow entry in ~/.claude.json that masks it; strip it
+  # here so a fresh machine never carries the shadow.  Opportunistic — a no-op
+  # unless the plugin is registered at user scope and the entry is present.
+  "$BINARY" prune-mcp-shadow < /dev/null 2>/dev/null || true
 fi
 
 # --- Step 10: Configure local TLS access ---

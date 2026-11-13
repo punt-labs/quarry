@@ -14,7 +14,7 @@ from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_failure import CheckFailure
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_mcp import ClaudeCodeMcp, UserScopeShadow
+from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_preconditions import Need, Preconditions
 from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
@@ -22,6 +22,7 @@ from quarry.gpu_runtime import GpuRuntime
 from quarry.install_directories import InstallDirectories
 from quarry.opencv_headless import HeadlessOpenCv
 from quarry.results import CheckResult
+from quarry.user_scope_shadow import UserScopeShadow
 
 logger = logging.getLogger(__name__)
 

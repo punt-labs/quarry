@@ -454,6 +454,43 @@ def test_default_mode_runs_plugin_install_with_claude(env: dict[str, str]) -> No
     )
 
 
+def test_default_mode_prunes_mcp_shadow_after_plugin_install(
+    env: dict[str, str],
+) -> None:
+    """The plugin owns the MCP server, so the installer strips any user-scope
+    shadow entry (PL-999) — and only after the plugin install has succeeded,
+    or a freshly installed plugin would still be masked by the shadow."""
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    plugin_idx = _index_of(log, "claude plugin install")
+    prune_idx = _index_of(log, "quarry prune-mcp-shadow")
+    assert prune_idx > plugin_idx, (
+        "prune-mcp-shadow must run AFTER the plugin install succeeds, "
+        "else the freshly installed plugin stays masked by the shadow entry"
+    )
+
+
+def test_no_plugin_mode_skips_mcp_shadow_prune(
+    env: dict[str, str],
+) -> None:
+    """``--no-plugin`` keeps its own user-scope MCP entry — the shadow prune
+    belongs to the plugin path and must not run when the plugin is skipped."""
+    result = _run_script(INSTALL_SH, env, args=["--no-plugin"])
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    assert not _any_line_contains(log, "prune-mcp-shadow"), (
+        "prune-mcp-shadow must not run on the --no-plugin path, which keeps "
+        "its own user-scope MCP entry"
+    )
+
+
 def test_default_mode_runs_quarry_login(env: dict[str, str]) -> None:
     """Default mode runs ``quarry login 127.0.0.1`` — the literal the daemon
     binds, never the ambiguous ``localhost`` name (HIGH: token-presentation is

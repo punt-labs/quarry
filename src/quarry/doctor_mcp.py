@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import time
@@ -12,14 +11,12 @@ from functools import partial
 from pathlib import Path
 from typing import ClassVar, Self, final
 
-from quarry.atomic_file import AtomicFile
 from quarry.doctor_failure import CheckFailure
-from quarry.file_lock import FileLock
 from quarry.home_paths import QuarryHome
 from quarry.json_file import ConfigError, JsonFile
 from quarry.mcp_constants import MCP_SERVER_NAME as _MCP_SERVER_NAME
+from quarry.plugin_registry_entries import PluginRegistryEntries
 from quarry.results import CheckResult
-from quarry.shadow_prune import ShadowPrune, ShadowPruneKind
 
 _SCOPE_USER = ("--scope", "user")
 
@@ -114,19 +111,34 @@ class ClaudeCodeMcp:
             )
 
     def _read_registry(self) -> CheckResult:
-        """Return whether the registry lists a quarry plugin whose manifest says so."""
+        """Return whether the registry lists a *user-scope* quarry plugin.
+
+        A plugin installed only at project scope (one directory, carrying
+        ``projectPath``) does not load for this user globally, so it must
+        not satisfy the check any more than an absent entry would -- both
+        :meth:`ClaudeCodeMcp.configure`'s skip-the-add decision and
+        :meth:`UserScopeShadow.prune`'s delete-the-fallback decision read
+        this same result.
+        """
         registry = self._plugins_path
         plugins = JsonFile.object_at(JsonFile.load(registry), "plugins", registry)
-        entries = plugins.get(self._PLUGIN_KEY)
-        if not entries:
+        raw_entries = plugins.get(self._PLUGIN_KEY)
+        if not raw_entries:
             return self._failure("not configured (run 'quarry install')")
+        if not isinstance(raw_entries, list):
+            msg = f"{registry.name}: the quarry plugin entry is malformed"
+            raise ConfigError(msg)
+        entries = PluginRegistryEntries(raw_entries)
+        if not entries.is_well_formed():
+            msg = f"{registry.name}: the quarry plugin entry is malformed"
+            raise ConfigError(msg)
+        user_entry = entries.user_scope()
+        if user_entry is None:
+            return self._failure("not configured at user scope (run 'quarry install')")
         # Verify the install path contains a valid plugin manifest with an
         # mcpServers entry for quarry.  This catches stale registry entries where
         # the plugin directory was deleted or corrupted.
-        if not isinstance(entries, list) or not isinstance(entries[0], dict):
-            msg = f"{registry.name}: the quarry plugin entry is malformed"
-            raise ConfigError(msg)
-        return self._verify_install_path(entries[0])
+        return self._verify_install_path(user_entry)
 
     def _verify_install_path(self, entry: dict[str, object]) -> CheckResult:
         """Return whether *entry*'s ``installPath`` has a valid quarry manifest."""
@@ -255,80 +267,3 @@ class ClaudeCodeMcp:
         return CheckResult(
             name="Claude Code MCP", passed=False, message=message, required=False
         )
-
-
-@final
-class UserScopeShadow:
-    """Prune a stray ``mcpServers.quarry`` entry from ``~/.claude.json``.
-
-    ``quarry install`` once wrote a user-scope entry unconditionally
-    (PL-999); the quarry Claude Code plugin now owns the server
-    (tool-enable-disable.md §2.6), so that entry is pure shadow once the
-    plugin is confirmed registered. A collaborator of :class:`ClaudeCodeMcp`
-    rather than a method on it: it owns a disjoint piece of state (the
-    ``~/.claude.json`` path) and a disjoint concern (pruning a stray write,
-    not registering or checking the plugin-owned server).
-
-    ``~/.claude.json`` is Claude Code's own primary state file and grows
-    unbounded with session history, so it is read with a generous cap rather
-    than :attr:`JsonFile.MAX_BYTES` -- that cap guards untrusted config, and
-    this file is trusted by convention, not hostile.
-    """
-
-    __slots__ = ("_claude_json_path", "_plugin")
-
-    # Claude Code's own history-bearing state file has been reported well past
-    # the 1 MiB untrusted-config cap (60+ MiB); this bound only rules out a
-    # truly pathological file, not a real one.
-    _CLAUDE_JSON_MAX_BYTES: ClassVar[int] = 128 * 1024 * 1024
-
-    _plugin: ClaudeCodeMcp
-    _claude_json_path: Path
-
-    def __new__(
-        cls, plugin: ClaudeCodeMcp, claude_json_path: Path | None = None
-    ) -> Self:
-        self = super().__new__(cls)
-        self._plugin = plugin
-        self._claude_json_path = claude_json_path or (
-            QuarryHome.home() / ".claude.json"
-        )
-        return self
-
-    def prune(self) -> ShadowPrune:
-        """Remove the stray entry; a no-op, never an error, when not applicable.
-
-        Opportunistic: a no-op when the plugin is absent (the ``--no-plugin``
-        path still needs its own user-scope entry), the file is absent, or
-        the ``quarry`` key is already gone -- the file is then never touched.
-
-        ``~/.claude.json`` is Claude Code's own primary state file; this
-        process's :class:`~quarry.file_lock.FileLock` only serializes against
-        other punt tools, not against Claude Code's own writer, which does not
-        take it. A concurrent Claude-Code write landing between the read below
-        and the rename can still be lost -- accepted because this prune runs
-        only from install/doctor/uninstall (rare) and the read-to-write window
-        is the smallest this method can make it.
-        """
-        if not self._plugin.check().passed:
-            return ShadowPrune(ShadowPruneKind.ABSENT)
-        with FileLock.shared(self._claude_json_path):
-            return self._strip_entry()
-
-    def _strip_entry(self) -> ShadowPrune:
-        """Delete the ``quarry`` key under a held lock; the file-touch boundary."""
-        if not self._claude_json_path.exists():
-            return ShadowPrune(ShadowPruneKind.ABSENT)
-        try:
-            config = JsonFile.load(
-                self._claude_json_path, max_bytes=self._CLAUDE_JSON_MAX_BYTES
-            )
-        except (OSError, ValueError) as exc:
-            detail = JsonFile.why(exc, self._claude_json_path)
-            return ShadowPrune(ShadowPruneKind.UNREADABLE, detail)
-        servers = config.get("mcpServers")
-        if not isinstance(servers, dict) or _MCP_SERVER_NAME not in servers:
-            return ShadowPrune(ShadowPruneKind.ABSENT)
-        del servers[_MCP_SERVER_NAME]
-        AtomicFile(self._claude_json_path).replace(json.dumps(config, indent=2) + "\n")
-        return ShadowPrune(ShadowPruneKind.REMOVED)

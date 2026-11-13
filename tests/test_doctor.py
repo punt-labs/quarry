@@ -38,13 +38,14 @@ from quarry.doctor import (
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_mcp import ClaudeCodeMcp, UserScopeShadow
+from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
 from quarry.json_file import JsonFile
 from quarry.results import CheckResult
 from quarry.shadow_prune import ShadowPrune, ShadowPruneKind
+from quarry.user_scope_shadow import UserScopeShadow
 from tests.home_only import HomeOnly
 
 if TYPE_CHECKING:
@@ -302,6 +303,56 @@ class TestCheckClaudeCodeMcp:
         assert not result.passed
         assert result.required is False
         assert "empty installPath" in result.message
+
+    def test_project_scope_only_does_not_satisfy_the_check(self, tmp_path: Path):
+        """A plugin installed only for one project does not own the server globally.
+
+        The registry entry carries ``projectPath`` and no ``scope: user``
+        sibling -- this must not be mistaken for a global install, or
+        :meth:`ClaudeCodeMcp.configure` skips the user-scope add and
+        :class:`~quarry.doctor_mcp.UserScopeShadow` deletes the fallback
+        entry a non-plugin user still needs (PL-999).
+        """
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        self._make_plugin_dir(install_path)
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {
+                "quarry@punt-labs": [
+                    {
+                        "scope": "project",
+                        "projectPath": "/some/other/project",
+                        "installPath": str(install_path),
+                    }
+                ],
+            },
+        )
+        result = ClaudeCodeMcp(plugins_path).check()
+        assert result.passed is False
+        assert "not configured" in result.message
+
+    def test_user_scope_entry_among_project_entries_satisfies_the_check(
+        self, tmp_path: Path
+    ):
+        """A user-scope entry makes the plugin global even alongside project ones."""
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        self._make_plugin_dir(install_path)
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {
+                "quarry@punt-labs": [
+                    {
+                        "scope": "project",
+                        "projectPath": "/some/other/project",
+                        "installPath": "/irrelevant",
+                    },
+                    {"scope": "user", "installPath": str(install_path)},
+                ],
+            },
+        )
+        result = ClaudeCodeMcp(plugins_path).check()
+        assert result.passed is True
+        assert "configured" in result.message
 
     def test_manifest_missing_mcp_server(self, tmp_path: Path):
         """plugin.json exists but has no quarry MCP server entry."""
@@ -1174,6 +1225,31 @@ class TestUserScopeShadow:
         assert result.kind is ShadowPruneKind.UNREADABLE
         assert result.detail
         assert claude_json.read_text() == "{not json"
+
+    def test_a_write_failure_is_reported_not_propagated(self, tmp_path: Path):
+        """A read-only home makes the strip's write fail; prune() must not raise.
+
+        prune()'s contract is "a no-op, never an error" -- a propagating OSError
+        would abort ``quarry uninstall`` before the service is removed, with the
+        cosmetic shadow write as the hidden cause. The failure is reported as
+        UNREADABLE (verification/strip did not complete), not a traceback.
+        """
+        home = tmp_path / "ro-home"
+        home.mkdir()
+        claude_json = home / ".claude.json"
+        claude_json.write_text(
+            json.dumps({"mcpServers": {"quarry": {"command": "quarry"}}}),
+            encoding="utf-8",
+        )
+        plugin = self._configured_plugin(tmp_path)
+        home.chmod(0o500)  # read+execute, no write: AtomicFile.mkstemp fails here
+        try:
+            result = UserScopeShadow(plugin, claude_json).prune()
+        finally:
+            home.chmod(0o700)
+
+        assert result.kind is ShadowPruneKind.UNREADABLE
+        assert result.detail
 
 
 class TestConfigureClaudeDesktop:

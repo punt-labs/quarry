@@ -22,10 +22,12 @@ from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor import check_environment, run_install
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_failure import CheckFailure
-from quarry.doctor_mcp import ClaudeCodeMcp, UserScopeShadow
+from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_memory import MemoryDiagnostics
 from quarry.json_file import JsonFile
 from quarry.opencv_headless import HeadlessOpenCv
+from quarry.shadow_prune import ShadowPrune, ShadowPruneKind
+from quarry.user_scope_shadow import UserScopeShadow
 from tests.test_doctor import _mock_install_deps
 
 MP = pytest.MonkeyPatch
@@ -817,7 +819,13 @@ def test_an_oserror_on_the_plugin_manifest_is_reported_under_the_manifest(
     manifest.chmod(0)
     registry = tmp_path / "installed_plugins.json"
     registry.write_text(
-        json.dumps({"plugins": {"quarry@punt-labs": [{"installPath": str(install)}]}})
+        json.dumps(
+            {
+                "plugins": {
+                    "quarry@punt-labs": [{"scope": "user", "installPath": str(install)}]
+                }
+            }
+        )
     )
     try:
         result = ClaudeCodeMcp(registry).check()
@@ -1039,9 +1047,36 @@ def test_uninstall_prunes_the_user_scope_shadow_before_the_daemon_step(
     """PL-999: ``quarry uninstall`` strips the shadow entry, then the service."""
     calls: list[str] = []
 
-    def fake_prune(_self: UserScopeShadow) -> bool:
+    def fake_prune(_self: UserScopeShadow) -> ShadowPrune:
         calls.append("prune")
-        return True
+        return ShadowPrune(ShadowPruneKind.REMOVED)
+
+    def fake_svc_uninstall() -> str:
+        calls.append("service")
+        return "uninstalled"
+
+    monkeypatch.setattr(UserScopeShadow, "prune", fake_prune)
+    monkeypatch.setattr("quarry.service.uninstall", fake_svc_uninstall)
+
+    result = CliRunner().invoke(app, ["uninstall"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["prune", "service"]
+
+
+def test_uninstall_removes_the_service_even_when_the_shadow_prune_cannot_write(
+    monkeypatch: MP,
+) -> None:
+    """A read-only home must not block the real teardown.
+
+    The shadow prune is cosmetic; a write failure returns UNREADABLE rather than
+    raising, so ``quarry uninstall`` still reaches ``svc_uninstall`` and exits 0.
+    """
+    calls: list[str] = []
+
+    def fake_prune(_self: UserScopeShadow) -> ShadowPrune:
+        calls.append("prune")
+        return ShadowPrune(ShadowPruneKind.UNREADABLE, "read-only file system")
 
     def fake_svc_uninstall() -> str:
         calls.append("service")
