@@ -10,10 +10,11 @@ from collections.abc import Callable, Generator
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_failure import CheckFailure
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_preconditions import Need, Preconditions
 from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
@@ -21,6 +22,7 @@ from quarry.gpu_runtime import GpuRuntime
 from quarry.install_directories import InstallDirectories
 from quarry.opencv_headless import HeadlessOpenCv
 from quarry.results import CheckResult
+from quarry.user_scope_shadow import UserScopeShadow
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +112,11 @@ def _check_imports() -> CheckResult:
     )
 
 
+def _fts_result(*, passed: bool, message: str) -> CheckResult:
+    """Return one ``FTS index`` report line; every path below is advisory."""
+    return CheckResult(name="FTS index", passed=passed, message=message, required=False)
+
+
 def _check_fts_health(db_path: Path) -> CheckResult:
     """Verify the Tantivy FTS index is queryable."""
     # LanceDB and pyarrow are native: a broken install is a failed check, not an
@@ -118,51 +125,23 @@ def _check_fts_health(db_path: Path) -> CheckResult:
         from quarry.db.facade import Database  # noqa: PLC0415
         from quarry.db.schema import TABLE_NAME  # noqa: PLC0415
     except CheckFailure.BROKEN_STACK as exc:
-        return CheckResult(
-            name="FTS index",
-            passed=False,
-            message=CheckFailure.import_message("quarry.db", exc),
-            required=False,
+        return _fts_result(
+            passed=False, message=CheckFailure.import_message("quarry.db", exc)
         )
 
     if not db_path.exists():
-        return CheckResult(
-            name="FTS index",
-            passed=True,
-            message="no database yet",
-            required=False,
-        )
+        return _fts_result(passed=True, message="no database yet")
     try:
         database = Database.connect(db_path)
         if TABLE_NAME not in database.db.list_tables().tables:
-            return CheckResult(
-                name="FTS index",
-                passed=True,
-                message="no table yet",
-                required=False,
-            )
+            return _fts_result(passed=True, message="no table yet")
         table = database.db.open_table(TABLE_NAME)
         table.search("health", query_type="fts").limit(1).to_list()
-        return CheckResult(
-            name="FTS index",
-            passed=True,
-            message="healthy",
-            required=False,
-        )
+        return _fts_result(passed=True, message="healthy")
     except (OSError, ValueError, RuntimeError) as exc:
-        return CheckResult(
-            name="FTS index",
-            passed=False,
-            message=CheckFailure.index_message(exc),
-            required=False,
-        )
+        return _fts_result(passed=False, message=CheckFailure.index_message(exc))
     except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="FTS index",
-            passed=False,
-            message=f"error: {CheckFailure.detail(exc)}",
-            required=False,
-        )
+        return _fts_result(passed=False, message=f"error: {CheckFailure.detail(exc)}")
 
 
 def _print_check(check: CheckResult) -> None:
@@ -174,25 +153,6 @@ def _print_check(check: CheckResult) -> None:
     else:
         symbol = "\u25cb"
     print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
-
-
-def _install_gpu_runtime() -> bool:
-    """Run the GPU-runtime swap step of the installer; return whether it failed.
-
-    Prints the ``GpuStatus`` line plus its :attr:`GpuStatus.install_detail`
-    clause (only ``CUDA_UNSUPPORTED`` carries one — a hint pointing at the
-    GPU-runtime warning log, which names the detected vs supported CUDA majors).
-    Returns ``True`` only when the daemon cannot start after the check — i.e.
-    ``RESTORE_FAILED`` — so the caller marks the install failed. Recovered
-    outcomes (``RESTORED``, ``CUDA_UNSUPPORTED``) warn but do not fail.
-
-    Unexpected exceptions are NOT caught here: this helper is not an error
-    boundary. A raise means failure and is caught at ``run_install``,
-    the installer entry point, which converts it to a hard install failure.
-    """
-    gpu_status = GpuRuntime.ensure()
-    print(f"  {gpu_status.symbol} {gpu_status}{gpu_status.install_detail}")  # noqa: T201
-    return gpu_status.is_failure
 
 
 def _run_optional_step(step: Callable[[], str], skip_note: str) -> None:
@@ -257,14 +217,24 @@ def _install_embedding_model() -> bool:
 
 
 def _gpu_runtime_is_usable() -> bool:
-    """Run the GPU runtime step; return False when the install must fail.
+    """Run the GPU-runtime swap step; return False when the install must fail.
+
+    Prints the ``GpuStatus`` line plus its :attr:`GpuStatus.install_detail`
+    clause (only ``CUDA_UNSUPPORTED`` carries one — a hint pointing at the
+    GPU-runtime warning log, which names the detected vs supported CUDA majors).
+    Returns ``False`` only when the daemon cannot start after the check — i.e.
+    ``RESTORE_FAILED`` — so the caller marks the install failed. Recovered
+    outcomes (``RESTORED``, ``CUDA_UNSUPPORTED``) warn but do not fail.
 
     The broad catch is the installer's error boundary: every legitimate GPU
-    outcome returns a GpuStatus, so a raise here is unexpected and may leave a
-    broken runtime — it becomes a hard install failure rather than a skip.
+    outcome returns a ``GpuStatus`` from ``GpuRuntime.ensure()``, so a raise here
+    is unexpected and may leave a broken runtime — it becomes a hard install
+    failure rather than a skip.
     """
     try:
-        return not _install_gpu_runtime()
+        gpu_status = GpuRuntime.ensure()
+        print(f"  {gpu_status.symbol} {gpu_status}{gpu_status.install_detail}")  # noqa: T201
+        return not gpu_status.is_failure
     except Exception as exc:  # noqa: BLE001
         print(f"  ✗ GPU runtime check failed: {CheckFailure.detail(exc)}")  # noqa: T201
         return False
@@ -277,6 +247,16 @@ def _configure_ethos_extension() -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2022 Skipped: {CheckFailure.detail(exc)}")  # noqa: T201
         print("    Ethos extension configuration is optional.")  # noqa: T201
+
+
+def _configure_mcp_clients() -> None:
+    """Run the Claude Code and Desktop MCP configure steps, printing each result."""
+    for entry in (
+        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().configure()),
+        CheckEntry("Claude Desktop MCP", lambda: ClaudeDesktopMcp().configure()),
+    ):
+        if (check := CheckRunner.attempt(entry)) is not None:
+            _print_check(check)
 
 
 def run_install() -> int:
@@ -316,12 +296,7 @@ def run_install() -> int:
 
     # Step 5: MCP clients
     print("[5/7] Configuring MCP clients...")  # noqa: T201
-    for entry in (
-        CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().configure()),
-        CheckEntry("Claude Desktop MCP", lambda: ClaudeDesktopMcp().configure()),
-    ):
-        if (check := CheckRunner.attempt(entry)) is not None:
-            _print_check(check)
+    _configure_mcp_clients()
 
     # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
     print("[6/7] Registering quarry daemon...")  # noqa: T201
@@ -374,6 +349,11 @@ def _run_checks() -> list[CheckResult]:
         CheckEntry("Claude Code MCP", lambda: ClaudeCodeMcp().check(), needs=Need.HOME),
         CheckEntry(
             "Claude Desktop MCP", lambda: ClaudeDesktopMcp().check(), needs=Need.HOME
+        ),
+        CheckEntry(
+            "User-scope MCP shadow",
+            lambda: UserScopeShadow(ClaudeCodeMcp()).prune().as_check_result(),
+            needs=Need.HOME,
         ),
         *SettingsChecks.entries(pre, _check_fts_health),
     ]

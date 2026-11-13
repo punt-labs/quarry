@@ -12,6 +12,7 @@ import typer.core
 from rich.console import Console
 
 from quarry._cli_entry import CliEntry
+from quarry.cli_admin import AdminCli
 from quarry.cli_captures import CapturesCli, CliPlumbing
 from quarry.cli_documents import DocumentsCli
 from quarry.cli_ingest import IngestCli
@@ -253,6 +254,7 @@ SyncCli(_plumbing).register(app)
 ProjectCli(_plumbing).register(app)
 MaintenanceCli(_plumbing).register(app)
 RemoteCli(_plumbing).register(app)
+AdminCli(_plumbing).register(app)
 app.add_typer(CapturesCli(_plumbing).build(), name="captures")
 app.add_typer(MissionsCli(_plumbing).build(), name="missions")
 app.add_typer(SkillsCli(_plumbing).build(), name="skills")
@@ -320,18 +322,8 @@ def version() -> None:
     _emit({"version": ver}, ver)
 
 
-@app.command()
-@_cli_errors
-def uninstall() -> None:
-    """Remove quarry system daemon and service file.
-
-    Stops the daemon and removes the launchd plist (macOS) or systemd unit
-    (Linux).  Clean inverse of the daemon step in ``quarry install``.
-    """
-    from quarry.service import uninstall as svc_uninstall  # noqa: PLC0415
-
-    msg = svc_uninstall()
-    _emit({"message": msg}, msg)
+# ``uninstall`` lives on ``AdminCli`` beside ``prune-mcp-shadow`` — both own the
+# same user-scope MCP-shadow cleanup (PL-999), registered above.
 
 
 # ---------------------------------------------------------------------------

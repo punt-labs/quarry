@@ -523,6 +523,17 @@ The Claude Desktop check (`_check_claude_desktop_mcp`) already used this file-ba
 3. **Skip the check when running under a Claude Code parent process** — Rejected. Detection is fragile (check `CLAUDE_SESSION_ID` env var?) and doesn't help when running `quarry doctor` from a plain terminal.
 4. **Read the MCP config that `claude mcp add` writes to** — Considered as an alternative data source. `_configure_claude_code()` writes via `claude mcp add`, which uses a different store than the plugin registry. In practice both stores have the quarry entry because quarry is always installed as a plugin. Noted as a known limitation in a code comment.
 
+### Amendment 2026-11-12 (PL-999): the double-store is no longer a limitation, it's a bug fixed
+
+The "known limitation" above assumed both stores converging on the quarry entry was harmless. It was not: `claude mcp add quarry --scope user` (run unconditionally by `ClaudeCodeMcp.configure()` during `quarry install`) writes `mcpServers.quarry` into `~/.claude.json`, and Claude Code resolves that user-scope entry *ahead of* the plugin's own `mcpServers.quarry` declaration in `plugin.json` — so quarry showed under "User MCPs" instead of `plugin:quarry:quarry`, violating `tool-enable-disable.md` §2.6 (install registers software; the plugin owns the MCP server) and §2.8.
+
+Fixed in two parts:
+
+1. **`ClaudeCodeMcp.configure()` gates the write on plugin absence.** It calls `self.check()` first (the existing file-based registry read this ADR describes); when the plugin is confirmed registered, `configure()` is a no-op that returns `passed=True, message="configured (via plugin)"` — no `claude mcp add` call at all. Only the `--no-plugin` / CLI-only install path (no plugin in the registry) still runs the user-scope add.
+2. **`UserScopeShadow` (new class, `doctor_mcp.py`) opportunistically prunes a stray entry** left over from before the fix: `quarry doctor` and `quarry uninstall` both call `UserScopeShadow(ClaudeCodeMcp()).prune()`, which deletes `mcpServers.quarry` from `~/.claude.json` when (and only when) the plugin is confirmed registered — a no-op, never an error, when the plugin is absent, the file is absent, or the key is already gone. This is a separate collaborator class rather than a method on `ClaudeCodeMcp` because it owns disjoint state (the `~/.claude.json` path) and a disjoint concern (pruning a stray write vs. registering/checking the plugin-owned server) — folding it into `ClaudeCodeMcp` regressed that class's LCOM cohesion.
+
+`ClaudeDesktopMcp` moved to its own module (`claude_desktop_mcp.py`) in the same change: the two classes (Claude Code's plugin-aware registry read vs. Claude Desktop's direct JSON-config write) shared no methods and no state, so `doctor_mcp.py` was two unrelated concerns bundled by name alone. The split paid down real OO debt (module_size 293→209 lines, max_complexity 8→5) that the new gate+prune logic would otherwise have pushed well over the module-size ratchet.
+
 ---
 
 ## DES-025: Agent Tool Access — disallowedTools vs tools

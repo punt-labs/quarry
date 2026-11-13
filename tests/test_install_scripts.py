@@ -147,8 +147,15 @@ def mock_bin(tmp_path: Path) -> Path:
         fake_tool_python,
         'if [ "$1" = "-c" ]; then printf "3.13.13\\n"; exit 0; fi\nexec /bin/sh "$@"\n',
     )
+    # The real `quarry prune-mcp-shadow` prints its outcome line
+    # ("nothing to prune"/"removed ...") to stdout; mirror that so a test can
+    # prove install.sh redirects it and the line never reaches the installer's
+    # own output stream.
     quarry_path.write_text(
-        f"#!{fake_tool_python}\n" + log_header + "exit 0\n",
+        f"#!{fake_tool_python}\n"
+        + log_header
+        + 'if [ "$1" = "prune-mcp-shadow" ]; then printf "nothing to prune\\n"; fi\n'
+        + "exit 0\n",
     )
     quarry_path.chmod(
         quarry_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
@@ -451,6 +458,62 @@ def test_default_mode_runs_plugin_install_with_claude(env: dict[str, str]) -> No
     log = _read_log(env)
     assert _any_line_contains(log, "claude plugin install"), (
         "Default mode with claude CLI must install the plugin"
+    )
+
+
+def test_default_mode_prunes_mcp_shadow_after_plugin_install(
+    env: dict[str, str],
+) -> None:
+    """The plugin owns the MCP server, so the installer strips any user-scope
+    shadow entry (PL-999) — and only after the plugin install has succeeded,
+    or a freshly installed plugin would still be masked by the shadow."""
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    plugin_idx = _index_of(log, "claude plugin install")
+    prune_idx = _index_of(log, "quarry prune-mcp-shadow")
+    assert prune_idx > plugin_idx, (
+        "prune-mcp-shadow must run AFTER the plugin install succeeds, "
+        "else the freshly installed plugin stays masked by the shadow entry"
+    )
+
+
+def test_mcp_shadow_prune_output_does_not_leak_into_installer_stdout(
+    env: dict[str, str],
+) -> None:
+    """prune-mcp-shadow's own line must not break the installer's bullet output.
+
+    The command prints "nothing to prune"/"removed ..." to stdout; install.sh
+    redirects it (Step 11's `quarry doctor` surfaces the check formatted). An
+    unredirected line would print raw, unprefixed, after the plugin-installed
+    bullet — and duplicate what doctor already reports."""
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    # The mock emits this only for `prune-mcp-shadow`; it must be swallowed.
+    assert "nothing to prune" not in result.stdout, (
+        "prune-mcp-shadow stdout leaked into the installer output — redirect it"
+    )
+
+
+def test_no_plugin_mode_skips_mcp_shadow_prune(
+    env: dict[str, str],
+) -> None:
+    """``--no-plugin`` keeps its own user-scope MCP entry — the shadow prune
+    belongs to the plugin path and must not run when the plugin is skipped."""
+    result = _run_script(INSTALL_SH, env, args=["--no-plugin"])
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    log = _read_log(env)
+    assert not _any_line_contains(log, "prune-mcp-shadow"), (
+        "prune-mcp-shadow must not run on the --no-plugin path, which keeps "
+        "its own user-scope MCP entry"
     )
 
 

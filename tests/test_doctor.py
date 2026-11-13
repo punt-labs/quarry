@@ -24,23 +24,28 @@ from quarry import (
     doctor_inference,
     doctor_sync,
 )
+from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor import (
     _QUIETED_LOGGERS,
     _check_fts_health,
     _check_imports,
     _check_python_version,
     _quiet_logging,
+    _run_checks,
     check_environment,
     run_install,
 )
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
+from quarry.json_file import JsonFile
 from quarry.results import CheckResult
+from quarry.shadow_prune import ShadowPrune, ShadowPruneKind
+from quarry.user_scope_shadow import UserScopeShadow
 from tests.home_only import HomeOnly
 
 if TYPE_CHECKING:
@@ -299,6 +304,56 @@ class TestCheckClaudeCodeMcp:
         assert result.required is False
         assert "empty installPath" in result.message
 
+    def test_project_scope_only_does_not_satisfy_the_check(self, tmp_path: Path):
+        """A plugin installed only for one project does not own the server globally.
+
+        The registry entry carries ``projectPath`` and no ``scope: user``
+        sibling -- this must not be mistaken for a global install, or
+        :meth:`ClaudeCodeMcp.configure` skips the user-scope add and
+        :class:`~quarry.doctor_mcp.UserScopeShadow` deletes the fallback
+        entry a non-plugin user still needs (PL-999).
+        """
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        self._make_plugin_dir(install_path)
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {
+                "quarry@punt-labs": [
+                    {
+                        "scope": "project",
+                        "projectPath": "/some/other/project",
+                        "installPath": str(install_path),
+                    }
+                ],
+            },
+        )
+        result = ClaudeCodeMcp(plugins_path).check()
+        assert result.passed is False
+        assert "not configured" in result.message
+
+    def test_user_scope_entry_among_project_entries_satisfies_the_check(
+        self, tmp_path: Path
+    ):
+        """A user-scope entry makes the plugin global even alongside project ones."""
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        self._make_plugin_dir(install_path)
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {
+                "quarry@punt-labs": [
+                    {
+                        "scope": "project",
+                        "projectPath": "/some/other/project",
+                        "installPath": "/irrelevant",
+                    },
+                    {"scope": "user", "installPath": str(install_path)},
+                ],
+            },
+        )
+        result = ClaudeCodeMcp(plugins_path).check()
+        assert result.passed is True
+        assert "configured" in result.message
+
     def test_manifest_missing_mcp_server(self, tmp_path: Path):
         """plugin.json exists but has no quarry MCP server entry."""
         install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
@@ -547,6 +602,39 @@ class TestCheckEnvironment:
             ),
         )
         assert check_environment() == 1
+
+
+class TestPruneUserScopeShadowCheck:
+    """PL-999: the doctor-side wiring of the opportunistic strip."""
+
+    def test_always_passes_and_names_a_prune(self):
+        result = ShadowPrune(ShadowPruneKind.REMOVED).as_check_result()
+        assert result.passed is True
+        assert result.required is False
+        assert "removed" in result.message
+
+    def test_always_passes_when_nothing_to_prune(self):
+        result = ShadowPrune(ShadowPruneKind.ABSENT).as_check_result()
+        assert result.passed is True
+        assert "nothing to prune" in result.message
+
+    def test_passes_but_says_so_when_the_file_could_not_be_checked(self):
+        """An unreadable ``~/.claude.json`` is reported, never mistaken for clean."""
+        result = ShadowPrune(
+            ShadowPruneKind.UNREADABLE, "larger than 999 bytes"
+        ).as_check_result()
+        assert result.passed is True
+        assert "could not check" in result.message
+        assert "larger than 999 bytes" in result.message
+        assert "nothing to prune" not in result.message
+
+    def test_is_wired_into_run_checks(self, tmp_path: Path, monkeypatch: MP):
+        """The check entry is present in the full `quarry doctor` report."""
+        HomeOnly.apply(monkeypatch, tmp_path)
+        absent = ShadowPrune(ShadowPruneKind.ABSENT)
+        monkeypatch.setattr(UserScopeShadow, "prune", lambda _self: absent)
+        names = [check.name for check in _run_checks()]
+        assert "User-scope MCP shadow" in names
 
 
 _INSERT_DIR = (
@@ -920,6 +1008,287 @@ class TestConfigureClaudeCode:
         assert result.passed is False
         assert "permission denied" in result.message
         assert ["remove", "quarry"] not in claude.verbs
+
+
+class TestConfigurePluginScopeGate:
+    """PL-999: ``configure()`` must not shadow a plugin-declared MCP server.
+
+    The quarry Claude Code plugin's own ``plugin.json`` already declares
+    ``mcpServers.quarry``; a user-scope ``claude mcp add`` on top of that
+    shadows the plugin's entry (tool-enable-disable.md §2.6/§2.8). When the
+    plugin registry already proves quarry configured, ``configure()`` must be
+    a no-op: no ``claude mcp add`` call, a passing result.
+    """
+
+    @staticmethod
+    def _write_plugins(tmp_path: Path, plugins: dict[str, object]) -> Path:
+        plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        plugins_path.parent.mkdir(parents=True, exist_ok=True)
+        plugins_path.write_text(
+            json.dumps({"version": 2, "plugins": plugins}), encoding="utf-8"
+        )
+        return plugins_path
+
+    @staticmethod
+    def _make_plugin_dir(install_path: Path) -> None:
+        plugin_json = install_path / ".claude-plugin" / "plugin.json"
+        plugin_json.parent.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "name": "quarry",
+            "mcpServers": {
+                "quarry": {"type": "stdio", "command": "quarry", "args": ["mcp"]},
+            },
+        }
+        plugin_json.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_plugin_present_configure_is_a_no_op(self, tmp_path: Path, monkeypatch: MP):
+        """Plugin registered -> no ``claude mcp add`` call, a passing no-op."""
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        self._make_plugin_dir(install_path)
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {"quarry@punt-labs": [{"scope": "user", "installPath": str(install_path)}]},
+        )
+        claude = _ScriptedClaude([])
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", claude.run)
+
+        result = ClaudeCodeMcp(plugins_path).configure()
+
+        assert result.passed is True
+        assert "via plugin" in result.message
+        assert claude.calls == []
+
+    def test_no_plugin_configure_still_runs_the_user_scope_add(
+        self, tmp_path: Path, monkeypatch: MP
+    ):
+        """No plugin in the registry -> the ``--no-plugin`` path still adds."""
+        missing_registry = tmp_path / "nonexistent" / "installed_plugins.json"
+        claude = _ScriptedClaude([(0, "")])
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", claude.run)
+
+        result = ClaudeCodeMcp(missing_registry).configure()
+
+        assert result.passed is True
+        assert "scope: user" in result.message
+        assert claude.verbs == [["add", "quarry"]]
+
+
+class TestUserScopeShadow:
+    """PL-999 Part 2: opportunistically strip a stray ``~/.claude.json`` entry.
+
+    The strip is scoped to when the plugin is confirmed registered (the entry
+    is genuinely shadow only then); absent plugin, absent file, or an absent
+    key are all no-ops that never touch the file.
+    """
+
+    @staticmethod
+    def _write_plugins(tmp_path: Path, plugins: dict[str, object]) -> Path:
+        plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        plugins_path.parent.mkdir(parents=True, exist_ok=True)
+        plugins_path.write_text(
+            json.dumps({"version": 2, "plugins": plugins}), encoding="utf-8"
+        )
+        return plugins_path
+
+    @staticmethod
+    def _make_plugin_dir(install_path: Path) -> None:
+        plugin_json = install_path / ".claude-plugin" / "plugin.json"
+        plugin_json.parent.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "name": "quarry",
+            "mcpServers": {
+                "quarry": {"type": "stdio", "command": "quarry", "args": ["mcp"]},
+            },
+        }
+        plugin_json.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def _configured_plugin(self, tmp_path: Path) -> ClaudeCodeMcp:
+        """Return a ``ClaudeCodeMcp`` whose ``check()`` passes (plugin registered)."""
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        self._make_plugin_dir(install_path)
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {"quarry@punt-labs": [{"scope": "user", "installPath": str(install_path)}]},
+        )
+        return ClaudeCodeMcp(plugins_path)
+
+    def test_plugin_present_and_entry_present_removes_exactly_that_key(
+        self, tmp_path: Path
+    ):
+        """The quarry key is removed; every other ``mcpServers`` entry survives."""
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "quarry": {"command": "quarry", "args": ["mcp"]},
+                        "other": {"command": "other-tool"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.REMOVED
+        config = json.loads(claude_json.read_text())
+        assert "quarry" not in config["mcpServers"]
+        assert config["mcpServers"]["other"] == {"command": "other-tool"}
+
+    def test_an_absolute_path_quarry_command_still_matches(self, tmp_path: Path):
+        """quarry writes `command: quarry`, but a resolved absolute path is ours too."""
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "quarry": {"command": "/usr/local/bin/quarry", "args": ["mcp"]}
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.REMOVED
+        assert "quarry" not in json.loads(claude_json.read_text())["mcpServers"]
+
+    def test_a_custom_quarry_entry_is_preserved_not_deleted(self, tmp_path: Path):
+        """A user-set custom `quarry` command/remote is NOT the shadow -> keep it.
+
+        The strip removes only the `quarry mcp` registration quarry itself
+        writes; deleting a deliberately customized entry would be silent data
+        loss.
+        """
+        claude_json = tmp_path / ".claude.json"
+        custom = {"command": "my-quarry-proxy", "args": ["--serve", "mcp"]}
+        claude_json.write_text(
+            json.dumps({"mcpServers": {"quarry": custom}}), encoding="utf-8"
+        )
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.PRESERVED
+        assert json.loads(claude_json.read_text())["mcpServers"]["quarry"] == custom
+
+    def test_key_absent_is_a_no_op_and_never_writes(self, tmp_path: Path):
+        """No ``quarry`` key -> no write, confirmed by an unchanged mtime."""
+        claude_json = tmp_path / ".claude.json"
+        original = json.dumps({"mcpServers": {"other": {"command": "other-tool"}}})
+        claude_json.write_text(original, encoding="utf-8")
+        before = claude_json.stat().st_mtime_ns
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.ABSENT
+        assert claude_json.stat().st_mtime_ns == before
+        assert claude_json.read_text() == original
+
+    def test_plugin_absent_is_a_no_op_even_with_the_key_present(self, tmp_path: Path):
+        """No plugin in the registry -> never strip (the --no-plugin path needs it)."""
+        claude_json = tmp_path / ".claude.json"
+        original = json.dumps(
+            {"mcpServers": {"quarry": {"command": "quarry", "args": ["mcp"]}}}
+        )
+        claude_json.write_text(original, encoding="utf-8")
+        missing_registry = tmp_path / "nonexistent" / "installed_plugins.json"
+        plugin = ClaudeCodeMcp(missing_registry)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.ABSENT
+        assert claude_json.read_text() == original
+
+    def test_file_absent_is_a_no_op(self, tmp_path: Path):
+        """No ``~/.claude.json`` at all -> no-op, no file created."""
+        claude_json = tmp_path / ".claude.json"
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.ABSENT
+        assert not claude_json.exists()
+
+    def test_an_oversize_claude_json_still_gets_its_entry_stripped(
+        self, tmp_path: Path
+    ):
+        """``~/.claude.json`` legitimately exceeds JsonFile's 1 MiB untrusted cap.
+
+        Claude Code's own state file grows unbounded with session history
+        (60+ MiB reported upstream); the strip must not silently no-op on a
+        real, big file by applying the untrusted-config cap to a file this
+        process trusts by convention.
+        """
+        claude_json = tmp_path / ".claude.json"
+        padding = "x" * (JsonFile.MAX_BYTES + 1)
+        claude_json.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {"quarry": {"command": "quarry", "args": ["mcp"]}},
+                    "padding": padding,
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert claude_json.stat().st_size > JsonFile.MAX_BYTES
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.REMOVED
+        config = json.loads(claude_json.read_text())
+        assert "quarry" not in config["mcpServers"]
+
+    def test_an_unreadable_claude_json_is_reported_not_mistaken_for_clean(
+        self, tmp_path: Path
+    ):
+        """Malformed JSON is UNREADABLE, distinct from ABSENT's "nothing to prune"."""
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text("{not json", encoding="utf-8")
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.UNREADABLE
+        assert result.detail
+        assert claude_json.read_text() == "{not json"
+
+    def test_a_write_failure_is_reported_not_propagated(self, tmp_path: Path):
+        """A read-only home makes the strip's write fail; prune() must not raise.
+
+        prune()'s contract is "a no-op, never an error" -- a propagating OSError
+        would abort ``quarry uninstall`` before the service is removed, with the
+        cosmetic shadow write as the hidden cause. The failure is reported as
+        UNREADABLE (verification/strip did not complete), not a traceback.
+        """
+        home = tmp_path / "ro-home"
+        home.mkdir()
+        claude_json = home / ".claude.json"
+        claude_json.write_text(
+            json.dumps({"mcpServers": {"quarry": {"command": "quarry"}}}),
+            encoding="utf-8",
+        )
+        plugin = self._configured_plugin(tmp_path)
+        home.chmod(0o500)  # read+execute, no write: AtomicFile.mkstemp fails here
+        try:
+            result = UserScopeShadow(plugin, claude_json).prune()
+        finally:
+            home.chmod(0o700)
+
+        assert result.kind is ShadowPruneKind.UNREADABLE
+        assert result.detail
 
 
 class TestConfigureClaudeDesktop:
