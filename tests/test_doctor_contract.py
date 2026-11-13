@@ -1089,3 +1089,24 @@ def test_uninstall_removes_the_service_even_when_the_shadow_prune_cannot_write(
 
     assert result.exit_code == 0, result.output
     assert calls == ["prune", "service"]
+    # The UNREADABLE outcome must be surfaced, not swallowed: the stray entry is
+    # still there and the user may want to clear it by hand.
+    assert "could not check" in result.output
+
+
+def test_uninstall_is_quiet_about_the_shadow_when_there_is_nothing_to_prune(
+    monkeypatch: MP,
+) -> None:
+    """A routine uninstall does not print a shadow line for the common no-op."""
+
+    def fake_prune(_self: UserScopeShadow) -> ShadowPrune:
+        return ShadowPrune(ShadowPruneKind.ABSENT)
+
+    monkeypatch.setattr(UserScopeShadow, "prune", fake_prune)
+    monkeypatch.setattr("quarry.service.uninstall", lambda: "uninstalled")
+
+    result = CliRunner().invoke(app, ["uninstall"])
+
+    assert result.exit_code == 0, result.output
+    assert "nothing to prune" not in result.output
+    assert "uninstalled" in result.output

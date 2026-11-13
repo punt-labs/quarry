@@ -22,6 +22,10 @@ class ShadowPruneKind(Enum):
     # not valid JSON) -- distinct from ABSENT so a user is never told "clean"
     # when the entry's presence was never actually verified.
     UNREADABLE = auto()
+    # A user-scope quarry entry is present but is NOT the one quarry writes
+    # (`quarry mcp`) -- a deliberate custom command or remote the user set.
+    # Left untouched: deleting it would be silent data loss.
+    PRESERVED = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +41,12 @@ class ShadowPrune:
             return "removed stray user-scope entry"
         if self.kind is ShadowPruneKind.ABSENT:
             return "nothing to prune"
+        if self.kind is ShadowPruneKind.PRESERVED:
+            return (
+                "a custom user-scope 'quarry' MCP entry is set in ~/.claude.json; "
+                "left as-is -- remove it by hand if it is stale "
+                "('claude mcp remove quarry --scope user')"
+            )
         return f"could not check ~/.claude.json for a stray entry ({self.detail})"
 
     def as_check_result(self) -> CheckResult:

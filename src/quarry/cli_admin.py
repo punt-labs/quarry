@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.shadow_prune import ShadowPrune, ShadowPruneKind
+
 if TYPE_CHECKING:
     import typer
 
@@ -37,7 +39,8 @@ class AdminCli:
         single opportunistic file edit. Hidden: an install-script internal,
         not a command end users invoke.
         """
-        self._p.emit(*self._shadow_message())
+        message = self._prune_shadow().message()
+        self._p.emit({"message": message}, message)
 
     def _uninstall(self) -> None:
         """Remove quarry system daemon and service file.
@@ -50,15 +53,20 @@ class AdminCli:
         """
         from quarry.service import uninstall as svc_uninstall  # noqa: PLC0415
 
-        self._shadow_message()
+        shadow = self._prune_shadow()
         msg = svc_uninstall()
+        # Surface the shadow outcome only when it carried news -- a removal, or a
+        # file that could not be read -- so a routine uninstall is not cluttered
+        # by "nothing to prune". An UNREADABLE outcome must be visible: the stray
+        # entry is still there and the user may want to clear it by hand.
+        if shadow.kind is not ShadowPruneKind.ABSENT:
+            self._p.emit({"shadow": shadow.message()}, shadow.message())
         self._p.emit({"message": msg}, msg)
 
     @staticmethod
-    def _shadow_message() -> tuple[dict[str, str], str]:
-        """Prune the stray shadow entry; return its ``emit`` payload and line."""
+    def _prune_shadow() -> ShadowPrune:
+        """Prune the stray user-scope shadow entry; return the outcome."""
         from quarry.doctor_mcp import ClaudeCodeMcp  # noqa: PLC0415
         from quarry.user_scope_shadow import UserScopeShadow  # noqa: PLC0415
 
-        message = UserScopeShadow(ClaudeCodeMcp()).prune().message()
-        return {"message": message}, message
+        return UserScopeShadow(ClaudeCodeMcp()).prune()

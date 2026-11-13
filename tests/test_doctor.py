@@ -1143,6 +1143,45 @@ class TestUserScopeShadow:
         assert "quarry" not in config["mcpServers"]
         assert config["mcpServers"]["other"] == {"command": "other-tool"}
 
+    def test_an_absolute_path_quarry_command_still_matches(self, tmp_path: Path):
+        """quarry writes `command: quarry`, but a resolved absolute path is ours too."""
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "quarry": {"command": "/usr/local/bin/quarry", "args": ["mcp"]}
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.REMOVED
+        assert "quarry" not in json.loads(claude_json.read_text())["mcpServers"]
+
+    def test_a_custom_quarry_entry_is_preserved_not_deleted(self, tmp_path: Path):
+        """A user-set custom `quarry` command/remote is NOT the shadow -> keep it.
+
+        The strip removes only the `quarry mcp` registration quarry itself
+        writes; deleting a deliberately customized entry would be silent data
+        loss.
+        """
+        claude_json = tmp_path / ".claude.json"
+        custom = {"command": "my-quarry-proxy", "args": ["--serve", "mcp"]}
+        claude_json.write_text(
+            json.dumps({"mcpServers": {"quarry": custom}}), encoding="utf-8"
+        )
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.PRESERVED
+        assert json.loads(claude_json.read_text())["mcpServers"]["quarry"] == custom
+
     def test_key_absent_is_a_no_op_and_never_writes(self, tmp_path: Path):
         """No ``quarry`` key -> no write, confirmed by an unchanged mtime."""
         claude_json = tmp_path / ".claude.json"

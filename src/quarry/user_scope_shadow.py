@@ -103,6 +103,26 @@ class UserScopeShadow:
         servers = config.get("mcpServers")
         if not isinstance(servers, dict) or _MCP_SERVER_NAME not in servers:
             return ShadowPrune(ShadowPruneKind.ABSENT)
+        if not self._is_quarrys_own_entry(servers[_MCP_SERVER_NAME]):
+            # A user deliberately set a different quarry command/remote. Deleting
+            # it would be silent data loss; leave it and let the user decide.
+            return ShadowPrune(ShadowPruneKind.PRESERVED)
         del servers[_MCP_SERVER_NAME]
         AtomicFile(self._claude_json_path).replace(json.dumps(config, indent=2) + "\n")
         return ShadowPrune(ShadowPruneKind.REMOVED)
+
+    @staticmethod
+    def _is_quarrys_own_entry(entry: object) -> bool:
+        """Return whether *entry* is the ``quarry mcp`` registration quarry writes.
+
+        Matches a stdio entry whose command is the ``quarry`` binary (by
+        basename, so an absolute path still matches) and whose args are exactly
+        ``["mcp"]`` -- the shape :meth:`ClaudeCodeMcp._command` produces. Any
+        other shape is a user's own entry and is never deleted.
+        """
+        if not isinstance(entry, dict):
+            return False
+        command = entry.get("command")
+        if not isinstance(command, str) or Path(command).name != "quarry":
+            return False
+        return entry.get("args") == ["mcp"]
