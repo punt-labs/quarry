@@ -24,6 +24,7 @@ from quarry import (
     doctor_inference,
     doctor_sync,
 )
+from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor import (
     _QUIETED_LOGGERS,
     _check_fts_health,
@@ -36,7 +37,7 @@ from quarry.doctor import (
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
@@ -920,6 +921,75 @@ class TestConfigureClaudeCode:
         assert result.passed is False
         assert "permission denied" in result.message
         assert ["remove", "quarry"] not in claude.verbs
+
+
+class TestConfigurePluginScopeGate:
+    """PL-999: ``configure()`` must not shadow a plugin-declared MCP server.
+
+    The quarry Claude Code plugin's own ``plugin.json`` already declares
+    ``mcpServers.quarry``; a user-scope ``claude mcp add`` on top of that
+    shadows the plugin's entry (tool-enable-disable.md §2.6/§2.8). When the
+    plugin registry already proves quarry configured, ``configure()`` must be
+    a no-op: no ``claude mcp add`` call, a passing result.
+    """
+
+    @staticmethod
+    def _write_plugins(tmp_path: Path, plugins: dict[str, object]) -> Path:
+        plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        plugins_path.parent.mkdir(parents=True, exist_ok=True)
+        plugins_path.write_text(
+            json.dumps({"version": 2, "plugins": plugins}), encoding="utf-8"
+        )
+        return plugins_path
+
+    @staticmethod
+    def _make_plugin_dir(install_path: Path) -> None:
+        plugin_json = install_path / ".claude-plugin" / "plugin.json"
+        plugin_json.parent.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "name": "quarry",
+            "mcpServers": {
+                "quarry": {"type": "stdio", "command": "quarry", "args": ["mcp"]},
+            },
+        }
+        plugin_json.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_plugin_present_configure_is_a_no_op(self, tmp_path: Path, monkeypatch: MP):
+        """Plugin registered -> no ``claude mcp add`` call, a passing no-op."""
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        self._make_plugin_dir(install_path)
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {"quarry@punt-labs": [{"scope": "user", "installPath": str(install_path)}]},
+        )
+        claude = _ScriptedClaude([])
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", claude.run)
+
+        result = ClaudeCodeMcp(plugins_path).configure()
+
+        assert result.passed is True
+        assert "via plugin" in result.message
+        assert claude.calls == []
+
+    def test_no_plugin_configure_still_runs_the_user_scope_add(
+        self, tmp_path: Path, monkeypatch: MP
+    ):
+        """No plugin in the registry -> the ``--no-plugin`` path still adds."""
+        missing_registry = tmp_path / "nonexistent" / "installed_plugins.json"
+        claude = _ScriptedClaude([(0, "")])
+        monkeypatch.setattr(
+            "quarry.doctor_mcp.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        monkeypatch.setattr("quarry.doctor_mcp.subprocess.run", claude.run)
+
+        result = ClaudeCodeMcp(missing_registry).configure()
+
+        assert result.passed is True
+        assert "scope: user" in result.message
+        assert claude.verbs == [["add", "quarry"]]
 
 
 class TestConfigureClaudeDesktop:

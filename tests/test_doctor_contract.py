@@ -16,10 +16,11 @@ import pytest
 from pydantic import BaseModel, ValidationError, field_validator
 
 from quarry import doctor as doctor_mod
+from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor import check_environment, run_install
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_failure import CheckFailure
-from quarry.doctor_mcp import ClaudeCodeMcp, ClaudeDesktopMcp
+from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_memory import MemoryDiagnostics
 from quarry.json_file import JsonFile
 from quarry.opencv_headless import HeadlessOpenCv
@@ -426,7 +427,7 @@ class TestMessagesNameTheirFile:
         def deep(*_a: object, **_k: object) -> str:
             raise RecursionError
 
-        monkeypatch.setattr("quarry.doctor_mcp.json.dumps", deep)
+        monkeypatch.setattr("quarry.claude_desktop_mcp.json.dumps", deep)
 
         result = ClaudeDesktopMcp(config).configure()
 
