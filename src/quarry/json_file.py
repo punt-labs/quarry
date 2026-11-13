@@ -36,13 +36,25 @@ class JsonFile:
     __slots__ = ()
 
     @classmethod
-    def load(cls, path: Path) -> dict[str, object]:
-        """Return the object in *path*, or raise :class:`ConfigError` saying why."""
+    def load(cls, path: Path, *, max_bytes: int = MAX_BYTES) -> dict[str, object]:
+        """Return the object in *path*, or raise :class:`ConfigError` saying why.
+
+        *max_bytes* bounds how much of *path* is read before it is refused;
+        the default is the 1 MiB untrusted-input cap. Pass a larger bound only
+        for a file this process already trusts by convention (e.g. Claude
+        Code's own unbounded-growth ``~/.claude.json``) -- every other caller
+        keeps the default cap unchanged.
+        """
         try:
-            raw = cls._read(path)
+            raw = cls._read(path, max_bytes)
         except OSError as exc:
             msg = f"{path.name}: {CheckFailure.detail(exc)}"
             raise ConfigError(msg) from exc
+        return cls._parsed(raw, path)
+
+    @classmethod
+    def _parsed(cls, raw: bytes, path: Path) -> dict[str, object]:
+        """Return *raw*'s decoded JSON object, or raise :class:`ConfigError`."""
         if not raw:
             return {}
         try:
@@ -88,8 +100,8 @@ class JsonFile:
         return f"{path.name}: {CheckFailure.detail(exc)}"
 
     @classmethod
-    def _read(cls, path: Path) -> bytes:
-        """Return a regular file's bytes, at most the cap's worth.
+    def _read(cls, path: Path, max_bytes: int) -> bytes:
+        """Return a regular file's bytes, at most *max_bytes* worth.
 
         ``O_NOCTTY`` so a terminal device never becomes this process's controlling
         terminal; the descriptor is closed on every path.
@@ -100,17 +112,17 @@ class JsonFile:
             if not stat.S_ISREG(info.st_mode):
                 msg = f"{path.name}: not a regular file"
                 raise ConfigError(msg)
-            if info.st_size > cls.MAX_BYTES:
-                raise cls._too_large(path)
+            if info.st_size > max_bytes:
+                raise cls._too_large(path, max_bytes)
             with os.fdopen(fd, "rb", closefd=False) as handle:
-                raw = handle.read(cls.MAX_BYTES + 1)
+                raw = handle.read(max_bytes + 1)
         finally:
             os.close(fd)
-        if len(raw) > cls.MAX_BYTES:  # grew after fstat
-            raise cls._too_large(path)
+        if len(raw) > max_bytes:  # grew after fstat
+            raise cls._too_large(path, max_bytes)
         return raw
 
-    @classmethod
-    def _too_large(cls, path: Path) -> ConfigError:
-        """Return the error for a file past the cap."""
-        return ConfigError(f"{path.name}: larger than {cls.MAX_BYTES} bytes")
+    @staticmethod
+    def _too_large(path: Path, max_bytes: int) -> ConfigError:
+        """Return the error for a file past *max_bytes*."""
+        return ConfigError(f"{path.name}: larger than {max_bytes} bytes")

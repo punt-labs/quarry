@@ -111,6 +111,11 @@ def _check_imports() -> CheckResult:
     )
 
 
+def _fts_result(*, passed: bool, message: str) -> CheckResult:
+    """Return one ``FTS index`` report line; every path below is advisory."""
+    return CheckResult(name="FTS index", passed=passed, message=message, required=False)
+
+
 def _check_fts_health(db_path: Path) -> CheckResult:
     """Verify the Tantivy FTS index is queryable."""
     # LanceDB and pyarrow are native: a broken install is a failed check, not an
@@ -119,51 +124,23 @@ def _check_fts_health(db_path: Path) -> CheckResult:
         from quarry.db.facade import Database  # noqa: PLC0415
         from quarry.db.schema import TABLE_NAME  # noqa: PLC0415
     except CheckFailure.BROKEN_STACK as exc:
-        return CheckResult(
-            name="FTS index",
-            passed=False,
-            message=CheckFailure.import_message("quarry.db", exc),
-            required=False,
+        return _fts_result(
+            passed=False, message=CheckFailure.import_message("quarry.db", exc)
         )
 
     if not db_path.exists():
-        return CheckResult(
-            name="FTS index",
-            passed=True,
-            message="no database yet",
-            required=False,
-        )
+        return _fts_result(passed=True, message="no database yet")
     try:
         database = Database.connect(db_path)
         if TABLE_NAME not in database.db.list_tables().tables:
-            return CheckResult(
-                name="FTS index",
-                passed=True,
-                message="no table yet",
-                required=False,
-            )
+            return _fts_result(passed=True, message="no table yet")
         table = database.db.open_table(TABLE_NAME)
         table.search("health", query_type="fts").limit(1).to_list()
-        return CheckResult(
-            name="FTS index",
-            passed=True,
-            message="healthy",
-            required=False,
-        )
+        return _fts_result(passed=True, message="healthy")
     except (OSError, ValueError, RuntimeError) as exc:
-        return CheckResult(
-            name="FTS index",
-            passed=False,
-            message=CheckFailure.index_message(exc),
-            required=False,
-        )
+        return _fts_result(passed=False, message=CheckFailure.index_message(exc))
     except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="FTS index",
-            passed=False,
-            message=f"error: {CheckFailure.detail(exc)}",
-            required=False,
-        )
+        return _fts_result(passed=False, message=f"error: {CheckFailure.detail(exc)}")
 
 
 def _print_check(check: CheckResult) -> None:
@@ -347,20 +324,6 @@ def run_install() -> int:
     return 1 if failed else exit_code
 
 
-def _prune_user_scope_shadow() -> CheckResult:
-    """Strip a stray ``mcpServers.quarry`` user-scope entry; always a non-fail.
-
-    Opportunistic (PL-999): removes the pre-plugin-scoped ``claude mcp add``
-    residue once the plugin is confirmed to own the server, so a machine
-    installed before the fix self-heals on the next ``quarry doctor``.
-    """
-    pruned = UserScopeShadow(ClaudeCodeMcp()).prune()
-    message = "removed stray user-scope entry" if pruned else "nothing to prune"
-    return CheckResult(
-        name="User-scope MCP shadow", passed=True, message=message, required=False
-    )
-
-
 def _run_checks() -> list[CheckResult]:
     """Run every environment check with third-party logging quieted."""
     pre = Preconditions.resolve()
@@ -386,7 +349,11 @@ def _run_checks() -> list[CheckResult]:
         CheckEntry(
             "Claude Desktop MCP", lambda: ClaudeDesktopMcp().check(), needs=Need.HOME
         ),
-        CheckEntry("User-scope MCP shadow", _prune_user_scope_shadow, needs=Need.HOME),
+        CheckEntry(
+            "User-scope MCP shadow",
+            lambda: UserScopeShadow(ClaudeCodeMcp()).prune().as_check_result(),
+            needs=Need.HOME,
+        ),
         *SettingsChecks.entries(pre, _check_fts_health),
     ]
     with _quiet_logging():

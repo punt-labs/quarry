@@ -19,6 +19,7 @@ from quarry.home_paths import QuarryHome
 from quarry.json_file import ConfigError, JsonFile
 from quarry.mcp_constants import MCP_SERVER_NAME as _MCP_SERVER_NAME
 from quarry.results import CheckResult
+from quarry.shadow_prune import ShadowPrune, ShadowPruneKind
 
 _SCOPE_USER = ("--scope", "user")
 
@@ -267,9 +268,19 @@ class UserScopeShadow:
     rather than a method on it: it owns a disjoint piece of state (the
     ``~/.claude.json`` path) and a disjoint concern (pruning a stray write,
     not registering or checking the plugin-owned server).
+
+    ``~/.claude.json`` is Claude Code's own primary state file and grows
+    unbounded with session history, so it is read with a generous cap rather
+    than :attr:`JsonFile.MAX_BYTES` -- that cap guards untrusted config, and
+    this file is trusted by convention, not hostile.
     """
 
     __slots__ = ("_claude_json_path", "_plugin")
+
+    # Claude Code's own history-bearing state file has been reported well past
+    # the 1 MiB untrusted-config cap (60+ MiB); this bound only rules out a
+    # truly pathological file, not a real one.
+    _CLAUDE_JSON_MAX_BYTES: ClassVar[int] = 128 * 1024 * 1024
 
     _plugin: ClaudeCodeMcp
     _claude_json_path: Path
@@ -284,28 +295,40 @@ class UserScopeShadow:
         )
         return self
 
-    def prune(self) -> bool:
+    def prune(self) -> ShadowPrune:
         """Remove the stray entry; a no-op, never an error, when not applicable.
 
         Opportunistic: a no-op when the plugin is absent (the ``--no-plugin``
         path still needs its own user-scope entry), the file is absent, or
         the ``quarry`` key is already gone -- the file is then never touched.
-        Returns whether a write happened.
+
+        ``~/.claude.json`` is Claude Code's own primary state file; this
+        process's :class:`~quarry.file_lock.FileLock` only serializes against
+        other punt tools, not against Claude Code's own writer, which does not
+        take it. A concurrent Claude-Code write landing between the read below
+        and the rename can still be lost -- accepted because this prune runs
+        only from install/doctor/uninstall (rare) and the read-to-write window
+        is the smallest this method can make it.
         """
         if not self._plugin.check().passed:
-            return False
+            return ShadowPrune(ShadowPruneKind.ABSENT)
         with FileLock.shared(self._claude_json_path):
             return self._strip_entry()
 
-    def _strip_entry(self) -> bool:
+    def _strip_entry(self) -> ShadowPrune:
         """Delete the ``quarry`` key under a held lock; the file-touch boundary."""
+        if not self._claude_json_path.exists():
+            return ShadowPrune(ShadowPruneKind.ABSENT)
         try:
-            config = JsonFile.load(self._claude_json_path)
-        except (OSError, ValueError):
-            return False
+            config = JsonFile.load(
+                self._claude_json_path, max_bytes=self._CLAUDE_JSON_MAX_BYTES
+            )
+        except (OSError, ValueError) as exc:
+            detail = JsonFile.why(exc, self._claude_json_path)
+            return ShadowPrune(ShadowPruneKind.UNREADABLE, detail)
         servers = config.get("mcpServers")
         if not isinstance(servers, dict) or _MCP_SERVER_NAME not in servers:
-            return False
+            return ShadowPrune(ShadowPruneKind.ABSENT)
         del servers[_MCP_SERVER_NAME]
         AtomicFile(self._claude_json_path).replace(json.dumps(config, indent=2) + "\n")
-        return True
+        return ShadowPrune(ShadowPruneKind.REMOVED)

@@ -30,7 +30,6 @@ from quarry.doctor import (
     _check_fts_health,
     _check_imports,
     _check_python_version,
-    _prune_user_scope_shadow,
     _quiet_logging,
     _run_checks,
     check_environment,
@@ -43,7 +42,9 @@ from quarry.doctor_mcp import ClaudeCodeMcp, UserScopeShadow
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
+from quarry.json_file import JsonFile
 from quarry.results import CheckResult
+from quarry.shadow_prune import ShadowPrune, ShadowPruneKind
 from tests.home_only import HomeOnly
 
 if TYPE_CHECKING:
@@ -555,23 +556,32 @@ class TestCheckEnvironment:
 class TestPruneUserScopeShadowCheck:
     """PL-999: the doctor-side wiring of the opportunistic strip."""
 
-    def test_always_passes_and_names_a_prune(self, monkeypatch: MP):
-        monkeypatch.setattr(UserScopeShadow, "prune", lambda _self: True)
-        result = _prune_user_scope_shadow()
+    def test_always_passes_and_names_a_prune(self):
+        result = ShadowPrune(ShadowPruneKind.REMOVED).as_check_result()
         assert result.passed is True
         assert result.required is False
         assert "removed" in result.message
 
-    def test_always_passes_when_nothing_to_prune(self, monkeypatch: MP):
-        monkeypatch.setattr(UserScopeShadow, "prune", lambda _self: False)
-        result = _prune_user_scope_shadow()
+    def test_always_passes_when_nothing_to_prune(self):
+        result = ShadowPrune(ShadowPruneKind.ABSENT).as_check_result()
         assert result.passed is True
         assert "nothing to prune" in result.message
+
+    def test_passes_but_says_so_when_the_file_could_not_be_checked(self):
+        """An unreadable ``~/.claude.json`` is reported, never mistaken for clean."""
+        result = ShadowPrune(
+            ShadowPruneKind.UNREADABLE, "larger than 999 bytes"
+        ).as_check_result()
+        assert result.passed is True
+        assert "could not check" in result.message
+        assert "larger than 999 bytes" in result.message
+        assert "nothing to prune" not in result.message
 
     def test_is_wired_into_run_checks(self, tmp_path: Path, monkeypatch: MP):
         """The check entry is present in the full `quarry doctor` report."""
         HomeOnly.apply(monkeypatch, tmp_path)
-        monkeypatch.setattr(UserScopeShadow, "prune", lambda _self: False)
+        absent = ShadowPrune(ShadowPruneKind.ABSENT)
+        monkeypatch.setattr(UserScopeShadow, "prune", lambda _self: absent)
         names = [check.name for check in _run_checks()]
         assert "User-scope MCP shadow" in names
 
@@ -1075,9 +1085,9 @@ class TestUserScopeShadow:
         )
         plugin = self._configured_plugin(tmp_path)
 
-        pruned = UserScopeShadow(plugin, claude_json).prune()
+        result = UserScopeShadow(plugin, claude_json).prune()
 
-        assert pruned is True
+        assert result.kind is ShadowPruneKind.REMOVED
         config = json.loads(claude_json.read_text())
         assert "quarry" not in config["mcpServers"]
         assert config["mcpServers"]["other"] == {"command": "other-tool"}
@@ -1090,9 +1100,9 @@ class TestUserScopeShadow:
         before = claude_json.stat().st_mtime_ns
         plugin = self._configured_plugin(tmp_path)
 
-        pruned = UserScopeShadow(plugin, claude_json).prune()
+        result = UserScopeShadow(plugin, claude_json).prune()
 
-        assert pruned is False
+        assert result.kind is ShadowPruneKind.ABSENT
         assert claude_json.stat().st_mtime_ns == before
         assert claude_json.read_text() == original
 
@@ -1106,9 +1116,9 @@ class TestUserScopeShadow:
         missing_registry = tmp_path / "nonexistent" / "installed_plugins.json"
         plugin = ClaudeCodeMcp(missing_registry)
 
-        pruned = UserScopeShadow(plugin, claude_json).prune()
+        result = UserScopeShadow(plugin, claude_json).prune()
 
-        assert pruned is False
+        assert result.kind is ShadowPruneKind.ABSENT
         assert claude_json.read_text() == original
 
     def test_file_absent_is_a_no_op(self, tmp_path: Path):
@@ -1116,10 +1126,54 @@ class TestUserScopeShadow:
         claude_json = tmp_path / ".claude.json"
         plugin = self._configured_plugin(tmp_path)
 
-        pruned = UserScopeShadow(plugin, claude_json).prune()
+        result = UserScopeShadow(plugin, claude_json).prune()
 
-        assert pruned is False
+        assert result.kind is ShadowPruneKind.ABSENT
         assert not claude_json.exists()
+
+    def test_an_oversize_claude_json_still_gets_its_entry_stripped(
+        self, tmp_path: Path
+    ):
+        """``~/.claude.json`` legitimately exceeds JsonFile's 1 MiB untrusted cap.
+
+        Claude Code's own state file grows unbounded with session history
+        (60+ MiB reported upstream); the strip must not silently no-op on a
+        real, big file by applying the untrusted-config cap to a file this
+        process trusts by convention.
+        """
+        claude_json = tmp_path / ".claude.json"
+        padding = "x" * (JsonFile.MAX_BYTES + 1)
+        claude_json.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {"quarry": {"command": "quarry", "args": ["mcp"]}},
+                    "padding": padding,
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert claude_json.stat().st_size > JsonFile.MAX_BYTES
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.REMOVED
+        config = json.loads(claude_json.read_text())
+        assert "quarry" not in config["mcpServers"]
+
+    def test_an_unreadable_claude_json_is_reported_not_mistaken_for_clean(
+        self, tmp_path: Path
+    ):
+        """Malformed JSON is UNREADABLE, distinct from ABSENT's "nothing to prune"."""
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text("{not json", encoding="utf-8")
+        plugin = self._configured_plugin(tmp_path)
+
+        result = UserScopeShadow(plugin, claude_json).prune()
+
+        assert result.kind is ShadowPruneKind.UNREADABLE
+        assert result.detail
+        assert claude_json.read_text() == "{not json"
 
 
 class TestConfigureClaudeDesktop:
