@@ -14,13 +14,15 @@ from unittest.mock import patch
 import lancedb
 import pytest
 from pydantic import BaseModel, ValidationError, field_validator
+from typer.testing import CliRunner
 
 from quarry import doctor as doctor_mod
+from quarry.__main__ import app
 from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor import check_environment, run_install
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_failure import CheckFailure
-from quarry.doctor_mcp import ClaudeCodeMcp
+from quarry.doctor_mcp import ClaudeCodeMcp, UserScopeShadow
 from quarry.doctor_memory import MemoryDiagnostics
 from quarry.json_file import JsonFile
 from quarry.opencv_headless import HeadlessOpenCv
@@ -898,6 +900,7 @@ _CHECKS = (
     "Core imports",
     "Claude Code MCP",
     "Claude Desktop MCP",
+    "User-scope MCP shadow",
     "Daemon",
     "Serve token",
     "Fd headroom",
@@ -1028,3 +1031,26 @@ def test_an_xdg_cache_root_lets_the_model_check_run_without_a_home(
 
     model = _check_lines(done.stdout)["Embedding model"]
     assert model.startswith("✗ Embedding model: Not cached"), model
+
+
+def test_uninstall_prunes_the_user_scope_shadow_before_the_daemon_step(
+    monkeypatch: MP,
+) -> None:
+    """PL-999: ``quarry uninstall`` strips the shadow entry, then the service."""
+    calls: list[str] = []
+
+    def fake_prune(_self: UserScopeShadow) -> bool:
+        calls.append("prune")
+        return True
+
+    def fake_svc_uninstall() -> str:
+        calls.append("service")
+        return "uninstalled"
+
+    monkeypatch.setattr(UserScopeShadow, "prune", fake_prune)
+    monkeypatch.setattr("quarry.service.uninstall", fake_svc_uninstall)
+
+    result = CliRunner().invoke(app, ["uninstall"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["prune", "service"]

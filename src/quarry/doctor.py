@@ -14,7 +14,7 @@ from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_failure import CheckFailure
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_mcp import ClaudeCodeMcp
+from quarry.doctor_mcp import ClaudeCodeMcp, UserScopeShadow
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_preconditions import Need, Preconditions
 from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
@@ -347,6 +347,20 @@ def run_install() -> int:
     return 1 if failed else exit_code
 
 
+def _prune_user_scope_shadow() -> CheckResult:
+    """Strip a stray ``mcpServers.quarry`` user-scope entry; always a non-fail.
+
+    Opportunistic (PL-999): removes the pre-plugin-scoped ``claude mcp add``
+    residue once the plugin is confirmed to own the server, so a machine
+    installed before the fix self-heals on the next ``quarry doctor``.
+    """
+    pruned = UserScopeShadow(ClaudeCodeMcp()).prune()
+    message = "removed stray user-scope entry" if pruned else "nothing to prune"
+    return CheckResult(
+        name="User-scope MCP shadow", passed=True, message=message, required=False
+    )
+
+
 def _run_checks() -> list[CheckResult]:
     """Run every environment check with third-party logging quieted."""
     pre = Preconditions.resolve()
@@ -372,6 +386,7 @@ def _run_checks() -> list[CheckResult]:
         CheckEntry(
             "Claude Desktop MCP", lambda: ClaudeDesktopMcp().check(), needs=Need.HOME
         ),
+        CheckEntry("User-scope MCP shadow", _prune_user_scope_shadow, needs=Need.HOME),
         *SettingsChecks.entries(pre, _check_fts_health),
     ]
     with _quiet_logging():

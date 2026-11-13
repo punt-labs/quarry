@@ -326,10 +326,15 @@ def uninstall() -> None:
     """Remove quarry system daemon and service file.
 
     Stops the daemon and removes the launchd plist (macOS) or systemd unit
-    (Linux).  Clean inverse of the daemon step in ``quarry install``.
+    (Linux).  Clean inverse of the daemon step in ``quarry install``.  Also
+    opportunistically prunes a stray user-scope ``mcpServers.quarry`` entry
+    from ``~/.claude.json`` (PL-999) -- harmless when the plugin is absent
+    or the entry is already gone.
     """
+    from quarry.doctor_mcp import ClaudeCodeMcp, UserScopeShadow  # noqa: PLC0415
     from quarry.service import uninstall as svc_uninstall  # noqa: PLC0415
 
+    UserScopeShadow(ClaudeCodeMcp()).prune()
     msg = svc_uninstall()
     _emit({"message": msg}, msg)
 

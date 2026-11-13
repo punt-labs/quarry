@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import ClassVar, Self, final
 
+from quarry.atomic_file import AtomicFile
 from quarry.doctor_failure import CheckFailure
+from quarry.file_lock import FileLock
 from quarry.home_paths import QuarryHome
 from quarry.json_file import ConfigError, JsonFile
 from quarry.mcp_constants import MCP_SERVER_NAME as _MCP_SERVER_NAME
@@ -121,7 +125,11 @@ class ClaudeCodeMcp:
         if not isinstance(entries, list) or not isinstance(entries[0], dict):
             msg = f"{registry.name}: the quarry plugin entry is malformed"
             raise ConfigError(msg)
-        raw_path = entries[0].get("installPath", "")
+        return self._verify_install_path(entries[0])
+
+    def _verify_install_path(self, entry: dict[str, object]) -> CheckResult:
+        """Return whether *entry*'s ``installPath`` has a valid quarry manifest."""
+        raw_path = entry.get("installPath", "")
         if not raw_path or not isinstance(raw_path, str):
             return self._failure("plugin registry has empty installPath")
         install_path = Path(raw_path)
@@ -137,10 +145,7 @@ class ClaudeCodeMcp:
         return CheckResult(name="Claude Code MCP", passed=True, message="configured")
 
     def _register(self, claude_path: str) -> CheckResult:
-        """Add the quarry server; remove and re-add a stale entry that blocks it."""
-        ok = CheckResult(
-            name="Claude Code MCP", passed=True, message="configured (scope: user)"
-        )
+        """Add the quarry server; fall through to replace a stale blocking entry."""
         call = _ClaudeCall(claude_path, time.monotonic() + self._TOTAL_TIMEOUT_S)
         run = partial(self._run, call)
         add_argv = [
@@ -153,11 +158,17 @@ class ClaudeCodeMcp:
         ]
         result = run(*add_argv)
         if result.returncode == 0:
-            return ok
+            return self._configured_ok()
         if "already exists" not in result.stderr:
             return self._failure(f"claude mcp add failed: {self._said(result)}")
         # An entry already exists and blocks the direct add. Remove it and re-add;
         # only now — with the entry confirmed present — do we risk a removal.
+        return self._replace_stale_entry(run, add_argv)
+
+    def _replace_stale_entry(
+        self, run: Callable[..., subprocess.CompletedProcess[str]], add_argv: list[str]
+    ) -> CheckResult:
+        """Remove the entry blocking the add, then re-add; surface either failure."""
         try:
             remove = run("mcp", "remove", _MCP_SERVER_NAME, *_SCOPE_USER)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -182,8 +193,15 @@ class ClaudeCodeMcp:
         except (OSError, subprocess.TimeoutExpired) as exc:
             return self._failure(self._readd_failed(CheckFailure.detail(exc)))
         if retry.returncode == 0:
-            return ok
+            return self._configured_ok()
         return self._failure(self._readd_failed(self._said(retry)))
+
+    @staticmethod
+    def _configured_ok() -> CheckResult:
+        """Return the passing result for a successful user-scope add."""
+        return CheckResult(
+            name="Claude Code MCP", passed=True, message="configured (scope: user)"
+        )
 
     @staticmethod
     def _readd_failed(why: str) -> str:
@@ -236,3 +254,58 @@ class ClaudeCodeMcp:
         return CheckResult(
             name="Claude Code MCP", passed=False, message=message, required=False
         )
+
+
+@final
+class UserScopeShadow:
+    """Prune a stray ``mcpServers.quarry`` entry from ``~/.claude.json``.
+
+    ``quarry install`` once wrote a user-scope entry unconditionally
+    (PL-999); the quarry Claude Code plugin now owns the server
+    (tool-enable-disable.md §2.6), so that entry is pure shadow once the
+    plugin is confirmed registered. A collaborator of :class:`ClaudeCodeMcp`
+    rather than a method on it: it owns a disjoint piece of state (the
+    ``~/.claude.json`` path) and a disjoint concern (pruning a stray write,
+    not registering or checking the plugin-owned server).
+    """
+
+    __slots__ = ("_claude_json_path", "_plugin")
+
+    _plugin: ClaudeCodeMcp
+    _claude_json_path: Path
+
+    def __new__(
+        cls, plugin: ClaudeCodeMcp, claude_json_path: Path | None = None
+    ) -> Self:
+        self = super().__new__(cls)
+        self._plugin = plugin
+        self._claude_json_path = claude_json_path or (
+            QuarryHome.home() / ".claude.json"
+        )
+        return self
+
+    def prune(self) -> bool:
+        """Remove the stray entry; a no-op, never an error, when not applicable.
+
+        Opportunistic: a no-op when the plugin is absent (the ``--no-plugin``
+        path still needs its own user-scope entry), the file is absent, or
+        the ``quarry`` key is already gone -- the file is then never touched.
+        Returns whether a write happened.
+        """
+        if not self._plugin.check().passed:
+            return False
+        with FileLock.shared(self._claude_json_path):
+            return self._strip_entry()
+
+    def _strip_entry(self) -> bool:
+        """Delete the ``quarry`` key under a held lock; the file-touch boundary."""
+        try:
+            config = JsonFile.load(self._claude_json_path)
+        except (OSError, ValueError):
+            return False
+        servers = config.get("mcpServers")
+        if not isinstance(servers, dict) or _MCP_SERVER_NAME not in servers:
+            return False
+        del servers[_MCP_SERVER_NAME]
+        AtomicFile(self._claude_json_path).replace(json.dumps(config, indent=2) + "\n")
+        return True
