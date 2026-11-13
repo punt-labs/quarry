@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- tool: `quarry install` no longer registers the quarry MCP server at Claude Code user scope when the plugin is installed. The plugin's `plugin.json` already declares the server; the user-scope entry shadowed it, so quarry rendered under "User MCPs" instead of `plugin:quarry:quarry` (tool-enable-disable §2.6/§2.8). The registration is now gated on the `--no-plugin` path, and `quarry doctor`/`quarry uninstall` strip a stray `mcpServers.quarry` entry that existing machines carry. The strip reads `~/.claude.json` with a 128 MiB cap so it works on Claude Code's own history-bearing state file, and reports a distinct message when that file cannot be read rather than a false "nothing to prune".
+
 ## [3.6.2] - 2026-11-12
 
 ### Changed
