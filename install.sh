@@ -624,7 +624,10 @@ if [ "$SKIP_PLUGIN" = "0" ]; then
   # left a user-scope shadow entry in ~/.claude.json that masks it; strip it
   # here so a fresh machine never carries the shadow.  Opportunistic — a no-op
   # unless the plugin is registered at user scope and the entry is present.
-  "$BINARY" prune-mcp-shadow < /dev/null 2>/dev/null || true
+  # Silent: the command's own "nothing to prune"/"removed" line would break the
+  # installer's bullet formatting, and Step 11's `quarry doctor` already surfaces
+  # this check formatted as "User-scope MCP shadow".
+  "$BINARY" prune-mcp-shadow < /dev/null >/dev/null 2>&1 || true
 fi
 
 # --- Step 10: Configure local TLS access ---
