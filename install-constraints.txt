@@ -43,7 +43,7 @@ onnxruntime==1.24.1
 opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
 openpyxl==3.1.5
-opentelemetry-api==1.45.1
+opentelemetry-api==1.45.2
 packaging==26.0
 pathspec==1.1.1
 pillow==13.0.0
@@ -72,7 +72,7 @@ rpds-py==0.30.0
 shapely==2.1.2
 shellingham==1.5.4
 six==1.17.0
-soupsieve==2.9
+soupsieve==4.1
 sse-starlette==3.2.0
 starlette==1.5.0
 sympy==1.14.0

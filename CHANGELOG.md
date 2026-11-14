@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Security
+
+- infra: bump soupsieve 2.9 → 4.1 (GHSA-6655-6qjp-jx7x, GHSA-mmhr-3c5m-f64f high; GHSA-7g44-g9rc-x53w, GHSA-4j63-6c4x-wfg4 medium) and opentelemetry-api 1.45.1 → 1.45.2 (GHSA-mf5v-w3w3-f6cg medium) in `uv.lock` and `install-constraints.txt`. Both are transitive; no quarry code change.
+
 ## [3.6.3] - 2026-11-13
 
 ### Fixed
