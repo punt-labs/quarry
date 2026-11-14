@@ -59,8 +59,8 @@ class EnableReport:
             )
         )
         lines += r.permissions.lines(
-            "Allowed quarry tools in",
-            unchanged="  Quarry tools already allowed in .claude/settings.json",
+            "Added quarry permission rules to",
+            unchanged="  Quarry permission rules already in .claude/settings.json",
         )
         return lines + self._ethos_lines()
 
