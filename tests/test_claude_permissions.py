@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from quarry.claude_permissions import QUARRY_RULES, ProjectPermissions
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _settings(root: Path) -> Path:
@@ -31,39 +28,52 @@ def _allow(root: Path) -> list[object]:
     return allow
 
 
-class TestRuleSet:
-    def test_covers_native_mcp_namespace_and_each_command(self) -> None:
-        assert QUARRY_RULES[0] == "mcp__quarry__*"
-        assert "Skill(find)" in QUARRY_RULES
-        assert "Skill(ingest)" in QUARRY_RULES
-        assert not any("plugin_quarry" in rule for rule in QUARRY_RULES)
-        assert not any(rule.endswith("-dev)") for rule in QUARRY_RULES)
+def _ask(root: Path) -> list[object]:
+    ask: list[object] = json.loads(_settings(root).read_text())["permissions"]["ask"]
+    return ask
 
-    def test_cli_rules_are_the_explicit_data_plane_prefixes(self) -> None:
-        cli = [rule for rule in QUARRY_RULES if rule.startswith("Bash(")]
-        assert cli == [
-            f"Bash(quarry {name}:*)"
-            for name in (
-                "doctor",
-                "find",
-                "ingest",
-                "learn",
-                "list",
-                "remember",
-                "show",
-                "status",
-            )
-        ]
+
+_ALLOW = QUARRY_RULES["allow"]
+_ASK = QUARRY_RULES["ask"]
+_ALL = (*_ALLOW, *_ASK)
+
+
+class TestRuleSet:
+    def test_allows_each_surface_broadly(self) -> None:
+        assert _ALLOW == ("Bash(quarry:*)", "mcp__quarry__*", "Skill(quarry:*)")
+        assert not any("plugin_quarry" in rule for rule in _ALL)
+        assert not any("-dev" in rule for rule in _ALL)
 
     @pytest.mark.parametrize(
-        "command", ["login", "logout", "install", "uninstall", "enable", "disable"]
+        "command",
+        [
+            "login",
+            "logout",
+            "remote",
+            "install",
+            "uninstall",
+            "enable",
+            "disable",
+            "captures",
+            "skills",
+            "mcp",
+            "delete",
+            "use",
+            "prune-mcp-shadow",
+        ],
     )
-    def test_no_rule_matches_an_admin_command(self, command: str) -> None:
-        for rule in QUARRY_RULES:
-            if rule.startswith("Bash("):
-                prefix = rule.removeprefix("Bash(").removesuffix(":*)")
-                assert not f"quarry {command} host --yes".startswith(prefix + " ")
-                assert prefix != "quarry"
+    def test_admin_and_destructive_commands_ask(self, command: str) -> None:
+        assert f"Bash(quarry {command}:*)" in _ASK
+
+    def test_data_plane_commands_do_not_ask(self) -> None:
+        for command in ("find", "ingest", "remember", "learn", "show", "status"):
+            assert f"Bash(quarry {command}:*)" not in _ASK
+
+    def test_global_options_before_the_verb_ask(self) -> None:
+        assert "Bash(quarry -*)" in _ASK
+
+    def test_mcp_delete_asks(self) -> None:
+        assert "mcp__quarry__delete" in _ASK
 
 
 class TestGrant:
@@ -71,8 +81,9 @@ class TestGrant:
         change = ProjectPermissions(tmp_path).grant()
 
         assert change.error == ""
-        assert change.changed == QUARRY_RULES
-        assert _allow(tmp_path) == list(QUARRY_RULES)
+        assert change.changed == _ALL
+        assert _allow(tmp_path) == list(_ALLOW)
+        assert _ask(tmp_path) == list(_ASK)
 
     def test_preserves_unrelated_settings_and_rule_order(self, tmp_path: Path) -> None:
         _write(
@@ -80,7 +91,7 @@ class TestGrant:
             {
                 "theme": "dark",
                 "permissions": {
-                    "allow": ["Bash(make:*)", "Skill(find)"],
+                    "allow": ["Bash(make:*)", "Skill(quarry:*)"],
                     "deny": ["X"],
                 },
             },
@@ -92,10 +103,10 @@ class TestGrant:
         assert data["theme"] == "dark"
         assert data["permissions"]["deny"] == ["X"]
         allow = data["permissions"]["allow"]
-        assert allow[:2] == ["Bash(make:*)", "Skill(find)"]
-        assert allow.count("Skill(find)") == 1
-        assert "Skill(find)" not in change.changed
-        assert set(allow) == {"Bash(make:*)", *QUARRY_RULES}
+        assert allow[:2] == ["Bash(make:*)", "Skill(quarry:*)"]
+        assert allow.count("Skill(quarry:*)") == 1
+        assert "Skill(quarry:*)" not in change.changed
+        assert set(allow) == {"Bash(make:*)", *_ALLOW}
 
     def test_narrower_mcp_entry_does_not_shadow_wildcard(self, tmp_path: Path) -> None:
         _write(tmp_path, {"permissions": {"allow": ["mcp__quarry__find"]}})
@@ -212,8 +223,9 @@ class TestRevoke:
 
         change = ProjectPermissions(tmp_path).revoke()
 
-        assert change.changed == QUARRY_RULES
+        assert change.changed == _ALL
         assert _allow(tmp_path) == ["Bash(make:*)", "Skill(other)"]
+        assert _ask(tmp_path) == []
 
     def test_revoke_without_settings_writes_nothing(self, tmp_path: Path) -> None:
         change = ProjectPermissions(tmp_path).revoke()

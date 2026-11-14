@@ -782,11 +782,12 @@ class TestEnableGrantsProjectPermissions:
             again = enable_project(project, client)
             disabled = disable_project(project, client)
 
-        assert enabled.permissions.changed == QUARRY_RULES
+        rules = (*QUARRY_RULES["allow"], *QUARRY_RULES["ask"])
+        assert enabled.permissions.changed == rules
         assert again.permissions.changed == ()
-        assert disabled.permissions.changed == QUARRY_RULES
+        assert disabled.permissions.changed == rules
         assert json.loads(settings.read_text()) == {
-            "permissions": {"allow": ["Bash(make:*)"]}
+            "permissions": {"allow": ["Bash(make:*)"], "ask": []}
         }
 
     def test_unreadable_settings_does_not_fail_enable(self, tmp_path: Path) -> None:

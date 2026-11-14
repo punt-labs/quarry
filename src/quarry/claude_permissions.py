@@ -1,4 +1,4 @@
-"""Quarry's allow rules in a project's ``.claude/settings.json`` (#552).
+"""Quarry's allow and ask rules in a project's ``.claude/settings.json`` (#552).
 
 ``quarry enable`` is the operator's explicit opt-in, so it -- not plugin
 startup -- grants Claude Code permission to call quarry's MCP tools and slash
@@ -22,41 +22,44 @@ from quarry.safe_paths import SafeRepoPath
 
 __all__ = ["QUARRY_RULES", "PermissionChange", "ProjectPermissions"]
 
-_COMMANDS: Final = (
-    "explain",
-    "find",
-    "help",
-    "ingest",
-    "learn",
-    "quarry",
-    "remember",
-    "source",
-)
-
-# Data-plane CLI subcommands only. A blanket ``Bash(quarry:*)`` would also
-# auto-approve ``login`` (retargets the user-global client config and sends
-# QUARRY_API_KEY to the chosen host), ``logout``, ``install``, ``uninstall``,
-# ``enable``/``disable`` on other repos, and ``captures``/``skills`` writes;
-# those stay unmatched so they still prompt.
-_CLI_SUBCOMMANDS: Final = (
-    "doctor",
-    "find",
-    "ingest",
-    "learn",
-    "list",
-    "remember",
-    "show",
-    "status",
-)
-
-# The deterministic rule set: enable adds every missing member, disable removes
-# these exact values (§ 2.8). Changing it strands rules on disable, so a rule
-# retired here must stay in the set until no enabled repo can still carry it.
-QUARRY_RULES: Final = (
-    "mcp__quarry__*",
-    *(f"Bash(quarry {name}:*)" for name in _CLI_SUBCOMMANDS),
-    *(f"Skill({name})" for name in _COMMANDS),
-)
+# Broad allow per surface with exact ask carve-outs (punt-kit permissions.md
+# § 6): ask beats allow, so these verbs keep prompting while new safe commands
+# work without a rule update. ``login`` retargets the user-global client config
+# and sends QUARRY_API_KEY to the chosen host; ``logout`` and ``remote`` change
+# that connection; ``install``/``uninstall`` manage the daemon; ``enable`` and
+# ``disable`` change permissions in any repo; ``captures``/``skills`` write
+# outside the repo; ``mcp`` starts a server; ``delete`` (CLI and MCP) drops
+# remembered content that cannot be re-ingested. ``Bash(quarry -*)`` asks for a
+# global option before the verb, which the verb rules would not match. The
+# deterministic rule set:
+# enable adds every missing member, disable removes these exact values (§ 2.8).
+# A rule dropped from the set is no longer removed by disable; there is no
+# cleanup code for it (punt-kit#396).
+QUARRY_RULES: Final[dict[str, tuple[str, ...]]] = {
+    "allow": ("Bash(quarry:*)", "mcp__quarry__*", "Skill(quarry:*)"),
+    "ask": (
+        "Bash(quarry -*)",
+        *(
+            f"Bash(quarry {verb}:*)"
+            for verb in (
+                "login",
+                "logout",
+                "remote",
+                "install",
+                "uninstall",
+                "enable",
+                "disable",
+                "captures",
+                "skills",
+                "mcp",
+                "delete",
+                "use",
+                "prune-mcp-shadow",
+            )
+        ),
+        "mcp__quarry__delete",
+    ),
+}
 
 _SETTINGS: Final = (".claude", "settings.json")
 
@@ -81,6 +84,49 @@ class PermissionChange:
             rules = ", ".join(self.changed)
             return [f"  {verb} .claude/settings.json (this project only): {rules}"]
         return [unchanged] if unchanged else []
+
+
+@final
+class _RuleList:
+    """One ``permissions.<tier>`` list of parsed settings, edited in place.
+
+    A ``permissions`` or tier list of the wrong type is the user's data, so it
+    is reported rather than overwritten. A missing tier is created only when
+    rules are added, and containers are only written when a rule changes.
+    """
+
+    __slots__ = ("_owned", "_rules")
+
+    _rules: list[object]
+    _owned: tuple[str, ...]
+
+    def __new__(cls, settings: dict[str, object], tier: str, *, create: bool) -> Self:
+        permissions = settings.setdefault("permissions", {})
+        if not isinstance(permissions, dict):
+            msg = ".claude/settings.json 'permissions' is not an object"
+            raise ValueError(msg)
+        rules = (
+            permissions.setdefault(tier, []) if create else permissions.get(tier, [])
+        )
+        if not isinstance(rules, list):
+            msg = f".claude/settings.json 'permissions.{tier}' is not a list"
+            raise ValueError(msg)
+        self = super().__new__(cls)
+        self._rules = rules
+        self._owned = QUARRY_RULES[tier]
+        return self
+
+    def add_missing(self) -> tuple[str, ...]:
+        """Append each quarry rule of this tier not yet present; return those added."""
+        added = tuple(rule for rule in self._owned if rule not in self._rules)
+        self._rules.extend(added)
+        return added
+
+    def remove_present(self) -> tuple[str, ...]:
+        """Remove every quarry rule of this tier; return those removed."""
+        removed = tuple(rule for rule in self._owned if rule in self._rules)
+        self._rules[:] = [rule for rule in self._rules if rule not in self._owned]
+        return removed
 
 
 @final
@@ -148,15 +194,14 @@ class ProjectPermissions:
         return True
 
     def _apply(self, *, add: bool) -> tuple[str, ...]:
-        """Edit the allow list in place and write it back if it changed."""
+        """Edit each tier in place and write the file back if a rule changed."""
         settings = self._read()
-        allow = self._allow_list(settings)
-        if add:
-            changed = tuple(rule for rule in QUARRY_RULES if rule not in allow)
-            allow.extend(changed)
-        else:
-            changed = tuple(rule for rule in QUARRY_RULES if rule in allow)
-            allow[:] = [rule for rule in allow if rule not in QUARRY_RULES]
+        tiers = [_RuleList(settings, tier, create=add) for tier in QUARRY_RULES]
+        changed = tuple(
+            rule
+            for tier in tiers
+            for rule in (tier.add_missing() if add else tier.remove_present())
+        )
         if changed:
             self._file.write_atomic(json.dumps(settings, indent=2) + "\n")
         return changed
@@ -174,21 +219,3 @@ class ProjectPermissions:
             msg = ".claude/settings.json is not a JSON object"
             raise ValueError(msg)
         return data
-
-    @staticmethod
-    def _allow_list(settings: dict[str, object]) -> list[object]:
-        """Return ``permissions.allow``, creating it if absent; refuse bad shapes.
-
-        A ``permissions`` or ``allow`` of the wrong type is the user's data,
-        so it is reported rather than overwritten. Containers created here are
-        only written when a rule changes.
-        """
-        permissions = settings.setdefault("permissions", {})
-        if not isinstance(permissions, dict):
-            msg = ".claude/settings.json 'permissions' is not an object"
-            raise ValueError(msg)
-        allow = permissions.setdefault("allow", [])
-        if not isinstance(allow, list):
-            msg = ".claude/settings.json 'permissions.allow' is not a list"
-            raise ValueError(msg)
-        return allow

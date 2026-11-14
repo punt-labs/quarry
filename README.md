@@ -254,13 +254,13 @@ Every hook fails open — a hook failure never blocks Claude Code — and each i
 independently toggleable in `.punt-labs/quarry/config.md`.
 
 **Permissions.** The plugin never edits a Claude settings file on its own.
-Running `quarry enable` is your consent: it adds quarry's allow rules
-(`mcp__quarry__*`, one `Bash(quarry <subcommand>:*)` rule each for the data-plane CLI
-subcommands `find`, `show`, `list`, `status`, `ingest`, `remember`, `learn`, and `doctor`, plus
-`Skill(find)`, `Skill(ingest)`, and the other quarry commands) to that project's
+Running `quarry enable` is your consent: it allows each quarry surface broadly
+(`Bash(quarry:*)`, `mcp__quarry__*` and `Skill(quarry:*)`) in that project's
 `.claude/settings.json`, so Claude calls quarry without a prompt in that project
-only, and prints each rule it added. Admin subcommands such as `login`, `logout`,
-`install`, `uninstall`, and `enable`/`disable` are not allowed and still prompt. Every
+only, and prints each rule it added. Exact `ask` rules keep the admin and
+destructive commands prompting: `login`, `logout`, `remote`, `install`,
+`uninstall`, `enable`, `disable`, `captures`, `skills`, `mcp` and `delete`, any
+global option before the verb (`Bash(quarry -*)`), and the `delete` MCP tool. Every
 other setting and rule in the file is kept. `quarry disable` removes exactly
 those rules. To be asked before each quarry call, delete them from
 `permissions.allow` after enabling. Earlier versions added the same rules to

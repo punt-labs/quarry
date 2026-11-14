@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- tool: `quarry enable` allows each surface broadly — `Bash(quarry:*)`, `mcp__quarry__*` and `Skill(quarry:*)` — and puts an exact `ask` rule in `permissions.ask` for each admin or destructive command (`login`, `logout`, `remote`, `install`, `uninstall`, `enable`, `disable`, `captures`, `skills`, `mcp`, `delete`, `use` (the persistent default database), `prune-mcp-shadow` (edits `~/.claude.json`), any global option before the verb via `Bash(quarry -*)`, and the `delete` MCP tool), so those still prompt while new safe commands work without a rule update (punt-kit#471). It replaces the named data-plane CLI rules and the short forms `Skill(find)`, `Skill(ingest)`, …, which punt-kit `permissions.md` § 3 bans. `quarry disable` removes the same allow and ask values; rules an earlier `quarry enable` added stay until you delete them by hand (PL-1032).
+
 ## [3.6.4] - 2026-11-14
 
 ### Security
