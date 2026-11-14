@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from quarry.claude_permissions import QUARRY_RULES, ProjectPermissions
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _settings(root: Path) -> Path:
@@ -34,10 +31,20 @@ def _allow(root: Path) -> list[object]:
 class TestRuleSet:
     def test_covers_native_mcp_namespace_and_each_command(self) -> None:
         assert QUARRY_RULES[0] == "mcp__quarry__*"
-        assert "Skill(find)" in QUARRY_RULES
-        assert "Skill(ingest)" in QUARRY_RULES
+        assert "Skill(quarry:find)" in QUARRY_RULES
+        assert "Skill(quarry:ingest)" in QUARRY_RULES
         assert not any("plugin_quarry" in rule for rule in QUARRY_RULES)
         assert not any(rule.endswith("-dev)") for rule in QUARRY_RULES)
+
+    def test_skill_rules_are_scoped_one_per_shipped_command(self) -> None:
+        commands = Path(__file__).parents[1] / "plugin" / "commands"
+        shipped = sorted(
+            path.stem
+            for path in commands.glob("*.md")
+            if not path.stem.endswith("-dev")
+        )
+        skills = [rule for rule in QUARRY_RULES if rule.startswith("Skill(")]
+        assert skills == [f"Skill(quarry:{name})" for name in shipped]
 
     def test_cli_rules_are_the_explicit_data_plane_prefixes(self) -> None:
         cli = [rule for rule in QUARRY_RULES if rule.startswith("Bash(")]
@@ -80,7 +87,7 @@ class TestGrant:
             {
                 "theme": "dark",
                 "permissions": {
-                    "allow": ["Bash(make:*)", "Skill(find)"],
+                    "allow": ["Bash(make:*)", "Skill(quarry:find)"],
                     "deny": ["X"],
                 },
             },
@@ -92,9 +99,9 @@ class TestGrant:
         assert data["theme"] == "dark"
         assert data["permissions"]["deny"] == ["X"]
         allow = data["permissions"]["allow"]
-        assert allow[:2] == ["Bash(make:*)", "Skill(find)"]
-        assert allow.count("Skill(find)") == 1
-        assert "Skill(find)" not in change.changed
+        assert allow[:2] == ["Bash(make:*)", "Skill(quarry:find)"]
+        assert allow.count("Skill(quarry:find)") == 1
+        assert "Skill(quarry:find)" not in change.changed
         assert set(allow) == {"Bash(make:*)", *QUARRY_RULES}
 
     def test_narrower_mcp_entry_does_not_shadow_wildcard(self, tmp_path: Path) -> None:

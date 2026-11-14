@@ -257,7 +257,7 @@ independently toggleable in `.punt-labs/quarry/config.md`.
 Running `quarry enable` is your consent: it adds quarry's allow rules
 (`mcp__quarry__*`, one `Bash(quarry <subcommand>:*)` rule each for the data-plane CLI
 subcommands `find`, `show`, `list`, `status`, `ingest`, `remember`, `learn`, and `doctor`, plus
-`Skill(find)`, `Skill(ingest)`, and the other quarry commands) to that project's
+`Skill(quarry:find)`, `Skill(quarry:ingest)`, and the other quarry commands) to that project's
 `.claude/settings.json`, so Claude calls quarry without a prompt in that project
 only, and prints each rule it added. Admin subcommands such as `login`, `logout`,
 `install`, `uninstall`, and `enable`/`disable` are not allowed and still prompt. Every

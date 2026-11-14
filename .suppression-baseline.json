@@ -1,7 +1,7 @@
 {
-  "total": 184,
+  "total": 183,
   "by_category": {
-    "noqa": 146,
+    "noqa": 145,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -9,7 +9,7 @@
   },
   "by_file": {
     "src/quarry/__main__.py": {
-      "noqa": 6,
+      "noqa": 5,
       "type_ignore": 1
     },
     "src/quarry/_hook_entry.py": {
@@ -23,6 +23,9 @@
     },
     "src/quarry/captures_collection.py": {
       "noqa": 1
+    },
+    "src/quarry/cli_admin.py": {
+      "noqa": 3
     },
     "src/quarry/cli_captures.py": {
       "noqa": 1
@@ -185,10 +188,7 @@
     },
     "src/quarry/web_fetch_name.py": {
       "noqa": 1
-    },
-    "src/quarry/cli_admin.py": {
-      "noqa": 3
     }
   },
-  "updated_at": "2026-11-13T13:25:32Z"
+  "updated_at": "2026-11-14T16:23:50Z"
 }
