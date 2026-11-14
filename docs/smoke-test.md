@@ -477,12 +477,15 @@ No cleanup: nothing was written.
 
 Tests `quarry enable` and `quarry disable` end-to-end. Use a
 temporary directory to avoid modifying real project state.
+`quarry enable` refuses any directory outside `$HOME` (the path-guard
+home-boundary check), so these commands use `$HOME/.quarry-smoke-*`, not
+`/tmp`.
 
 ### 3.1 Enable
 
 ```bash
-mkdir -p /tmp/quarry-smoke-enable
-quarry enable /tmp/quarry-smoke-enable
+mkdir -p "$HOME/.quarry-smoke-enable"
+quarry enable "$HOME/.quarry-smoke-enable"
 ```
 
 **Verify:**
@@ -496,8 +499,8 @@ quarry enable /tmp/quarry-smoke-enable
 ### 3.2 Enable with custom collection
 
 ```bash
-mkdir -p /tmp/quarry-smoke-custom
-quarry enable /tmp/quarry-smoke-custom --collection custom-smoke
+mkdir -p "$HOME/.quarry-smoke-custom"
+quarry enable "$HOME/.quarry-smoke-custom" --collection custom-smoke
 ```
 
 **Verify:**
@@ -508,7 +511,7 @@ quarry enable /tmp/quarry-smoke-custom --collection custom-smoke
 ### 3.3 Enable idempotent
 
 ```bash
-quarry enable /tmp/quarry-smoke-enable
+quarry enable "$HOME/.quarry-smoke-enable"
 ```
 
 **Verify:** Exit code 0, `created_registration` is false (reuse).
@@ -516,7 +519,7 @@ quarry enable /tmp/quarry-smoke-enable
 ### 3.4 Doctor enable status
 
 ```bash
-cd /tmp/quarry-smoke-enable && quarry doctor | grep "Enable status"
+cd "$HOME/.quarry-smoke-enable" && quarry doctor | grep "Enable status"
 ```
 
 **Verify:** Shows collection name and "config.md" present.
@@ -524,7 +527,7 @@ cd /tmp/quarry-smoke-enable && quarry doctor | grep "Enable status"
 ### 3.5 Disable
 
 ```bash
-quarry disable /tmp/quarry-smoke-enable
+quarry disable "$HOME/.quarry-smoke-enable"
 ```
 
 **Verify:**
@@ -536,7 +539,7 @@ quarry disable /tmp/quarry-smoke-enable
 ### 3.6 Disable with --keep-data
 
 ```bash
-quarry disable /tmp/quarry-smoke-custom --keep-data
+quarry disable "$HOME/.quarry-smoke-custom" --keep-data
 ```
 
 **Verify:** Registration removed but no "Deleted N chunks" message.
@@ -544,7 +547,7 @@ quarry disable /tmp/quarry-smoke-custom --keep-data
 ### 3.7 Cleanup
 
 ```bash
-rm -rf /tmp/quarry-smoke-enable /tmp/quarry-smoke-custom
+rm -rf "$HOME/.quarry-smoke-enable" "$HOME/.quarry-smoke-custom"
 ```
 
 ## Phase 4: Install Verification
