@@ -53,6 +53,8 @@ QUARRY_RULES: Final[dict[str, tuple[str, ...]]] = {
                 "skills",
                 "mcp",
                 "delete",
+                "use",
+                "prune-mcp-shadow",
             )
         ),
         "mcp__quarry__delete",

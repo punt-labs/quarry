@@ -58,6 +58,8 @@ class TestRuleSet:
             "skills",
             "mcp",
             "delete",
+            "use",
+            "prune-mcp-shadow",
         ],
     )
     def test_admin_and_destructive_commands_ask(self, command: str) -> None:
