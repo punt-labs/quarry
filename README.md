@@ -191,8 +191,6 @@ Search by meaning:
 | `quarry sync` | Re-index registered directories |
 | `quarry enable` / `quarry disable` | Set up / tear down project collections + captures |
 | `quarry missions sync` | File each frozen ethos mission round into `memory-<worker>` (`--mission`, `--dry-run`, `--force`) |
-| `quarry skills install [--agent <id>\|--all]` | Deposit the quarry-recall/quarry-capture skills into every detected coding-agent harness (pi, opencode, codex); `--all` is the default |
-| `quarry skills status` | Report which harnesses have the skills deposited, and whether current |
 | `quarry use <name>` | Switch the active database |
 | `quarry status` | Database dashboard |
 | `quarry insights` | Recall telemetry: query volume, latency, empty-result rate, recall mix |
@@ -202,25 +200,25 @@ Search by meaning:
 | `quarry login <host> --api-key <token>` | Connect to a remote server (TOFU pinning) |
 | `quarry logout` | Disconnect, revert to the local daemon |
 
-Agent-memory tagging is available on `ingest`/`remember`/`find` via `--agent-handle`, `--memory-type`, and `--summary`.
-`--memory-type` is one vocabulary on every surface (`fact`, `observation`, `opinion`, `procedure`; `lesson` is reserved for `quarry learn`) — an unknown value is a 400 on `remember`, `ingest`, and the capture route alike. Always pass your own handle: the daemon cannot infer it, and a subagent's working directory resolves to the repo's leader, not to the subagent.
+A registered directory is indexed automatically: quarry watches it for changes
+and re-indexes as you work (honoring `.gitignore` and a root-level
+`.quarryignore`, so a large `node_modules` or `.venv` is skipped at no cost),
+with a periodic sweep that catches anything the live watch misses. You rarely
+need `quarry sync`. `quarry list registrations` shows each directory's watch
+state (`watched`, `degraded`, or `scan-only`); a `scan-only` directory still
+stays current through the sweep.
 
-Each ethos identity gets a versioned `## Memory (quarry guide v2)` block in its `session_context` — when to `remember` (the five moments), what never to store, and why the handle is yours — written to the vendored `.punt-labs/ethos/identities/<handle>.ext/quarry.yaml` on `quarry enable` (commit it via PR) and to the global identities on `quarry install`.
+`quarry enable` in a repo is all it takes — that's the whole setup. It's also
+your consent for Claude to call quarry without a per-call prompt: it adds
+quarry's allow rules to that project's `.claude/settings.json` (admin and
+destructive commands still prompt), and `quarry disable` removes them.
+Driving quarry from an agent — memory tagging and agent handles — is covered in
+[AGENTS.md](AGENTS.md).
 
-Two Agent Skills carry the deep how-to that used to be restated across the SessionStart context, the MCP `instructions` block, and the memory guide: `quarry-recall` (understand code, recall a decision, recall memory — all backed by `quarry find`) and `quarry-capture` (`remember`/`learn`/`ingest`, the five-moments timing, the `agent_handle` discipline). Claude Code reads them straight from this repo's `plugin/skills/`; `quarry skills install` deposits the same two skills into pi (`~/.pi/agent/skills/`), opencode (`~/.config/opencode/skills/`), and codex (`~/.codex/skills/`, alongside its own preinstalled `.system/` skills) — version-stamped by content hash, so a re-run only touches a harness whose deposit is stale. `quarry disable` retracts them again, but only when the disabled repo's own `pyproject.toml` names the `punt-quarry` package (never merely because a `plugin/skills/` tree exists — every marketplace-layout plugin ships one) and only for a directory carrying quarry's own deposit manifest; a same-named directory it never wrote is left alone.
-
-A registered directory isn't cron-driven — `quarryd` runs a live filesystem
-watch (debounced, ~1s) that reacts to changes as they happen, backed by a
-5-minute periodic safety sweep (catches anything the watch missed, self-heals
-the search index). `quarry sync` triggers an immediate
-one-shot pass on top of that; you don't need to run it after every edit.
-
-The watch honors ignore rules the way git does: `.gitignore` (at every level),
-a root-level `.quarryignore`, and built-in scratch/VCS defaults all prune both
-what gets indexed and which directories consume OS watch resources — a giant
-`node_modules` or `.venv` costs nothing. `quarry list registrations` shows each
-collection's live watch state (`watched`, `degraded`, or `scan-only`); a
-`scan-only` collection still stays current via the periodic sweep.
+> **Upgrading from an older version?** Earlier quarry wrote the same allow rules
+> to your user-global `~/.claude/settings.json` at session start; `quarry
+> disable` does not remove those. Delete them by hand if you want quarry to
+> prompt again everywhere.
 
 ## Setup
 
@@ -252,20 +250,6 @@ knowledge automatically, with no action from you:
 
 Every hook fails open — a hook failure never blocks Claude Code — and each is
 independently toggleable in `.punt-labs/quarry/config.md`.
-
-**Permissions.** The plugin never edits a Claude settings file on its own.
-Running `quarry enable` is your consent: it allows each quarry surface broadly
-(`Bash(quarry:*)`, `mcp__quarry__*` and `Skill(quarry:*)`) in that project's
-`.claude/settings.json`, so Claude calls quarry without a prompt in that project
-only, and prints each rule it added. Exact `ask` rules keep the admin and
-destructive commands prompting: `login`, `logout`, `remote`, `install`,
-`uninstall`, `enable`, `disable`, `captures`, `skills`, `mcp` and `delete`, any
-global option before the verb (`Bash(quarry -*)`), and the `delete` MCP tool. Every
-other setting and rule in the file is kept. `quarry disable` removes exactly
-those rules. To be asked before each quarry call, delete them from
-`permissions.allow` after enabling. Earlier versions added the same rules to
-your user-global `~/.claude/settings.json` at session start; those entries
-stay until you delete them.
 
 Captures are scrubbed at write time (secrets, paths, emails, hostnames)
 through a single choke point before they ever reach disk. The scrub is
