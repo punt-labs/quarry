@@ -75,11 +75,6 @@ class Enablement:
         self._root = root
         return self
 
-    @property
-    def root(self) -> Path:
-        """Return the repo root this instance enables/disables quarry for."""
-        return self._root
-
     def enable(self) -> EnablementResult:
         """Ensure the ignore, deposit the guide, register the import, write the marker.
 
@@ -97,16 +92,20 @@ class Enablement:
         The skill deposit runs AFTER the lock releases and is genuinely
         best-effort (:class:`~quarry.skills_sync.SkillDeposit` never raises),
         so a deposit failure can never discard the gitignore/guide/import/
-        marker result already committed above it. This makes ``enable`` the
-        one setup command non-Claude harnesses (pi, opencode, codex) need:
-        Claude Code already reads the skills from the plugin directly.
+        marker result already committed above it. It deposits from the
+        INSTALLED BINARY's own packaged skill tree, ungated by *this*
+        repo's tree, so it fires the same way in any repo -- this makes
+        ``enable`` the one setup command non-Claude harnesses (pi, opencode,
+        codex) need in a normal user's project, not only quarry's own
+        checkout: Claude Code already reads the skills from the plugin
+        directly.
         """
         gitignore_ensured = self._gitignore.ensure()
         self._guidance.deposit()
         with FileLock.shared(self._import.path):
             import_registered = self._import.register(REPO_IMPORT_LINE)
             enabled_marker_written = self._marker.write()
-        skills_deposited = SkillDeposit(self._root).run()
+        skills_deposited = SkillDeposit.run()
         return EnablementResult(
             guide_deposited=True,
             enabled_marker_written=enabled_marker_written,

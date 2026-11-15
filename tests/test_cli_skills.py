@@ -4,7 +4,11 @@ Exercised in isolation with a stub CliPlumbing (no daemon client -- deposit is
 pure filesystem), the same pattern as ``test_cli_sync.py``/
 ``test_cli_captures.py``. ``Path.home`` is monkeypatched process-wide for the
 duration of each test so the installer targets a throwaway directory instead
-of the real machine.
+of the real machine. The CLI deposits from quarry's OWN packaged tree
+(PL-1049), so these tests no longer build a fake ``plugin/skills/`` fixture --
+they assert on the real ``quarry-recall``/``quarry-capture`` skills and run
+from an arbitrary (not even quarry-shaped) CWD, proving the command works
+anywhere.
 """
 
 from __future__ import annotations
@@ -30,6 +34,8 @@ runner = CliRunner()
 
 # Each emitted call recorded as (structured_data, human_text).
 Emitted = tuple[object, str]
+
+_PACKAGED_SKILLS = {"quarry-recall", "quarry-capture"}
 
 
 def _plumbing(calls: list[Emitted], err_console: MagicMock) -> CliPlumbing:
@@ -62,39 +68,26 @@ def _rows(calls: list[Emitted]) -> list[dict[str, object]]:
     return data
 
 
-def _write_skill(root: Path, name: str) -> None:
-    skill_dir = root / name
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: test\n---\n\nbody\n", encoding="utf-8"
-    )
-
-
-def _repo_with_skills(tmp_path: Path, names: tuple[str, ...] = ("demo",)) -> Path:
-    repo = tmp_path / "repo"
-    for name in names:
-        _write_skill(repo / "plugin" / "skills", name)
-    # ``locate_source`` refuses a tree it cannot prove is quarry's own
-    # (identity guard) -- every fixture repo here stands in for quarry
-    # itself, so it needs a matching pyproject.toml.
-    (repo / "pyproject.toml").write_text(
-        '[project]\nname = "punt-quarry"\n', encoding="utf-8"
-    )
-    return repo
-
-
 def _patch_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+
+
+def _unrelated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chdir into an ordinary, non-quarry directory -- no ``plugin/skills/``,
+    no ``pyproject.toml`` at all -- proving the command deposits from the
+    packaged tree regardless of where it is invoked from."""
+    cwd = tmp_path / "some-unrelated-directory"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
 
 
 class TestInstall:
     def test_all_deposits_into_every_detected_harness(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
         home = tmp_path / "home"
         (home / ".codex").mkdir(parents=True)
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, home)
         calls: list[Emitted] = []
 
@@ -102,42 +95,41 @@ class TestInstall:
 
         assert result.exit_code == 0, result.output
         rows = _rows(calls)
-        assert {(r["harness"], r["action"]) for r in rows} == {("codex", "deposited")}
-        assert (home / ".codex" / "skills" / "demo" / "SKILL.md").is_file()
+        assert {r["harness"] for r in rows} == {"codex"}
+        assert {r["skill"] for r in rows} >= _PACKAGED_SKILLS
+        assert all(r["action"] == "deposited" for r in rows)
+        assert (home / ".codex" / "skills" / "quarry-recall" / "SKILL.md").is_file()
 
     def test_default_with_no_flags_behaves_like_all(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
         home = tmp_path / "home"
         (home / ".pi").mkdir(parents=True)
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, home)
 
         result = runner.invoke(_app([]), ["skills", "install"])
 
         assert result.exit_code == 0, result.output
-        assert (home / ".pi" / "agent" / "skills" / "demo").is_dir()
+        assert (home / ".pi" / "agent" / "skills" / "quarry-recall").is_dir()
 
     def test_agent_targets_one_harness_even_if_undetected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
         home = tmp_path / "home"  # no markers at all -- codex is undetected
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, home)
 
         result = runner.invoke(_app([]), ["skills", "install", "--agent", "codex"])
 
         assert result.exit_code == 0, result.output
-        assert (home / ".codex" / "skills" / "demo").is_dir()
+        assert (home / ".codex" / "skills" / "quarry-recall").is_dir()
 
     def test_rerun_is_idempotent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
         home = tmp_path / "home"
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, home)
         calls: list[Emitted] = []
         runner.invoke(_app(calls), ["skills", "install", "--agent", "codex"])
@@ -150,8 +142,7 @@ class TestInstall:
     def test_unknown_agent_is_a_usage_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, tmp_path / "home")
         err_console = MagicMock()
 
@@ -166,8 +157,7 @@ class TestInstall:
     def test_agent_and_all_together_is_a_usage_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, tmp_path / "home")
 
         result = runner.invoke(
@@ -179,8 +169,7 @@ class TestInstall:
     def test_no_detected_harness_reports_plainly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, tmp_path / "home")  # no harness markers at all
         calls: list[Emitted] = []
 
@@ -190,36 +179,13 @@ class TestInstall:
         assert _rows(calls) == []
         assert calls[-1][1] == "No harnesses detected."
 
-    def test_no_skills_in_source_reports_a_distinct_message(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A harness IS detected, but plugin/skills/ carries no SKILL.md --
-        distinct from the "no harnesses" case (mdm review finding)."""
-        repo = tmp_path / "repo"
-        (repo / "plugin" / "skills").mkdir(parents=True)  # empty -- no skills
-        (repo / "pyproject.toml").write_text(
-            '[project]\nname = "punt-quarry"\n', encoding="utf-8"
-        )
-        home = tmp_path / "home"
-        (home / ".codex").mkdir(parents=True)
-        monkeypatch.chdir(repo)
-        _patch_home(monkeypatch, home)
-        calls: list[Emitted] = []
-
-        result = runner.invoke(_app(calls), ["skills", "install", "--all"])
-
-        assert result.exit_code == 0
-        assert _rows(calls) == []
-        assert calls[-1][1] == "No skills found in plugin/skills/ to deposit."
-
     def test_all_deposits_into_multiple_detected_harnesses_together(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
         home = tmp_path / "home"
         (home / ".pi").mkdir(parents=True)
         (home / ".config" / "opencode").mkdir(parents=True)
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, home)
         calls: list[Emitted] = []
 
@@ -229,15 +195,14 @@ class TestInstall:
         rows = _rows(calls)
         assert {r["harness"] for r in rows} == {"pi", "opencode"}
         assert all(r["action"] == "deposited" for r in rows)
-        assert (home / ".pi" / "agent" / "skills" / "demo").is_dir()
-        assert (home / ".config" / "opencode" / "skills" / "demo").is_dir()
+        assert (home / ".pi" / "agent" / "skills" / "quarry-recall").is_dir()
+        assert (home / ".config" / "opencode" / "skills" / "quarry-recall").is_dir()
 
     def test_agent_claude_alongside_all_shows_the_unsupported_row(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
         home = tmp_path / "home"
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, home)
         calls: list[Emitted] = []
 
@@ -245,23 +210,16 @@ class TestInstall:
 
         assert result.exit_code == 0, result.output
         rows = _rows(calls)
-        assert rows == [
-            {
-                "harness": "claude",
-                "skill": "demo",
-                "action": "unsupported",
-                "path": None,
-            }
-        ]
+        assert {r["skill"] for r in rows} >= _PACKAGED_SKILLS
+        assert all(r["action"] == "unsupported" and r["path"] is None for r in rows)
 
 
 class TestStatus:
     def test_reports_absent_then_current(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        repo = _repo_with_skills(tmp_path)
         home = tmp_path / "home"
-        monkeypatch.chdir(repo)
+        _unrelated_cwd(tmp_path, monkeypatch)
         _patch_home(monkeypatch, home)
         calls: list[Emitted] = []
 

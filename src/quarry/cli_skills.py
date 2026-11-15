@@ -9,13 +9,13 @@ filesystem operation against the local machine's harness config directories.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn, Self, final
 
 import typer
 
 from quarry.home_paths import QuarryHome
 from quarry.skills_install import Harness, SkillsInstaller
+from quarry.skills_source import SkillSource
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
@@ -83,8 +83,16 @@ class SkillsCli:
         self._p.emit([self._row(o) for o in outcomes], self._render(outcomes))
 
     def _installer(self) -> SkillsInstaller:
-        source_dir = SkillsInstaller.locate_source(Path.cwd())
-        return SkillsInstaller(source_dir, QuarryHome.home())
+        """Build the installer from quarry's OWN packaged skill tree (PL-1049).
+
+        Not :meth:`SkillsInstaller.locate_source` — that walks up from the
+        CWD and requires an enclosing checkout provably named
+        ``punt-quarry``, which makes ``quarry skills install`` work only
+        inside quarry's own repo. :meth:`~quarry.skills_source.SkillSource.packaged`
+        is the installed binary's own tree, so this command deposits the
+        same way ``quarry enable`` does, from anywhere.
+        """
+        return SkillsInstaller(SkillSource.packaged(), QuarryHome.home())
 
     def _parse_harness(self, agent: str) -> Harness:
         try:
@@ -107,7 +115,7 @@ class SkillsCli:
             )
         if no_harnesses:
             return "No harnesses detected."
-        return "No skills found in plugin/skills/ to deposit."
+        return "No skills found in the packaged skill tree to deposit."
 
     @staticmethod
     def _row(outcome: SkillOutcome) -> dict[str, object]:
