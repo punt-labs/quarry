@@ -14,14 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from quarry.claude_permissions import QUARRY_RULES
-from quarry.enable import (
-    _CONFIG_TEMPLATE,
-    DisableResult,
-    EnableResult,
-    _write_project_config,
-    disable_project,
-    enable_project,
-)
+from quarry.enable import DisableResult, EnableResult, disable_project, enable_project
 from quarry.enabled_marker import EnabledMarker
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
 from quarry.guidance import REPO_IMPORT_LINE
@@ -439,46 +432,6 @@ class TestDisableIdempotentRetrySafe:
         assert "captures purge for myproject-captures was rejected" in caplog.text
 
 
-class TestWriteProjectConfig:
-    def test_creates_config_with_template(self, tmp_path: Path) -> None:
-        result_path = _write_project_config(tmp_path)
-        config = Path(result_path)
-        assert config.exists()
-        assert config.read_text() == _CONFIG_TEMPLATE
-
-    def test_idempotent_no_overwrite(self, tmp_path: Path) -> None:
-        _write_project_config(tmp_path)
-        config = tmp_path / ".punt-labs" / "quarry" / "config.md"
-        config.write_text("custom content")
-        _write_project_config(tmp_path)
-        assert config.read_text() == "custom content"
-
-    def test_atomic_no_overwrite_existing(self, tmp_path: Path) -> None:
-        """Verify O_CREAT|O_EXCL path: pre-existing file is never opened for write."""
-        config_dir = tmp_path / ".punt-labs" / "quarry"
-        config_dir.mkdir(parents=True)
-        config_path = config_dir / "config.md"
-        original = "do not touch\n"
-        config_path.write_text(original)
-
-        _write_project_config(tmp_path)
-
-        assert config_path.read_text() == original
-
-    def test_refuses_symlinked_ancestor(self, tmp_path: Path) -> None:
-        """A symlinked .punt-labs ancestor makes the config write refuse, not escape."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        external = tmp_path / "external"
-        external.mkdir()
-        (repo / ".punt-labs").symlink_to(external)
-
-        with pytest.raises(ValueError, match="ancestor"):
-            _write_project_config(repo)
-
-        assert not (external / "quarry" / "config.md").exists()
-
-
 class TestT15DisableOnChildOfRegisteredParentRaises:
     def test_disable_on_child_of_registered_parent_raises(self, tmp_path: Path) -> None:
         parent = tmp_path / "project"
@@ -670,16 +623,16 @@ class TestEnableEnsuresCapturesGitignore:
         config.md is ever written, so a failure at the config-write step
         still leaves the repo protected.
         """
-        import quarry.enable as enable_module
+        from quarry.project_config import ProjectConfig
 
         project = tmp_path / "myproject"
         project.mkdir()
         client = FakeRegistryClient()
 
-        def boom(directory: Path) -> str:
+        def boom(self: ProjectConfig, directory: Path) -> str:
             raise OSError("config write failed")
 
-        monkeypatch.setattr(enable_module, "_write_project_config", boom)
+        monkeypatch.setattr(ProjectConfig, "write", boom)
 
         with (
             patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"),

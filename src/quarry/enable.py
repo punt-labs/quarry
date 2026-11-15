@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Protocol, Self, final
 from quarry.claude_permissions import PermissionChange, ProjectPermissions
 from quarry.ethos_memory import EthosMemoryBootstrap, EthosMemoryResult
 from quarry.home_paths import QuarryHome
+from quarry.project_config import ProjectConfig
 from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     )
     from quarry.enablement_result import DisablementResult
     from quarry.registrations import Registrations
+    from quarry.skills_install import SkillOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,9 @@ class EnableResult:
     deposit, ``enabled`` marker, ``@``-import line, and ``.gitignore`` entry.
     ``ethos`` is the bootstrap's own per-handle outcome, carried whole rather
     than flattened into parallel lists. ``permissions`` is the § 2.8 allow-rule
-    grant in the repo's ``.claude/settings.json`` (#552).
+    grant in the repo's ``.claude/settings.json`` (#552). ``skills_deposited``
+    is the PL-1049 cross-harness skill-deposit outcome, passed through from
+    ``Enablement.enable()`` unchanged.
     """
 
     directory: str
@@ -64,6 +68,7 @@ class EnableResult:
     gitignore_ensured: bool = False
     ethos: EthosMemoryResult = field(default_factory=EthosMemoryResult)
     permissions: PermissionChange = field(default_factory=PermissionChange)
+    skills_deposited: tuple[SkillOutcome, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,42 +89,6 @@ class DisableResult:
     import_pruned: bool = False
     enabled_marker_removed: bool = False
     permissions: PermissionChange = field(default_factory=PermissionChange)
-
-
-_CONFIG_TEMPLATE = """\
----
-auto_capture:
-  session_sync: true
-  web_fetch: true
-  compaction: true
-  session_end: true
-  web_search: true
-  read: false
-  subagent_stop: true
-# shadow:                          # push redacted captures to a PRIVATE shadow repo
-#   enabled: false                 # opt-in network+security action, off by default
-#   remote: ""                     # empty -> derive <origin>-quarry from origin
-#   acknowledge_unverified: false  # push even when gh cannot confirm private
----
-
-# Quarry Project Configuration
-
-Controls quarry's passive knowledge capture. Set any field to `false` to disable
-that capture type; uncomment `shadow` to move redacted captures off the public
-repo into a per-project private shadow (`<repo>` -> `<repo>-quarry`).
-
-- `session_sync`: auto-index project files on session start
-- `web_fetch`: auto-ingest URLs fetched during research
-- `compaction`: capture session transcripts before context compaction
-- `session_end`: capture session transcripts on session close (fires even when
-  a session never compacts)
-- `web_search`: auto-ingest a digest of `WebSearch` results
-- `read`: capture prose files (.md/.pdf/.docx/...) read from outside the tree —
-  default `false` because `Read` fires often and has the highest secret-leak
-  surface; opt in after confirming the filter set is clean
-- `subagent_stop`: capture subagent transcripts on completion
-- `shadow`: pre-create the private repo, then set `enabled: true`
-"""
 
 
 def enable_project(
@@ -159,7 +128,7 @@ def enable_project(
     claudemd = Enablement(directory).enable()
     if claudemd.import_registered:
         logger.info("Registered quarry @-import in CLAUDE.md")
-    config_path = _write_project_config(directory)
+    config_path = ProjectConfig().write(directory)
     # Running enable is the operator's consent to quarry's allow rules (#552);
     # they land last, once the project is otherwise fully enabled.
     permissions = ProjectPermissions(directory).grant()
@@ -176,6 +145,7 @@ def enable_project(
         gitignore_ensured=claudemd.gitignore_ensured,
         ethos=ethos,
         permissions=permissions,
+        skills_deposited=claudemd.skills_deposited,
     )
 
 
@@ -339,16 +309,3 @@ class _DisableOrchestrator:
                 "the project is fully disabled (deregistered + local files removed)",
                 captures,
             )
-
-
-def _write_project_config(directory: Path) -> str:
-    """Write config.md exclusively (no overwrite, no symlink follow); return its path.
-
-    Routes through :class:`quarry.safe_paths.SafeRepoPath` so a hostile repo
-    cannot redirect the create outside the repo via a symlinked ``.punt-labs``
-    ancestor or a symlinked ``config.md`` leaf. An existing regular config is
-    left untouched (idempotent); a non-regular entry at the path is refused.
-    """
-    config = SafeRepoPath(directory, (".punt-labs", "quarry", "config.md"))
-    config.create_exclusive(_CONFIG_TEMPLATE, mode=0o644)
-    return str(config.path)

@@ -62,7 +62,30 @@ class EnableReport:
             "Added quarry permission rules to",
             unchanged="  Quarry permission rules already in .claude/settings.json",
         )
+        lines += self._skills_lines()
         return lines + self._ethos_lines()
+
+    def _skills_lines(self) -> list[str]:
+        """Return the cross-harness skill-deposit line (PL-1049), or none.
+
+        A tuple of :class:`~quarry.skills_install.SkillOutcome` is not a flag
+        ``_flagged`` can branch on, so this names the harnesses directly.
+        Only ``"deposited"`` and ``"upgraded"`` count as new content;
+        ``"current"`` (unchanged on a re-enable) and ``"unsupported"``
+        (Claude Code, served by the plugin directly) are not, and a re-enable
+        where every skill is already current (or no source tree/non-Claude
+        harness exists at all) omits the line entirely — the same "visible by
+        its absence" convention :meth:`DisableReport.lines` uses for its own
+        marker line. A ``dict``'s insertion-ordered keys are the
+        de-duplicating, order-preserving set this needs — a plain ``set``
+        would scramble the display order.
+        """
+        new_actions = ("deposited", "upgraded")
+        harnesses = dict.fromkeys(
+            o.harness.value for o in self._r.skills_deposited if o.action in new_actions
+        )
+        line = f"  Deposited agent skills to: {', '.join(harnesses)}"
+        return [line] if harnesses else []
 
     def _ethos_lines(self) -> list[str]:
         """Return the ethos-identity portion of the summary.
