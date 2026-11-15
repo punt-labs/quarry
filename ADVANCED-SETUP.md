@@ -28,14 +28,27 @@ export QUARRY_API_KEY=$(openssl rand -hex 32)
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fd274d3/install.sh | sh -s -- --network
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/42baaf3/install.sh | sh -s -- --network
 ```
 
-On the client, install normally, then log in — queries redirect to the server over `wss://` with TOFU certificate pinning:
+On the client, install normally, then log in — queries go to the server over HTTPS, and the server's certificate is pinned the first time you connect (trust on first use):
 
 ```bash
 quarry login <server-hostname> --api-key <token>
 ```
+
+## Upgrades
+
+Re-running the Quick Start installer upgrades quarry. It:
+
+- installs every dependency at the version tested in `uv.lock`, using the
+  `install-constraints.txt` file from the release tag;
+- runs `quarry install`;
+- restarts the daemon service and checks that its process ID changed;
+- waits for the new daemon to report ready.
+
+If the restart does not take effect, or the daemon never reports ready, the
+installer exits with an error.
 
 ## HTTP API
 
