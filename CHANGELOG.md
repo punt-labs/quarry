@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- tool: `quarry enable` now deposits quarry's agent skills (`quarry-recall`, `quarry-capture`) into every coding-agent harness detected on the machine (pi, opencode, codex), so enabling quarry in a repo is the whole setup — no separate `quarry skills install` step. Claude Code already loads the skills from the plugin. The skills ship inside the wheel (`quarry/_skills/`, kept in sync with the plugin's `plugin/skills/` by `make sync-skills` and a `check-skills-sync` gate), so the installed binary deposits its own canonical skills regardless of which repo is enabled; `quarry skills install` now also works from any directory, not only a quarry checkout. The deposit is best-effort (never blocks enable), idempotent (content-hash stamped), and never overwrites a skill quarry didn't write. `quarry enable` reports what it deposited ("Deposited agent skills to: …") (PL-1049).
+
 ### Fixed
 
 - tool: `quarry enable` allows each surface broadly — `Bash(quarry:*)`, `mcp__quarry__*` and `Skill(quarry:*)` — and puts an exact `ask` rule in `permissions.ask` for each admin or destructive command (`login`, `logout`, `remote`, `install`, `uninstall`, `enable`, `disable`, `captures`, `skills`, `mcp`, `delete`, `use` (the persistent default database), `prune-mcp-shadow` (edits `~/.claude.json`), any global option before the verb via `Bash(quarry -*)`, and the `delete` MCP tool), so those still prompt while new safe commands work without a rule update (punt-kit#471). It replaces the named data-plane CLI rules and the short forms `Skill(find)`, `Skill(ingest)`, …, which punt-kit `permissions.md` § 3 bans. `quarry disable` removes the same allow and ask values; rules an earlier `quarry enable` added stay until you delete them by hand (PL-1032).
