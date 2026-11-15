@@ -2,9 +2,9 @@
 
 Part of [Punt Labs](https://github.com/punt-labs). This repo must be checked out inside the `punt-labs/` workspace meta-repo so that org-wide configuration loads via Claude Code's ancestor directory walk:
 
-- **`punt-labs/CLAUDE.md`** — org workflow, delegation model, beads issue tracking, tool configuration
+- **`punt-labs/CLAUDE.md`** — org workflow, delegation model, Linear issue tracking, tool configuration
 - **`punt-labs/.claude/rules/python-*.md`** — 19 Python OO coding rules, scoped via `paths:` frontmatter (load on-demand when `.py` files are touched)
-- **`punt-labs/.envrc`** — git identity, beads DB connection, API keys from platform keychain
+- **`punt-labs/.envrc`** — git identity, API keys from platform keychain
 - **`punt-kit/standards/`** — canonical reference docs
 
 If cloned outside the workspace, these rules and configuration will not be present.
@@ -120,13 +120,13 @@ pseudocode for its control flow and a Z schema for its entry/exit doorway. This
 section is a map, not a second copy; the specifics live there in full.
 
 ```text
-Level 1 — Backlog loop   one iteration = one work batch     (beads)
+Level 1 — Backlog loop   one iteration = one work batch     (Linear)
   Level 2 — PR loop      one iteration = one pull request
     Level 3 — Mission    one iteration = one delegated mission (a do-while)
 ```
 
-- **Level 1 (backlog)** keeps the bead tracker true and picks what's next:
-  intake every signal → a bead or closed at the door; validate against current
+- **Level 1 (backlog)** keeps the Linear tracker true and picks what's next:
+  intake every signal → an issue or closed at the door; validate against current
   main; order automatically (security → broken journeys → active epic → debt →
   features); escalate only a genuine fork. `EnterBatch`/`ExitBatch`.
 - **Level 2 (PR)** turns one throughput-sized unit into one merged,
@@ -147,7 +147,7 @@ PR review follows punt-kit/standards/pr-review.md: local review (qodo review + s
 
 Two directives that govern all three and are the most-corrected failures here:
 **defects flow inward, scope flows outward** — a reviewer-flagged defect in an
-open PR is fixed in that PR, never laundered into a "follow-up bead"; and **PRs
+open PR is fixed in that PR, never laundered into a "follow-up issue"; and **PRs
 need not be pure** — a docs tweak, an OO paydown, or an adjacent fix riding
 along is welcome, an improvement is never held back for tidiness, and the
 operator explicitly rejects rules that make it harder to improve code. Rollback
