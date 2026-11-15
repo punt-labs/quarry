@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from quarry.atomic_dir_swap import AtomicDirectorySwap
 from quarry.skills_install import Harness, SkillOutcome, SkillsInstaller
 from quarry.skills_source import SkillDepositError, SkillSource
 
@@ -83,6 +84,31 @@ class TestLocateSource:
         outside = Path("/quarry-test-no-such-tree-xyzzy/nested")
         with pytest.raises(FileNotFoundError, match="plugin/skills"):
             SkillsInstaller.locate_source(outside)
+
+
+class TestPackagedSource:
+    """§ PL-1049: the deposit source is the INSTALLED binary's own tree, not a
+    repo-located one -- no ancestor walk, no identity guard, nothing for a
+    hostile repo to forge (see ``TestForgeryRegression`` in
+    ``test_enablement.py`` for the end-to-end closure of this)."""
+
+    def test_packaged_resolves_to_the_committed_mirror_under_src_quarry(self) -> None:
+        source_dir = SkillSource.packaged()
+
+        assert source_dir.is_dir()
+        assert source_dir.name == "_skills"
+        names = {p.name for p in source_dir.iterdir() if (p / "SKILL.md").is_file()}
+        assert names >= {"quarry-recall", "quarry-capture"}
+
+    def test_packaged_carries_the_same_skills_as_locate_from_the_repo_root(
+        self,
+    ) -> None:
+        """The packaged mirror and the repo-root tree must agree -- a drift
+        here is exactly what ``make check-skills-sync`` exists to catch."""
+        packaged = SkillSource.packaged().name
+        located = SkillSource.locate(_REPO_ROOT).name
+        assert packaged == "_skills"
+        assert located == "skills"
 
 
 class TestLocateSourceIdentityGuard:
@@ -583,14 +609,16 @@ class TestOrphanSweep:
         self, tmp_path: Path
     ) -> None:
         """Unit-level regression for the escape itself, independent of a
-        full install round trip."""
+        full install round trip -- the sweep now lives on
+        :class:`~quarry.atomic_dir_swap.AtomicDirectorySwap`, exercised via
+        its public :meth:`~quarry.atomic_dir_swap.AtomicDirectorySwap.prepare`."""
         parent = tmp_path / "skills"
         parent.mkdir()
         unrelated = parent / ".demo-a.tmp-12345"
         unrelated.mkdir()
         (unrelated / "keep.txt").write_text("keep\n", encoding="utf-8")
 
-        SkillSource._sweep_orphans(parent, "*")
+        AtomicDirectorySwap("*", parent / "*").prepare()
 
         assert unrelated.exists()
 
