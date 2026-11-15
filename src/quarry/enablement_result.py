@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from quarry.skills_install import SkillOutcome
 
 __all__ = ["DisablementResult", "EnablementResult"]
 
@@ -15,6 +19,9 @@ class EnablementResult:
     enabled_marker_written: bool
     import_registered: bool
     gitignore_ensured: bool
+    # Cross-harness skill deposits (PL-1049): every SkillOutcome from the
+    # best-effort install_detected() call, or () with no source tree of our own.
+    skills_deposited: tuple[SkillOutcome, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
