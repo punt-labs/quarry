@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 
 class RouteGroup:
@@ -195,5 +195,4 @@ class RouteGroup:
         """
         with Terminal.for_task(state).recording():
             count = await run_in_threadpool(delete_call)
-            state.status = "completed"
-            state.results = {"deleted": count, "name": name, "type": kind_label}
+            state.complete({"deleted": count, "name": name, "type": kind_label})

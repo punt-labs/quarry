@@ -10,7 +10,7 @@ import pytest
 
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.queued_job import JobWithdrawnError, QueuedJob
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.ingestion.chunk_store_funnel import ChunkStoreFunnel
 from quarry.ingestion.ingest_context import Progress
 from quarry.ingestion.owned_insert import OwnedInsert

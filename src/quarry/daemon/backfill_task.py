@@ -17,7 +17,7 @@ from quarry.stop_signal import StopSignal
 if TYPE_CHECKING:
     from quarry.daemon.backfill_args import BackfillArgs
     from quarry.daemon.context import DaemonContext
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 
 @final

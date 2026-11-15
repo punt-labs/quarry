@@ -21,7 +21,7 @@ from quarry.daemon.daemon_threads import DaemonThreads
 from quarry.daemon.job_abort import JobAbort
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.queued_unit import QueuedUnit
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.shutdown_policy import ShutdownPolicy
 from tests.job_states import JobStates
 
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from quarry.config import Settings
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
-    from quarry.daemon.tasks import TaskStatus
+    from quarry.daemon.task_state import TaskStatus
 
 
 @final

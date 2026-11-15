@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse
 
 from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.daemon.terminal import Terminal
 from quarry.finalize_steps import ManualOptimize
 from quarry.http_guards import RequestGuards
@@ -94,7 +94,6 @@ class MaintenanceRoutes(RouteGroup):
         with Terminal.for_task(state).recording():
             step = ManualOptimize(self.ctx.database.optimizer, self.ctx.settings)
             outcome = await run_in_threadpool(lambda: step.run_manually(force=force))
-            state.status = "completed"
             results: dict[str, object] = {
                 "optimized": outcome.optimized,
                 "fragments_before": outcome.fragments,
@@ -102,7 +101,7 @@ class MaintenanceRoutes(RouteGroup):
             }
             if outcome.reason:
                 results["reason"] = outcome.reason
-            state.results = results
+            state.complete(results)
 
     async def _run_backfill(self, state: TaskState, args: BackfillArgs) -> None:
         """Run the transcript backfill in a worker thread and record its stats."""

@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING, Self, final
 from quarry.daemon.finalize_job import CollectionPurgeJob
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TERMINAL_STATUSES
+from quarry.daemon.task_state import TERMINAL_STATUSES
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 

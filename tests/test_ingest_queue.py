@@ -29,7 +29,8 @@ from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.routes.base import RouteGroup
-from quarry.daemon.tasks import TaskRegistry, TaskState
+from quarry.daemon.task_state import TaskState
+from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.terminal import Terminal
 from tests.job_states import JobStates
 

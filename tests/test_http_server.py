@@ -33,13 +33,15 @@ from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.task_drain import TaskDrain
-from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
+from quarry.daemon.task_state import TaskState
+from quarry.daemon.tasks import TASK_TTL_SECONDS
 from quarry.fd_headroom import FdHeadroom
 from quarry.finalize_ledger import FinalizeLedgers
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.results import SearchResult
 from quarry.web_fetch_name import WebFetchName
+from tests.task_states import completed, failed
 from tests.url_names import with_query
 
 # Bound on how long fixture teardown waits for a background job to finish for
@@ -3208,7 +3210,7 @@ class TestSync:
 
         # Simulate an in-progress sync task via the unified tasks dict.
         task_id = "sync-test123"
-        ctx.tasks.seed(TaskState(task_id=task_id, kind="sync", status="running"))
+        ctx.tasks.seed(TaskState(task_id, "sync"))
 
         resp = sync_client.post("/v1/sync", json={})
         assert resp.status_code == 202
@@ -3227,14 +3229,7 @@ class TestSync:
         _inject_mocks(ctx)
 
         # Simulate a completed sync task.
-        ctx.tasks.seed(
-            TaskState(
-                task_id="sync-test-123",
-                kind="sync",
-                status="completed",
-                results={"math": {"ingested": 3}},
-            )
-        )
+        ctx.tasks.seed(completed("sync-test-123", "sync", {"math": {"ingested": 3}}))
 
         app = build_app(ctx)
         sync_client = TestClient(app, raise_server_exceptions=False)
@@ -3920,8 +3915,8 @@ class TestRunPurgeTask:
         reg.markers.mark_pending("docs")
         reg.commit()
         reg.close()
-        state = TaskState(task_id="deregister-x", kind="deregister")
-        state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
+        state = TaskState("deregister-x", "deregister")
+        state.record({"collection": "docs", "removed": 1, "deleted_chunks": 0})
         # DES-045: the purge is a collection-wide delete routed through the queue.
         with patch(
             "quarry.db.chunk_store.ChunkStore.delete_collection", return_value=3
@@ -3941,8 +3936,8 @@ class TestRunPurgeTask:
         reg.markers.mark_pending("docs")
         reg.commit()
         reg.close()
-        state = TaskState(task_id="deregister-y", kind="deregister")
-        state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
+        state = TaskState("deregister-y", "deregister")
+        state.record({"collection": "docs", "removed": 1, "deleted_chunks": 0})
         with patch(
             "quarry.db.chunk_store.ChunkStore.delete_collection",
             side_effect=RuntimeError("purge boom"),
@@ -4079,14 +4074,7 @@ class TestSyncGenericFailure:
         _inject_mocks(ctx)
 
         # Simulate a failed sync task.
-        ctx.tasks.seed(
-            TaskState(
-                task_id="sync-fail-456",
-                kind="sync",
-                status="failed",
-                error="embedder crashed",
-            )
-        )
+        ctx.tasks.seed(failed("sync-fail-456", "sync", "embedder crashed"))
 
         app = build_app(ctx)
         sync_client = TestClient(app, raise_server_exceptions=False)
@@ -4155,22 +4143,8 @@ class TestUnifiedTaskPolling:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
 
-        ctx.tasks.seed(
-            TaskState(
-                task_id="sync-abc",
-                kind="sync",
-                status="completed",
-                results={"math": {"ingested": 5}},
-            )
-        )
-        ctx.tasks.seed(
-            TaskState(
-                task_id="ingest-xyz",
-                kind="ingest",
-                status="failed",
-                error="timeout",
-            )
-        )
+        ctx.tasks.seed(completed("sync-abc", "sync", {"math": {"ingested": 5}}))
+        ctx.tasks.seed(failed("ingest-xyz", "ingest", "timeout"))
 
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
@@ -4210,30 +4184,9 @@ class TestTaskGC:
 
         # Add an old completed task and an old running task.
         old_time = time.monotonic() - TASK_TTL_SECONDS - 100
-        ctx.tasks.seed(
-            TaskState(
-                task_id="old-completed",
-                kind="ingest",
-                status="completed",
-                created_at=old_time,
-            )
-        )
-        ctx.tasks.seed(
-            TaskState(
-                task_id="old-running",
-                kind="sync",
-                status="running",
-                created_at=old_time,
-            )
-        )
-        ctx.tasks.seed(
-            TaskState(
-                task_id="recent-failed",
-                kind="remember",
-                status="failed",
-                created_at=time.monotonic(),
-            )
-        )
+        ctx.tasks.seed(completed("old-completed", "ingest", created_at=old_time))
+        ctx.tasks.seed(TaskState("old-running", "sync", created_at=old_time))
+        ctx.tasks.seed(failed("recent-failed", "remember", created_at=time.monotonic()))
 
         app = build_app(ctx)
         # Trigger GC by creating a new task via POST /remember.
@@ -4506,9 +4459,7 @@ class TestMaintenance:
         """Second optimize while one runs returns 409 with the running task_id."""
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
-        ctx.tasks.seed(
-            TaskState(task_id="optimize-x", kind="optimize", status="running")
-        )
+        ctx.tasks.seed(TaskState("optimize-x", "optimize"))
         tc = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = tc.post("/v1/optimize", json={})
         assert resp.status_code == 409
@@ -4523,9 +4474,7 @@ class TestMaintenance:
         """
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
-        ctx.tasks.seed(
-            TaskState(task_id="backfill-x", kind="backfill", status="running")
-        )
+        ctx.tasks.seed(TaskState("backfill-x", "backfill"))
         tc = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = tc.post("/v1/backfill-sessions", json={})
         assert resp.status_code == 409

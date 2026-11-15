@@ -20,13 +20,14 @@ from starlette.testclient import TestClient
 
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.db import ChunkStore, TableOptimizer
 from quarry.db.chunk_table import ChunkTable
 from quarry.db.optimizer import FRAGMENT_THRESHOLD
 from quarry.db.schema import TABLE_NAME
 from quarry.models import Chunk
 from quarry.sync_registry import SyncRegistry
+from tests.task_states import completed, failed
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -99,9 +100,7 @@ class TestSyncLock:
         _inject(ctx)
 
         # Simulate a running sync task.
-        ctx.tasks.seed(
-            TaskState(task_id="sync-existing", kind="sync", status="running")
-        )
+        ctx.tasks.seed(TaskState("sync-existing", "sync"))
 
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
@@ -121,7 +120,7 @@ class TestSyncLock:
         _inject(ctx)
 
         # Previous sync completed.
-        ctx.tasks.seed(TaskState(task_id="sync-old", kind="sync", status="completed"))
+        ctx.tasks.seed(completed("sync-old", "sync"))
 
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
@@ -135,11 +134,7 @@ class TestSyncLock:
         _inject(ctx)
 
         # Previous sync failed.
-        ctx.tasks.seed(
-            TaskState(
-                task_id="sync-bad", kind="sync", status="failed", error="disk full"
-            )
-        )
+        ctx.tasks.seed(failed("sync-bad", "sync", "disk full"))
 
         app = build_app(ctx)
         client = TestClient(app, raise_server_exceptions=False)
@@ -153,7 +148,7 @@ class TestSyncLock:
         ctx = DaemonContext(settings)
         _inject(ctx)
 
-        ctx.tasks.seed(TaskState(task_id="sync-done", kind="sync", status="completed"))
+        ctx.tasks.seed(completed("sync-done", "sync"))
 
         # A new POST should succeed, not 409.
         app = build_app(ctx)
@@ -499,7 +494,7 @@ class TestAsyncSyncEndpoint:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject(ctx)
-        ctx.tasks.seed(TaskState(task_id="sync-abc", kind="sync", status="running"))
+        ctx.tasks.seed(TaskState("sync-abc", "sync"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.get("/v1/tasks/sync-abc")
@@ -512,14 +507,7 @@ class TestAsyncSyncEndpoint:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject(ctx)
-        ctx.tasks.seed(
-            TaskState(
-                task_id="sync-done",
-                kind="sync",
-                status="completed",
-                results={"math": {"ingested": 5}},
-            )
-        )
+        ctx.tasks.seed(completed("sync-done", "sync", {"math": {"ingested": 5}}))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.get("/v1/tasks/sync-done")
@@ -531,14 +519,7 @@ class TestAsyncSyncEndpoint:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject(ctx)
-        ctx.tasks.seed(
-            TaskState(
-                task_id="sync-bad",
-                kind="sync",
-                status="failed",
-                error="disk full",
-            )
-        )
+        ctx.tasks.seed(failed("sync-bad", "sync", "disk full"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.get("/v1/tasks/sync-bad")
@@ -551,7 +532,7 @@ class TestAsyncSyncEndpoint:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject(ctx)
-        ctx.tasks.seed(TaskState(task_id="sync-running", kind="sync", status="running"))
+        ctx.tasks.seed(TaskState("sync-running", "sync"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.post("/v1/sync", json={})
@@ -630,7 +611,7 @@ class TestAsyncIngestEndpoint:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject(ctx)
-        ctx.tasks.seed(TaskState(task_id="ingest-abc", kind="ingest", status="running"))
+        ctx.tasks.seed(TaskState("ingest-abc", "ingest"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.get("/v1/tasks/ingest-abc")
@@ -644,11 +625,8 @@ class TestAsyncIngestEndpoint:
         ctx = DaemonContext(settings)
         _inject(ctx)
         ctx.tasks.seed(
-            TaskState(
-                task_id="ingest-done",
-                kind="ingest",
-                status="completed",
-                results={"document_name": "example.com", "chunks": 5},
+            completed(
+                "ingest-done", "ingest", {"document_name": "example.com", "chunks": 5}
             )
         )
 
@@ -663,14 +641,7 @@ class TestAsyncIngestEndpoint:
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject(ctx)
-        ctx.tasks.seed(
-            TaskState(
-                task_id="ingest-bad",
-                kind="ingest",
-                status="failed",
-                error="connection timed out",
-            )
-        )
+        ctx.tasks.seed(failed("ingest-bad", "ingest", "connection timed out"))
 
         client = TestClient(build_app(ctx), raise_server_exceptions=False)
         resp = client.get("/v1/tasks/ingest-bad")

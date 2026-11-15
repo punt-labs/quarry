@@ -10,7 +10,7 @@ from quarry.redacted_failure import RedactedFailure
 
 if TYPE_CHECKING:
     from quarry.daemon.ingest_unit import IngestUnit
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ from quarry.stop_signal import StopSignal
 if TYPE_CHECKING:
     from quarry.backfill_stats import BackfillStats
     from quarry.daemon.run_record import RunRecord
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class LateOutcome:
             self.log_failure(failure)  # the cancel hides it from the caller
         if cancelled:
             stopped = self._state.error or f"backfill stopped ({reason})"
-            self._state.error = (
+            self._state.note(
                 stopped
                 if failure is None
                 else f"{stopped}; scan failed: {type(failure).__name__}"
@@ -95,7 +95,7 @@ class LateOutcome:
         self._stopped = f"backfill stopped ({reason})"
         self._record.record(self._record.so_far())
         self._pending = f"{self._stopped}; scan thread still running"
-        self._state.error = self._pending
+        self._state.note(self._pending)
         # At shutdown nothing starts another backfill, so the guard is not the news.
         refusal = (
             ""
@@ -110,11 +110,11 @@ class LateOutcome:
 
     def returned(self, running: asyncio.Future[BackfillStats]) -> None:
         """Done callback: release the guard, and take a late outcome if one is due."""
-        self._state.holds_thread = False
+        self._state.release_thread()
         if not self._given_up:
             return
         if running.cancelled():
-            self._state.error = f"{self._stopped}; scan thread cancelled"
+            self._state.note(f"{self._stopped}; scan thread cancelled")
             return
         failure = running.exception()
         if failure is not None:
@@ -124,9 +124,9 @@ class LateOutcome:
             self._record.late(running.result())
             how = f"returned late: {running.result().summary()}"
         # Appended to what the run record set, if it set a reason; else to the stop.
-        recorded = self._state.error
+        recorded = self._state.reason_or(self._pending)
         base = self._stopped if recorded == self._pending else recorded
-        self._state.error = f"{base}; scan thread {how}"
+        self._state.note(f"{base}; scan thread {how}")
 
     @staticmethod
     def log_failure(exc: BaseException) -> None:

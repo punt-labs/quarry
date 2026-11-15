@@ -14,7 +14,8 @@ from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.queued_ingest import DEFAULT_QUEUE_POLICY, QueuePolicy
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskRegistry, TaskState
+from quarry.daemon.task_state import TaskState
+from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.terminal import Terminal
 from quarry.daemon.thread_call import ThreadCall
 from quarry.stop_signal import StopSignal

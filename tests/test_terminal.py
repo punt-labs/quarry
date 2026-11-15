@@ -9,14 +9,15 @@ from typing import TYPE_CHECKING, Self, final
 import pytest
 
 from quarry.daemon.job_lifecycle import JobLifecycle
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.daemon.terminal import Terminal
 from tests.job_states import JobStates
+from tests.task_states import completed, failed
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from quarry.daemon.tasks import TaskStatus
+    from quarry.daemon.task_state import TaskStatus
 
 
 def _state() -> TaskState:
@@ -63,7 +64,7 @@ def test_a_body_that_never_set_a_status_is_marked_failed() -> None:
 
 def test_a_cancel_never_overwrites_the_reason_the_run_already_gave() -> None:
     state = _state()
-    state.error = "backfill stopped (daemon shutting down); scan thread still running"
+    state.note("backfill stopped (daemon shutting down); scan thread still running")
 
     with pytest.raises(asyncio.CancelledError), Terminal.for_task(state).recording():
         _fail(asyncio.CancelledError())
@@ -89,7 +90,7 @@ def test_a_body_that_exits_mid_job_is_forced_to_failed(status: TaskStatus) -> No
 
 def test_a_body_that_exits_mid_job_keeps_the_reason_it_gave() -> None:
     state = TaskState(task_id="t-3", kind="backfill", status="committing")
-    state.error = "insert failed"
+    state.note("insert failed")
 
     with Terminal.for_task(state).recording():
         pass
@@ -99,7 +100,11 @@ def test_a_body_that_exits_mid_job_keeps_the_reason_it_gave() -> None:
 
 @pytest.mark.parametrize("status", ["completed", "failed"])
 def test_a_terminal_status_is_left_alone(status: TaskStatus) -> None:
-    state = TaskState(task_id="t-4", kind="backfill", status=status)
+    state = (
+        completed("t-4", "backfill")
+        if status == "completed"
+        else failed("t-4", "backfill", "it failed")
+    )
 
     with Terminal.for_task(state).recording():
         pass

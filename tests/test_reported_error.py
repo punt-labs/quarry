@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.daemon.terminal import Terminal
 from quarry.failure_reason import FailureReason
 from quarry.refusal import RefusalError

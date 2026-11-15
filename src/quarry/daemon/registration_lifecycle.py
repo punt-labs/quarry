@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from quarry.daemon.context import DaemonContext
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,7 @@ class RegistrationLifecycle:
             # mid-flight must never see "completed" while the parent is unwatched,
             # and a raise in teardown/start_watching must land as failed, not a
             # stale completed.
-            state.results = results
-            state.status = "completed"
+            state.complete(results)
 
     async def run_purge(self, state: TaskState, collection: str) -> None:
         """Purge a deregistered collection's chunks THROUGH the queue."""
@@ -88,17 +87,18 @@ class RegistrationLifecycle:
             purge = await CollectionPurger(self._ctx).purge(
                 collection, "deregister-purge"
             )
-            state.results["deleted_chunks"] = purge.results.get("deleted", 0)
+            deleted = purge.results.get("deleted", 0)
+            purged = state.results | {"deleted_chunks": deleted}
             if purge.status == "failed":
                 # Symmetric with _teardown_subsumed: a shed deregister-purge would
                 # otherwise orphan the collection's chunks with no backstop (the
                 # rows are gone from the registry, so reconcile never revisits it).
                 # Defer it so the reconcile drains the orphan when the queue frees.
                 self._ctx.watch_loop.defer_purge(collection)
-                state.status = "failed"
-                state.error = purge.error or "purge failed"
+                state.record(purged)
+                state.fail(purge.error or "purge failed")
             else:
-                state.status = "completed"
+                state.complete(purged)
 
     async def _teardown_subsumed(self, collection: str, *, parent: str) -> bool:
         """Stop watching a subsumed child and purge its now-orphaned chunks.

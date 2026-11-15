@@ -19,7 +19,7 @@ from quarry.content_guard import UnindexableContentError
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.ingest_labels import IngestLabels
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.http_url import HttpUrl
 
 if TYPE_CHECKING:

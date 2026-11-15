@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.job_spool import JobSpool
-    from quarry.daemon.tasks import TaskState, TaskStatus
+    from quarry.daemon.task_state import TaskState, TaskStatus
 
 
 @final

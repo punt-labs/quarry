@@ -11,7 +11,7 @@ from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
 from quarry.daemon.job_admission import JobAdmission
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TERMINAL_STATUSES, TaskState
+from quarry.daemon.task_state import TERMINAL_STATUSES, TaskState
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext

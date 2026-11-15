@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.settlement import Settlement
-    from quarry.daemon.tasks import TaskState, TaskStatus
+    from quarry.daemon.task_state import TaskState, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -107,14 +107,14 @@ class JobLifecycle:
         with self._state.claim:
             if self._state.status == "withdrawn":
                 return False
-            self._set("queued")
+            self._move("queued")
             return True
 
     def start(self) -> bool:
         """Move a queued job to ``running``; return False if it will not run."""
         with self._state.claim:
             if self._state.status == "queued":
-                self._set("running")
+                self._move("running")
                 return True
             self._skipped()
             return False
@@ -124,7 +124,7 @@ class JobLifecycle:
         with self._state.claim:
             if self._state.status != "running":
                 return False
-            self._set("committing")
+            self._move("committing")
             return True
 
     def withdraw(self) -> Withdrawn:
@@ -132,10 +132,10 @@ class JobLifecycle:
         with self._state.claim:
             status = self._state.status
             if status in self._WAITING:
-                self._set("withdrawn")
+                self._move("withdrawn")
                 status = "withdrawn"
             elif status == "running":
-                self._set("aborted")
+                self._move("aborted")
                 status = "aborted"
             # A status this does not know is taken as started: nothing is
             # claimed untouched that might not be.
@@ -181,7 +181,7 @@ class JobLifecycle:
             if self._state.status not in self._WORKING:
                 self._refused("failed")
                 return False
-            self._set("failed", error=reason)
+            self._fail_with(reason)
             return True
 
     def settle(self, settlement: Settlement) -> bool:
@@ -227,7 +227,7 @@ class JobLifecycle:
                 self._complete(settlement.results)
                 return self.Observed.COMPLETED
             if not settlement.is_stored and status == "committing":
-                self._set("failed", error=settlement.reason)
+                self._fail_with(settlement.reason)
                 return self.Observed.FAILED
             return self.Observed.UNCHANGED
 
@@ -273,7 +273,7 @@ class JobLifecycle:
                 return self.Disposition.KEPT
             if status == "committing":
                 return self.Disposition.UNCONFIRMED
-            self._set("failed", error=reason)
+            self._fail_with(reason)
             return self.Disposition.FAILED
 
     async def run(
@@ -307,36 +307,36 @@ class JobLifecycle:
         elif settlement.is_stored:
             self._complete(settlement.results)
         else:
-            self._set("failed", error=settlement.reason or default)
+            self._fail_with(settlement.reason or default)
 
     def _fail(self, default: str) -> None:
         """Fail with the reason the job gave, else *default* (claim held)."""
-        self._set("failed", error=self._state.reason_or(default))
+        self._fail_with(self._state.reason_or(default))
 
     def _complete(self, results: Mapping[str, object]) -> None:
         """Complete the job with *results* and no failure reason (claim held)."""
-        self._set("completed", error="", results=results)
+        self._held()
+        self._state.complete(results)
 
-    def _set(
-        self,
-        status: TaskStatus,
-        *,
-        error: str | None = None,  # None: the reason stays as it is
-        results: Mapping[str, object] | None = None,  # None: the results stay
-    ) -> None:
-        """Write the job's status (and reason, results), if the claim is held.
+    def _move(self, status: TaskStatus) -> None:
+        """Move the job to a status that is not terminal (claim held)."""
+        self._held()
+        self._state.move_to(status)
 
-        The one place a queued job's fields are assigned.  A caller that does not
-        hold the claim has a bug, and it is raised rather than written over.
+    def _fail_with(self, reason: str) -> None:
+        """Fail the job for *reason* (claim held)."""
+        self._held()
+        self._state.fail(reason)
+
+    def _held(self) -> None:
+        """Raise unless the calling thread holds the job's claim.
+
+        A caller that does not hold the claim has a bug, and it is raised
+        rather than written over.
         """
         if not self._state.claim.owned():
             msg = f"task {self._state.task_id}: written without its claim"
             raise ClaimNotHeldError(msg)
-        self._state.status = status
-        if error is not None:
-            self._state.error = error
-        if results is not None:
-            self._state.results = dict(results)
 
     def _refused(self, move: str) -> None:
         """Say, at debug, that a settle did not move the status (claim held)."""

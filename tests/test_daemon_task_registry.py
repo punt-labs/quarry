@@ -9,10 +9,12 @@ the boundary case of a task that is *already done* when ``track`` is called.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
 from quarry.daemon.task_drain import TaskDrain
+from quarry.daemon.task_state import TaskState
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskRegistry
 
 
@@ -104,15 +106,26 @@ class TestDrain:
         assert task.cancelled()  # wrapper cancelled as best-effort cleanup
 
 
+def _expired_failed(registry: TaskRegistry) -> TaskState:
+    """Seed a failed task past the TTL whose scan thread has not returned."""
+    state = TaskState(
+        "backfill-old", "backfill", created_at=time.monotonic() - TASK_TTL_SECONDS - 10
+    )
+    state.fail("reported")
+    state.hold_thread()
+    registry.seed(state)
+    return state
+
+
 def test_a_task_whose_thread_is_alive_still_counts_as_running() -> None:
     registry = TaskRegistry()
     state = registry.begin("backfill")
-    state.status = "failed"  # reported, but its scan thread has not returned
-    state.holds_thread = True
+    state.fail("reported")  # but its scan thread has not returned
+    state.hold_thread()
 
     assert registry.running_of_kind("backfill") is state
 
-    state.holds_thread = False
+    state.release_thread()
     assert registry.running_of_kind("backfill") is None
 
 
@@ -120,10 +133,7 @@ def test_a_state_that_still_holds_its_thread_survives_the_ttl_and_keeps_the_guar
     None
 ):
     registry = TaskRegistry()
-    state = registry.begin("backfill")
-    state.status = "failed"  # reported, but its scan thread has not returned
-    state.holds_thread = True
-    state.created_at -= TASK_TTL_SECONDS + 10
+    state = _expired_failed(registry)
 
     registry.begin("optimize")  # beginning a task sweeps the expired ones
 
@@ -135,12 +145,9 @@ def test_a_terminal_state_past_the_ttl_is_evicted_once_its_thread_has_returned()
     None
 ):
     registry = TaskRegistry()
-    state = registry.begin("backfill")
-    state.status = "failed"
-    state.holds_thread = True
-    state.created_at -= TASK_TTL_SECONDS + 10
+    state = _expired_failed(registry)
     registry.begin("optimize")
-    state.holds_thread = False
+    state.release_thread()
 
     registry.begin("optimize")
 

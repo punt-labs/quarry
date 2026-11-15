@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
 
     from quarry.daemon.lifecycle import Lifecycle
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 

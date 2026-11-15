@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from quarry.config import Settings
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.job_spool import SpoolRecord
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
     from quarry.db import Database
     from quarry.ingestion.file_indexer import FileIndexOutcome
     from quarry.sync import SyncResult

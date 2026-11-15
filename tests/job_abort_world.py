@@ -7,7 +7,7 @@ import re
 import sys
 import tempfile
 import threading
-from contextlib import ExitStack
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -25,7 +25,8 @@ from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.job_spool import JobSpool, SpoolRecord
 from quarry.daemon.queued_job import JobWithdrawnError, QueuedJob
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskRegistry, TaskState
+from quarry.daemon.task_state import TaskState
+from quarry.daemon.tasks import TaskRegistry
 from quarry.ingestion.file_indexer import FileIndexOutcome
 from quarry.shutdown_policy import ShutdownPolicy
 from quarry.sync import SyncResult
@@ -44,23 +45,19 @@ if TYPE_CHECKING:
 # Every write to a watched status, error or results field: the job, the field,
 # whether the writer held the job's claim, and the module that wrote.
 WRITES: list[tuple[str, str, bool, str]] = []
-_WATCHED = frozenset({"status", "error", "results"})
+_WATCHED = ("complete", "fail", "move_to", "record", "note")
 
 
-@dataclass(slots=True)
-class WatchedState(TaskState):
-    """A task state that records who wrote its status, error or results."""
+def _watching(name: str) -> Callable[..., None]:
+    """Return a ``TaskState`` writer that logs who called it, and whether claimed."""
+    write = getattr(TaskState, name)
 
-    def __setattr__(self, name: str, value: object) -> None:
-        if name in _WATCHED:
-            try:
-                owned = self.claim.owned()
-            except AttributeError:
-                owned = True  # the dataclass's own construction, before any claim
-            else:
-                module = Path(sys._getframe(1).f_code.co_filename).name
-                WRITES.append((self.task_id, name, owned, module))
-        object.__setattr__(self, name, value)
+    def watched(self: TaskState, *args: object) -> None:
+        module = Path(sys._getframe(1).f_code.co_filename).name
+        WRITES.append((self.task_id, name, self.claim.owned(), module))
+        write(self, *args)
+
+    return watched
 
 
 @final
@@ -96,7 +93,7 @@ class Entry:
 
     name: str
     job: IngestUnit
-    state: WatchedState
+    state: TaskState
     store: Store
 
 
@@ -213,7 +210,7 @@ class World:
         return self._ctx
 
     def __enter__(self) -> Self:
-        for active in (
+        patches: list[AbstractContextManager[object]] = [
             # Most scenarios hold one store per collection at once; with the real
             # ceiling of one, only the first would ever start.
             patch("quarry.daemon.ingest_queue.EMBED_CONCURRENCY_CEILING", 16),
@@ -223,7 +220,9 @@ class World:
                 ScrubbedIngestJob, "scrub_and_ingest", self._ingest_function()
             ),
             patch.object(JobSpool, "write", self._spool_function()),
-        ):
+            *(patch.object(TaskState, n, _watching(n)) for n in _WATCHED),
+        ]
+        for active in patches:
             self._stack.enter_context(active)
         self._namespace.ingest_queue = IngestQueue(self._ctx)
         return self
@@ -244,7 +243,7 @@ class World:
         commits: bool = False,
     ) -> Entry:
         """Admit a ``remember`` job (or a backfill transcript) the way a route does."""
-        state = WatchedState(task_id=name, kind="remember")
+        state = TaskState(name, "remember")
         labels = IngestLabels(
             overwrite=True,
             collection=collection,
@@ -286,7 +285,7 @@ class World:
             collection = f"i{n}"
             monkeypatch.setattr(cls, method, self._held(name))
             job = self._index_job(cls, collection)
-            state = WatchedState(task_id=name, kind=name, status="new")
+            state = TaskState(name, name, status="new")
             self._stores[name] = store = Store(outcome=result)
             entry = Entry(name, job, state, store)
             self._entries[name] = entry

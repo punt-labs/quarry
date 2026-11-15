@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
 from quarry.daemon.queued_unit import QueuedUnit
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 
 if TYPE_CHECKING:
     import pytest

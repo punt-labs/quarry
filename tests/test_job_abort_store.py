@@ -28,7 +28,7 @@ from quarry.daemon.job_abort import JobAbort
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.queued_job import JobWithdrawnError
 from quarry.daemon.store_run import StoreRun
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.daemon.terminal import Terminal
 from quarry.ingestion.file_indexer import FileIndexOutcome
 from quarry.refusal import RefusalError
@@ -361,7 +361,7 @@ def _break() -> None:
 async def test_callers_outside_the_queue_end_as_before(kind: str) -> None:
     done = TaskState(task_id="a", kind=kind)
     with Terminal.for_task(done).recording():
-        done.status = "completed"
+        done.complete({})
     failed = TaskState(task_id="b", kind=kind)
     with Terminal.for_task(failed).recording():
         _break()

@@ -157,15 +157,17 @@ class RegistrationRoutes(RouteGroup):
         # file for this collection mid-purge (DES-045 §6).
         self.ctx.watch_loop.stop_watching(collection)
 
-        state = self.ctx.tasks.begin("deregister")
-        state.results = {
+        removed = len(removed_docs)
+        results: dict[str, object] = {
             "collection": collection,
-            "removed": len(removed_docs),
+            "removed": removed,
             "deleted_chunks": 0,
             "type": "registration",
         }
+        state = self.ctx.tasks.begin("deregister")
+        state.record(results)
         if keep_data:
-            state.status = "completed"  # keep the chunks; nothing to purge
+            state.complete(results)  # keep the chunks; nothing to purge
         else:
             # Purge unconditionally (even with no known removed docs): a
             # FileIndexJob admitted before deregister may still be inserting
@@ -178,11 +180,7 @@ class RegistrationRoutes(RouteGroup):
             )
 
         return JSONResponse(
-            {
-                "task_id": state.task_id,
-                "status": "accepted",
-                "removed": len(removed_docs),
-            },
+            {"task_id": state.task_id, "status": "accepted", "removed": removed},
             status_code=202,
         )
 

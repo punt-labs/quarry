@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from quarry.daemon.route_key import RouteKey
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
     from quarry.daemon.watch_submit import WatchSubmitter
 
 

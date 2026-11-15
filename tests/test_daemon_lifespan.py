@@ -82,7 +82,7 @@ async def test_a_straggler_is_logged_and_teardown_still_ends_inside_the_budget(
 ) -> None:
     ctx = _context(tmp_path, budget_s=1.0)
     state = ctx.tasks.begin("backfill")
-    state.holds_thread = True  # its scan thread will not return
+    state.hold_thread()  # its scan thread will not return
     release = asyncio.Event()
 
     async def stubborn() -> None:
@@ -114,7 +114,7 @@ async def test_a_failing_watch_loop_stop_does_not_skip_the_rest_of_the_teardown(
 ) -> None:
     ctx = _context(tmp_path)
     state = ctx.tasks.begin("backfill")
-    state.holds_thread = True
+    state.hold_thread()
     finished = asyncio.Event()
 
     async def finishes() -> None:

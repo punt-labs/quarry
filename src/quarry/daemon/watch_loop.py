@@ -22,7 +22,7 @@ from quarry.daemon.debounce import DebouncedDispatcher
 from quarry.daemon.fs_events import NullFsEventSource
 from quarry.daemon.fs_watchdog import WatchdogSource
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TERMINAL_STATUSES
+from quarry.daemon.task_state import TERMINAL_STATUSES
 from quarry.daemon.terminal import Terminal
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.fs_events import FsEvent, FsEventSource
     from quarry.daemon.scan_sweep import ScanSweep
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,7 @@ from quarry.daemon.queued_job import JobWithdrawnError, QueuedJob
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.daemon.thread_call import ThreadCallAbortedError
 from quarry.stop_signal import StopSignal
 from tests.queue_fixtures import (
@@ -31,7 +31,7 @@ from tests.queue_fixtures import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from quarry.daemon.tasks import TaskStatus
+    from quarry.daemon.task_state import TaskStatus
 
 _SNAPSHOT = datetime(2026, 1, 2, tzinfo=UTC)
 _QUICK = QueuePolicy(admit_timeout_s=0.2, finish_timeout_s=0.2, grace_s=0.2, reserve=0)
@@ -45,8 +45,12 @@ def _session(tmp_path: Path) -> BackfillSession:
 
 def _finishing(status: TaskStatus, error: str = "") -> object:
     async def run(_self: ScrubbedIngestJob, _ctx: object, state: TaskState) -> None:
-        state.status = status
-        state.error = error
+        if status == "completed":
+            state.complete({})
+        elif status == "failed":
+            state.fail(error or "failed")
+        else:
+            state.move_to(status)
 
     return run
 
@@ -249,7 +253,7 @@ async def test_a_stop_while_the_job_is_queued_behind_another_never_lets_it_write
 
     async def records(_self: ScrubbedIngestJob, _ctx: object, state: TaskState) -> None:
         wrote.append("written")
-        state.status = "completed"
+        state.complete({})
 
     asyncio.get_running_loop().call_later(0.2, stop.set, "task cancelled")
     with (
@@ -276,7 +280,7 @@ async def test_a_stop_while_the_job_is_running_counts_it_as_having_run(
 
     async def holds(_self: ScrubbedIngestJob, _ctx: object, state: TaskState) -> None:
         await gate.wait()
-        state.status = "completed"
+        state.complete({})
 
     asyncio.get_running_loop().call_later(0.3, stop.set, "task cancelled")
     with (
@@ -301,7 +305,7 @@ async def test_a_job_that_times_out_still_queued_never_writes_later(
 
     async def records(_self: ScrubbedIngestJob, _ctx: object, state: TaskState) -> None:
         wrote.append("written")
-        state.status = "completed"
+        state.complete({})
 
     with (
         patch.object(ScrubbedIngestJob, "run", records),
@@ -323,8 +327,12 @@ def _aborting_after(status: TaskStatus, error: str = "") -> object:
     async def run_tracked(
         _self: QueuedIngest, _job: object, state: TaskState
     ) -> TaskState:
-        state.status = status
-        state.error = error
+        if status == "completed":
+            state.complete({})
+        elif status == "failed":
+            state.fail(error or "failed")
+        else:
+            state.move_to(status)
         msg = "task cancelled"
         raise ThreadCallAbortedError(msg)
 
@@ -390,7 +398,7 @@ async def test_a_running_job_withdrawn_before_its_commit_never_writes(
         except JobWithdrawnError:
             return  # the job's terminal handler would record the refusal
         wrote.append("written")
-        state.status = "completed"
+        state.complete({})
 
     asyncio.get_running_loop().call_later(0.3, stop.set, "task cancelled")
     with (
@@ -422,7 +430,7 @@ async def test_a_job_past_its_commit_when_the_run_stops_is_unconfirmed(
         self.checkpoint(QueuedJob.COMMIT_POINT)  # past the point of no return
         await gate.wait()
         wrote.append("written")
-        state.status = "completed"
+        state.complete({})
 
     asyncio.get_running_loop().call_later(0.3, stop.set, "task cancelled")
     with (
@@ -453,8 +461,7 @@ async def test_a_committing_job_that_then_fails_is_never_counted_stored(
         assert self.checkpoint is not None
         self.checkpoint(QueuedJob.COMMIT_POINT)
         await gate.wait()
-        state.status = "failed"
-        state.error = "insert failed"
+        state.fail("insert failed")
 
     asyncio.get_running_loop().call_later(0.3, stop.set, "task cancelled")
     with (
