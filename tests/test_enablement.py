@@ -434,6 +434,141 @@ class TestDisableRetractsOwnSkills:
         assert any("failed to retract" in r.getMessage() for r in caplog.records)
 
 
+class TestEnableDepositsOwnSkills:
+    """§ cross-harness skills (PL-1049): enable deposits them, symmetric with disable.
+
+    Mirrors ``TestDisableRetractsOwnSkills`` above: the same identity guard
+    (``pyproject.toml`` must name ``punt-quarry``), the same best-effort
+    failure discipline (a deposit failure must not fail ``enable``), and the
+    same idempotent re-run via ``SkillsInstaller``'s content-hash stamping.
+    """
+
+    @staticmethod
+    def _write_skill(root: Path, name: str) -> None:
+        skill_dir = root / "plugin" / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: test\n---\n\nbody\n", encoding="utf-8"
+        )
+
+    @staticmethod
+    def _write_pyproject(root: Path, package_name: str) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "pyproject.toml").write_text(
+            f'[project]\nname = "{package_name}"\n', encoding="utf-8"
+        )
+
+    def test_ordinary_repo_never_touches_the_home_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+
+        Enablement(tmp_path / "repo").enable()
+
+        assert not home.exists()  # never created -- enable never looked here
+
+    def test_own_checkout_with_a_detected_harness_deposits_the_skills(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".codex").mkdir(parents=True)  # codex "installed" on this machine
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        repo = tmp_path / "quarry-checkout"
+        self._write_skill(repo, "demo")
+        self._write_pyproject(repo, "punt-quarry")
+
+        result = Enablement(repo).enable()
+
+        deposited = home / ".codex" / "skills" / "demo"
+        assert deposited.is_dir()
+        assert (deposited / "SKILL.md").is_file()
+        deposited_skills = [
+            o.skill for o in result.skills_deposited if o.action == "deposited"
+        ]
+        assert deposited_skills == ["demo"]
+
+    def test_own_checkout_with_no_detected_harness_deposits_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"  # no .codex/.pi/.config/opencode under it
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        repo = tmp_path / "quarry-checkout"
+        self._write_skill(repo, "demo")
+        self._write_pyproject(repo, "punt-quarry")
+
+        result = Enablement(repo).enable()
+
+        assert result.skills_deposited == ()
+        assert not home.exists()  # install_detected found nothing to deposit into
+
+    def test_a_repo_with_the_same_layout_but_a_different_package_name_deposits_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Identity guard: every marketplace-layout plugin (lux, prfaq,
+        dungeon, punt-kit, ...) ships an identically shaped ``plugin/skills/``
+        tree. Enabling one of THOSE must never deposit as quarry's own."""
+        home = tmp_path / "home"
+        (home / ".codex").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        repo = tmp_path / "lux-checkout"
+        self._write_skill(repo, "demo")
+        self._write_pyproject(repo, "punt-lux")
+
+        result = Enablement(repo).enable()
+
+        assert result.skills_deposited == ()
+        assert not (home / ".codex" / "skills" / "demo").exists()
+
+    def test_a_deposit_failure_does_not_fail_enable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Isolation: an install_detected() failure is logged and swallowed,
+        never propagated out of ``enable`` -- the gitignore/guide/import/
+        marker work already committed above it must still be reported."""
+        home = tmp_path / "home"
+        (home / ".codex").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        repo = tmp_path / "quarry-checkout"
+        self._write_skill(repo, "demo")
+        self._write_pyproject(repo, "punt-quarry")
+
+        def _boom(_self: object) -> None:
+            msg = "permission denied"
+            raise OSError(msg)
+
+        monkeypatch.setattr(SkillsInstaller, "install_detected", _boom)
+
+        with caplog.at_level("WARNING", logger="quarry.skills_sync"):
+            result = Enablement(repo).enable()  # must not raise
+
+        assert result.import_registered is True
+        assert result.enabled_marker_written is True
+        assert result.skills_deposited == ()
+        assert any("failed to deposit" in r.getMessage() for r in caplog.records)
+
+    def test_reenable_is_idempotent_and_reports_current_not_a_new_deposit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".codex").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        repo = tmp_path / "quarry-checkout"
+        self._write_skill(repo, "demo")
+        self._write_pyproject(repo, "punt-quarry")
+        first = Enablement(repo).enable()
+        assert [o.action for o in first.skills_deposited] == ["deposited"]
+
+        second = Enablement(repo).enable()
+
+        assert [o.action for o in second.skills_deposited] == ["current"]
+        deposited = home / ".codex" / "skills" / "demo"
+        assert deposited.is_dir()  # still present, not re-written
+
+
 # ── concurrency: enable/disable are atomic, never stranding the marker ─
 
 
