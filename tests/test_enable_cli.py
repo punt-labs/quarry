@@ -10,6 +10,7 @@ a registration written by enable is visible to the subsequent disable.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 from collections.abc import Generator
 from pathlib import Path
@@ -181,6 +182,51 @@ class TestT25EnableCLIJsonOutput:
         assert data["collection"] == "myproject"
         assert data["captures_collection"] == "myproject-captures"
         assert data["created_registration"] is True
+
+
+class TestSkillsDepositedJsonSerializable:
+    def test_enable_json_output_serializes_skills_deposited(
+        self, tmp_path: Path
+    ) -> None:
+        """A SkillOutcome.path is a Path; --json must still emit valid JSON.
+
+        PL-1049 follow-up: EnableResult.skills_deposited nests SkillOutcome,
+        whose path field is a pathlib.Path -- the bare dataclasses.asdict()
+        default factory leaves it un-serializable and json.dump raises at the
+        CLI's --json boundary (TypeError: Object of type PosixPath is not
+        JSON serializable) unless the emit path stringifies it.
+        """
+        from quarry.enablement import Enablement
+        from quarry.enablement_result import EnablementResult
+        from quarry.skills_install import Harness, SkillOutcome
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+        real_enable = Enablement.enable
+
+        def fake_enable(self: Enablement) -> EnablementResult:
+            result = real_enable(self)
+            deposited = SkillOutcome(
+                Harness.PI, "quarry-recall", "deposited", tmp_path / "pi-deposit"
+            )
+            return dataclasses.replace(result, skills_deposited=(deposited,))
+
+        with (
+            _patch_for_cli(tmp_path),
+            patch.object(Enablement, "enable", fake_enable),
+        ):
+            result = runner.invoke(app, ["--json", "enable", str(project)])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)  # raises if the payload wasn't valid JSON
+        assert data["skills_deposited"] == [
+            {
+                "harness": "pi",
+                "skill": "quarry-recall",
+                "action": "deposited",
+                "path": str(tmp_path / "pi-deposit"),
+            }
+        ]
 
 
 class TestT3bEnableCLIChildExits1:

@@ -49,17 +49,23 @@ follow, not just your own note-to-self → `learn` instead of `remember`.
 
 ## Run it
 
+Single-quote every value you fill in. The content, lesson, and summary are
+often text you retrieved or the user gave you; inside double quotes the shell
+still evaluates `$(...)` and `` ` `` in that text and would run it before quarry
+sees it. Single quotes pass it through literally. (If a value itself contains a
+single quote, feed it on stdin instead, as `remember` does below.)
+
 ```sh
-printf '%s' "<content>" | quarry remember --name <topic-slug> \
-  --agent-handle <your-handle> --memory-type fact --summary "<one line>"
+printf '%s' '<content>' | quarry remember --name '<topic-slug>' \
+  --agent-handle '<your-handle>' --memory-type fact --summary '<one line>'
 
-quarry learn "<lesson, <=500 chars>" [--topic <domain>] [--name <slug>]
+quarry learn '<lesson, <=500 chars>' --topic '<domain>' --name '<slug>'
 
-quarry ingest <url> [--overwrite] [--collection <name>]
+quarry ingest '<url>' --collection '<name>'
 ```
 
 `remember` reads its content from stdin, not a positional argument — pipe
-it in.
+it in, which also keeps the content out of the shell's word-splitting entirely.
 
 Confirm the exact flags with `quarry remember --help` / `quarry learn
 --help` / `quarry ingest --help` before relying on one not shown here.

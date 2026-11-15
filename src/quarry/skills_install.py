@@ -13,6 +13,7 @@ harness orchestration — which harness, which root, which skills go where.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from enum import StrEnum
@@ -23,6 +24,8 @@ from quarry.own_checkout import OwnCheckout
 from quarry.skills_source import SkillSource
 
 __all__ = ["Harness", "SkillOutcome", "SkillsInstaller"]
+
+logger = logging.getLogger(__name__)
 
 # The closed vocabulary a deposit/status/removal call reports. "unsupported"
 # is Claude Code only (no deposit target); "current"/"stale" are status
@@ -181,10 +184,25 @@ class SkillsInstaller:
         )
 
     def install_detected(self) -> tuple[SkillOutcome, ...]:
-        """Deposit into every harness :meth:`detected_harnesses` finds."""
+        """Deposit into every harness :meth:`detected_harnesses` finds.
+
+        Each harness is deposited independently: a failure on one (e.g. a
+        permission error under its skills dir) is logged and skipped, never
+        aborting the rest or discarding the outcomes from harnesses already
+        done. The ``--agent`` path (:meth:`install`) still raises, because an
+        explicit single-target request should surface its own failure; only
+        this detect-and-deposit-all path is best-effort across harnesses.
+        """
         outcomes: list[SkillOutcome] = []
         for harness in self.detected_harnesses():
-            outcomes.extend(self.install(harness))
+            try:
+                outcomes.extend(self.install(harness))
+            except OSError:
+                logger.warning(
+                    "skills: failed to deposit into %s; skipping it",
+                    harness.value,
+                    exc_info=True,
+                )
         return tuple(outcomes)
 
     def status(self) -> tuple[SkillOutcome, ...]:

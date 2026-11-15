@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from quarry.claude_permissions import PermissionChange
 from quarry.enable import DisableResult, EnableResult
 from quarry.enable_report import DisableReport, EnableReport
 from quarry.ethos_memory import EthosMemoryResult
+from quarry.skills_install import Harness, SkillOutcome
 
 
 def _enable(ethos: EthosMemoryResult) -> EnableResult:
@@ -164,6 +167,43 @@ def test_enable_report_surfaces_permission_error() -> None:
         permissions=PermissionChange(error="bad json"),
     )
     assert "  Permissions not changed: bad json" in EnableReport(result).lines()
+
+
+def test_enable_report_shows_skills_line_when_deposited() -> None:
+    result = EnableResult(
+        directory="/p",
+        collection="p",
+        captures_collection="p-captures",
+        skills_deposited=(
+            SkillOutcome(Harness.PI, "quarry-recall", "deposited", Path("/p")),
+            SkillOutcome(Harness.CODEX, "quarry-recall", "upgraded", Path("/c")),
+            # a second skill on an already-seen harness must not repeat it
+            SkillOutcome(Harness.PI, "quarry-capture", "deposited", Path("/p2")),
+        ),
+    )
+    joined = "\n".join(EnableReport(result).lines())
+    assert "  Deposited agent skills to: pi, codex" in joined
+
+
+def test_enable_report_omits_skills_line_when_nothing_new() -> None:
+    """A re-enable where every skill is already current shows nothing new."""
+    result = EnableResult(
+        directory="/p",
+        collection="p",
+        captures_collection="p-captures",
+        skills_deposited=(
+            SkillOutcome(Harness.PI, "quarry-recall", "current", Path("/p")),
+            SkillOutcome(Harness.CLAUDE, "quarry-recall", "unsupported", None),
+        ),
+    )
+    joined = "\n".join(EnableReport(result).lines())
+    assert "Deposited agent skills" not in joined
+
+
+def test_enable_report_omits_skills_line_when_empty() -> None:
+    """No source tree/no detected harness at all -- the common case."""
+    joined = "\n".join(EnableReport(_enable(EthosMemoryResult())).lines())
+    assert "Deposited agent skills" not in joined
 
 
 def test_disable_report_lists_removed_rules_and_omits_noop() -> None:

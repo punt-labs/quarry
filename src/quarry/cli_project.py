@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Annotated, Self, final
 import typer
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from quarry.cli_captures import CliPlumbing
 
 
@@ -36,6 +38,20 @@ class ProjectCli:
         """Attach the ``enable`` and ``disable`` commands to *app*."""
         app.command(name="enable")(self._p.cli_errors(self._enable))
         app.command(name="disable")(self._p.cli_errors(self._disable))
+
+    @staticmethod
+    def _json_safe_dict(pairs: Iterable[tuple[str, object]]) -> dict[str, object]:
+        """``dataclasses.asdict``'s ``dict_factory``: stringify every ``Path``.
+
+        ``EnableResult.skills_deposited`` nests
+        :class:`~quarry.skills_install.SkillOutcome`, whose ``path`` field is
+        a ``Path`` -- JSON has no native path type, so the bare ``dict``
+        default factory leaves a ``PosixPath`` in the payload and
+        ``json.dump`` raises at the ``--json`` emit boundary. Applied
+        uniformly (not just on the one nested field) so any future
+        ``Path``-carrying field gets the same treatment for free.
+        """
+        return {k: (str(v) if isinstance(v, Path) else v) for k, v in pairs}
 
     def _enable(
         self,
@@ -61,7 +77,10 @@ class ProjectCli:
             directory, self._p.client(), collection_override=collection
         )
         lines = EnableReport(result).lines()
-        self._p.emit(dataclasses.asdict(result), "\n".join(lines))
+        self._p.emit(
+            dataclasses.asdict(result, dict_factory=self._json_safe_dict),
+            "\n".join(lines),
+        )
 
     def _disable(
         self,
@@ -85,4 +104,7 @@ class ProjectCli:
 
         result = disable_project(directory, self._p.client(), keep_data=keep_data)
         lines = DisableReport(result, keep_data=keep_data).lines()
-        self._p.emit(dataclasses.asdict(result), "\n".join(lines))
+        self._p.emit(
+            dataclasses.asdict(result, dict_factory=self._json_safe_dict),
+            "\n".join(lines),
+        )

@@ -23,7 +23,7 @@ expected to match.
 
 **Next action**: narrow or rephrase once — try a shorter, more literal
 phrase, drop a scope flag (`--collection`, `--agent-handle`) that may be too
-narrow, or check `quarry status` to confirm the expected collection is
+narrow, or run `quarry list collections` to confirm the expected collection is
 indexed at all.
 
 **Do not**: report "not found" as "does not exist" or "never happened."
@@ -35,10 +35,12 @@ captured yet.
 **Recognize**: results differ from what you expect, or a collection you
 know is registered locally doesn't appear.
 
-**Next action**: run `quarry status` — it reports which database and mode
-(local vs. a remote `QUARRY_URL`/`quarry login` target) is active. A remote
-target only searches its own database; local collections are invisible to
-it and vice versa.
+**Next action**: run `quarry remote list --ping` — it reports whether this
+client is pointed at a remote target (`quarry login`) and whether that target
+is reachable, which is what tells you which database a search actually hit. A
+remote target only searches its own database; local collections are invisible
+to it and vice versa. (`quarry status` shows the database's own stats, not
+which client target is active.)
 
 **Do not**: assume a missing collection means it was never indexed — check
 which target you're actually searching first.
