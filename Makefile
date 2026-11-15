@@ -1,4 +1,4 @@
-.PHONY: help test test-slow lint lint-docs lint-slash-mcp lint-hook-mcp-matcher type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi install-constraints check-install-constraints brew-formula report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline logs-errors logs-tail
+.PHONY: help test test-slow lint lint-docs lint-slash-mcp lint-hook-mcp-matcher type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi sync-skills check-skills-sync install-constraints check-install-constraints brew-formula report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline logs-errors logs-tail
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -77,13 +77,19 @@ OO_BASE ?=
 COUPLING_BASE ?=
 SUPPRESSION_BASE ?=
 
-check: lint type test check-oo check-coupling check-suppressions check-imports check-openapi check-install-constraints ## Run all quality gates
+check: lint type test check-oo check-coupling check-suppressions check-imports check-openapi check-install-constraints check-skills-sync ## Run all quality gates
 
 openapi: ## Regenerate docs/openapi.json from the daemon FastAPI app
 	uv run python tools/generate_openapi.py
 
 check-openapi: ## Fail if docs/openapi.json is stale vs the daemon app
 	uv run python tools/generate_openapi.py --check
+
+sync-skills: ## Copy plugin/skills/ into src/quarry/_skills/ (the wheel-packaged mirror)
+	uv run python tools/sync_skills.py
+
+check-skills-sync: ## Fail if src/quarry/_skills/ has drifted from plugin/skills/
+	uv run python tools/sync_skills.py --check
 
 # install.sh pins the tool venv to the versions uv.lock names, by passing this
 # file to `uv tool install --constraints`.  Without it `uv tool install
