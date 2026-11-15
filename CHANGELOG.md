@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-11-15
+
 ### Added
 
 - tool: `quarry enable` now deposits quarry's agent skills (`quarry-recall`, `quarry-capture`) into every coding-agent harness detected on the machine (pi, opencode, codex), so enabling quarry in a repo is the whole setup — no separate `quarry skills install` step. Claude Code already loads the skills from the plugin. The skills ship inside the wheel (`quarry/_skills/`, kept in sync with the plugin's `plugin/skills/` by `make sync-skills` and a `check-skills-sync` gate), so the installed binary deposits its own canonical skills regardless of which repo is enabled; `quarry skills install` now also works from any directory, not only a quarry checkout. The deposit is best-effort (never blocks enable), idempotent (content-hash stamped), and never overwrites a skill quarry didn't write. `quarry enable` reports what it deposited ("Deposited agent skills to: …") (PL-1049).
