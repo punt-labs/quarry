@@ -18,8 +18,8 @@ from quarry.db import Database
 from quarry.ingestion.backends import new_embedding_backend
 
 if TYPE_CHECKING:
+    from quarry.backend_protocols import EmbeddingBackend
     from quarry.config import Settings
-    from quarry.types import EmbeddingBackend
 
 logger = logging.getLogger(__name__)
 

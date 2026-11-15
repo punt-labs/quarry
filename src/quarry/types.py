@@ -1,7 +1,6 @@
 """Protocol definitions for quarry.
 
 Infrastructure protocols (LanceDB) abstract external libraries.
-Domain protocols (OcrBackend, EmbeddingBackend) define backend contracts.
 """
 
 from __future__ import annotations
@@ -10,14 +9,9 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from datetime import timedelta
-    from pathlib import Path
 
-    import numpy as np
     import pyarrow as pa
     from lancedb.index import FTS, Bitmap, BTree
-    from numpy.typing import NDArray
-
-    from quarry.models import PageContent
 
 
 # --- Infrastructure: LanceDB ---
@@ -44,6 +38,7 @@ class LanceTable(Protocol):
         transforms: dict[str, str],
     ) -> None: ...
     def optimize(self, *, cleanup_older_than: timedelta | None = ...) -> object: ...
+    def drop_columns(self, columns: list[str]) -> None: ...
     @property
     def schema(self) -> pa.Schema: ...
     @property
@@ -52,6 +47,7 @@ class LanceTable(Protocol):
 
 class LanceQuery(Protocol):
     def limit(self, n: int) -> LanceQuery: ...
+    def offset(self, n: int) -> LanceQuery: ...
     def metric(self, metric: str) -> LanceQuery: ...
     def where(self, predicate: str) -> LanceQuery: ...
     def select(self, columns: list[str]) -> LanceQuery: ...
@@ -73,44 +69,3 @@ class LanceDB(Protocol):
         data: list[dict[str, object]],
         schema: object,
     ) -> LanceTable: ...
-
-
-# --- Domain: OCR and Embedding backends ---
-
-
-class OcrBackend(Protocol):
-    """Protocol for OCR backends that extract text from documents."""
-
-    def ocr_document(
-        self,
-        document_path: Path,
-        page_numbers: list[int],
-        total_pages: int,
-        *,
-        document_name: str | None = None,
-    ) -> list[PageContent]: ...
-
-    def ocr_image_bytes(
-        self,
-        image_bytes: bytes,
-        document_name: str,
-        document_path: Path,
-    ) -> PageContent: ...
-
-
-class EmbeddingBackend(Protocol):
-    """Protocol for text embedding backends."""
-
-    @property
-    def dimension(self) -> int: ...
-
-    @property
-    def model_name(self) -> str: ...
-
-    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        """Returns shape (n, dimension)."""
-        ...
-
-    def embed_query(self, query: str) -> NDArray[np.float32]:
-        """Returns shape (dimension,)."""
-        ...

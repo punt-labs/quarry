@@ -29,9 +29,9 @@ from quarry.models import PageType
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from quarry.backend_protocols import OcrBackend
     from quarry.config import Settings
     from quarry.ingestion.ingest_context import Progress
-    from quarry.types import OcrBackend
 
 SUPPORTED_EXTENSIONS = (
     frozenset({".pdf"}) | SUPPORTED_IMAGE_EXTENSIONS | frozenset(TEXT_LIKE_FORMATS)

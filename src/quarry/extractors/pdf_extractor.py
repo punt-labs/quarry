@@ -12,8 +12,8 @@ from quarry.ingestion.pdf_text_extractor import extract_text_pages
 from quarry.models import PageAnalysis, PageContent, PageType
 
 if TYPE_CHECKING:
+    from quarry.backend_protocols import OcrBackend
     from quarry.config import Settings
-    from quarry.types import OcrBackend
 
 logger = logging.getLogger(__name__)
 
