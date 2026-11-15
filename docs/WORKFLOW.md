@@ -6,7 +6,7 @@ one pull request: a single shippable, revertible change. The innermost loop
 owns one mission: a single delegated piece of work inside that change.
 
 ```text
-Level 1 — Backlog loop   one iteration = one work batch     (beads)
+Level 1 — Backlog loop   one iteration = one work batch     (Linear)
   Level 2 — PR loop      one iteration = one pull request
     Level 3 — Mission    one iteration = one delegated mission
                          (design, code, test — a do-while)
@@ -14,10 +14,10 @@ Level 1 — Backlog loop   one iteration = one work batch     (beads)
 
 Each level hands work down and receives finished results back. Escalation of
 scope only goes up: a mission that uncovers a bigger problem grows its PR; a
-PR that uncovers a new line of work files a bead for the backlog loop. Defects
+PR that uncovers a new line of work files an issue for the backlog loop. Defects
 move the other way — anything found while a PR is open is fixed in that PR,
-never sent back to the backlog as a "follow-up bead." Filing a reviewer-flagged
-defect as a bead and merging around it is the single most-corrected failure in
+never sent back to the backlog as a "follow-up issue." Filing a reviewer-flagged
+defect as an issue and merging around it is the single most-corrected failure in
 this repo's history; see Invariant 5.
 
 The pseudocode at each level gives the control flow; a small Z schema at each
@@ -27,21 +27,19 @@ and what must be true to leave it. The state those schemas observe:
 ```text
 LoopState
   signals       : ℙ SIGNAL  -- issues, alerts, messages not yet triaged
-  open          : ℙ BEAD    -- open items in the tracker (Linear where
-                            --   migrated, observed through the beads
-                            --   mirror)
-  validated     : ℙ BEAD    -- re-proven against current main
-  claimed       : ℙ BEAD    -- the current batch
-  closed        : ℙ BEAD    -- beads completed by a merged PR
+  open          : ℙ ISSUE   -- open Linear issues for this repo
+  validated     : ℙ ISSUE   -- re-proven against current main
+  claimed       : ℙ ISSUE   -- the current batch
+  closed        : ℙ ISSUE   -- issues completed by a merged PR
   activeWorkers : ℙ WORKER  -- sub-agents editing a shared worktree
   testCount     : ℕ         -- tests collected by the suite
   ------------------------------------------------------------------
   validated ⊆ open
   claimed   ⊆ validated
-  open ∩ closed = ∅         -- a bead is open or closed, never both
+  open ∩ closed = ∅         -- an issue is open or closed, never both
 ```
 
-A bead's lifecycle is a walk through these sets:
+An issue's lifecycle is a walk through these sets:
 `open → validated → claimed → closed`. Steps that were performed ("the recap
 was sent", "the daemon was
 exercised") appear as named predicates over declared terms, never as bare
@@ -62,33 +60,32 @@ ran, not review of the diff.
 
 ## Level 1 — The backlog loop
 
-The backlog loop keeps the bead tracker true and decides what to work on next.
-The tracker is the single funnel: every piece of work, whatever its origin, is a bead before it is
+The backlog loop keeps the Linear tracker true and decides what to work on next.
+The tracker is the single funnel: every piece of work, whatever its origin, is a Linear issue before it is
 anything else. One iteration selects and completes one batch of work. The loop
 runs at session start and again whenever the current batch is done. Start every
-session with `/loop 2m /biff:read` and a `bd ready --limit=99` sweep.
+session with `/loop 2m /biff:read` and a `list_issues` sweep (team `PL`, label `repo:quarry`, status not Done/Canceled).
 
 ```text
 function backlog_loop():
 
-    # 1. INTAKE — every signal becomes a bead or is disposed at the door
+    # 1. INTAKE — every signal becomes an issue or is disposed at the door
     for signal in [github_issues, dependabot_alerts, biff_messages,
                    operator_requests, new_scope_found_while_working]:
                    # a defect inside an open PR's unit is fixed in that PR,
                    # never filed — only genuinely NEW scope arrives here
-        if duplicate(signal):  close_at_door(signal, link_existing_bead)
+        if duplicate(signal):  close_at_door(signal, link_existing_issue)
         elif invalid(signal):  close_at_door(signal, stated_reason)
         else:                  tracker_create(signal, labels, link_back_to_source)
-                               # Linear save_issue where migrated; bd create
-                               #   otherwise
+                               # Linear save_issue, repo:quarry label
 
-    # 2. VALIDATE — a bead must be true before it is workable
-    for bead in candidates(bd_ready):
+    # 2. VALIDATE — an issue must be true before it is workable
+    for issue in candidates(open_issues):
         confirm it is still real against current main
         confirm nothing merged or decided has superseded it
         confirm it is one rollback-coherent unit (split or merge if not)
         confirm its blocked-by links reflect reality
-        otherwise: fix the bead, or close it with the reason
+        otherwise: fix the issue, or close it with the reason
 
     # 3. ASSESS — automatic ordering; escalate only on a genuine fork
     order = sort(validated, by:
@@ -104,15 +101,15 @@ function backlog_loop():
 
     # 4. SELECT AND EXECUTE
     batch = claim a realistic set from the top of the order
-    #   bd update <id> --status=in_progress per claimed bead
-    #   TaskCreate one entry per claimed bead (session-visible display only)
+    #   set each claimed issue In Progress (Linear save_issue)
+    #   TaskCreate one entry per claimed issue (session-visible display only)
     for unit in rollback_coherent_units(batch):
         pr_loop(unit)                      # Level 2
 
     # 5. CLOSE OUT
     close GitHub issues resolved by the merged PRs, linking each PR
     send the batch recap via beadle-email  # covers what the per-merge recaps
-                                           # do not: intake dispositions, beads
+                                           # do not: intake dispositions, issues
                                            # closed at validation, order changes
     return to intake — new signals have accrued while working
 ```
@@ -126,12 +123,12 @@ EnterBatch ≙ [ LoopState ]                -- no precondition: the backlog loop
 
 ExitBatch ≙ [ Δ LoopState; mergedPRs : ℙ PR |   -- the PRs merged this batch
   intakeDisposed(signals)                 -- every signal observed at this
-                                          --   iteration's intake became a bead
+                                          --   iteration's intake became an issue
                                           --   or was closed at the door with a
                                           --   reason; new signals keep accruing,
                                           --   so the live queue is never empty
   ∧ claimed′ = ∅ ∧ claimed ⊆ closed′      -- the batch drained: every claimed
-                                          --   bead closed by a merged PR
+                                          --   issue closed by a merged PR
   ∧ resolvedIssuesClosed(mergedPRs)       -- GitHub issues answered with their PR
   ∧ batchRecapSent(claimed) ]
 ```
@@ -141,29 +138,29 @@ ExitBatch ≙ [ Δ LoopState; mergedPRs : ℙ PR |   -- the PRs merged this batc
 Work arrives from five places: GitHub issues, Dependabot alerts, biff messages
 from agents in other repositories, operator requests, and new lines of work we
 discover ourselves. That last source carries a boundary: a defect found inside
-the unit of an open PR is fixed in that PR and never becomes a bead; only
+the unit of an open PR is fixed in that PR and never becomes an issue; only
 genuinely new scope — discovered outside any open PR, or clearly a separate
 rollback unit — enters at intake. At intake, each signal is either turned into
-a bead or closed at the door with a stated reason. Nothing is left sitting in
-an external queue: a GitHub issue gets a reply naming its bead and closes when
-that bead closes. Every biff message gets a reply — acknowledge, answer, or
+an issue or closed at the door with a stated reason. Nothing is left sitting in
+an external queue: a GitHub issue gets a reply naming its issue and closes when
+that issue closes. Every biff message gets a reply — acknowledge, answer, or
 report blocked; silence is not acceptable.
 
 Security alerts map severity to priority: a critical or high alert becomes a P1
-bead at the front of the order. Security work does not wait in the backlog.
+issue at the front of the order. Security work does not wait in the backlog.
 
 Intake must not depend on remembering to look. A recurring `/loop` poll or a
 session-start sweep checks the GitHub issue list and the Dependabot alert list,
-so an alert filed overnight is a bead by the time the first batch is selected.
+so an alert filed overnight is an issue by the time the first batch is selected.
 
 ### Validation
 
-The codebase moves; beads rot. Before a bead is workable, confirm it is still
+The codebase moves; issues rot. Before an issue is workable, confirm it is still
 real against current main: reproduce the bug or re-check the premise, confirm
 no merged PR or design decision has superseded it (read `DESIGN.md` — the
 ADR log — before touching settled architecture), confirm it is one
 rollback-coherent unit, and confirm its dependency links are correct. A stale
-bead is closed with the reason. A bloated bead is split into an epic. Validation
+issue is closed with the reason. A bloated issue is split into an epic. Validation
 covers the candidates for the coming batch, not the whole backlog every time.
 
 ### Assessment
@@ -203,8 +200,8 @@ size of a PR is an economic decision, not a hygiene one:
 - **The ceiling is reviewer effectiveness.** The reviewers are agents, and past
   a certain diff size their quality drops. A PR too large buys throughput at the
   cost of review quality.
-- **The typical right size** is several small beads batched together, or one
-  coherent slice of a larger bead. A bead too large to slice into one PR is
+- **The typical right size** is several small issues batched together, or one
+  coherent slice of a larger issue. An issue too large to slice into one PR is
   mis-filed: decompose it into an epic whose children fit the band.
 - **Rollback coherence still binds.** Whatever merges must revert together
   sensibly. That is the one structural constraint. "Purity," "one concern per
@@ -248,7 +245,7 @@ function pr_loop(unit):
         operator confirms
 
     # D. SHIP
-    bd close the bead(s)                   # Phase 6, before the push
+    mark the issue(s) Done in Linear        # Phase 6, before the push
     push; create the PR via the GitHub MCP tools (not gh, where MCP suffices)
     if the PR changes a file that is not demo_exempt:
         comment "demo confirmed: <head sha>"   # once step C passed on that
@@ -320,7 +317,7 @@ Entry and exit for one PR iteration. The pre-merge gate is pr-review.md's
 close-out completes and carries every conjunct the standard's gate requires.
 
 ```text
-EnterPR ≙ [ LoopState; unit : ℙ BEAD |
+EnterPR ≙ [ LoopState; unit : ℙ ISSUE |
   unit ⊆ claimed
   ∧ rollbackCoherent(unit)                -- reverts together sensibly
   ∧ inThroughputBand(unit)                -- above transaction cost,
@@ -348,7 +345,7 @@ ExitPR ≙ [ Δ LoopState; pr : PR |
   ∧ round(pr) ≤ 2                         -- round 2 only after a High fix
   ∧ unresolvedThreads(pr) = ∅
   ∧ openEscalations(pr) = ∅               -- each closed by a recorded ruling
-  ∧ beadsOf(pr) ⊆ closed′
+  ∧ issuesOf(pr) ⊆ closed′
   ∧ mergeRecapSent(pr) ]
 ```
 
@@ -382,7 +379,7 @@ as a PR round.
 Every finding is fixed in this PR. A dismissal requires the exact finding, the
 specific reason it does not apply, and the code reference. Opening a PR with
 unresolved local findings is a procedural violation. Nothing is deferred to a
-bead.
+follow-up issue.
 
 ### Remote review: Qodo and Bugbot, at most two rounds
 
@@ -648,14 +645,14 @@ change in one of these areas is not accepted until its class is tested.
 
 ## Invariants
 
-1. **The tracker is the single funnel.** Every piece of work is a bead before it is
+1. **The tracker is the single funnel.** Every piece of work is a Linear issue before it is
    anything else; external queues (issues, alerts) drain into it at intake.
    `TaskCreate` is session-visible display only, never the durable record.
 2. **A satisfied merge gate means merge now.** The gate is the only path to a
    merge, and nothing waits once it passes — no asking, no one-more-empty-round.
    Merge is always explicit — never auto-merge, never an admin override.
 3. **Do or do not.** A finding is fixed in this PR or dismissed with a
-   reason, the moment it arrives. It is never deferred to a bead or a
+   reason, the moment it arrives. It is never deferred to an issue or a
    follow-up PR. A thread is resolved only once it is answered per
    `answered(f)`, one by one, never in bulk. Batch fixes across a round; one
    push per round.
@@ -665,10 +662,10 @@ change in one of these areas is not accepted until its class is tested.
    High fix. Never merge until `reviewed_head` is the PR head.
 5. **Defects flow inward, scope flows outward.** A reviewer-flagged defect found
    while a PR is open is fixed in that PR — never laundered into a "follow-up
-   bead" and merged around. "Pre-existing", "by design", "intentional", and
-   "expected" are not reasons, and a bead is not a disposition for a real
-   finding. Only a genuinely new, separate line of work becomes a bead. This is
-   the most-corrected failure in this repo; do not run the bead factory.
+   issue" and merged around. "Pre-existing", "by design", "intentional", and
+   "expected" are not reasons, and an issue is not a disposition for a real
+   finding. Only a genuinely new, separate line of work becomes an issue. This is
+   the most-corrected failure in this repo; do not run the issue factory.
 6. **The operator gates demos and direction, never diffs or sequencing.**
    Between a merged design and implementation, the leader escalates substantive
    design issues to the operator as concrete decisions and waits for the ruling.
