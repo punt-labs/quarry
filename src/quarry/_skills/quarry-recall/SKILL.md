@@ -49,7 +49,9 @@ Scope the search to match the intent:
 
 - Everything indexed: `quarry find "query"` (no scope flags).
 - Only your own memories: `quarry find "query" --agent-handle <your-handle>`.
-  Always your own handle — never guess or borrow another agent's.
+  Always your own handle — never guess or borrow another agent's. This finds
+  what you `remember`ed; it does NOT find lessons (`quarry learn` saves those
+  handle-less), so to recall a lesson use `--memory-type lesson` or no scope.
 - One collection: `quarry find "query" --collection <name>`.
 - Narrow further: `--document`, `--page-type`, `--source-format`,
   `--memory-type` (e.g. `fact`, `procedure`, `lesson`).

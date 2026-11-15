@@ -7,8 +7,11 @@
   captured web pages, and every agent's memories. The default, and the
   right choice for "what did we decide" or "how does X work" questions.
 - **`--agent-handle <you>`** — restricts to memories written under that
-  handle. Use your own handle to recall what *you* previously remembered or
-  learned; never another agent's handle to impersonate their memory.
+  handle. Use your own handle to recall what *you* previously `remember`ed;
+  never another agent's handle to impersonate their memory. Note: `quarry
+  learn` saves lessons with NO agent handle (they are project-wide), so this
+  filter *excludes* lessons — don't use it when you're trying to recall a
+  lesson.
 - **`--collection <name>`** — restricts to one named collection (a
   directory registration, a memory collection like `memory-<handle>`, or a
   captures collection). Use when you know exactly which corpus the answer
@@ -41,6 +44,7 @@ otherwise-comparable hits, not relevance itself.
 | Question shape | Scope |
 |---|---|
 | "What did we decide about X" | No scope — the decision could live in docs, transcripts, or a teammate's memory |
-| "What did I learn about X" | `--agent-handle <you>` |
+| "What did I note/remember about X" | `--agent-handle <you>` — your own `remember`ed rows |
+| "What lesson did I learn about X" | `--memory-type lesson` (or no scope — lessons are handle-less and get a retrieval boost); NOT `--agent-handle`, which excludes lessons |
 | "What's in the `<repo>` design docs about X" | `--collection <repo-collection>` |
 | "Is there a project rule about X" | No scope, or `--memory-type lesson` if the boost hasn't already surfaced it first |
