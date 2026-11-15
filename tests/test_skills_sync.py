@@ -1,11 +1,11 @@
 """Direct unit tests for :mod:`quarry.skills_sync`'s two collaborators.
 
-``tests/test_enablement.py`` already exercises both through
-:class:`~quarry.enablement.Enablement`'s public ``enable``/``disable``
-surface (the real-world entry point); these tests pin the collaborators'
-own behavior -- deposit's packaged source (PL-1049) and retraction's
-own-checkout guard, plus the best-effort failure discipline -- at the unit
-level, independent of ``Enablement``'s CLAUDE.md/marker/import machinery.
+``tests/test_enablement.py`` already exercises this through
+:class:`~quarry.enablement.Enablement`'s public ``enable`` surface (the
+real-world entry point); these tests pin :class:`SkillDeposit`'s own
+behavior -- its packaged source (PL-1049) and the best-effort failure
+discipline -- at the unit level, independent of ``Enablement``'s
+CLAUDE.md/marker/import machinery.
 """
 
 from __future__ import annotations
@@ -15,25 +15,11 @@ from typing import TYPE_CHECKING
 
 from quarry.home_paths import HomeUnresolvedError
 from quarry.skills_install import Harness, SkillsInstaller
-from quarry.skills_sync import SkillDeposit, SkillRetraction
+from quarry.skills_source import SkillSource
+from quarry.skills_sync import SkillDeposit
 
 if TYPE_CHECKING:
     import pytest
-
-
-def _write_skill(root: Path, name: str) -> None:
-    skill_dir = root / "plugin" / "skills" / name
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: test\n---\n\nbody\n", encoding="utf-8"
-    )
-
-
-def _write_pyproject(root: Path, package_name: str) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "pyproject.toml").write_text(
-        f'[project]\nname = "{package_name}"\n', encoding="utf-8"
-    )
 
 
 class TestSkillDeposit:
@@ -110,72 +96,31 @@ class TestSkillDeposit:
         assert any("failed to deposit" in r.getMessage() for r in caplog.records)
 
 
-class TestSkillRetraction:
-    """Retraction keeps its narrower own-checkout gate -- unrelated to deposit."""
+class TestInstallDetectedResilience:
+    """A failure on one detected harness must not lose the others (PL-1049 #4)."""
 
-    def test_no_source_tree_retracts_nothing(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-
-        SkillRetraction(repo).run()  # must not raise
-
-    def test_own_checkout_retracts_a_prior_deposit(
+    def test_one_harness_failure_keeps_the_others(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         home = tmp_path / "home"
+        (home / ".pi").mkdir(parents=True)
+        (home / ".codex").mkdir(parents=True)
         monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "repo"
-        _write_skill(repo, "demo")
-        _write_pyproject(repo, "punt-quarry")
-        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
-        deposited = home / ".codex" / "skills" / "demo"
-        assert deposited.is_dir()
+        installer = SkillsInstaller(SkillSource.packaged(), home)
+        real_install = SkillsInstaller.install
 
-        SkillRetraction(repo).run()
+        def _install(self: SkillsInstaller, harness: Harness) -> tuple[object, ...]:
+            if harness is Harness.PI:
+                msg = "permission denied"
+                raise OSError(msg)
+            return real_install(self, harness)
 
-        assert not deposited.exists()
+        monkeypatch.setattr(SkillsInstaller, "install", _install)
 
-    def test_a_filesystem_failure_is_swallowed_and_logged(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "repo"
-        _write_skill(repo, "demo")
-        _write_pyproject(repo, "punt-quarry")
-        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
+        outcomes = installer.install_detected()
 
-        def _boom(_self: object) -> None:
-            msg = "permission denied"
-            raise OSError(msg)
-
-        monkeypatch.setattr(SkillsInstaller, "remove_all", _boom)
-
-        with caplog.at_level("WARNING", logger="quarry.skills_sync"):
-            SkillRetraction(repo).run()  # must not raise
-
-        assert any("failed to retract" in r.getMessage() for r in caplog.records)
-
-    def test_an_unresolvable_home_is_swallowed_and_logged(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """An unset ``$HOME`` must not abort ``disable``."""
-        repo = tmp_path / "repo"
-        _write_skill(repo, "demo")
-        _write_pyproject(repo, "punt-quarry")
-
-        def _boom() -> Path:
-            raise HomeUnresolvedError("cannot determine the home directory")
-
-        monkeypatch.setattr("quarry.skills_sync.QuarryHome.home", _boom)
-
-        with caplog.at_level("WARNING", logger="quarry.skills_sync"):
-            SkillRetraction(repo).run()  # must not raise
-
-        assert any("failed to retract" in r.getMessage() for r in caplog.records)
+        # pi raised and was skipped; codex still got its deposit.
+        harnesses = {o.harness for o in outcomes}
+        assert Harness.CODEX in harnesses
+        assert Harness.PI not in harnesses
+        assert (home / ".codex" / "skills" / "quarry-recall" / "SKILL.md").is_file()

@@ -24,7 +24,7 @@ from quarry.file_lock import FileLock
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY, QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE
 from quarry.home_paths import HomeUnresolvedError
-from quarry.skills_install import Harness, SkillsInstaller
+from quarry.skills_install import SkillsInstaller
 from tests.conftest import FakeRegistryClient
 
 
@@ -228,211 +228,49 @@ def test_disable_is_idempotent(tmp_path: Path) -> None:
     assert second.enabled_marker_removed is False
 
 
-class TestDisableRetractsOwnSkills:
-    """§ cross-harness skills: disable retracts them only for quarry's own checkout.
+class TestDisableDoesNotTouchHarnessSkills:
+    """§ cross-harness skills (PL-1049): ``disable`` must NOT retract them.
 
-    An ordinary target repo (every ``Enablement(tmp_path)`` call in this
-    file) must never touch the operator's real home directory — this is
-    checked directly by asserting on a stub ``Path.home`` rather than by
-    absence of a crash, since a bug here would silently reach outside the
-    test's own tmp_path.
-
-    Two guards are load-bearing here, both exercised below: the checkout's
-    ``pyproject.toml`` must name the ``punt-quarry`` package (identity —
-    every marketplace-layout plugin, quarry included, ships an identically
-    shaped ``plugin/skills/`` tree, so shape alone proves nothing), and any
-    deposit removal still requires a quarry manifest (ownership — see
-    ``TestRemove`` in ``test_skills_install.py``).
+    Since the redesign, every repo that enables quarry deposits the binary's
+    own packaged skills into the machine's harnesses. Those deposits are
+    therefore machine-global and shared across every enabled repo -- so
+    disabling one repo must not delete skills another still-enabled repo
+    depends on. ``disable`` touches only this repo's marker/import/guide.
     """
 
-    @staticmethod
-    def _write_skill(root: Path, name: str) -> None:
-        skill_dir = root / "plugin" / "skills" / name
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: test\n---\n\nbody\n", encoding="utf-8"
-        )
-
-    @staticmethod
-    def _write_pyproject(root: Path, package_name: str) -> None:
-        root.mkdir(parents=True, exist_ok=True)
-        (root / "pyproject.toml").write_text(
-            f'[project]\nname = "{package_name}"\n', encoding="utf-8"
-        )
-
-    def test_ordinary_repo_never_touches_the_home_directory(
+    def test_ordinary_repo_disable_never_touches_the_home_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = tmp_path / "home"
+        home = tmp_path / "home"  # no harness dirs under it
         monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
         Enablement(tmp_path / "repo").enable()
 
         Enablement(tmp_path / "repo").disable()
 
-        assert not home.exists()  # never created -- disable never looked here
+        assert not home.exists()  # disable never looked at the home tree
 
-    def test_own_checkout_retracts_deposited_skills(
+    def test_disabling_one_repo_leaves_another_repos_skills_in_place(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Regression (PL-1049 #6): enable in repo A deposits the global
+        skills; enabling repo B and then disabling A must leave the harness
+        deposits intact, because they belong to the machine, not to A."""
         home = tmp_path / "home"
+        (home / ".codex").mkdir(parents=True)  # codex installed on this machine
         monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "quarry-checkout"
-        self._write_skill(repo, "demo")
-        self._write_pyproject(repo, "punt-quarry")
-        Enablement(repo).enable()
-        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
-        deposited = home / ".codex" / "skills" / "demo"
+        repo_a = tmp_path / "project-a"
+        repo_a.mkdir()
+        repo_b = tmp_path / "project-b"
+        repo_b.mkdir()
+
+        Enablement(repo_a).enable()  # deposits the global skills
+        deposited = home / ".codex" / "skills" / "quarry-recall"
         assert deposited.is_dir()
+        Enablement(repo_b).enable()  # B now also relies on them
 
-        Enablement(repo).disable()
+        Enablement(repo_a).disable()
 
-        assert not deposited.exists()
-
-    def test_own_checkout_with_nothing_deposited_is_a_noop(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "quarry-checkout"
-        self._write_skill(repo, "demo")
-        self._write_pyproject(repo, "punt-quarry")
-        Enablement(repo).enable()
-
-        result = Enablement(repo).disable()  # must not raise
-
-        assert result.import_pruned is True
-
-    def test_a_repo_with_the_same_layout_but_a_different_package_name_is_untouched(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The blocking safety hole (adb, round 1): every marketplace-layout
-        plugin (lux, prfaq, dungeon, punt-kit, ...) ships an identically
-        shaped ``plugin/skills/`` tree. Disabling one of THOSE must never
-        retract quarry's real deposits, even a same-named one already
-        sitting under ``$HOME`` with a valid quarry manifest.
-        """
-        home = tmp_path / "home"
-        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "lux-checkout"
-        self._write_skill(repo, "demo")
-        self._write_pyproject(repo, "punt-lux")
-        # Simulate quarry's own prior deposit already present at $HOME.
-        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
-        deposited = home / ".codex" / "skills" / "demo"
-        assert deposited.is_dir()
-        Enablement(repo).enable()
-
-        Enablement(repo).disable()
-
-        assert deposited.is_dir()  # NOT retracted -- repo isn't quarry's own
-
-    def test_a_repo_with_no_pyproject_toml_at_all_is_untouched(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = tmp_path / "home"
-        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "some-checkout"
-        self._write_skill(repo, "demo")  # plugin/skills/ present, no pyproject.toml
-        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
-        deposited = home / ".codex" / "skills" / "demo"
-        Enablement(repo).enable()
-
-        Enablement(repo).disable()
-
-        assert deposited.is_dir()
-
-    def test_a_pyproject_toml_with_invalid_utf8_is_untouched(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``read_text(encoding="utf-8")`` raises ``UnicodeDecodeError`` (a
-        ``ValueError`` subclass) on invalid UTF-8 bytes, not caught by name
-        alongside ``tomllib.TOMLDecodeError`` -- must still fail safe to "not
-        provably quarry's own checkout" rather than crash ``disable()``."""
-        home = tmp_path / "home"
-        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "quarry-checkout"
-        self._write_skill(repo, "demo")
-        (repo / "pyproject.toml").write_bytes(b"[project]\nname = \xff\xfe\n")
-        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
-        deposited = home / ".codex" / "skills" / "demo"
-        Enablement(repo).enable()
-
-        Enablement(repo).disable()  # must not raise
-
-        assert deposited.is_dir()  # not retracted -- identity unprovable
-
-    def test_nested_dir_inside_the_real_checkout_never_reaches_home(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """No ancestor walk: disabling a subdirectory of quarry's own checkout
-        (which has no ``plugin/skills/`` of its OWN) must not walk up to the
-        real checkout root and retract the real deposit."""
-        home = tmp_path / "home"
-        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "quarry-checkout"
-        self._write_skill(repo, "demo")
-        self._write_pyproject(repo, "punt-quarry")
-        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
-        deposited = home / ".codex" / "skills" / "demo"
-        assert deposited.is_dir()
-        nested = repo / "src" / "quarry"
-        nested.mkdir(parents=True)
-        Enablement(nested).enable()
-
-        Enablement(nested).disable()
-
-        assert deposited.is_dir()  # untouched -- nested has no plugin/skills/ itself
-
-    def test_deposit_lacking_a_quarry_manifest_is_not_removed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Manifest ownership, exercised end-to-end through ``disable``: a
-        same-named directory under the harness root that quarry never wrote
-        (no ``.quarry-skill.json``) survives even a genuine own-checkout
-        retraction."""
-        home = tmp_path / "home"
-        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "quarry-checkout"
-        self._write_skill(repo, "demo")
-        self._write_pyproject(repo, "punt-quarry")
-        foreign = home / ".codex" / "skills" / "demo"
-        foreign.mkdir(parents=True)
-        (foreign / "NOTES.md").write_text("not quarry's\n", encoding="utf-8")
-        Enablement(repo).enable()
-
-        Enablement(repo).disable()
-
-        assert foreign.is_dir()
-        assert (foreign / "NOTES.md").is_file()
-
-    def test_a_retraction_failure_does_not_abort_disable(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """Isolation: an rmtree failure inside retraction is logged and
-        swallowed, never propagated out of ``disable`` (silent-failure,
-        round 1) -- the marker/import teardown already committed above it."""
-        home = tmp_path / "home"
-        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
-        repo = tmp_path / "quarry-checkout"
-        self._write_skill(repo, "demo")
-        self._write_pyproject(repo, "punt-quarry")
-        SkillsInstaller(repo / "plugin" / "skills", home).install(Harness.CODEX)
-        Enablement(repo).enable()
-
-        def _boom(_harness: object) -> None:
-            msg = "permission denied"
-            raise OSError(msg)
-
-        monkeypatch.setattr(SkillsInstaller, "remove_all", _boom)
-
-        with caplog.at_level("WARNING", logger="quarry.enablement"):
-            result = Enablement(repo).disable()  # must not raise
-
-        assert result.import_pruned is True
-        assert any("failed to retract" in r.getMessage() for r in caplog.records)
+        assert deposited.is_dir()  # A's disable must not strip B's skills
 
 
 class TestEnableDepositsOwnSkills:

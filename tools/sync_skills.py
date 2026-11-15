@@ -44,7 +44,11 @@ class SkillsSync:
         """Replace the packaged mirror with a fresh copy of the source tree."""
         if self._packaged.exists():
             shutil.rmtree(self._packaged)
-        shutil.copytree(self._source, self._packaged)
+        # symlinks=True keeps a source symlink AS a symlink, so the copy matches
+        # what _tree_hash() records (the link target string, not the dereferenced
+        # bytes) -- otherwise a skill containing a symlink would materialize on
+        # sync and then fail --check immediately, even right after a sync.
+        shutil.copytree(self._source, self._packaged, symlinks=True)
 
     def is_current(self) -> bool:
         """Return whether the packaged mirror's content hash matches the source's.

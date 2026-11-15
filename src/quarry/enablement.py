@@ -12,7 +12,7 @@ from quarry.enablement_result import DisablementResult, EnablementResult
 from quarry.file_lock import FileLock
 from quarry.gitignore import QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE, Guidance
-from quarry.skills_sync import SkillDeposit, SkillRetraction
+from quarry.skills_sync import SkillDeposit
 
 __all__ = ["DisablementResult", "Enablement", "EnablementResult"]
 
@@ -49,13 +49,15 @@ class Enablement:
     marker. The lock is reentrant, so ``register``/``prune`` re-acquiring it
     for the edit itself share the one hold.
 
-    Each operation also runs one best-effort cross-harness skill-sync side
-    step after the lock releases — :class:`~quarry.skills_sync.SkillDeposit`
-    on ``enable`` (PL-1049), :class:`~quarry.skills_sync.SkillRetraction` on
-    ``disable`` — kept in their own module rather than as methods here: they
-    operate on *root* alone, never the guide/marker/import machinery, so
-    folding them into this class would pull it into two disjoint clusters of
-    state (PL-CO-1/PY-IC-6).
+    ``enable`` also runs one best-effort cross-harness skill deposit after the
+    lock releases (:class:`~quarry.skills_sync.SkillDeposit`, PL-1049), kept in
+    its own module rather than as a method here: it operates on the installed
+    binary's own packaged skills and the operator's home, never the
+    guide/marker/import machinery, so folding it in would pull this class into
+    two disjoint clusters of state (PL-CO-1/PY-IC-6). ``disable`` does NOT
+    retract those deposits: they are machine-global and binary-owned, shared by
+    every repo that enabled quarry, so one repo's disable must not delete skills
+    another still-enabled repo depends on.
     """
 
     __slots__ = ("_gitignore", "_guidance", "_import", "_marker", "_root")
@@ -126,14 +128,13 @@ class Enablement:
         interleave under the shared lock.
 
         Deregistering the sync collection is the CALLER's responsibility.
-        This method owns marker + import atomicity, plus the best-effort
-        :class:`~quarry.skills_sync.SkillRetraction` step run after the lock
-        releases: when the disabled repo IS quarry's own checkout, it
-        retracts quarry's cross-harness skill deposits (``quarry skills
-        install``) — those live under the OPERATOR's home directory, not
-        this repo's tree, so there is nothing to retract for the other 99%
-        of repos ``disable`` runs against, and that absence is the expected
-        case (PY-EH-8), not a failure. It deliberately depends on no
+        This method owns marker + import atomicity. It does NOT retract the
+        cross-harness skills ``enable`` deposits: since PL-1049 those come from
+        the installed binary's own packaged tree and are deposited by every repo
+        that enables quarry, so they are machine-global, not this repo's to
+        remove — retracting them here would delete skills another still-enabled
+        repo depends on. ``quarry skills install`` manages them explicitly if a
+        user ever wants them gone. It deliberately depends on no
         daemon/HTTP client so the file-system commit point stays pure
         stdlib. The orchestrator (:func:`quarry.enable.disable_project`)
         sequences the deregister AFTER this call, so a deregister failure
@@ -154,7 +155,6 @@ class Enablement:
             except ValueError:
                 enabled_marker_removed = False
             import_pruned = self._import.prune(REPO_IMPORT_LINE)
-        SkillRetraction(self._root).run()
         return DisablementResult(
             import_pruned=import_pruned,
             enabled_marker_removed=enabled_marker_removed,
