@@ -20,14 +20,18 @@ JOB_DEADLINE_S = 15.0
 PAYLOAD = '{"session_id": "abc", "transcript_path": "/tmp/t.jsonl"}'
 
 
-def _mock_quarry_hook(bin_dir: Path, log: Path, delay_s: float) -> None:
+def _mock_quarry_hook(
+    bin_dir: Path, log: Path, delay_s: float, pgid_log: Path | None = None
+) -> None:
     script = bin_dir / "quarry-hook"
+    pgid_line = f'ps -o pgid= -p $$ > "{pgid_log}"\n' if pgid_log else ""
     script.write_text(
         "#!/bin/sh\n"
-        f"sleep {delay_s}\n"
-        f'printf "%s\\n" "$1" >> "{log}"\n'
-        f'cat >> "{log}"\n'
-        f'printf "\\n" >> "{log}"\n'
+        + pgid_line
+        + f"sleep {delay_s}\n"
+        + f'printf "%s\\n" "$1" >> "{log}"\n'
+        + f'cat >> "{log}"\n'
+        + f'printf "\\n" >> "{log}"\n'
     )
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
 
@@ -76,6 +80,17 @@ class TestSessionEndHook:
         lines = _wait_for(log).splitlines()
         assert lines[0] == "session-end"
         assert lines[1] == PAYLOAD
+
+    def test_detached_job_runs_in_its_own_process_group(self, tmp_path: Path) -> None:
+        log = tmp_path / "calls.log"
+        pgid_log = tmp_path / "pgid.log"
+        _mock_quarry_hook(tmp_path, log, delay_s=1, pgid_log=pgid_log)
+        parent_pgid = os.getpgid(0)
+        result, _ = _run_hook(tmp_path, [tmp_path])
+        assert result.returncode == 0
+        _wait_for(log)
+        job_pgid = int(pgid_log.read_text().strip())
+        assert job_pgid != parent_pgid
 
     def test_kill_switch_short_circuits(self, tmp_path: Path) -> None:
         log = tmp_path / "calls.log"
