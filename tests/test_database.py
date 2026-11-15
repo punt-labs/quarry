@@ -115,7 +115,7 @@ class TestGetPageText:
         vectors = _random_vectors(1)
         ChunkStore(db).insert(chunks, vectors)
 
-        text = ChunkCatalog(db).get_page_text("test.pdf", 3)
+        text = ChunkStore(db).pages.get_page_text("test.pdf", 3)
         assert text == "raw text page 3"
 
     def test_returns_none_for_missing(self, tmp_path: Path):
@@ -124,12 +124,12 @@ class TestGetPageText:
         vectors = _random_vectors(1)
         ChunkStore(db).insert(chunks, vectors)
 
-        text = ChunkCatalog(db).get_page_text("test.pdf", 99)
+        text = ChunkStore(db).pages.get_page_text("test.pdf", 99)
         assert text is None
 
     def test_returns_none_empty_db(self, tmp_path: Path):
         db = get_db(tmp_path / "db")
-        text = ChunkCatalog(db).get_page_text("test.pdf", 1)
+        text = ChunkStore(db).pages.get_page_text("test.pdf", 1)
         assert text is None
 
     def test_finds_page_in_large_table(self, tmp_path: Path):
@@ -158,7 +158,7 @@ class TestGetPageText:
         vectors = _random_vectors(len(all_chunks))
         ChunkStore(db).insert(all_chunks, vectors)
 
-        text = ChunkCatalog(db).get_page_text("big.pdf", 456)
+        text = ChunkStore(db).pages.get_page_text("big.pdf", 456)
         assert text == "raw text page 456"
 
 
@@ -266,7 +266,7 @@ class TestListDocuments:
         db = get_db(tmp_path / "db")
         legacy = [f for f in SchemaManager.schema() if f.name != "source_version"]
         row = {**asdict(_make_chunk()), "vector": _random_vectors(1)[0].tolist()}
-        del row["source_version"]
+        del row["source_version"], row["page_raw_text"]
         db.create_table(TABLE_NAME, data=[row], schema=pa.schema(legacy))
 
         [doc] = ChunkCatalog(db).list_documents()

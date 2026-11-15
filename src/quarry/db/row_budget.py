@@ -34,7 +34,7 @@ class RowBudgetError(UnindexableContentError):
 class RowBudget:
     """Cap a stored page, chunk and label so a scan batch cannot overflow.
 
-    ``max_page_bytes`` is measured on ``page_raw_text``; one byte under 1 MiB so
+    ``max_page_bytes`` is measured on a page's text; one byte under 1 MiB so
     the invariant holds strictly.  ``max_chunk_bytes`` is the last-line cap on
     ``chunks.text``: the chunker wraps text to ``chunk_max_chars``, which
     ``Settings`` bounds, so this guards only against a change that stops doing
@@ -98,7 +98,7 @@ class RowBudget:
 
     def require_page(self, text: str) -> None:
         """Raise :class:`RowBudgetError` if page text is over ``max_page_bytes``."""
-        self._require("page_raw_text", text, self.max_page_bytes)
+        self._require("page", text, self.max_page_bytes)
 
     def require_chunk(self, text: str) -> None:
         """Raise :class:`RowBudgetError` if chunk text is over ``max_chunk_bytes``."""

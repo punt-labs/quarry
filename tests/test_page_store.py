@@ -44,15 +44,15 @@ class TestPut:
     def test_text_is_retrievable_from_the_pages_table(self, lance_db: LanceDB) -> None:
         store = PageStore(lance_db)
         store.put([_page(1, "alpha"), _page(2, "beta")])
-        assert store.text_of("d.txt", 2, collection="col") == "beta"
+        assert store.get_page_text("d.txt", 2, collection="col") == "beta"
 
     def test_a_missing_page_is_none(self, lance_db: LanceDB) -> None:
         store = PageStore(lance_db)
         store.put([_page(1)])
-        assert store.text_of("d.txt", 9, collection="col") is None
+        assert store.get_page_text("d.txt", 9, collection="col") is None
 
     def test_no_table_is_none(self, lance_db: LanceDB) -> None:
-        assert PageStore(lance_db).text_of("d.txt", 1) is None
+        assert PageStore(lance_db).get_page_text("d.txt", 1) is None
 
     def test_a_page_is_stored_once_however_often_it_is_put(
         self, lance_db: LanceDB
@@ -61,14 +61,14 @@ class TestPut:
         store.put([_page(1, "v1")])
         store.put([_page(1, "v2"), _page(1, "v2")])
         assert store.count() == 1
-        assert store.text_of("d.txt", 1, collection="col") == "v2"
+        assert store.get_page_text("d.txt", 1, collection="col") == "v2"
 
     def test_the_collection_scopes_a_lookup(self, lance_db: LanceDB) -> None:
         store = PageStore(lance_db)
         store.put(
             [PageRecord("a", "d.txt", 1, "in a"), PageRecord("b", "d.txt", 1, "in b")]
         )
-        assert store.text_of("d.txt", 1, collection="b") == "in b"
+        assert store.get_page_text("d.txt", 1, collection="b") == "in b"
 
     def test_an_over_budget_page_is_refused_not_truncated(
         self, lance_db: LanceDB
@@ -85,7 +85,7 @@ class TestDelete:
         store.put([_page(1, doc="a.txt"), _page(1, doc="b.txt")])
         store.delete(DocumentRef("a.txt", CollectionRef("col")))
         assert store.count() == 1
-        assert store.text_of("b.txt", 1) == "page text"
+        assert store.get_page_text("b.txt", 1) == "page text"
 
     def test_a_collection_delete_removes_its_pages(self, lance_db: LanceDB) -> None:
         store = PageStore(lance_db)
@@ -127,8 +127,10 @@ class TestOrphanSweep:
         )
         PageStore(lance_db).put([_page(2, "orphan")])
         assert OrphanPageSweep(lance_db).run(now=self._age(lance_db)) == 1
-        assert PageStore(lance_db).text_of("d.txt", 1, collection="col") == "page 1"
-        assert PageStore(lance_db).text_of("d.txt", 2, collection="col") is None
+        assert (
+            PageStore(lance_db).get_page_text("d.txt", 1, collection="col") == "page 1"
+        )
+        assert PageStore(lance_db).get_page_text("d.txt", 2, collection="col") is None
 
     def test_no_pages_table_sweeps_nothing(self, lance_db: LanceDB) -> None:
         assert OrphanPageSweep(lance_db).run() == 0

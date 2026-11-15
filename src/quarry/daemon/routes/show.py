@@ -55,7 +55,7 @@ class ShowRoutes(RouteGroup):
     def _page_text(
         self, document: str, page: int, collection: str | None
     ) -> JSONResponse:
-        text = self.ctx.database.catalog.get_page_text(
+        text = self.ctx.database.store.pages.get_page_text(
             document, page, collection=collection
         )
         if text is None:

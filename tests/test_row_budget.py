@@ -89,7 +89,7 @@ class TestRequirePage:
         RowBudget().require_page("")
 
     def test_the_message_names_the_column(self) -> None:
-        with pytest.raises(RowBudgetError, match="page_raw_text"):
+        with pytest.raises(RowBudgetError, match="row budget exceeded: page"):
             RowBudget(max_page_bytes=8, assumed_batch_rows=1).require_page("a" * 9)
 
     def test_the_error_is_a_value_error(self) -> None:
@@ -122,7 +122,7 @@ class TestBuildRecordsBackstop:
         assert record["page_raw_text"] == page
 
     def test_a_page_one_byte_over_is_rejected_not_truncated(self) -> None:
-        with pytest.raises(RowBudgetError, match="page_raw_text"):
+        with pytest.raises(RowBudgetError, match="row budget exceeded: page"):
             ChunkTable.build_records(
                 [_chunk(page_raw_text="a" * (_PAGE_LIMIT + 1))], self._vectors()
             )

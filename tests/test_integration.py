@@ -187,7 +187,7 @@ class TestPdfIngestion:
     ) -> None:
         ingest_document(pdf_fixture, database, integration_settings)
 
-        raw = ChunkCatalog(lance_db).get_page_text(pdf_fixture.name, 1)
+        raw = ChunkStore(lance_db).pages.get_page_text(pdf_fixture.name, 1)
         assert raw is not None
         assert "software" in raw.lower() or "engineering" in raw.lower()
 

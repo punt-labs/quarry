@@ -16,6 +16,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -39,6 +40,7 @@ from quarry.fd_headroom import FdHeadroom
 from quarry.finalize_ledger import FinalizeLedgers
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
+from quarry.models import Chunk
 from quarry.results import SearchResult
 from quarry.web_fetch_name import WebFetchName
 from tests.task_states import completed, failed
@@ -1395,7 +1397,7 @@ class TestShow:
 
     def test_show_page_text(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
+            "quarry.db.page_store.PageStore.get_page_text",
             return_value="Hello world",
         ):
             data = client.get("/v1/show?document=foo&page=1").json()
@@ -1403,6 +1405,34 @@ class TestShow:
         assert data["document_name"] == "foo"
         assert data["page_number"] == 1
         assert data["text"] == "Hello world"
+
+    def test_show_page_text_matches_the_local_read(self, tmp_path: Path) -> None:
+        """Remote /show and the local catalog return the same page text and fields."""
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        chunk = Chunk(
+            document_name="doc.txt",
+            document_path="/d/doc.txt",
+            collection="col",
+            page_number=3,
+            total_pages=4,
+            chunk_index=0,
+            text="a chunk",
+            page_raw_text="the whole page",
+            page_type="text",
+            source_format=".txt",
+            ingestion_timestamp=datetime.now(UTC),
+        )
+        ctx.database.store.insert([chunk], np.zeros((1, 768), dtype=np.float32))
+        local = ctx.database.store.pages.get_page_text("doc.txt", 3, collection="col")
+        with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
+            remote = tc.get("/v1/show?document=doc.txt&page=3&collection=col").json()
+        assert local == "the whole page"
+        assert remote == {
+            "document_name": "doc.txt",
+            "page_number": 3,
+            "text": local,
+        }
 
     def test_show_metadata(self, client: TestClient) -> None:
         mock_doc = {
@@ -1432,9 +1462,7 @@ class TestShow:
         assert resp.status_code == 400
 
     def test_show_page_not_found(self, client: TestClient) -> None:
-        with patch(
-            "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
-        ):
+        with patch("quarry.db.page_store.PageStore.get_page_text", return_value=None):
             resp = client.get("/v1/show?document=foo&page=1")
 
         assert resp.status_code == 404
@@ -1451,7 +1479,7 @@ class TestShow:
 
     def test_show_with_collection(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
+            "quarry.db.page_store.PageStore.get_page_text",
             return_value="page text",
         ) as mock_get_page:
             client.get("/v1/show?document=foo&page=1&collection=math")

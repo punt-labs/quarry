@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import logging
-import threading
 from typing import TYPE_CHECKING, Self
 
-from quarry.db.chunk_table import ChunkTable
+from quarry.db.chunk_writer import ChunkWriter
 from quarry.db.document_ref import CollectionRef, DocumentRef
 from quarry.db.schema import TABLE_NAME
 from quarry.display_name import DisplayName
@@ -15,35 +14,30 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
+    from quarry.db.page_store import PageStore
     from quarry.models import Chunk
     from quarry.types import LanceDB, LanceTable
 
 logger = logging.getLogger(__name__)
 
-# Serializes every ``table.add()`` and ``table.delete()`` so the progressive
-# sync consumer's flushes never race a producer thread's overwrite-delete.
-# LanceDB's ``add`` is not internally serialized (DES-034 §2), so the single
-# consumer plus this lock are what keep writes conflict-free.
-_write_lock = threading.Lock()
-
 
 class ChunkStore:
     """Insert, delete, and count chunks in the LanceDB chunks table."""
 
-    __slots__ = ("_db", "_table")
+    __slots__ = ("_db", "_writer")
 
     _db: LanceDB
-    _table: ChunkTable
+    _writer: ChunkWriter
 
     def __new__(cls, db: LanceDB) -> Self:
         self = super().__new__(cls)
         self._db = db
-        self._table = ChunkTable(db)
+        self._writer = ChunkWriter(db)
         return self
 
     def _open(self) -> LanceTable | None:
         """Return the chunks table for reads/deletes, or ``None`` if absent."""
-        return self._table.open_or_none()
+        return self._writer.open_or_none()
 
     def insert(
         self,
@@ -51,26 +45,30 @@ class ChunkStore:
         vectors: NDArray[np.float32],
     ) -> int:
         """Insert chunks with their embedding vectors into LanceDB."""
-        return self.insert_records(ChunkTable.build_records(chunks, vectors))
+        return self.insert_records(ChunkWriter.build_records(chunks, vectors))
 
     def insert_records(self, records: list[dict[str, object]]) -> int:
         """Append pre-built row dicts to LanceDB — the per-flush write primitive.
 
-        Serialized via ``_write_lock`` so a progressive flush never races a
-        producer thread's overwrite-delete (DES-034 §2).
+        The pages the rows belong to are written first, so a chunk never exists
+        without its page: a crash between the two writes leaves only an orphan
+        page.  Serialized via ``_write_lock`` so a progressive flush never races
+        a producer thread's overwrite-delete.
         """
         if not records:
             return 0
-        table = self._table.get_or_create(records)
-        if table is not None:
-            with _write_lock:
-                table.add(records)
+        self._writer.add(records)
         # DEBUG per the level policy in quarry.logging_config: this fires once
-        # per FLUSH WINDOW (DES-034 progressive commit), so one large document
-        # emits it many times.  The per-document totals are logged by the
-        # pipeline, which is the user-visible operation.
+        # per FLUSH WINDOW (progressive commit), so one large document emits it
+        # many times.  The per-document totals are logged by the pipeline, which
+        # is the user-visible operation.
         logger.debug("Inserted %d chunks into %s", len(records), TABLE_NAME)
         return len(records)
+
+    @property
+    def pages(self) -> PageStore:
+        """Page text: one row per page, read by document and page number."""
+        return self._writer.pages
 
     def delete_document(
         self,
@@ -83,12 +81,10 @@ class ChunkStore:
         table = self._open()
         if table is None:
             return 0
-        predicate = DocumentRef(
-            document_name, CollectionRef.optional(collection)
-        ).predicate()
+        ref = DocumentRef(document_name, CollectionRef.optional(collection))
+        predicate = ref.predicate()
         deleted = table.count_rows(predicate) if count else 0
-        with _write_lock:
-            table.delete(predicate)
+        self._writer.delete_document(predicate, ref)
         shown = DisplayName(document_name).redacted()
         if count:
             logger.info("Deleted %d chunks for %s", deleted, shown)
@@ -115,8 +111,7 @@ class ChunkStore:
             return 0
         predicate = ref.predicate()
         deleted = table.count_rows(predicate)
-        with _write_lock:
-            table.delete(predicate)
+        self._writer.delete_tail(predicate)
         logger.info(
             "Delete-tail removed %d chunks for %s (chunk_index >= %d)",
             deleted,
@@ -131,10 +126,8 @@ class ChunkStore:
         if table is None:
             return 0
         before = table.count_rows()
-        with _write_lock:
-            table.delete(CollectionRef(collection).clause())
-        after = table.count_rows()
-        deleted = before - after
+        self._writer.delete_collection(collection, CollectionRef(collection).clause())
+        deleted = before - self.count()
         logger.info("Deleted %d chunks for collection %s", deleted, collection)
         return deleted
 

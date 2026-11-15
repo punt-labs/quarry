@@ -92,7 +92,7 @@ class PageStore:
                 table.add(rows)
         return len(rows)
 
-    def text_of(
+    def get_page_text(
         self, document_name: str, page_number: int, collection: str | None = None
     ) -> str | None:
         """Return the stored text of a page, or ``None`` when it is absent."""

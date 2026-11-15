@@ -1047,3 +1047,8 @@ def test_a_worker_that_outlives_the_abort_wait_and_is_cancelled_says_so_at_info(
 
     [record] = [r for r in caplog.records if "was cancelled" in r.getMessage()]
     assert record.levelno == logging.INFO
+
+
+def test_the_embed_gate_admits_one_unit_at_a_time() -> None:
+    """Pages-before-chunks safety relies on one embed job running at a time."""
+    assert iq.EMBED_CONCURRENCY_CEILING == 1
