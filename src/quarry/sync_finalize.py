@@ -39,7 +39,7 @@ class SyncFinalizer:
         self._gc()
 
     def _optimize(self) -> None:
-        OptimizeStep(self._db, str(self._settings.lancedb_path)).run()
+        OptimizeStep(self._db, self._settings).run()
 
     def _push_shadows(self) -> None:
         ShadowPushStep(self._settings).run()

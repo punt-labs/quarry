@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from typing import TYPE_CHECKING, ClassVar, Self, final
@@ -10,6 +11,10 @@ from quarry.api.health import FinalizeDatabaseHealth
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
+
+    from quarry.config import Settings
+    from quarry.db.optimizer import OptimizeOutcome
 
 BACKOFF_BASE_SECONDS: float = 600.0
 BACKOFF_CAP_SECONDS: float = 6 * 3600.0
@@ -70,7 +75,7 @@ class FinalizeLedger:
             )
             self._retry_at = self._clock() + delay
 
-    def record_success(self) -> None:
+    def clear(self) -> None:
         """Clear the failure record after an optimize that completed."""
         with self._lock:
             self._consecutive_failures = 0
@@ -92,7 +97,7 @@ class FinalizeLedger:
 
 @final
 class FinalizeLedgers:
-    """The daemon's ledgers, one per database path, shared by finalize and health."""
+    """The daemon's ledgers, one per database name, shared by finalize and health."""
 
     __slots__ = ()
 
@@ -100,10 +105,35 @@ class FinalizeLedgers:
     _guard: ClassVar[threading.Lock] = threading.Lock()
 
     @classmethod
-    def for_database(cls, database: str) -> FinalizeLedger:
-        """Return the ledger for *database*, creating it on first use."""
+    def for_database(cls, lancedb_path: Path, quarry_root: Path) -> FinalizeLedger:
+        """Return the ledger for the database at *lancedb_path*, creating it.
+
+        Keyed and reported by the database directory relative to *quarry_root*
+        (unique within an install), never the absolute path: ``/health`` is
+        unauthenticated.  A database outside the root gets a short hash of its
+        path, which is stable and does not reveal it.
+        """
+        name = cls._wire_name(lancedb_path, quarry_root)
         with cls._guard:
-            return cls._ledgers.setdefault(database, FinalizeLedger(database))
+            return cls._ledgers.setdefault(name, FinalizeLedger(name))
+
+    @classmethod
+    def settle_manual(cls, settings: Settings, outcome: OptimizeOutcome) -> None:
+        """Clear the database's failure state after a manual optimize that ran.
+
+        A skipped manual optimize leaves it: the problem it reports persists.
+        """
+        if outcome.optimized:
+            cls.for_database(settings.lancedb_path, settings.quarry_root).clear()
+
+    @staticmethod
+    def _wire_name(lancedb_path: Path, quarry_root: Path) -> str:
+        directory = lancedb_path.parent
+        try:
+            return directory.relative_to(quarry_root).as_posix()
+        except ValueError:
+            digest = hashlib.sha256(str(directory).encode()).hexdigest()[:12]
+            return f"external-{digest}"
 
     @classmethod
     def snapshot(cls) -> tuple[FinalizeDatabaseHealth, ...]:

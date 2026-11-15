@@ -12,6 +12,7 @@ from quarry.finalize_ledger import FinalizeLedger, FinalizeLedgers
 
 if TYPE_CHECKING:
     from quarry.config import Settings
+    from quarry.db.optimizer import OptimizeOutcome
     from quarry.shadow import ShadowSyncResult
     from quarry.types import LanceDB
 
@@ -24,7 +25,9 @@ class OptimizeStep:
 
     Cleanup shares ``table.optimize()`` with compaction, so a failing optimize
     leaks orphaned files on every attempt.  The failure must not stop the rest of
-    the finalize, and the ledger spaces the retries out.
+    the finalize, and the ledger spaces the retries out.  The ledger carries only
+    the exception type: its snapshot is served unauthenticated on ``/health``,
+    while the full error goes to the log.
     """
 
     __slots__ = ("_db", "_ledger")
@@ -32,10 +35,12 @@ class OptimizeStep:
     _db: LanceDB
     _ledger: FinalizeLedger
 
-    def __new__(cls, db: LanceDB, database_key: str) -> Self:
+    def __new__(cls, db: LanceDB, settings: Settings) -> Self:
         self = super().__new__(cls)
         self._db = db
-        self._ledger = FinalizeLedgers.for_database(database_key)
+        self._ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
         return self
 
     def run(self) -> None:
@@ -44,21 +49,32 @@ class OptimizeStep:
             logger.warning("sync: optimize skipped, backing off after failures")
             return
         try:
-            self._optimize()
+            outcome = self._optimize()
         except (OSError, RuntimeError, ValueError) as exc:
-            self._ledger.record_failure(f"{type(exc).__name__}: {exc}")
+            self._ledger.record_failure(type(exc).__name__)
             logger.warning("sync: optimize failed: %s", exc, exc_info=True)
             return
-        self._ledger.record_success()
+        self._record(outcome)
 
-    def _optimize(self) -> None:
+    def _record(self, outcome: OptimizeOutcome) -> None:
+        """Clear the ledger only for a compaction that ran; flag a forced skip."""
+        if outcome.optimized:
+            self._ledger.clear()
+        elif outcome.fragments > 0:
+            logger.warning("sync: optimize not run: %s", outcome.reason)
+            self._ledger.record_failure(
+                "compaction skipped: too many fragments; run 'quarry optimize --force'"
+            )
+
+    def _optimize(self) -> OptimizeOutcome:
         t0 = time.perf_counter()
         opt = TableOptimizer(self._db)
         opt.create_collection_index()
         logger.info("sync: create_collection_index in %.2fs", time.perf_counter() - t0)
         t0 = time.perf_counter()
-        opt.optimize()
+        outcome = opt.optimize()
         logger.info("sync: optimize_table in %.2fs", time.perf_counter() - t0)
+        return outcome
 
 
 @final

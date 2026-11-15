@@ -100,10 +100,22 @@ class TestPushShadowsFailOpen:
         assert "not pushed" in caplog.text
 
 
-def _finalizer_at(path: Path) -> SyncFinalizer:
+def _finalizer_at(path: Path, root: Path | None = None) -> _Stepper:
     settings = MagicMock(name="settings")
     settings.lancedb_path = path
-    return SyncFinalizer(MagicMock(name="db"), settings)
+    settings.quarry_root = root or path.parent.parent
+    return _Stepper(SyncFinalizer(MagicMock(name="db"), settings))
+
+
+class _Stepper:
+    def __init__(self, fin: SyncFinalizer) -> None:
+        self._fin = fin
+
+    def run(self) -> None:
+        self._fin.run()
+
+    def run_optimize_only(self) -> None:
+        self._fin._optimize()
 
 
 class TestOptimizeFailureIsolation:
@@ -123,7 +135,7 @@ class TestOptimizeFailureIsolation:
         push.assert_called_once()
         collect.assert_called_once()
 
-    def test_failure_is_recorded_with_its_reason(self, tmp_path: Path) -> None:
+    def test_failure_is_recorded_by_exception_type(self, tmp_path: Path) -> None:
         path = tmp_path / "lancedb"
         with (
             patch("quarry.finalize_steps.TableOptimizer") as optimizer,
@@ -134,9 +146,11 @@ class TestOptimizeFailureIsolation:
                 "Offset overflow error"
             )
             _finalizer_at(path).run()
-        (entry,) = (h for h in FinalizeLedgers.snapshot() if h.database == str(path))
+        (entry,) = (
+            h for h in FinalizeLedgers.snapshot() if h.database == path.parent.name
+        )
         assert entry.consecutive_failures == 1
-        assert "Offset overflow error" in entry.last_error
+        assert entry.last_error == "RuntimeError"
 
     def test_backed_off_database_skips_optimize_but_still_runs_tail(
         self, tmp_path: Path
@@ -153,3 +167,55 @@ class TestOptimizeFailureIsolation:
         assert optimizer.return_value.optimize.call_count == 1
         assert push.call_count == 2
         assert collect.call_count == 2
+
+
+class TestOptimizeOutcomeIsInspected:
+    def test_threshold_skip_is_degraded_not_success(self, tmp_path: Path) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
+        path = tmp_path / "skipdb" / "lancedb"
+        ledger = FinalizeLedgers.for_database(path, tmp_path)
+        ledger.clear()
+        skip = OptimizeOutcome(optimized=False, fragments=20_000, reason="too many")
+        with patch("quarry.finalize_steps.TableOptimizer") as optimizer:
+            optimizer.return_value.optimize.return_value = skip
+            _finalizer_at(path).run_optimize_only()
+        (entry,) = (h for h in FinalizeLedgers.snapshot() if h.database == "skipdb")
+        assert entry.consecutive_failures == 1
+        assert "--force" in entry.last_error
+
+    def test_no_table_leaves_failure_state_untouched(self, tmp_path: Path) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
+        path = tmp_path / "notable" / "lancedb"
+        FinalizeLedgers.for_database(path, tmp_path).clear()
+        none = OptimizeOutcome(optimized=False, fragments=0, reason="no table")
+        with patch("quarry.finalize_steps.TableOptimizer") as optimizer:
+            optimizer.return_value.optimize.return_value = none
+            _finalizer_at(path).run_optimize_only()
+        (entry,) = (h for h in FinalizeLedgers.snapshot() if h.database == "notable")
+        assert entry.consecutive_failures == 0
+
+
+class TestHealthIsCoarse:
+    def test_wire_carries_name_and_exception_type_only(self, tmp_path: Path) -> None:
+        path = tmp_path / "secretuser" / "mydb" / "lancedb"
+        root = tmp_path / "secretuser"
+        with (
+            patch("quarry.finalize_steps.TableOptimizer") as optimizer,
+            patch.object(SyncFinalizer, "_push_shadows"),
+            patch.object(SyncFinalizer, "_gc"),
+        ):
+            optimizer.return_value.optimize.side_effect = RuntimeError(
+                f"cannot read {path}/data/x.lance"
+            )
+            _finalizer_at(path, root).run()
+        wire = [
+            h.model_dump_json()
+            for h in FinalizeLedgers.snapshot()
+            if h.database == "mydb"
+        ]
+        assert wire
+        assert "secretuser" not in wire[0]
+        assert "x.lance" not in wire[0]
+        assert "RuntimeError" in wire[0]

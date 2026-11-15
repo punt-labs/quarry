@@ -18,6 +18,7 @@ from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskState
 from quarry.daemon.terminal import Terminal
+from quarry.finalize_ledger import FinalizeLedgers
 from quarry.http_guards import RequestGuards
 
 # Both bodies carry only small option dicts.
@@ -93,6 +94,7 @@ class MaintenanceRoutes(RouteGroup):
         with Terminal.for_task(state).recording():
             opt = self.ctx.database.optimizer
             outcome = await run_in_threadpool(lambda: opt.optimize(force=force))
+            FinalizeLedgers.settle_manual(self.ctx.settings, outcome)
             state.status = "completed"
             results: dict[str, object] = {
                 "optimized": outcome.optimized,
