@@ -8,9 +8,11 @@
 [![Python](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5), stores the vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the command line. Everything runs locally — no API keys, no cloud accounts. One `quarryd` daemon per machine loads the model once; the CLI, the MCP server, and the Claude Code hooks are thin clients over it, reachable directly too via an HTTP API.
+Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5), stores the vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the command line. Everything runs locally — no API keys, no cloud accounts. One `quarryd` daemon per machine loads the model once; the CLI, the MCP (Model Context Protocol) server, and the Claude Code hooks are thin clients that send requests to it. Scripts can also call its HTTP API directly.
 
 **Platforms:** macOS (Apple Silicon), Linux
+
+Intel macOS is not supported by any install path: two of quarry's dependencies (`lancedb` and `onnxruntime`) publish no Intel macOS wheel.
 
 ## Quick Start
 
@@ -20,7 +22,7 @@ Install the CLI, the daemon, the MCP server, and the Claude Code plugin:
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/42baaf3/install.sh | sh
 ```
 
-Restart Claude Code. Your current project is auto-indexed at session start, so you can search it by meaning right away — see [What It Looks Like](#what-it-looks-like).
+Restart Claude Code. At each session start, quarry registers your current project and starts indexing it in the background. See [What It Looks Like](#what-it-looks-like) for example searches.
 
 <details>
 <summary>Manual install (if you already have uv)</summary>
@@ -48,30 +50,38 @@ quarry doctor
 <details>
 <summary>Homebrew (Apple Silicon macOS, Linux)</summary>
 
-Intel macOS is not currently supported by any install path — two of quarry's dependencies (`lancedb`, `onnxruntime`) publish no Intel macOS wheel, so `uv tool install`/`pip install` fails there the same way `brew install` does.
-
-`brew install` puts the `quarry`, `quarryd`, and `quarry-hook` binaries on `PATH`. Run `quarry install` afterward for the model download, TLS certificates, and daemon service:
+Install the formula. It puts the `quarry`, `quarryd`, and `quarry-hook` commands on `PATH`:
 
 ```bash
 brew install punt-labs/tap/quarry
+```
+
+Download the model and set up the TLS certificates and the daemon service:
+
+```bash
 quarry install
 ```
 
-To add the Claude Code plugin too:
+To add the Claude Code plugin too, add the Punt Labs marketplace:
 
 ```bash
 claude plugin marketplace add punt-labs/claude-plugins
+```
+
+Then install the plugin:
+
+```bash
 claude plugin install quarry@punt-labs
 ```
 
-Use one distribution channel per machine — mixing Homebrew with the `curl | sh` installer puts two copies of `quarry` on `PATH` in different locations, and whichever comes first wins. Run `which quarry` (or `command -v quarry`) to see which one that is.
+Use one install method per machine. Mixing Homebrew with the `curl | sh` installer puts two copies of `quarry` on `PATH`, and whichever comes first wins. Run `which quarry` (or `command -v quarry`) to see which one that is.
 
 </details>
 
 <details>
 <summary>CLI only (skip the Claude Code plugin)</summary>
 
-For non-Claude harnesses (Codex, Cursor, a plain terminal) or Claude Code users whose org policy blocks marketplace/plugin installs, `--no-plugin` installs everything except the marketplace-register and plugin-install steps:
+For other coding agents (Codex, Cursor), a plain terminal, or Claude Code setups where policy blocks plugin installs, `--no-plugin` installs everything except the Claude Code marketplace and plugin:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/42baaf3/install.sh | sh -s -- --no-plugin
@@ -83,7 +93,7 @@ Where a flag cannot be passed (CI templating a bare `curl … | sh`), set `QUARR
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/42baaf3/install.sh | QUARRY_NO_PLUGIN=1 sh
 ```
 
-Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server directly; both talk to the resident `quarryd`. Re-run the installer without `--no-plugin` to add the plugin later.
+Everything else runs unchanged. Use the CLI, or point your tool at the `quarry mcp` server (MCP over standard input/output); both talk to the `quarryd` daemon. Re-run the installer without `--no-plugin` to add the plugin later.
 
 </details>
 
@@ -120,10 +130,10 @@ sh install.sh
 
 - **20+ formats** — PDFs (with OCR for scanned pages), source code (AST-aware splitting), spreadsheets, presentations, HTML, Markdown, LaTeX, DOCX, images.
 - **Semantic search** — retrieval is by meaning, not keyword. A query about "margins" finds passages about profitability even if they never use that word.
-- **One daemon, thin clients** — a single `quarryd` process loads the embedding model once and serves the CLI, the MCP server, and the Claude Code hooks over a versioned REST API. Its resource use is bounded so it stays quiet in the background while you work.
-- **Passive knowledge capture** — `quarry enable` sets up per-project file sync, web-fetch and session-transcript capture, and per-agent memory. Captures are PII/secret-scrubbed at write time and kept separate from the code index. See [Knowledge Capture](#knowledge-capture).
-- **Named databases** — isolated LanceDB directories with independent sync registries; switch with `quarry use` for work/personal separation.
-- **Remote server** — run the engine on a GPU host and connect from any Mac or Linux client over TLS. See [ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server).
+- **One daemon, thin clients** — a single `quarryd` process loads the embedding model once and serves the CLI, the MCP server, and the Claude Code hooks over a versioned REST API. It caps its embedding and database compute threads at two each to limit CPU load.
+- **Automatic knowledge capture** — `quarry enable` sets up per-project file sync, web-fetch and session-transcript capture, and per-agent memory. Secrets and personal information are scrubbed from captures before they are stored, and captures are kept separate from the code index. See [Knowledge Capture](#knowledge-capture).
+- **Named databases** — separate databases, each with its own index and directory registrations, for example to keep work and personal documents apart. `quarry use <name>` sets the default database and `--db <name>` picks one for a single command. Each daemon serves one database, and the installed service serves the default; see [Managing the Daemon](#managing-the-daemon) to run another.
+- **Remote server** — run the daemon on a GPU host and connect from any Mac or Linux client over TLS. See [ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server).
 
 ## What It Looks Like
 
@@ -153,13 +163,14 @@ Search by meaning:
 
 | Command | What it does |
 |---------|-------------|
-| `/ingest <source>` | Ingest a URL, or register+sync a local file or directory |
+| `/ingest <source>` | Ingest a URL, or register and sync a local file or directory |
 | `/remember <name>` | Ingest inline text under a document name |
-| `/learn <name>` | Save a distilled, retrieval-preferred lesson (project-scoped) |
-| `/find <query>` | Semantic search; questions get synthesized answers, keywords get raw results |
-| `/explain <topic>` | Search and synthesize an explanation |
+| `/learn <lesson> [as <name>]` | Save a short lesson (up to 500 characters) that ranks higher in search results |
+| `/find <query>` | Semantic search; questions get answers with citations, keywords get raw results |
+| `/explain <topic>` | Search and write an explanation of a document or topic |
 | `/source <claim>` | Find which document a claim comes from |
-| `/quarry [sub]` | Manage: `status`, `sync`, `collections`, `databases`, `registrations`, `missions sync` |
+| `/quarry [sub]` | Manage: `status` (default), `sync`, `collections`, `databases`, `registrations`, `use <name>`, `enable`, `disable`, `missions sync` |
+| `/help` | List quarry's slash commands |
 
 ### MCP Tools
 
@@ -169,47 +180,60 @@ Search by meaning:
 | `show` | Document metadata or page text |
 | `list` | Documents, collections, databases, registrations |
 | `status` | Database statistics |
-| `insights` | Recall telemetry: query volume, latency, empty-result rate, recall mix |
+| `insights` | Local search statistics: query volume, latency, empty-result rate, and result breakdowns |
 | `ingest` / `remember` | Index a URL, or inline text |
-| `learn` | Save a distilled lesson (`memory_type=lesson`, project-scoped, retrieval boost) |
+| `learn` | Save a short lesson that ranks higher in search results |
 | `register_directory` / `deregister_directory` | Manage a synced directory |
 | `sync_all_registrations` | Re-index all registered directories |
 | `delete` | Remove a document or collection |
 | `use` | Switch the active database |
-| `missions_sync` | File each frozen ethos mission round into the worker's memory |
+| `missions_sync` | Save each completed ethos mission round to the worker agent's memory |
 
 ### CLI
 
 | Command | What it does |
 |---------|-------------|
-| `quarry find "<query>"` | Hybrid search (vector + full-text) |
-| `quarry ingest <url>` | Index a webpage (local files/directories: `quarry register`) |
-| `quarry remember --name <name>` | Index inline text from stdin |
-| `quarry learn --name <name>` | Save a distilled lesson from stdin (project-scoped, retrieval-preferred) |
-| `quarry list documents` | List indexed documents |
-| `quarry register <dir>` | Watch a directory for changes |
+| `quarry find "<query>"` | Hybrid search (meaning plus keywords) |
+| `quarry ingest <url>` | Index a webpage (for local files and directories, use `quarry register`) |
+| `quarry remember --name <name>` | Index text read from standard input |
+| `quarry learn "<lesson>"` | Save a short lesson (up to 500 characters) that ranks higher in search results |
+| `quarry show <document>` | Show a document's metadata, or one page's text with `--page` |
+| `quarry list documents` | List indexed documents (also `collections`, `databases`, `registrations`) |
+| `quarry delete <name>` | Delete a document, or a collection with `--type collection` |
+| `quarry register <dir>` | Watch a directory and keep its index current |
+| `quarry deregister <collection>` | Stop watching a directory and remove its data (`--keep-data` keeps it) |
 | `quarry sync` | Re-index registered directories |
-| `quarry enable` / `quarry disable` | Set up / tear down project collections + captures |
-| `quarry missions sync` | File each frozen ethos mission round into `memory-<worker>` (`--mission`, `--dry-run`, `--force`) |
-| `quarry use <name>` | Switch the active database |
-| `quarry status` | Database dashboard |
-| `quarry insights` | Recall telemetry: query volume, latency, empty-result rate, recall mix |
+| `quarry enable` / `quarry disable` | Turn project indexing and capture on or off for a repo |
+| `quarry missions sync` | Save each completed ethos mission round to `memory-<worker>` (`--mission`, `--dry-run`, `--force`) |
+| `quarry use <name>` | Set the default database |
+| `quarry status` | Show document and chunk counts, storage size, and model |
+| `quarry insights` | Local search statistics: query volume, latency, empty-result rate, and result breakdowns |
+| `quarry optimize` | Compact the database and rebuild its indexes |
 | `quarry doctor` | Health check |
-| `quarry install` | Set up the daemon service, TLS certs, and MCP config |
-| `quarry uninstall` | Remove the daemon service (its launchd/systemd unit) |
-| `quarry login <host> --api-key <token>` | Connect to a remote server (TOFU pinning) |
-| `quarry logout` | Disconnect, revert to the local daemon |
+| `quarry install` | Set up the daemon service, TLS certificates, and MCP config |
+| `quarry uninstall` | Remove the daemon service (its launchd or systemd unit) |
+| `quarry login <host> --api-key <token>` | Connect to a remote server; the server's certificate is pinned on first connection |
+| `quarry logout` | Disconnect and go back to the local daemon |
+| `quarry version` | Print the installed version |
+
+Run `quarry --help` for the full list, including `captures`, `skills`,
+`backfill-sessions`, `remote`, and `mcp`, and `quarry <command> --help` for
+each command's options.
+
+[ethos](https://github.com/punt-labs/ethos) is the Punt Labs tool that gives
+agents named identities and runs delegated tasks ("missions"); the
+`missions sync` commands only matter if you use it.
 
 A registered directory is indexed automatically: quarry watches it for changes
 and re-indexes as you work (honoring `.gitignore` and a root-level
-`.quarryignore`, so a large `node_modules` or `.venv` is skipped at no cost),
+`.quarryignore`, so directories such as `node_modules` or `.venv` are skipped),
 with a periodic sweep that catches anything the live watch misses. You rarely
 need `quarry sync`. `quarry list registrations` shows each directory's watch
 state (`watched`, `degraded`, or `scan-only`); a `scan-only` directory still
 stays current through the sweep.
 
-`quarry enable` in a repo is all it takes — that's the whole setup. It's also
-your consent for Claude to call quarry without a per-call prompt: it adds
+To set up a repo, run `quarry enable` in it. No other setup is needed.
+`quarry enable` also lets Claude call quarry without asking each time: it adds
 quarry's allow rules to that project's `.claude/settings.json` (admin and
 destructive commands still prompt), and `quarry disable` removes them.
 Driving quarry from an agent — memory tagging and agent handles — is covered in
@@ -223,11 +247,11 @@ Driving quarry from an agent — memory tagging and agent handles — is covered
 ## Setup
 
 Quarry works with zero configuration. For environment variables and running
-the engine on a remote/GPU host, see [ADVANCED-SETUP.md](ADVANCED-SETUP.md).
+the daemon on a remote or GPU host, see [ADVANCED-SETUP.md](ADVANCED-SETUP.md).
 
 ## Claude Desktop
 
-The `.mcpb` bundle is an on-top way to reach the **same** local index from Claude Desktop. It embeds no engine — it registers the thin `quarry mcp` client, which talks to the same `quarryd` that backs the CLI and Claude Code. It is not a standalone install: quarry must already be installed and running.
+The `.mcpb` bundle connects Claude Desktop to the same local index that the CLI and Claude Code use. It contains no search engine of its own: it registers the `quarry mcp` client, which talks to the same `quarryd` daemon. Install quarry first; the bundle does not work on its own.
 
 `quarry install` configures Claude Desktop automatically. To add it by hand instead, [download `punt-quarry.mcpb`](https://github.com/punt-labs/quarry/releases/latest/download/punt-quarry.mcpb) and double-click it.
 
@@ -235,48 +259,49 @@ Uploaded files in Claude Desktop live in a sandbox quarry cannot read — use `r
 
 ## Knowledge Capture
 
-As a Claude Code plugin, quarry hooks into the session lifecycle and captures
-knowledge automatically, with no action from you:
+The Claude Code plugin runs hooks (commands Claude Code runs on session events)
+that capture knowledge automatically:
 
 | Hook | What it captures |
 |------|-------------------|
-| `SessionStart` | Auto-registers and syncs the current project, so it's searchable from the first prompt |
-| `PostToolUse` (WebFetch) | Ingests URLs Claude fetches during research. If the URL was already captured, the hook nudges Claude to `find` it instead of re-fetching |
+| `SessionStart` | Registers the current project and starts indexing it in the background |
+| `PostToolUse` (WebFetch) | Ingests URLs Claude fetches during research. If the URL was already captured, the hook tells Claude to use `find` instead of fetching it again |
 | `PostToolUse` (WebSearch) | Files a scrubbed digest of search results under `<repo>-captures` |
-| `PostToolUse` (Read) | Opt-in (off by default): captures prose files read from outside any registered tree, gated by an in-tree/secret-path/extension/size filter |
+| `PostToolUse` (Read) | Opt-in (off by default): captures prose files Claude reads from outside any registered directory, skipping likely secret files, non-prose file types, and large files |
 | `PreCompact` | Captures the session transcript before context compaction discards it |
 | `SessionEnd` | Captures the full session transcript on every close, even a short session that never compacts |
-| `SubagentStop` | Archives a subagent's own transcript, separate from the parent session's, and — when `agent_type` names a registered ethos identity — files the subagent's final report as an `observation` in `memory-<handle>`; a bare `Agent()` (`general-purpose`) is filed unattributed, never under the leader's pin |
+| `SubagentStop` | Captures a subagent's transcript separately from the parent session's. If the subagent has an ethos identity, its final report is also saved to that agent's memory (`memory-<handle>`) |
 
-Every hook fails open — a hook failure never blocks Claude Code — and each is
+If a hook fails, Claude Code continues normally. Each hook is
 independently toggleable in `.punt-labs/quarry/config.md`.
 
-Captures are scrubbed at write time (secrets, paths, emails, hostnames)
-through a single choke point before they ever reach disk. The scrub is
-pattern-based and best-effort, not a formal guarantee of catching every
-possible secret; a failure in the scrubber itself is fail-closed (the write
-is blocked, not written unscrubbed). Deliberate `ingest`/`remember` content
-is not scrubbed — that's content you chose to add. See [DES-036 in
+Captures are scrubbed (secrets, paths, emails, hostnames) before they are
+written to disk. The scrub matches known patterns and may miss some secrets.
+If the scrubber itself fails, the capture is not written. Content you add
+yourself with `ingest` or `remember` is not scrubbed. See [DES-036 in
 DESIGN.md](DESIGN.md).
 
-**Extension: private capture shadow.** An opt-in per-project shadow repo
-(`<repo>` → private `<repo>-quarry`) can push the scrubbed captures off the
-public repo entirely, for projects where even scrubbed transcripts shouldn't
-live in a public history. See [DES-039 in DESIGN.md](DESIGN.md) and
+**Private capture repo.** You can opt in to a private companion repo per
+project (`<repo>` → private `<repo>-quarry`) so that scrubbed captures are
+pushed there instead of living in the public repo's history. Set it up with
+`quarry captures init`. See [DES-039 in DESIGN.md](DESIGN.md) and
 [AGENTS.md](AGENTS.md).
 
-**Recall telemetry privacy note.** Every search records a scrubbed copy of the
+**Search telemetry.** Every search records a scrubbed copy of the
 query text and its ranked hits to a local SQLite file
 (`~/.punt-labs/quarry/data/<db>/telemetry.db`) — nothing leaves the machine.
-Query text goes through the same secret/PII scrub as captures before it ever
-touches disk. Turn it off with `telemetry_enabled: false` in `Settings`
-(env var `TELEMETRY_ENABLED`); see [DES-056 in DESIGN.md](DESIGN.md).
+Query text goes through the same scrub as captures before it is written. To
+turn recording off, set `TELEMETRY_ENABLED=false` in the environment of the
+`quarryd` process and restart the daemon; `quarry insights` then reports
+telemetry as disabled. See [DES-056 in DESIGN.md](DESIGN.md).
 
 ## Managing the Daemon
 
-`quarry install` registers `quarryd` as a per-user service that starts at login and restarts on crash (launchd on macOS, systemd on Linux). Re-running the [Quick Start](#quick-start) installer does this for you on every upgrade — it pins every dependency to the tested `uv.lock` versions (via `install-constraints.txt` from the release tag), calls `quarry install`, then force-restarts the service, checks that the daemon's PID changed, and waits for it to report ready — a restart that did not take, or a daemon that never becomes ready, fails the install instead of passing silently — so a plain `curl | sh` re-run is enough.
+`quarry install` registers `quarryd` as a per-user service that starts at login and restarts if it crashes (launchd on macOS, systemd on Linux).
 
-**After upgrading the package some other way** (`uv tool install --force`, a local wheel), restart the service yourself — a running daemon holds the old engine in memory until restarted.
+To upgrade, re-run the [Quick Start](#quick-start) installer. It installs the tested dependency versions, runs `quarry install`, restarts the daemon, and fails if the new daemon does not start and report ready. [ADVANCED-SETUP.md](ADVANCED-SETUP.md#upgrades) lists the steps.
+
+**After upgrading some other way** (for example `uv tool install --force`), restart the service yourself. A running daemon keeps using the old version until it restarts.
 
 macOS:
 
@@ -292,21 +317,26 @@ systemctl --user restart quarry
 
 `quarry doctor` confirms the daemon is running and ready.
 
-`quarryd` also exposes a REST API for scripting or non-Claude integrations —
-see [ADVANCED-SETUP.md](ADVANCED-SETUP.md#http-api).
+To use a second named database while the service runs, start another daemon
+for it in the foreground. `--port 0` picks a free port, and `--tls` matches
+the installed service:
+
+```bash
+quarryd --db work --port 0 --tls
+```
+
+Then pass the same name to each command, for example `quarry --db work find "<query>"`.
+
+`quarryd` also serves a REST API for scripts and other integrations. See [ADVANCED-SETUP.md](ADVANCED-SETUP.md#http-api).
 
 ## Documentation
 
-[Architecture](docs/architecture.tex) |
+[Architecture (PDF)](docs/architecture.pdf) |
 [Advanced Setup](ADVANCED-SETUP.md) |
 [Design (ADR log)](DESIGN.md) |
 [Agents](AGENTS.md) |
-[Changelog](CHANGELOG.md)
-
-## Development
-
-Quality gates, architecture notes, and the PR process are in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[Changelog](CHANGELOG.md) |
+[Contributing](CONTRIBUTING.md)
 
 ## License
 
