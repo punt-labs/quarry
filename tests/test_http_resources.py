@@ -172,3 +172,19 @@ class TestQuarryResources:
         assert any("query database" in m for m in messages)
         assert any("ONNX embedding session" in m for m in messages)
         assert any("ready" in m for m in messages)
+
+
+class TestWarmMigratesPages:
+    def test_warm_runs_the_pages_migration_on_the_write_database(
+        self, tmp_path: Path
+    ) -> None:
+        settings = _mock_settings(tmp_path)
+        with (
+            _patch_connect(),
+            _patch_new_embedding_backend(),
+            patch("quarry.http_resources.PagesMigration") as migration,
+        ):
+            resources = QuarryResources(settings)
+            resources.warm()
+        migration.assert_called_once_with(resources.database.db)
+        migration.return_value.run.assert_called_once_with()
