@@ -24,8 +24,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.api.meta import FdHealth
+from quarry.api.health import FdHealth
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_health_probe import HealthProbe
 from quarry.fd_headroom import FdHeadroom
 from quarry.tls import generate_ca, generate_server_cert
 
@@ -100,7 +101,7 @@ class TestReachability:
 
         with (
             _run_dir_at(tmp_path) as settings,
-            patch("quarry.doctor_daemon.http.client.HTTPSConnection", _fake_conn),
+            patch("quarry.doctor_health_probe.http.client.HTTPSConnection", _fake_conn),
         ):
             result = DaemonDiagnostics.reachability(settings)
         assert captured["host"] == "127.0.0.1"
@@ -143,7 +144,7 @@ class TestPinnedCa:
             _run_dir_at(tmp_path) as settings,
             patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=ca),
             patch(
-                "quarry.doctor_daemon.ssl.SSLContext.load_verify_locations",
+                "quarry.doctor_health_probe.ssl.SSLContext.load_verify_locations",
                 side_effect=denied,
             ),
         ):
@@ -164,10 +165,10 @@ class TestPinnedCa:
     def test_no_ca_at_all_still_probes_unverified(self, tmp_path: Path) -> None:
         missing = tmp_path / "ca.crt"
         with patch("quarry.home_paths.QuarryHome.daemon_ca", return_value=missing):
-            pinned = DaemonDiagnostics._pinned_context()
+            pinned = HealthProbe._pinned_context()
 
         assert pinned is None
-        assert DaemonDiagnostics._unverified_context().verify_mode == ssl.CERT_NONE
+        assert HealthProbe._unverified_context().verify_mode == ssl.CERT_NONE
 
     def test_a_ca_that_cannot_even_be_looked_up_names_the_file(
         self, tmp_path: Path
@@ -222,16 +223,16 @@ class TestServeToken:
 
 class TestHealthParsing:
     def test_object_body_parses(self) -> None:
-        assert DaemonDiagnostics._parse_object(b'{"state": "ready", "uptime": 1}') == {
+        assert HealthProbe._parse_object(b'{"state": "ready", "uptime": 1}') == {
             "state": "ready",
             "uptime": 1,
         }
 
     def test_non_json_body_is_none(self) -> None:
-        assert DaemonDiagnostics._parse_object(b"not json at all") is None
+        assert HealthProbe._parse_object(b"not json at all") is None
 
     def test_non_object_body_is_none(self) -> None:
-        assert DaemonDiagnostics._parse_object(b'["ready"]') is None
+        assert HealthProbe._parse_object(b'["ready"]') is None
 
 
 class TestFdHeadroom:
@@ -253,8 +254,8 @@ class TestFdHeadroom:
         with (
             _run_dir_at(tmp_path) as settings,
             patch.object(
-                DaemonDiagnostics,
-                "_fetch_health",
+                HealthProbe,
+                "fetch",
                 return_value=self._ready_fd(100, 8192),
             ),
         ):
@@ -276,8 +277,8 @@ class TestFdHeadroom:
                 side_effect=AssertionError("fd_headroom sampled the local process"),
             ),
             patch.object(
-                DaemonDiagnostics,
-                "_fetch_health",
+                HealthProbe,
+                "fetch",
                 return_value=self._ready_fd(100, 8192),
             ),
         ):
@@ -296,7 +297,7 @@ class TestFdHeadroom:
         (tmp_path / "serve.port").write_text("8420")
         with (
             _run_dir_at(tmp_path) as settings,
-            patch.object(DaemonDiagnostics, "_fetch_health", return_value=None),
+            patch.object(HealthProbe, "fetch", return_value=None),
         ):
             result = DaemonDiagnostics.fd_headroom(settings)
         assert result.passed is False
@@ -308,7 +309,7 @@ class TestFdHeadroom:
         body: dict[str, object] = {"state": "ready", "fd": None}
         with (
             _run_dir_at(tmp_path) as settings,
-            patch.object(DaemonDiagnostics, "_fetch_health", return_value=body),
+            patch.object(HealthProbe, "fetch", return_value=body),
         ):
             result = DaemonDiagnostics.fd_headroom(settings)
         assert result.passed is False
@@ -319,8 +320,8 @@ class TestFdHeadroom:
         with (
             _run_dir_at(tmp_path) as settings,
             patch.object(
-                DaemonDiagnostics,
-                "_fetch_health",
+                HealthProbe,
+                "fetch",
                 return_value=self._ready_fd(250, 256),
             ),
         ):
@@ -337,7 +338,7 @@ class TestProbeFailSoft:
             conn.request.side_effect = OSError("connection refused")
             return conn
 
-        with patch("quarry.doctor_daemon.http.client.HTTPSConnection", _boom):
+        with patch("quarry.doctor_health_probe.http.client.HTTPSConnection", _boom):
             assert DaemonDiagnostics._probe_health(8420) is False
 
     def test_non_200_status_is_not_ready(self) -> None:
@@ -346,7 +347,7 @@ class TestProbeFailSoft:
             conn.getresponse.return_value.status = 503
             return conn
 
-        with patch("quarry.doctor_daemon.http.client.HTTPSConnection", _conn):
+        with patch("quarry.doctor_health_probe.http.client.HTTPSConnection", _conn):
             assert DaemonDiagnostics._probe_health(8420) is False
 
 
@@ -362,7 +363,7 @@ class TestProbeTransportFallback:
 
     def test_tls_daemon_ready_over_https(self) -> None:
         with patch(
-            "quarry.doctor_daemon.http.client.HTTPSConnection", self._ready_conn
+            "quarry.doctor_health_probe.http.client.HTTPSConnection", self._ready_conn
         ):
             assert DaemonDiagnostics._probe_health(8420) is True
 
@@ -375,8 +376,14 @@ class TestProbeTransportFallback:
             return conn
 
         with (
-            patch("quarry.doctor_daemon.http.client.HTTPSConnection", _https_ssl_error),
-            patch("quarry.doctor_daemon.http.client.HTTPConnection", self._ready_conn),
+            patch(
+                "quarry.doctor_health_probe.http.client.HTTPSConnection",
+                _https_ssl_error,
+            ),
+            patch(
+                "quarry.doctor_health_probe.http.client.HTTPConnection",
+                self._ready_conn,
+            ),
         ):
             assert DaemonDiagnostics._probe_health(8420) is True
 
@@ -388,7 +395,7 @@ class TestProbeTransportFallback:
             conn.request.side_effect = ConnectionRefusedError("refused")
             return conn
 
-        with patch("quarry.doctor_daemon.http.client.HTTPSConnection", _refused):
+        with patch("quarry.doctor_health_probe.http.client.HTTPSConnection", _refused):
             assert DaemonDiagnostics._probe_health(8420) is False
 
 
@@ -666,10 +673,54 @@ class TestAResetHandshake:
                 "quarry.home_paths.QuarryHome.daemon_ca",
                 return_value=tmp_path / "ca.crt",
             ),
-            caplog.at_level(logging.INFO, logger="quarry.doctor_daemon"),
+            caplog.at_level(logging.INFO, logger="quarry.doctor_health_probe"),
         ):
             (tmp_path / "serve.port").write_text(str(port))
             result = DaemonDiagnostics.reachability(settings)
 
         assert result.passed is True
         assert "retrying over plain HTTP" in caplog.text
+
+
+class TestFinalizeCheck:
+    """``DaemonDiagnostics.finalize`` reads the ledger off the daemon's /health."""
+
+    @staticmethod
+    def _body(*entries: dict[str, object]) -> dict[str, object]:
+        return {"state": "ready", "finalize": {"databases": list(entries)}}
+
+    def test_failing_optimize_is_reported_with_reason(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        body = self._body(
+            {
+                "database": "/d/lancedb",
+                "consecutive_failures": 3,
+                "last_error": "RuntimeError: Offset overflow error",
+                "retry_in_seconds": 1200.0,
+            }
+        )
+        with (
+            _run_dir_at(tmp_path) as settings,
+            patch.object(HealthProbe, "fetch", return_value=body),
+        ):
+            result = DaemonDiagnostics.finalize(settings)
+        assert result.passed is False
+        assert "Offset overflow error" in result.message
+
+    def test_clean_ledger_passes(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with (
+            _run_dir_at(tmp_path) as settings,
+            patch.object(HealthProbe, "fetch", return_value=self._body()),
+        ):
+            result = DaemonDiagnostics.finalize(settings)
+        assert result.passed is True
+
+    def test_unreachable_daemon_degrades(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with (
+            _run_dir_at(tmp_path) as settings,
+            patch.object(HealthProbe, "fetch", return_value=None),
+        ):
+            result = DaemonDiagnostics.finalize(settings)
+        assert result.passed is False

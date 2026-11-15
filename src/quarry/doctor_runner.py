@@ -20,6 +20,7 @@ from quarry.results import CheckResult
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+    from quarry.config import Settings
     from quarry.doctor_preconditions import Preconditions
 
 logger = logging.getLogger(__name__)
@@ -117,35 +118,34 @@ class SettingsChecks:
             msg = "the current directory is not accessible"
             raise RuntimeError(msg) from exc
 
-    @staticmethod
+    @classmethod
     def entries(
-        pre: Preconditions, fts: Callable[[Path], CheckResult]
+        cls, pre: Preconditions, fts: Callable[[Path], CheckResult]
     ) -> list[CheckEntry]:
         """Return the entries that need the settings; *fts* is the index check."""
+        return [*cls._daemon_entries(pre), *cls._settings_entries(pre, fts)]
+
+    @classmethod
+    def _daemon_entries(cls, pre: Preconditions) -> list[CheckEntry]:
         both = Need.HOME | Need.SETTINGS
+        daemon_checks: tuple[tuple[str, Callable[[Settings], CheckResult]], ...] = (
+            ("Daemon", DaemonDiagnostics.reachability),
+            ("Serve token", DaemonDiagnostics.serve_token),
+            ("Fd headroom", DaemonDiagnostics.fd_headroom),
+            ("Finalize", DaemonDiagnostics.finalize),
+            ("Stop timeout", DaemonDiagnostics.stop_timeout),
+        )
         return [
-            CheckEntry(
-                "Daemon",
-                lambda: DaemonDiagnostics.reachability(pre.settings),
-                needs=both,
-            ),
-            CheckEntry(
-                "Serve token",
-                lambda: DaemonDiagnostics.serve_token(pre.settings),
-                needs=both,
-            ),
-            CheckEntry(
-                "Fd headroom",
-                lambda: DaemonDiagnostics.fd_headroom(pre.settings),
-                needs=both,
-            ),
-            CheckEntry(
-                "Stop timeout",
-                lambda: DaemonDiagnostics.stop_timeout(pre.settings),
-                needs=both,
-            ),
-            *SettingsChecks._settings_entries(pre, fts),
+            CheckEntry(name, cls._on_settings(check, pre), needs=both)
+            for name, check in daemon_checks
         ]
+
+    @staticmethod
+    def _on_settings(
+        check: Callable[[Settings], CheckResult], pre: Preconditions
+    ) -> Callable[[], CheckResult]:
+        """Defer reading ``pre.settings`` until the entry runs, after its gate."""
+        return lambda: check(pre.settings)
 
     @staticmethod
     def _settings_entries(

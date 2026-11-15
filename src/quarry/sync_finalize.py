@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import gc
 import logging
-import sqlite3
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.db import TableOptimizer
+from quarry.finalize_steps import OptimizeStep, ShadowPushStep
 
 if TYPE_CHECKING:
     from quarry.config import Settings
-    from quarry.shadow import ShadowSyncResult
     from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
@@ -35,50 +33,16 @@ class SyncFinalizer:
         return self
 
     def run(self) -> None:
-        """Optimize the table, push enabled capture shadows, then GC."""
+        """Optimize the table, push enabled capture shadows, then GC, each isolated."""
         self._optimize()
         self._push_shadows()
         self._gc()
 
     def _optimize(self) -> None:
-        t0 = time.perf_counter()
-        opt = TableOptimizer(self._db)
-        opt.create_collection_index()
-        logger.info("sync: create_collection_index in %.2fs", time.perf_counter() - t0)
-        t0 = time.perf_counter()
-        opt.optimize()
-        logger.info("sync: optimize_table in %.2fs", time.perf_counter() - t0)
+        OptimizeStep(self._db, str(self._settings.lancedb_path)).run()
 
     def _push_shadows(self) -> None:
-        """Push each enabled project's redacted captures to its private shadow.
-
-        Fail-open, and the WHOLE step is wrapped: a registry-open or import
-        failure must not raise past here and block the sync tail (index rebuild
-        already ran; GC must still run).  A committed-but-not-pushed result is
-        logged rather than swallowed silently (fail-open but LOGGED).
-        """
-        try:
-            from quarry.shadow import CaptureSync  # noqa: PLC0415
-
-            results = CaptureSync.push_registered(self._settings, fail_open=True)
-        except (ImportError, OSError, sqlite3.Error) as exc:
-            logger.warning("sync: capture-shadow push skipped (fail-open): %s", exc)
-            return
-        self._warn_unpushed(results)
-
-    @staticmethod
-    def _warn_unpushed(results: dict[str, ShadowSyncResult]) -> None:
-        """Log each enabled shadow whose captures did not reach the remote.
-
-        The message reflects the real state: a run that aborted, a run that
-        committed but could not push, or a run that neither committed nor
-        aborted (nothing to commit or a deferred offline push).
-        """
-        for collection, result in results.items():
-            if not result.pushed:
-                logger.warning(
-                    "sync: %s captures %s", collection, result.unpushed_detail()
-                )
+        ShadowPushStep(self._settings).run()
 
     def _gc(self) -> None:
         t_gc = time.perf_counter()

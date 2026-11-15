@@ -364,6 +364,54 @@
         "title": "FdHealth",
         "type": "object"
       },
+      "FinalizeDatabaseHealth": {
+        "description": "One database's finalize-optimize failure ledger.\n\n``consecutive_failures`` is 0 when the last optimize succeeded (or none has\nfailed yet); otherwise ``last_error`` is its reason and ``retry_in_seconds``\nis how long the backoff window still has to run.",
+        "properties": {
+          "consecutive_failures": {
+            "minimum": 0.0,
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "database": {
+            "title": "Database",
+            "type": "string"
+          },
+          "last_error": {
+            "title": "Last Error",
+            "type": "string"
+          },
+          "retry_in_seconds": {
+            "minimum": 0.0,
+            "title": "Retry In Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "database",
+          "consecutive_failures",
+          "last_error",
+          "retry_in_seconds"
+        ],
+        "title": "FinalizeDatabaseHealth",
+        "type": "object"
+      },
+      "FinalizeHealth": {
+        "description": "The finalize-optimize ledger of every database the daemon has finalized.",
+        "properties": {
+          "databases": {
+            "items": {
+              "$ref": "#/components/schemas/FinalizeDatabaseHealth"
+            },
+            "title": "Databases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "databases"
+        ],
+        "title": "FinalizeHealth",
+        "type": "object"
+      },
       "HealthResponse": {
         "description": "The daemon's liveness and readiness snapshot (unversioned; auth-exempt).\n\nCarries liveness (``status``), process uptime, warm/ready ``state``, the wire\n``api_version`` a client negotiates against, the running ``quarry_version``,\nand the daemon's own file-descriptor headroom.",
         "properties": {
@@ -375,6 +423,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/FdHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finalize": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FinalizeHealth"
               },
               {
                 "type": "null"

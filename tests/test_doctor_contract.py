@@ -22,6 +22,7 @@ from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor import check_environment, run_install
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_failure import CheckFailure
+from quarry.doctor_fts import FtsIndexCheck
 from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_memory import MemoryDiagnostics
 from quarry.json_file import JsonFile
@@ -858,7 +859,7 @@ def test_the_fts_check_treats_a_table_without_an_index_as_missing(
         "chunks", data=[{"text": "hello", "vector": [0.1, 0.2, 0.3, 0.4]}]
     )
 
-    result = doctor_mod._check_fts_health(db_dir)
+    result = FtsIndexCheck.check(db_dir)
 
     assert result.passed is False
     assert "missing — will be created on next sync" in result.message
@@ -912,6 +913,7 @@ _CHECKS = (
     "Daemon",
     "Serve token",
     "Fd headroom",
+    "Finalize",
     "Stop timeout",
     "FTS index",
     "Sync directories",

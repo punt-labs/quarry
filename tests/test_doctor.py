@@ -27,7 +27,6 @@ from quarry import (
 from quarry.claude_desktop_mcp import ClaudeDesktopMcp
 from quarry.doctor import (
     _QUIETED_LOGGERS,
-    _check_fts_health,
     _check_imports,
     _check_python_version,
     _quiet_logging,
@@ -37,6 +36,7 @@ from quarry.doctor import (
 )
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_fts import FtsIndexCheck
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_model import EmbeddingModel
@@ -564,8 +564,8 @@ class TestCheckEnvironment:
             lambda _self: _ok(name="Claude Desktop MCP", passed=True, message="mocked"),
         )
         monkeypatch.setattr(
-            doctor_mod,
-            "_check_fts_health",
+            FtsIndexCheck,
+            "check",
             lambda _p: _ok(
                 name="FTS index", passed=True, message="mocked", required=False
             ),
@@ -652,7 +652,7 @@ class TestCheckFtsHealth:
 
     def test_no_database(self, tmp_path: Path) -> None:
         db_path = tmp_path / "nonexistent" / "lancedb"
-        result = _check_fts_health(db_path)
+        result = FtsIndexCheck.check(db_path)
         assert result.passed is True
         assert result.required is False
         assert "no database yet" in result.message
@@ -662,7 +662,7 @@ class TestCheckFtsHealth:
 
         db_path = tmp_path / "lancedb"
         get_db(db_path)  # creates empty db
-        result = _check_fts_health(db_path)
+        result = FtsIndexCheck.check(db_path)
         assert result.passed is True
         assert "no table yet" in result.message
 
@@ -687,7 +687,7 @@ class TestCheckFtsHealth:
         mock_db.open_table.return_value = mock_table
 
         with patch.object(Database, "connect", return_value=Database(mock_db)):
-            result = _check_fts_health(db_path)
+            result = FtsIndexCheck.check(db_path)
         assert result.passed is True
         assert result.message == "healthy"
         assert result.required is False
@@ -713,7 +713,7 @@ class TestCheckFtsHealth:
         mock_db.open_table.return_value = mock_table
 
         with patch.object(Database, "connect", return_value=Database(mock_db)):
-            result = _check_fts_health(db_path)
+            result = FtsIndexCheck.check(db_path)
         assert result.passed is False
         assert "stale" in result.message
         assert result.required is False
@@ -739,7 +739,7 @@ class TestCheckFtsHealth:
         mock_db.open_table.return_value = mock_table
 
         with patch.object(Database, "connect", return_value=Database(mock_db)):
-            result = _check_fts_health(db_path)
+            result = FtsIndexCheck.check(db_path)
         assert result.passed is False
         assert "missing" in result.message
         assert result.required is False
@@ -1793,7 +1793,7 @@ class TestImportIsolation:
     ) -> None:
         self._break(monkeypatch, module)
 
-        result = _check_fts_health(tmp_path / "lancedb")
+        result = FtsIndexCheck.check(tmp_path / "lancedb")
 
         assert result.passed is False
         assert result.required is False
@@ -1958,7 +1958,7 @@ class TestDoctorNeverCrashes:
             builtins, "__import__", _importer_that_raises("quarry.db.facade", exc)
         )
 
-        result = _check_fts_health(tmp_path / "lancedb")
+        result = FtsIndexCheck.check(tmp_path / "lancedb")
 
         assert result.passed is False
         assert result.required is False
@@ -1987,7 +1987,7 @@ class TestDoctorNeverCrashes:
             "quarry.db.facade.Database.connect",
             side_effect=PermissionError(errno.EACCES, "denied"),
         ):
-            result = _check_fts_health(db_path)
+            result = FtsIndexCheck.check(db_path)
 
         assert result.passed is False
         assert "missing" not in result.message
@@ -2000,7 +2000,7 @@ class TestDoctorNeverCrashes:
             "quarry.db.facade.Database.connect",
             side_effect=FileNotFoundError(errno.ENOENT, "gone"),
         ):
-            result = _check_fts_health(db_path)
+            result = FtsIndexCheck.check(db_path)
 
         assert "missing" in result.message
         assert "FileNotFoundError" in result.message

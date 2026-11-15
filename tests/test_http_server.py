@@ -35,6 +35,7 @@ from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.task_drain import TaskDrain
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
+from quarry.finalize_ledger import FinalizeLedgers
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.results import SearchResult
@@ -175,6 +176,20 @@ class TestHealth:
         assert data["state"] == "starting"
         assert data["api_version"] == "1"
         assert data["quarry_version"]
+
+    def test_reports_finalize_ledger(self, client: TestClient) -> None:
+        """/health.finalize carries one entry per database that failed optimize."""
+        ledger = FinalizeLedgers.for_database("/health-test/db")
+        ledger.record_failure("Offset overflow error")
+        try:
+            finalize = client.get("/health").json()["finalize"]
+        finally:
+            ledger.record_success()
+        (entry,) = (
+            d for d in finalize["databases"] if d["database"] == "/health-test/db"
+        )
+        assert entry["consecutive_failures"] == 1
+        assert entry["last_error"] == "Offset overflow error"
 
     def test_state_ready_after_warm(self, tmp_path: Path) -> None:
         """A warmed context flips /health state to ``ready``."""

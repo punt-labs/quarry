@@ -2,18 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-
-class FdHealth(BaseModel):
-    """The daemon's open file descriptors against its soft ``RLIMIT_NOFILE``.
-
-    Sampled inside the daemon process, so it is the resident daemon's own fd
-    state — the number a health check must report, never the short-lived CLI's.
-    """
-
-    open_fds: int = Field(ge=0)
-    soft_limit: int = Field(gt=0)
+from quarry.api.health import FdHealth, FinalizeHealth
 
 
 class HealthResponse(BaseModel):
@@ -35,6 +26,8 @@ class HealthResponse(BaseModel):
     # client parses an older daemon whose response predates this field, and the
     # default maps that absent key to ``None`` (the upgrade-before-reinstall window).
     fd: FdHealth | None = None
+    # ``None`` only when parsing an older daemon whose response predates the field.
+    finalize: FinalizeHealth | None = None
 
 
 class StatusResponse(BaseModel):
