@@ -19,7 +19,7 @@ Intel macOS is not supported by any install path: two of quarry's dependencies (
 Install the CLI, the daemon, the MCP server, and the Claude Code plugin:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/42baaf3/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/d162820/install.sh | sh
 ```
 
 Restart Claude Code. At each session start, quarry registers your current project and starts indexing it in the background. See [What It Looks Like](#what-it-looks-like) for example searches.
@@ -84,13 +84,13 @@ Use one install method per machine. Mixing Homebrew with the `curl | sh` install
 For other coding agents (Codex, Cursor), a plain terminal, or Claude Code setups where policy blocks plugin installs, `--no-plugin` installs everything except the Claude Code marketplace and plugin:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/42baaf3/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/d162820/install.sh | sh -s -- --no-plugin
 ```
 
 Where a flag cannot be passed (CI templating a bare `curl … | sh`), set `QUARRY_NO_PLUGIN=1` — honored only when exactly `1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/42baaf3/install.sh | QUARRY_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/d162820/install.sh | QUARRY_NO_PLUGIN=1 sh
 ```
 
 Everything else runs unchanged. Use the CLI, or point your tool at the `quarry mcp` server (MCP over standard input/output); both talk to the `quarryd` daemon. Re-run the installer without `--no-plugin` to add the plugin later.
@@ -103,7 +103,7 @@ Everything else runs unchanged. Use the CLI, or point your tool at the `quarry m
 Download the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/42baaf3/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/d162820/install.sh -o install.sh
 ```
 
 Check its digest (`shasum -a 256 install.sh` on macOS):
