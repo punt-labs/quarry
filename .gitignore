@@ -50,13 +50,8 @@
 .CLAUDE.md.punt-import.lock
 **/.create.lock
 
-# --- Beads runtime state ---
-.beads/bd.sock*
-.beads/beads.db*
-.beads/daemon-*
-.beads/daemon.log
-.beads/daemon-error
-.beads/.local_version
+# --- Leftover local state from the retired beads tracker ---
+.beads/
 
 # --- Scratch / temp ---
 .tmp/*
