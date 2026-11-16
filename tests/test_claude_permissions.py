@@ -69,8 +69,15 @@ class TestRuleSet:
         for command in ("find", "ingest", "remember", "learn", "show", "status"):
             assert f"Bash(quarry {command}:*)" not in _ASK
 
-    def test_global_options_before_the_verb_ask(self) -> None:
-        assert "Bash(quarry -*)" in _ASK
+    def test_no_catch_all_flag_rule(self) -> None:
+        assert "Bash(quarry -*)" not in _ASK
+
+    @pytest.mark.parametrize("verb", ["grant", "revoke"])
+    def test_legacy_flag_rule_is_stripped(self, tmp_path: Path, verb: str) -> None:
+        _write(tmp_path, {"permissions": {"ask": ["Bash(ls:*)", "Bash(quarry -*)"]}})
+        change = getattr(ProjectPermissions(tmp_path), verb)()
+        assert ("Bash(quarry -*)" in change.changed) == (verb == "revoke")
+        assert _ask(tmp_path) == ["Bash(ls:*)", *(_ASK if verb == "grant" else ())]
 
     def test_mcp_delete_asks(self) -> None:
         assert "mcp__quarry__delete" in _ASK

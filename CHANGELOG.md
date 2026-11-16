@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- tool: `quarry --version` and `quarry --help` no longer prompt in an enabled project (punt-kit DES-039). `quarry enable` stops granting the `Bash(quarry -*)` ask rule, which matched every command starting with an option; the CLI ask tier is now one rule per unsafe verb. `quarry enable` and `quarry disable` both remove the old rule from a project an earlier version enabled.
+
 ## [3.7.0] - 2026-11-15
 
 ### Added
