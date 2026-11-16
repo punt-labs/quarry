@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- cli: `quarry repair` rebuilds a chunks table that `optimize()` can no longer compact (the Arrow i32 offset overflow). It reads the table in small batches, drops provably-binary and over-budget rows, verifies every kept row including its vector, recreates the bitmap and full-text indexes, and swaps the new table in atomically — a failure before the swap leaves the original byte-for-byte intact, and leaked data files are reclaimed. It refuses to run while the daemon is up and asks for consent first (`--yes` skips the prompt, `--dry-run` previews what would drop). Recovery half of DES-057 decision 4 (PL-303).
+
 ### Fixed
 
 - tool: `quarry --version` and `quarry --help` no longer prompt in an enabled project (punt-kit DES-039). `quarry enable` stops granting the `Bash(quarry -*)` ask rule, which matched every command starting with an option; the CLI ask tier is now one rule per unsafe verb. `quarry enable` and `quarry disable` both remove the old rule from a project an earlier version enabled.
