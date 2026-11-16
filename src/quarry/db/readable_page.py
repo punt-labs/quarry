@@ -38,15 +38,24 @@ class ReadablePage:
     def text_of(
         self, document_name: str, page_number: int, collection: str | None
     ) -> str:
-        """Return the page's text; raise ``KeyError`` when no live chunk holds it."""
+        """Return the page's text; raise ``KeyError`` when no live chunk holds it.
+
+        With no *collection* given, the live chunk decides it, and that same
+        collection selects the stored page, so a live chunk in one collection can
+        never authorize another collection's page of the same name and number.
+        """
         table = self._chunks()
-        predicate = self._predicate(document_name, page_number, collection)
-        if table is None or not self._has_chunk(table, predicate):
+        if table is None:
             raise KeyError(page_number)
-        stored = self._pages.get_page_text(document_name, page_number, collection)
+        resolved = self._live_collection(
+            table, self._predicate(document_name, page_number, collection)
+        )
+        stored = self._pages.get_page_text(document_name, page_number, resolved)
         if stored is not None:
             return stored
-        inline = self._inline(table, predicate)
+        inline = self._inline(
+            table, self._predicate(document_name, page_number, resolved)
+        )
         if inline is None:
             raise KeyError(page_number)
         return inline
@@ -57,10 +66,12 @@ class ReadablePage:
         return self._db.open_table(TABLE_NAME)
 
     @staticmethod
-    def _has_chunk(table: LanceTable, predicate: str) -> bool:
-        return bool(
-            table.search().where(predicate).select(["page_number"]).limit(1).to_list()
-        )
+    def _live_collection(table: LanceTable, predicate: str) -> str:
+        """Return the collection of the first chunk matching *predicate*."""
+        rows = table.search().where(predicate).select(["collection"]).limit(1).to_list()
+        if not rows:
+            raise KeyError(predicate)
+        return str(rows[0]["collection"])
 
     @staticmethod
     def _inline(table: LanceTable, predicate: str) -> str | None:

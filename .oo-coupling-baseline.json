@@ -1298,8 +1298,8 @@
     "efferent_coupling": 3.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.3,
-    "avg_lcom": 0.3
+    "max_lcom": 0.536,
+    "avg_lcom": 0.536
   },
   "src/quarry/db/page_store.py": {
     "efferent_coupling": 3.0,

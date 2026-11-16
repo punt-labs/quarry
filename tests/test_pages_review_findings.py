@@ -14,10 +14,12 @@ from starlette.testclient import TestClient
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.db.chunk_store import ChunkStore
+from quarry.db.chunk_writer import ChunkWriter
 from quarry.db.orphan_pages import GRACE_PERIOD, OrphanPageSweep
 from quarry.db.page_store import PageStore
 from quarry.db.pages_migration import LEGACY_COLUMN, MigrationOutcome, PagesMigration
 from quarry.db.schema import TABLE_NAME
+from quarry.db.storage import get_db
 from quarry.http_resources import QuarryResources
 from quarry.page_record import PageRecord
 from tests.test_chunk_store_pages import _chunk, _insert
@@ -116,13 +118,8 @@ class TestOverBudgetLegacyPage:
     """Finding 3: an over-budget legacy page stays readable through /v1/show."""
 
     def test_show_serves_the_retained_inline_text(self, tmp_path: Path) -> None:
-        import lancedb
-
         settings = _mock_settings(tmp_path)
-        _seed_legacy(
-            lancedb.connect(str(settings.lancedb_path)),  # type: ignore[arg-type]
-            [_row("big.txt", 1, 0, _BIG)],
-        )
+        _seed_legacy(get_db(settings.lancedb_path), [_row("big.txt", 1, 0, _BIG)])
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
@@ -203,20 +200,20 @@ class TestDeleteDoesNotStrandChunks:
         _insert(store, [_chunk(1, 0, doc="old.txt")])
         in_put = threading.Event()
         release = threading.Event()
-        real_add = type(store._writer)._add_chunks
+        real_add = ChunkWriter._add_chunks
 
-        def paused_add(self: object, rows: list[dict[str, object]]) -> None:
+        def paused_add(self: ChunkWriter, rows: list[dict[str, object]]) -> None:
             in_put.set()
             release.wait(timeout=5)
-            real_add(self, rows)  # type: ignore[arg-type]
+            real_add(self, rows)
 
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         def ingest() -> None:
             try:
-                with patch.object(type(store._writer), "_add_chunks", paused_add):
+                with patch.object(ChunkWriter, "_add_chunks", paused_add):
                     _insert(store, [_chunk(1, 1, doc="d.txt")])
-            except BaseException as exc:  # noqa: BLE001
+            except (OSError, RuntimeError, ValueError) as exc:
                 errors.append(exc)
 
         t = threading.Thread(target=ingest)
@@ -274,15 +271,185 @@ class TestFailedMigrationLeavesPagesReadable:
     def test_a_page_stays_readable_after_a_failed_startup_migration(
         self, tmp_path: Path
     ) -> None:
-        import lancedb
-
         settings = _mock_settings(tmp_path)
         _seed_legacy(
-            lancedb.connect(str(settings.lancedb_path)),  # type: ignore[arg-type]
-            [_row("a.txt", 1, 0, "legacy text")],
+            get_db(settings.lancedb_path), [_row("a.txt", 1, 0, "legacy text")]
         )
         resources = QuarryResources(settings)
         with patch.object(PagesMigration, "run", side_effect=RuntimeError("scan")):
             resources.warm()
         text = resources.database.store.readable.text_of("a.txt", 1, "col")
         assert text == "legacy text"
+
+
+class TestShowResolvesTheCollectionFromTheLiveChunk:
+    """Round 2, finding 1: a live chunk may not authorize another collection's page."""
+
+    @pytest.mark.parametrize("orphan_collection", ["aaa-other", "zzz-other"])
+    def test_an_orphan_in_another_collection_is_never_served(
+        self, tmp_path: Path, orphan_collection: str
+    ) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        _insert(ctx.database.store, [_chunk(1, 0)])
+        orphan = PageRecord(orphan_collection, "d.txt", 1, "ORPHAN TEXT")
+        PageStore(ctx.database.db).put([orphan])
+        with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
+            resp = tc.get("/v1/show?document=d.txt&page=1")
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "full text of page 1"
+
+    def test_a_live_chunk_without_its_page_is_not_served_from_an_orphan(
+        self, lance_db: LanceDB
+    ) -> None:
+        from quarry.db.readable_page import ReadablePage
+
+        _insert(ChunkStore(lance_db), [_chunk(1, 0)])
+        PageStore(lance_db).delete_where("collection = 'col'")
+        PageStore(lance_db).put([PageRecord("other", "d.txt", 1, "ORPHAN TEXT")])
+        with pytest.raises(KeyError):
+            ReadablePage(lance_db).text_of("d.txt", 1, None)
+
+    def test_an_explicit_collection_still_selects_that_collection(
+        self, tmp_path: Path
+    ) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        _insert(ctx.database.store, [_chunk(1, 0)])
+        with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
+            resp = tc.get("/v1/show?document=d.txt&page=1&collection=col")
+        assert resp.json()["text"] == "full text of page 1"
+
+
+class TestMigrationMemoryIsBounded:
+    """Round 2, finding 2: the seen-page state holds digests, not page text."""
+
+    def test_the_seen_state_holds_no_page_text(self) -> None:
+        from quarry.db.pages_migration import _SeenPages
+
+        seen = _SeenPages()
+        big = "x" * 1_000_000
+        for n in range(20):
+            assert seen.is_new(PageRecord("c", "d", n, big + str(n)))
+        held = sum(len(v) for v in seen._first.values())
+        assert held < 20 * 100
+
+    def test_a_conflict_is_still_detected_by_digest(self) -> None:
+        from quarry.db.pages_migration import _SeenPages
+
+        seen = _SeenPages()
+        assert seen.is_new(PageRecord("c", "d", 1, "one"))
+        assert not seen.is_new(PageRecord("c", "d", 1, "two"))
+        assert seen.conflicts(PageRecord("c", "d", 1, "two")) == 1
+        assert seen.conflicts(PageRecord("c", "d", 1, "one")) == 0
+
+
+class TestVerifyReadsEachPageOnce:
+    """Round 2, finding 6: one stored-text read per distinct page, not per chunk."""
+
+    def test_a_page_shared_by_many_chunks_is_fetched_once(
+        self, lance_db: LanceDB
+    ) -> None:
+        _seed_legacy(lance_db, [_row("d.txt", 1, i, "shared") for i in range(30)])
+        reads: list[int] = []
+        real = PageStore.get_page_text
+
+        def counting(
+            store: PageStore, name: str, number: int, collection: str | None = None
+        ) -> str | None:
+            reads.append(number)
+            return real(store, name, number, collection)
+
+        with patch.object(PageStore, "get_page_text", counting):
+            outcome = PagesMigration(lance_db).run()
+        assert outcome is MigrationOutcome.MIGRATED
+        assert len(reads) <= 2
+
+    def test_a_conflict_among_the_chunks_of_a_page_still_blocks_the_drop(
+        self, lance_db: LanceDB
+    ) -> None:
+        _seed_legacy(lance_db, [_row("d.txt", 1, 0, "a"), _row("d.txt", 1, 1, "b")])
+        assert PagesMigration(lance_db).run() is MigrationOutcome.INCOMPLETE
+
+
+def _held_by_caller() -> bool:
+    """Return whether the calling thread holds ``WRITE_LOCK``.
+
+    A reentrant lock cannot be probed from its owner, so a second thread tries a
+    non-blocking acquire: it fails exactly when the caller holds the lock.
+    """
+    from quarry.db.page_store import WRITE_LOCK
+
+    outcome: list[bool] = []
+
+    def probe() -> None:
+        free = WRITE_LOCK.acquire(blocking=False)
+        if free:
+            WRITE_LOCK.release()
+        outcome.append(not free)
+
+    worker = threading.Thread(target=probe)
+    worker.start()
+    worker.join(timeout=5)
+    return outcome[0]
+
+
+class TestSweepKeepsTheWriteLockShort:
+    """Round 2, finding 8: the batch lookup is outside the lock, the recheck inside."""
+
+    def test_the_batch_lookup_runs_without_the_write_lock(
+        self, lance_db: LanceDB
+    ) -> None:
+        _insert(ChunkStore(lance_db), [_chunk(n, n) for n in range(1, 6)])
+        owned_during_lookup: list[bool] = []
+        real = OrphanPageSweep._batch_live_pages
+
+        def spy(
+            sweep: OrphanPageSweep, rows: list[dict[str, object]]
+        ) -> set[tuple[str, str, int]]:
+            owned_during_lookup.append(_held_by_caller())
+            return real(sweep, rows)
+
+        with patch.object(OrphanPageSweep, "_batch_live_pages", spy):
+            OrphanPageSweep(lance_db).run(now=_aged())
+        assert owned_during_lookup == [False]
+
+    def test_the_delete_recheck_holds_the_write_lock(self, lance_db: LanceDB) -> None:
+        PageStore(lance_db).put([_page("d.txt", 1, "orphan")])
+        owned_during_recheck: list[bool] = []
+        real = OrphanPageSweep._has_chunk
+
+        def spy(sweep: OrphanPageSweep, predicate: str) -> bool:
+            owned_during_recheck.append(_held_by_caller())
+            return real(sweep, predicate)
+
+        with patch.object(OrphanPageSweep, "_has_chunk", spy):
+            OrphanPageSweep(lance_db).run(now=_aged())
+        assert owned_during_recheck == [True]
+
+    def test_a_live_page_is_never_deleted_by_the_batch_lookup(
+        self, lance_db: LanceDB
+    ) -> None:
+        _insert(ChunkStore(lance_db), [_chunk(1, 0), _chunk(2, 1)])
+        PageStore(lance_db).put([_page("d.txt", 9, "orphan")])
+        assert OrphanPageSweep(lance_db).run(now=_aged()) == 1
+        assert PageStore(lance_db).count() == 2
+
+    def test_a_chunk_that_arrives_after_the_batch_lookup_saves_its_page(
+        self, lance_db: LanceDB
+    ) -> None:
+        PageStore(lance_db).put([_page("d.txt", 1, "late")])
+        real = OrphanPageSweep._batch_live_pages
+
+        def late_writer(
+            sweep: OrphanPageSweep, rows: list[dict[str, object]]
+        ) -> set[tuple[str, str, int]]:
+            found = real(sweep, rows)
+            _insert(ChunkStore(lance_db), [_chunk(1, 0)])
+            return found
+
+        with patch.object(OrphanPageSweep, "_batch_live_pages", late_writer):
+            assert OrphanPageSweep(lance_db).run(now=_aged()) == 0
+        assert PageStore(lance_db).get_page_text("d.txt", 1, "col") is not None

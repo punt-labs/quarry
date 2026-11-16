@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import hashlib
 import logging
 from typing import TYPE_CHECKING, Self, final
 
@@ -33,11 +34,16 @@ class MigrationOutcome(enum.Enum):
 
 @final
 class _SeenPages:
-    """The first inline text seen for each page, to catch a later conflicting one."""
+    """A digest of the first inline text seen for each page.
+
+    Holding a fixed-size digest, not the text, keeps memory bounded by the number
+    of pages however large they are, and still tells a later, different value for
+    the same page from a repeat of the first.
+    """
 
     __slots__ = ("_first",)
 
-    _first: dict[tuple[str, str, int], str]
+    _first: dict[tuple[str, str, int], bytes]
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
@@ -49,13 +55,17 @@ class _SeenPages:
         key = (page.collection, page.document_name, page.page_number)
         if key in self._first:
             return False
-        self._first[key] = page.text
+        self._first[key] = self._digest(page.text)
         return True
 
     def conflicts(self, page: PageRecord) -> int:
         """Return 1 when *page* differs from the first text seen for its key."""
         key = (page.collection, page.document_name, page.page_number)
-        return int(self._first[key] != page.text)
+        return int(self._first[key] != self._digest(page.text))
+
+    @staticmethod
+    def _digest(text: str) -> bytes:
+        return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).digest()
 
 
 @final
@@ -159,11 +169,18 @@ class PagesMigration:
         return stored == page.text
 
     def _verified(self, table: LanceTable) -> bool:
-        """Return whether every inline value equals its stored page."""
+        """Return whether every inline value equals its stored page.
+
+        Each page is read from the pages table once, on its first chunk; later
+        chunks of the page are compared against that first value by digest.
+        """
+        seen = _SeenPages()
         for batch in AdaptiveScan(table, _SCAN_COLUMNS, start=_START_BATCH_ROWS):
-            for row in batch:
-                page = self._page_of(row)
-                if page is not None and not self._stored_equal(page):
+            for page in filter(None, map(self._page_of, batch)):
+                if seen.is_new(page):
+                    if not self._stored_equal(page):
+                        return False
+                elif seen.conflicts(page):
                     return False
         return True
 

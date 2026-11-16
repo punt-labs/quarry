@@ -16,6 +16,10 @@ from quarry.db.schema import TABLE_NAME
 from quarry.models import Chunk
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from quarry.db.document_ref import DocumentRef
+    from quarry.page_record import PageRecord
     from quarry.types import LanceDB
 
 _DIM = 768
@@ -121,17 +125,17 @@ class TestCrashSafety:
         real_put, real_add = PageStore.put, ChunkWriter._add_chunks
         real_del_pages, real_del = PageStore.delete, ChunkWriter._delete_chunks
 
-        def put(self: PageStore, pages: object) -> int:
+        def put(self: PageStore, pages: Sequence[PageRecord]) -> int:
             events.append("put pages")
-            return real_put(self, pages)  # type: ignore[arg-type]
+            return real_put(self, pages)
 
-        def add(self: ChunkWriter, records: object) -> None:
+        def add(self: ChunkWriter, records: list[dict[str, object]]) -> None:
             events.append("add chunks")
-            real_add(self, records)  # type: ignore[arg-type]
+            real_add(self, records)
 
-        def del_pages(self: PageStore, ref: object) -> None:
+        def del_pages(self: PageStore, ref: DocumentRef) -> None:
             events.append("delete pages")
-            real_del_pages(self, ref)  # type: ignore[arg-type]
+            real_del_pages(self, ref)
 
         def del_chunks(self: ChunkWriter, predicate: str) -> None:
             events.append("delete chunks")
