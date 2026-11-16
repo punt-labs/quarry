@@ -117,6 +117,10 @@ class RecyclingTable:
         """Drop *columns* from the wrapped table (metadata-only)."""
         self._table.drop_columns(columns)
 
+    def stats(self) -> object:
+        """Return the wrapped table's fragment statistics (loads no row data)."""
+        return self._table.stats()
+
     def optimize(self, *, cleanup_older_than: timedelta | None = None) -> object:
         """Compact data fragments and prune old manifest versions."""
         return self._table.optimize(cleanup_older_than=cleanup_older_than)

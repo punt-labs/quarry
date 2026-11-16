@@ -764,6 +764,17 @@
             "title": "Database Path",
             "type": "string"
           },
+          "disk_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Bytes"
+          },
           "document_count": {
             "title": "Document Count",
             "type": "integer"
@@ -775,6 +786,28 @@
           "embedding_model": {
             "title": "Embedding Model",
             "type": "string"
+          },
+          "free_disk_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Disk Bytes"
+          },
+          "live_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Bytes"
           },
           "provider": {
             "title": "Provider",

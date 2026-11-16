@@ -1,7 +1,7 @@
 {
-  "total": 183,
+  "total": 184,
   "by_category": {
-    "noqa": 145,
+    "noqa": 146,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -66,6 +66,9 @@
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
+    },
+    "src/quarry/doctor_disk.py": {
+      "noqa": 1
     },
     "src/quarry/doctor_fts.py": {
       "noqa": 3
