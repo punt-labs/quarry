@@ -91,3 +91,15 @@ def test_database_outside_the_root_is_keyed_by_a_hash_not_its_path(
     health = FinalizeLedgers.for_database(outside, tmp_path).health()
     assert "secretuser" not in health.database
     assert health.database.startswith("external-")
+
+
+def test_symlinked_alias_and_real_path_share_one_ledger(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    real = root / "projects" / "foo" / "lancedb"
+    real.mkdir(parents=True)
+    alias_dir = root / "active"
+    alias_dir.symlink_to(root / "projects" / "foo")
+    via_alias = FinalizeLedgers.for_database(alias_dir / "lancedb", root)
+    via_real = FinalizeLedgers.for_database(real, root)
+    assert via_alias is via_real
+    assert via_real.health().database == "projects/foo"

@@ -18,7 +18,7 @@ from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.tasks import TaskState
 from quarry.daemon.terminal import Terminal
-from quarry.finalize_ledger import FinalizeLedgers
+from quarry.finalize_steps import ManualOptimize
 from quarry.http_guards import RequestGuards
 
 # Both bodies carry only small option dicts.
@@ -92,9 +92,8 @@ class MaintenanceRoutes(RouteGroup):
         the fragment count from the outcome so the table is scanned only once.
         """
         with Terminal.for_task(state).recording():
-            opt = self.ctx.database.optimizer
-            outcome = await run_in_threadpool(lambda: opt.optimize(force=force))
-            FinalizeLedgers.settle_manual(self.ctx.settings, outcome)
+            step = ManualOptimize(self.ctx.database.optimizer, self.ctx.settings)
+            outcome = await run_in_threadpool(lambda: step.run_manually(force=force))
             state.status = "completed"
             results: dict[str, object] = {
                 "optimized": outcome.optimized,

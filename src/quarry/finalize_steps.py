@@ -120,3 +120,33 @@ class ShadowPushStep:
                 logger.warning(
                     "sync: %s captures %s", collection, result.unpushed_detail()
                 )
+
+
+@final
+class ManualOptimize:
+    """An operator-triggered optimize: index, compact, then settle the ledger.
+
+    The ledger may hold an index-build failure, so only a run that did both
+    steps may clear it; a failure in either propagates and leaves it.
+    """
+
+    __slots__ = ("_ledger", "_opt")
+
+    _opt: TableOptimizer
+    _ledger: FinalizeLedger
+
+    def __new__(cls, opt: TableOptimizer, settings: Settings) -> Self:
+        self = super().__new__(cls)
+        self._opt = opt
+        self._ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
+        return self
+
+    def run_manually(self, *, force: bool) -> OptimizeOutcome:
+        """Create the collection index, compact, and clear the ledger on success."""
+        self._opt.create_collection_index()
+        outcome = self._opt.optimize(force=force)
+        if outcome.optimized:
+            self._ledger.clear()
+        return outcome

@@ -4748,3 +4748,30 @@ class TestManualOptimizeClearsLedger:
             task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
             tc.get(f"/v1/tasks/{task_id}")
         assert ledger.health().consecutive_failures == 1
+
+
+class TestManualOptimizeKeepsIndexFailure:
+    def test_index_failure_is_not_cleared_by_a_compaction_alone(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
+        settings = _mock_settings(tmp_path)
+        ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
+        ledger.record_failure("RuntimeError")
+        ran = OptimizeOutcome(optimized=True, fragments=3)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with (
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=ran),
+            patch(
+                "quarry.db.optimizer.TableOptimizer.create_collection_index",
+                side_effect=RuntimeError("index build failed"),
+            ),
+            TestClient(build_app(ctx)) as tc,
+        ):
+            task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
+            tc.get(f"/v1/tasks/{task_id}")
+        assert ledger.health().consecutive_failures == 1

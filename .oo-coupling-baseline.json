@@ -1611,10 +1611,10 @@
   },
   "src/quarry/finalize_steps.py": {
     "efferent_coupling": 2.0,
-    "public_names": 3.0,
+    "public_names": 4.0,
     "circular_imports": 0.0,
     "max_lcom": 0.333,
-    "avg_lcom": 0.167
+    "avg_lcom": 0.111
   },
   "src/quarry/formatting.py": {
     "efferent_coupling": 1.0,

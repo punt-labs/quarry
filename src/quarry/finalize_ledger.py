@@ -13,9 +13,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from quarry.config import Settings
-    from quarry.db.optimizer import OptimizeOutcome
-
 BACKOFF_BASE_SECONDS: float = 600.0
 BACKOFF_CAP_SECONDS: float = 6 * 3600.0
 # Keeps a pathological multi-day failure log from storing an unbounded string.
@@ -117,20 +114,12 @@ class FinalizeLedgers:
         with cls._guard:
             return cls._ledgers.setdefault(name, FinalizeLedger(name))
 
-    @classmethod
-    def settle_manual(cls, settings: Settings, outcome: OptimizeOutcome) -> None:
-        """Clear the database's failure state after a manual optimize that ran.
-
-        A skipped manual optimize leaves it: the problem it reports persists.
-        """
-        if outcome.optimized:
-            cls.for_database(settings.lancedb_path, settings.quarry_root).clear()
-
     @staticmethod
     def _wire_name(lancedb_path: Path, quarry_root: Path) -> str:
-        directory = lancedb_path.parent
+        # Resolve first so a symlinked alias and the real path share one key.
+        directory = lancedb_path.parent.resolve()
         try:
-            return directory.relative_to(quarry_root).as_posix()
+            return directory.relative_to(quarry_root.resolve()).as_posix()
         except ValueError:
             digest = hashlib.sha256(str(directory).encode()).hexdigest()[:12]
             return f"external-{digest}"
