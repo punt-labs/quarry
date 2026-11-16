@@ -717,7 +717,7 @@ class TestStatus:
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_collections", return_value=[]
             ),
-            patch("quarry.daemon.routes.meta.SyncRegistry") as mock_registry,
+            patch("quarry.daemon.routes.status_snapshot.SyncRegistry") as mock_registry,
         ):
             mock_registry.return_value.list_registrations.return_value = fake_regs
             data = reg_client.get("/v1/status").json()

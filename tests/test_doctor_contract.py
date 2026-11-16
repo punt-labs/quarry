@@ -916,6 +916,8 @@ _CHECKS = (
     "Finalize",
     "Stop timeout",
     "FTS index",
+    "Disk footprint",
+    "Free disk",
     "Sync directories",
     "Sync enable",
     "Unlinked captures",

@@ -41,18 +41,9 @@ class StatusResponse(BaseModel):
     embedding_model: str
     provider: str
     embedding_dimension: int
-
-
-class CoverageResponse(BaseModel):
-    """Per-repo coverage of a collection and its ``<collection>-captures`` sibling.
-
-    Three distinct-name counts scoped to one repo's slice of the shared catalog:
-    non-memory documents in ``collection``, ``session-<id>`` compaction archives
-    in ``captures_collection``, and memory rows (``agent_handle``/``memory_type``
-    set) in ``collection``. A URL capture in the captures collection is neither
-    — it's a background artifact and not surfaced here.
-    """
-
-    documents_indexed: int
-    transcripts_captured: int
-    memories_saved: int
+    # Bytes: the tables' on-disk size, their live-data estimate, and the free space
+    # on the filesystem. None distinguishes a measurement failure from a measured
+    # zero; status stays readable on a sick machine (doctor is the authoritative gate).
+    disk_bytes: int | None = None
+    live_bytes: int | None = None
+    free_disk_bytes: int | None = None

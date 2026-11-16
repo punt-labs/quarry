@@ -2187,3 +2187,24 @@ def test_a_missing_package_version_is_unknown_not_a_crash(
     check_environment()
 
     assert "punt-quarry unknown" in capsys.readouterr().out
+
+
+class TestFinalizeExitCode:
+    """check_environment exits 1 for a failing optimize, 0 for a stopped daemon."""
+
+    @staticmethod
+    def _exit_with(result: CheckResult) -> int:
+        with patch("quarry.doctor._run_checks", return_value=[result]):
+            return check_environment(_skip_header=True)
+
+    def test_failing_optimize_exits_one(self) -> None:
+        failing = CheckResult(
+            name="Finalize", passed=False, message="optimize failing", required=True
+        )
+        assert self._exit_with(failing) == 1
+
+    def test_stopped_daemon_exits_zero(self) -> None:
+        stopped = CheckResult(
+            name="Finalize", passed=False, message="daemon not running", required=False
+        )
+        assert self._exit_with(stopped) == 0

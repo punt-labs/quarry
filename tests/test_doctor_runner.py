@@ -5,8 +5,9 @@ from __future__ import annotations
 import pytest
 
 from quarry.config import Settings
+from quarry.doctor_check_runner import CheckRunner
 from quarry.doctor_preconditions import Need, Preconditions
-from quarry.doctor_runner import CheckEntry, CheckRunner
+from quarry.doctor_runner import CheckEntry, SettingsChecks
 from quarry.home_paths import HomeUnresolvedError
 from quarry.results import CheckResult
 
@@ -123,3 +124,10 @@ def test_resolved_preconditions_hold_the_settings_for_the_checks() -> None:
 
     assert pre.missing(Need.HOME | Need.SETTINGS) is None
     assert pre.settings.lancedb_path.name == "lancedb"
+
+
+def test_settings_entries_include_the_disk_checks_as_advisories() -> None:
+    entries = {e.name: e for e in SettingsChecks.entries(_resolved())}
+
+    assert entries["Disk footprint"].required is False
+    assert entries["Free disk"].required is False

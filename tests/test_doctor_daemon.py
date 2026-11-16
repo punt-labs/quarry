@@ -26,6 +26,7 @@ import pytest
 
 from quarry.api.health import FdHealth
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_health import HealthBodyDiagnostics
 from quarry.doctor_health_probe import HealthProbe
 from quarry.fd_headroom import FdHeadroom
 from quarry.tls import generate_ca, generate_server_cert
@@ -409,34 +410,34 @@ class TestFdWireContract:
     def test_producer_shape_round_trips_through_doctor(self) -> None:
         # Exactly what the /health route emits: FdHealth(...).model_dump().
         wire = FdHealth(open_fds=100, soft_limit=8192).model_dump()
-        headroom = DaemonDiagnostics._fd_from_health({"fd": wire})
+        headroom = HealthBodyDiagnostics._fd_from_health({"fd": wire})
         assert headroom == FdHeadroom(open_fds=100, soft_limit=8192)
 
     def test_null_fd_degrades_to_none(self) -> None:
-        assert DaemonDiagnostics._fd_from_health({"fd": None}) is None
+        assert HealthBodyDiagnostics._fd_from_health({"fd": None}) is None
 
     def test_missing_fd_key_degrades_to_none(self) -> None:
-        assert DaemonDiagnostics._fd_from_health({"state": "ready"}) is None
+        assert HealthBodyDiagnostics._fd_from_health({"state": "ready"}) is None
 
     def test_non_object_fd_degrades_to_none(self) -> None:
         # A string where the object is expected fails validation → None, no raise.
-        assert DaemonDiagnostics._fd_from_health({"fd": "nope"}) is None
+        assert HealthBodyDiagnostics._fd_from_health({"fd": "nope"}) is None
 
     def test_nonpositive_soft_limit_rejected(self) -> None:
         # gt=0 on FdHealth.soft_limit stops a zero/negative limit from
         # deserializing and reaching FdHeadroom.utilization's divide.
-        zero = DaemonDiagnostics._fd_from_health(
+        zero = HealthBodyDiagnostics._fd_from_health(
             {"fd": {"open_fds": 1, "soft_limit": 0}}
         )
         assert zero is None
-        neg = DaemonDiagnostics._fd_from_health(
+        neg = HealthBodyDiagnostics._fd_from_health(
             {"fd": {"open_fds": 1, "soft_limit": -5}}
         )
         assert neg is None
 
     def test_negative_open_fds_rejected(self) -> None:
         # ge=0 on FdHealth.open_fds rejects a negative count on the wire.
-        result = DaemonDiagnostics._fd_from_health(
+        result = HealthBodyDiagnostics._fd_from_health(
             {"fd": {"open_fds": -1, "soft_limit": 8192}}
         )
         assert result is None
@@ -683,7 +684,7 @@ class TestAResetHandshake:
 
 
 class TestFinalizeCheck:
-    """``DaemonDiagnostics.finalize`` reads the ledger off the daemon's /health."""
+    """``FinalizeDiagnostic.check`` reads the ledger off the daemon's /health."""
 
     @staticmethod
     def _body(*entries: dict[str, object]) -> dict[str, object]:
@@ -724,3 +725,51 @@ class TestFinalizeCheck:
         ):
             result = DaemonDiagnostics.finalize(settings)
         assert result.passed is False
+
+
+class TestFinalizeRequiredness:
+    """Only a real failing optimize is required; a stopped daemon is not."""
+
+    @staticmethod
+    def _failing() -> dict[str, object]:
+        return {
+            "state": "ready",
+            "finalize": {
+                "databases": [
+                    {
+                        "database": "/d/lancedb",
+                        "consecutive_failures": 2,
+                        "last_error": "RuntimeError: Offset overflow error",
+                        "retry_in_seconds": 60.0,
+                    }
+                ]
+            },
+        }
+
+    def test_failing_optimize_is_a_required_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with (
+            _run_dir_at(tmp_path) as settings,
+            patch.object(HealthProbe, "fetch", return_value=self._failing()),
+        ):
+            result = DaemonDiagnostics.finalize(settings)
+        assert (result.passed, result.required) == (False, True)
+
+    def test_clean_ledger_passes_and_is_not_a_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        body = {"state": "ready", "finalize": {"databases": []}}
+        with (
+            _run_dir_at(tmp_path) as settings,
+            patch.object(HealthProbe, "fetch", return_value=body),
+        ):
+            result = DaemonDiagnostics.finalize(settings)
+        assert (result.passed, result.required) == (True, False)
+
+    def test_stopped_daemon_is_not_a_required_failure(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with (
+            _run_dir_at(tmp_path) as settings,
+            patch.object(HealthProbe, "fetch", return_value=None),
+        ):
+            result = DaemonDiagnostics.finalize(settings)
+        assert (result.passed, result.required) == (False, False)

@@ -1,7 +1,7 @@
 {
-  "total": 183,
+  "total": 184,
   "by_category": {
-    "noqa": 145,
+    "noqa": 146,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -62,10 +62,16 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 36
+      "noqa": 33
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
+    },
+    "src/quarry/doctor_disk.py": {
+      "noqa": 1
+    },
+    "src/quarry/doctor_fts.py": {
+      "noqa": 3
     },
     "src/quarry/doctor_inference.py": {
       "noqa": 1
@@ -102,6 +108,9 @@
       "noqa": 1
     },
     "src/quarry/extractors/text_extractor.py": {
+      "noqa": 1
+    },
+    "src/quarry/finalize_steps.py": {
       "noqa": 1
     },
     "src/quarry/hooks.py": {
@@ -177,9 +186,6 @@
     "src/quarry/sitemap_web_client.py": {
       "noqa": 1
     },
-    "src/quarry/sync_finalize.py": {
-      "noqa": 1
-    },
     "src/quarry/sync_ingest.py": {
       "noqa": 1
     },
@@ -190,5 +196,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-11-14T17:37:51Z"
+  "updated_at": "2026-11-16T20:50:23Z"
 }

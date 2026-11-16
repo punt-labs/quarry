@@ -23,6 +23,7 @@ from quarry.api.collections import (
     CollectionList,
     DeleteCollectionRequest,
 )
+from quarry.api.coverage import CoverageResponse
 from quarry.api.databases import DatabaseInfo, DatabaseList
 from quarry.api.deregister import DeregisterAccepted, DeregisterRequest
 from quarry.api.documents import DeleteDocumentRequest, DocumentInfo, DocumentList
@@ -36,7 +37,7 @@ from quarry.api.insights import (
     InsightsResponse,
 )
 from quarry.api.maintenance import BackfillRequest, OptimizeRequest
-from quarry.api.meta import CoverageResponse, HealthResponse, StatusResponse
+from quarry.api.meta import HealthResponse, StatusResponse
 from quarry.api.registrations import (
     RegisterRequest,
     RegistrationInfo,

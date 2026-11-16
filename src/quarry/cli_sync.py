@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Self, final
 import typer
 
 from quarry.cli_directories import DirectoryCli
-from quarry.formatting import format_insights, format_status
+from quarry.reports import InsightsReport, StatusReport
 
 if TYPE_CHECKING:
     from quarry.cli_captures import CliPlumbing
@@ -68,11 +68,10 @@ class SyncCli:
 
     def _status(self) -> None:
         """Show database status: documents, chunks, storage, model info."""
-        resp = self._p.client().status()
-        data = resp.model_dump()
-        self._p.emit(data, format_status(data))
+        data = self._p.client().status().model_dump()
+        self._p.emit(data, StatusReport(data).render())
 
     def _insights(self) -> None:
         """Show recall telemetry: query volume, latency, and recall breakdowns."""
         resp = self._p.client().insights()
-        self._p.emit(resp.model_dump(), format_insights(resp))
+        self._p.emit(resp.model_dump(), InsightsReport(resp).render())

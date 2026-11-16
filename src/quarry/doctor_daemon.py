@@ -19,15 +19,12 @@ import stat
 from functools import partial
 from typing import TYPE_CHECKING, final
 
-from pydantic import ValidationError
-
-from quarry.api.health import FdHealth, FinalizeHealth
 from quarry.daemon_ca_error import DaemonCaError
 from quarry.daemon_unready_error import DaemonUnreadyError
 from quarry.db_pointer import SELECTION
-from quarry.doctor_health_probe import HEALTH_HOST, HealthProbe, HealthUnavailableError
+from quarry.doctor_health import HealthBodyDiagnostics
+from quarry.doctor_health_probe import HEALTH_HOST, HealthProbe
 from quarry.doctor_stop_timeout import StopTimeoutDiagnostic
-from quarry.fd_headroom import FdHeadroom
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
 
@@ -35,11 +32,6 @@ if TYPE_CHECKING:
     from quarry.config import Settings
 
 _TOKEN_MODE = 0o600
-# Reported when the daemon's fd headroom cannot be read: fd headroom is a
-# property of the resident daemon, so with no daemon there is nothing to sample
-# (never a local CLI fallback — that fallback is the observability bug itself).
-_FD_UNAVAILABLE = "daemon fd headroom unavailable — daemon not running"
-_FINALIZE_UNAVAILABLE = "daemon finalize state unavailable — daemon not running"
 
 
 @final
@@ -130,77 +122,13 @@ class DaemonDiagnostics:
 
     @classmethod
     def fd_headroom(cls, settings: Settings) -> CheckResult:
-        """Report the DAEMON's open-fd headroom, read from its ``/health``.
-
-        The resident daemon is the only long-lived process that accumulates
-        LanceDB reader descriptors and can hit ``EMFILE``, so its headroom — not
-        the short-lived CLI's shell ``ulimit`` — is what this check must surface.
-        Sampling locally would report the invoking shell's limit, meaningless for
-        the daemon; reading the daemon's self-sampled ``fd`` field is the fix.
-        Degrade to a clear advisory when the daemon is unreachable or reported no
-        fd headroom; never fall back to a local sample — that fallback IS the bug.
-        """
-        result = partial(CheckResult, name="FD headroom", required=False)
-        try:
-            body = HealthProbe.read(cls._run_dir(settings), _FD_UNAVAILABLE)
-        except HealthUnavailableError as exc:
-            return result(passed=False, message=str(exc))
-        headroom = cls._fd_from_health(body)
-        if headroom is None:
-            return result(
-                passed=False,
-                message="daemon reachable but reported no fd headroom",
-            )
-        if headroom.is_low:
-            return result(
-                passed=False,
-                message=f"daemon {headroom.describe()} — over 80%, "
-                "risk of descriptor exhaustion",
-            )
-        return result(passed=True, message=f"daemon {headroom.describe()}")
+        """Report the DAEMON's open-fd headroom, read from its ``/health``."""
+        return HealthBodyDiagnostics.fd_headroom(cls._run_dir(settings))
 
     @classmethod
     def finalize(cls, settings: Settings) -> CheckResult:
-        """Report the daemon's finalize-optimize failure ledger from ``/health``.
-
-        The ledger lives in the resident daemon, so it is read off the same
-        ``/health`` body as fd headroom; a failing optimize leaks orphaned files
-        every attempt and is otherwise visible only in the daemon log.
-        """
-        result = partial(CheckResult, name="Finalize", required=False)
-        try:
-            body = HealthProbe.read(cls._run_dir(settings), _FINALIZE_UNAVAILABLE)
-        except HealthUnavailableError as exc:
-            return result(passed=False, message=str(exc))
-        try:
-            health = FinalizeHealth.model_validate(body.get("finalize"))
-        except ValidationError:
-            return result(
-                passed=False, message="daemon reachable but reported no finalize state"
-            )
-        failing = [d for d in health.databases if d.consecutive_failures > 0]
-        if not failing:
-            return result(passed=True, message="optimize healthy")
-        detail = "; ".join(
-            f"{d.database}: {d.consecutive_failures} consecutive failures, "
-            f"retry in {d.retry_in_seconds:.0f}s ({d.last_error})"
-            for d in failing
-        )
-        return result(passed=False, message=f"optimize failing — {detail}")
-
-    @staticmethod
-    def _fd_from_health(body: dict[str, object]) -> FdHeadroom | None:
-        """Build the daemon's ``FdHeadroom`` from the ``/health`` ``fd`` field.
-
-        Validates the wire value through :class:`FdHealth` — the single owner of
-        the fd shape — returning ``None`` (the "no headroom to render" signal)
-        when the daemon reported ``fd: null`` or the field is malformed.
-        """
-        try:
-            health = FdHealth.model_validate(body.get("fd"))
-        except ValidationError:
-            return None
-        return FdHeadroom(open_fds=health.open_fds, soft_limit=health.soft_limit)
+        """Report the daemon's finalize-optimize failure ledger from ``/health``."""
+        return HealthBodyDiagnostics.finalize(cls._run_dir(settings))
 
     @staticmethod
     def _run_dir(settings: Settings) -> RunDir:

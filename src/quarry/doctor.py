@@ -11,14 +11,14 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from quarry.claude_desktop_mcp import ClaudeDesktopMcp
+from quarry.doctor_check_runner import CheckRunner
 from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_failure import CheckFailure
-from quarry.doctor_fts import FtsIndexCheck
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_mcp import ClaudeCodeMcp
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_preconditions import Need, Preconditions
-from quarry.doctor_runner import CheckEntry, CheckRunner, SettingsChecks
+from quarry.doctor_runner import CheckEntry, SettingsChecks
 from quarry.gpu_runtime import GpuRuntime
 from quarry.install_directories import InstallDirectories
 from quarry.opencv_headless import HeadlessOpenCv
@@ -324,7 +324,7 @@ def _run_checks() -> list[CheckResult]:
             lambda: UserScopeShadow(ClaudeCodeMcp()).prune().as_check_result(),
             needs=Need.HOME,
         ),
-        *SettingsChecks.entries(pre, FtsIndexCheck.check),
+        *SettingsChecks.entries(pre),
     ]
     with _quiet_logging():
         return CheckRunner.run(entries, pre)
