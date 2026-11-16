@@ -226,16 +226,23 @@ class TestOrphanPageSweepStep:
     def test_finalize_sweeps_orphan_pages_after_optimize(self, tmp_path: Path) -> None:
         fin = _finalizer_at(tmp_path / "lancedb")
         calls: list[str] = []
+
+        def optimize(**_: object) -> OptimizeOutcome:
+            calls.append("optimize")
+            return OptimizeOutcome(optimized=True, fragments=1)
+
+        def sweep_run() -> int:
+            calls.append("sweep")
+            return 0
+
         with (
             patch("quarry.finalize_steps.TableOptimizer") as optimizer,
             patch("quarry.sync_finalize.OrphanPageSweep") as sweep,
             patch("quarry.sync_finalize.ShadowPushStep"),
             patch.object(SyncFinalizer, "_gc"),
         ):
-            optimizer.return_value.optimize.side_effect = lambda **_: (
-                calls.append("optimize") or OptimizeOutcome(optimized=True, fragments=1)
-            )
-            sweep.return_value.run.side_effect = lambda: calls.append("sweep")
+            optimizer.return_value.optimize.side_effect = optimize
+            sweep.return_value.run.side_effect = sweep_run
             fin.run()
         assert calls == ["optimize", "sweep"]
 

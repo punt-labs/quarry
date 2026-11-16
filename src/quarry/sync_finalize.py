@@ -34,7 +34,7 @@ class SyncFinalizer:
         return self
 
     def run(self) -> None:
-        """Optimize, sweep orphan pages, push capture shadows, then GC, each isolated."""
+        """Optimize, sweep orphan pages, push shadows, then GC, each isolated."""
         self._optimize()
         self._sweep_pages()
         self._push_shadows()
