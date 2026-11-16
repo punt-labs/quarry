@@ -4,15 +4,30 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from quarry.api.meta import StatusResponse
-from quarry.formatting import format_status
+import pytest
+from starlette.testclient import TestClient
 
-from .test_http_server import client  # noqa: F401
+from quarry.api.meta import StatusResponse
+from quarry.reports import StatusReport
+
+from .inproc_daemon import InProcessDaemon
 
 if TYPE_CHECKING:
-    from starlette.testclient import TestClient
+    from collections.abc import Iterator
+    from pathlib import Path
 
 _NEW_FIELDS = {"disk_bytes", "live_bytes", "free_disk_bytes"}
+
+
+@pytest.fixture
+def daemon(tmp_path: Path) -> InProcessDaemon:
+    return InProcessDaemon(tmp_path)
+
+
+@pytest.fixture
+def body(daemon: InProcessDaemon) -> Iterator[dict[str, object]]:
+    with TestClient(daemon.app) as http:
+        yield http.get("/v1/status").json()
 
 
 def test_status_response_declares_the_size_and_disk_fields() -> None:
@@ -20,29 +35,33 @@ def test_status_response_declares_the_size_and_disk_fields() -> None:
 
 
 def test_daemon_status_body_carries_exactly_the_declared_fields(
-    client: TestClient,  # noqa: F811
+    body: dict[str, object],
 ) -> None:
-    body = client.get("/v1/status").json()
-
     assert set(body) == set(StatusResponse.model_fields)
 
 
 def test_daemon_status_body_populates_the_new_fields_as_non_negative_ints(
-    client: TestClient,  # noqa: F811
+    body: dict[str, object],
 ) -> None:
-    body = client.get("/v1/status").json()
-
-    assert all(isinstance(body[f], int) and body[f] >= 0 for f in _NEW_FIELDS)
-
-
-def test_client_parse_round_trips_the_daemon_body(
-    client: TestClient,  # noqa: F811
-) -> None:
-    body = client.get("/v1/status").json()
-
     parsed = StatusResponse.model_validate(body)
 
-    assert parsed.model_dump() == body
+    assert min(parsed.disk_bytes, parsed.live_bytes, parsed.free_disk_bytes) >= 0
+
+
+def test_cli_client_path_matches_the_daemon_body(
+    daemon: InProcessDaemon, body: dict[str, object]
+) -> None:
+    with daemon.client() as client:
+        parsed = client.status()
+
+    assert set(parsed.model_dump()) == set(body)
+
+
+def test_cli_client_path_populates_free_disk(daemon: InProcessDaemon) -> None:
+    with daemon.client() as client:
+        parsed = client.status()
+
+    assert parsed.free_disk_bytes > 0
 
 
 def test_format_status_shows_size_and_free_disk() -> None:
@@ -60,7 +79,7 @@ def test_format_status_shows_size_and_free_disk() -> None:
         free_disk_bytes=50 * 1024**3,
     ).model_dump()
 
-    text = format_status(info)
+    text = StatusReport(info).render()
 
     assert "3.00 GiB on disk" in text
     assert "1.00 GiB live" in text

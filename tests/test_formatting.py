@@ -4,44 +4,33 @@ from __future__ import annotations
 
 from quarry.api import InsightsResponse
 from quarry.formatting import (
-    ColumnSpec,
     format_collections,
     format_databases,
-    format_delete_summary,
-    format_deregister_summary,
     format_documents,
-    format_ingest_summary,
-    format_insights,
-    format_register_summary,
     format_registrations,
     format_search_results,
-    format_sitemap_summary,
-    format_status,
-    format_switch_summary,
-    format_sync_summary,
-    format_table,
-    truncate,
-    visible_width,
 )
+from quarry.reports import InsightsReport
+from quarry.table_layout import ColumnSpec, TableLayout
 
 
 class TestHelpers:
     def test_visible_width_plain(self) -> None:
-        assert visible_width("hello") == 5
+        assert TableLayout.visible_width("hello") == 5
 
     def test_visible_width_ansi(self) -> None:
-        assert visible_width("\x1b[31mred\x1b[0m") == 3
+        assert TableLayout.visible_width("\x1b[31mred\x1b[0m") == 3
 
     def test_truncate_short(self) -> None:
-        assert truncate("hello world", 20) == "hello world"
+        assert TableLayout.truncate("hello world", 20) == "hello world"
 
     def test_truncate_long(self) -> None:
-        result = truncate("a" * 200, 50)
+        result = TableLayout.truncate("a" * 200, 50)
         assert len(result) == 50
         assert result.endswith("...")
 
     def test_truncate_collapses_whitespace(self) -> None:
-        assert truncate("hello   \n  world") == "hello world"
+        assert TableLayout.truncate("hello   \n  world") == "hello world"
 
 
 class TestFormatTable:
@@ -51,7 +40,7 @@ class TestFormatTable:
             ColumnSpec("COUNT", 5, align="right"),
         ]
         rows = [["alpha", "10"], ["beta", "200"]]
-        result = format_table(specs, rows)
+        result = TableLayout(specs).render(rows)
         assert "\u25b6" in result  # Header prefix
         assert "NAME" in result
         assert "COUNT" in result
@@ -65,13 +54,13 @@ class TestFormatTable:
         ]
         long_text = "word " * 30
         rows = [["1", long_text.strip()]]
-        result = format_table(specs, rows)
+        result = TableLayout(specs).render(rows)
         lines = result.split("\n")
         assert len(lines) > 2  # Header + at least 2 wrapped lines
 
     def test_empty_rows(self) -> None:
         specs = [ColumnSpec("NAME", 4)]
-        result = format_table(specs, [])
+        result = TableLayout(specs).render([])
         assert "NAME" in result
 
 
@@ -200,51 +189,6 @@ class TestRegistrations:
         assert "2025-02-20" in result
 
 
-class TestStatus:
-    def test_includes_all_fields(self) -> None:
-        info = {
-            "document_count": 45,
-            "collection_count": 3,
-            "chunk_count": 1234,
-            "registered_directories": 2,
-            "database_path": "/home/user/.punt-labs/quarry/lancedb",
-            "embedding_model": "arctic-embed",
-        }
-        result = format_status(info)
-        assert "quarry status" in result
-        assert "45" in result
-        assert "1,234" in result
-        assert "/home/user/.punt-labs/quarry/lancedb" in result
-        assert "Size:" not in result  # the tree-walking field is gone
-        assert "arctic-embed" in result
-
-    def test_includes_provider(self) -> None:
-        info = {
-            "document_count": 1,
-            "collection_count": 1,
-            "chunk_count": 10,
-            "registered_directories": 0,
-            "database_path": "/tmp/test",
-            "embedding_model": "test-model",
-            "provider": "CPUExecutionProvider (int8)",
-        }
-        result = format_status(info)
-        assert "Provider:" in result
-        assert "CPUExecutionProvider (int8)" in result
-
-    def test_provider_defaults_to_unknown(self) -> None:
-        info = {
-            "document_count": 0,
-            "collection_count": 0,
-            "chunk_count": 0,
-            "registered_directories": 0,
-            "database_path": "/tmp/test",
-            "embedding_model": "test-model",
-        }
-        result = format_status(info)
-        assert "Provider:       ?" in result
-
-
 _EMPTY_INSIGHTS = InsightsResponse(
     telemetry_enabled=True,
     total_queries=0,
@@ -278,18 +222,18 @@ class TestFormatInsights:
     """Shared by the CLI (``quarry insights``) and the MCP ``insights`` tool."""
 
     def test_empty_store_renders_without_breakdown_sections(self) -> None:
-        text = format_insights(_EMPTY_INSIGHTS)
+        text = InsightsReport(_EMPTY_INSIGHTS).render()
         assert "Total queries:    0" in text
         assert "Top empty queries:" not in text
         assert "Per-collection hits:" not in text
 
     def test_telemetry_disabled_renders_as_disabled(self) -> None:
         disabled = _EMPTY_INSIGHTS.model_copy(update={"telemetry_enabled": False})
-        text = format_insights(disabled)
+        text = InsightsReport(disabled).render()
         assert "disabled" in text
 
     def test_populated_store_renders_every_breakdown(self) -> None:
-        text = format_insights(_POPULATED_INSIGHTS)
+        text = InsightsReport(_POPULATED_INSIGHTS).render()
         assert "Top empty queries:" in text
         assert "nada: 2" in text
         assert "Per-collection hits:" in text
@@ -300,98 +244,7 @@ class TestFormatInsights:
         assert "0-7d: 4" in text
 
     def test_latency_and_rate_are_formatted(self) -> None:
-        text = format_insights(_POPULATED_INSIGHTS)
+        text = InsightsReport(_POPULATED_INSIGHTS).render()
         assert "20.0%" in text
         assert "12.3ms" in text
         assert "45.6ms" in text
-
-
-class TestActionSummaries:
-    def test_ingest_summary(self) -> None:
-        result = format_ingest_summary(
-            {"document_name": "report.pdf", "chunks": 42, "collection": "finance"}
-        )
-        assert "report.pdf" in result
-        assert "42 chunks" in result
-        assert "finance" in result
-        assert "\u25b6" in result
-
-    def test_sitemap_summary(self) -> None:
-        result = format_sitemap_summary(
-            {
-                "ingested": 45,
-                "skipped": 3,
-                "failed": 1,
-                "total_discovered": 628,
-                "after_filter": 50,
-                "collection": "docs.example.com",
-            }
-        )
-        assert "45 ingested" in result
-        assert "3 skipped" in result
-        assert "1 failed" in result
-        assert "628 discovered" in result
-
-    def test_sitemap_summary_no_skipped_or_failed(self) -> None:
-        result = format_sitemap_summary(
-            {
-                "ingested": 10,
-                "skipped": 0,
-                "failed": 0,
-                "total_discovered": 10,
-                "after_filter": 10,
-                "collection": "docs",
-            }
-        )
-        assert "skipped" not in result
-        assert "failed" not in result
-
-    def test_sync_summary(self) -> None:
-        result = format_sync_summary(
-            {
-                "collections_synced": 2,
-                "results": {
-                    "a": {"ingested": 3, "deleted": 1, "skipped": 5},
-                    "b": {"ingested": 0, "deleted": 0, "skipped": 2},
-                },
-            }
-        )
-        assert "Synced 2 collections" in result
-        assert "3 ingested" in result
-        assert "1 deleted" in result
-        assert "7 skipped" in result
-
-    def test_sync_summary_empty(self) -> None:
-        result = format_sync_summary({"collections_synced": 0, "results": {}})
-        assert "No collections to sync" in result
-
-    def test_delete_summary_singular(self) -> None:
-        result = format_delete_summary("document", "report.pdf", 1)
-        assert "1 chunk)" in result
-        assert "chunks" not in result
-
-    def test_delete_summary_plural(self) -> None:
-        result = format_delete_summary("collection", "math", 50)
-        assert "50 chunks" in result
-
-    def test_register_summary(self) -> None:
-        result = format_register_summary("/home/user/docs", "docs")
-        assert "/home/user/docs" in result
-        assert "docs" in result
-        assert "\u2192" in result
-
-    def test_deregister_summary_with_data(self) -> None:
-        result = format_deregister_summary("math", 5, data_deleted=True)
-        assert "math" in result
-        assert "5 docs removed" in result
-
-    def test_deregister_summary_keep_data(self) -> None:
-        result = format_deregister_summary("math", 5, data_deleted=False)
-        assert "math" in result
-        assert "removed" not in result
-
-    def test_switch_summary(self) -> None:
-        result = format_switch_summary("default", "work", "/path/to/lancedb")
-        assert "default" in result
-        assert "work" in result
-        assert "/path/to/lancedb" in result

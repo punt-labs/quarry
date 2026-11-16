@@ -29,15 +29,13 @@ from quarry.client import QuarryClient, TargetResolver
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.formatting import (
-    format_insights,
     format_search_results,
-    format_status,
-    format_switch_summary,
 )
 from quarry.mcp_catalog import ResourceCatalog
 from quarry.mcp_documents import DocumentTools
 from quarry.mcp_guard import ToolGuard
 from quarry.mcp_missions import MissionTools
+from quarry.reports import InsightsReport, StatusReport
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -289,12 +287,12 @@ class McpTools:
     @ToolGuard.wrap
     def status(self) -> str:
         """Use to check how much is indexed before you search or ingest."""
-        return format_status(self._connect().status().model_dump())
+        return StatusReport(self._connect().status().model_dump()).render()
 
     @ToolGuard.wrap
     def insights(self) -> str:
         """Use to read your own recall stats: query volume, latency, recall mix."""
-        return format_insights(self._connect().insights())
+        return InsightsReport(self._connect().insights()).render()
 
     @ToolGuard.wrap
     def use_database(self, name: str) -> str:
@@ -333,7 +331,7 @@ class McpTools:
         # resolve_db_paths raises ValueError on a bad name, leaving the db unchanged.
         resolved = Settings.load().resolve_db_paths(name)
         SELECTION.override(name)
-        return format_switch_summary(previous, name, str(resolved.lancedb_path))
+        return f"\u25b6  Switched {previous} \u2192 {name} ({resolved.lancedb_path})"
 
     @staticmethod
     def _reject_blank(value: str, label: str) -> str | None:

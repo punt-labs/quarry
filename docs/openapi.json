@@ -764,6 +764,11 @@
             "title": "Database Path",
             "type": "string"
           },
+          "disk_bytes": {
+            "default": 0,
+            "title": "Disk Bytes",
+            "type": "integer"
+          },
           "document_count": {
             "title": "Document Count",
             "type": "integer"
@@ -775,6 +780,16 @@
           "embedding_model": {
             "title": "Embedding Model",
             "type": "string"
+          },
+          "free_disk_bytes": {
+            "default": 0,
+            "title": "Free Disk Bytes",
+            "type": "integer"
+          },
+          "live_bytes": {
+            "default": 0,
+            "title": "Live Bytes",
+            "type": "integer"
           },
           "provider": {
             "title": "Provider",
