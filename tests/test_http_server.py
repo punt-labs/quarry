@@ -1397,7 +1397,7 @@ class TestShow:
 
     def test_show_page_text(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.page_store.PageStore.get_page_text",
+            "quarry.db.readable_page.ReadablePage.text_of",
             return_value="Hello world",
         ):
             data = client.get("/v1/show?document=foo&page=1").json()
@@ -1462,7 +1462,9 @@ class TestShow:
         assert resp.status_code == 400
 
     def test_show_page_not_found(self, client: TestClient) -> None:
-        with patch("quarry.db.page_store.PageStore.get_page_text", return_value=None):
+        with patch(
+            "quarry.db.readable_page.ReadablePage.text_of", side_effect=KeyError(1)
+        ):
             resp = client.get("/v1/show?document=foo&page=1")
 
         assert resp.status_code == 404
@@ -1479,13 +1481,13 @@ class TestShow:
 
     def test_show_with_collection(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.page_store.PageStore.get_page_text",
+            "quarry.db.readable_page.ReadablePage.text_of",
             return_value="page text",
         ) as mock_get_page:
             client.get("/v1/show?document=foo&page=1&collection=math")
 
-        _, kwargs = mock_get_page.call_args
-        assert kwargs["collection"] == "math"
+        args, _ = mock_get_page.call_args
+        assert args[2] == "math"
 
     def test_show_metadata_with_collection(self, client: TestClient) -> None:
         with patch(

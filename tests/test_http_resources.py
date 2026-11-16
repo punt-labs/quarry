@@ -187,4 +187,4 @@ class TestWarmMigratesPages:
             resources = QuarryResources(settings)
             resources.warm()
         migration.assert_called_once_with(resources.database.db)
-        migration.return_value.run.assert_called_once_with()
+        migration.return_value.run_failing_open.assert_called_once_with()

@@ -82,7 +82,7 @@ class QuarryResources:
         distinctly so a failure is attributed to the resource that failed.
         """
         logger.info("Warming write database connection...")
-        PagesMigration(self.database.db).run()
+        PagesMigration(self.database.db).run_failing_open()
         logger.info("Warming isolated query database connection...")
         _ = self.query_database
         # Only the real-load path builds ONNX; an injected override just returns

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.db.adaptive_scan import AdaptiveScan
 from quarry.db.page_store import PageStore
-from quarry.db.row_budget import RowBudgetError
+from quarry.db.row_budget import RowBudget, RowBudgetError
 from quarry.db.schema import TABLE_NAME
 from quarry.page_record import PageRecord
 
@@ -35,22 +35,45 @@ class MigrationOutcome(enum.Enum):
 class PagesMigration:
     """Backfill ``pages`` from ``chunks.page_raw_text``, verify, then drop the column.
 
-    The backfill reads in small adaptive batches (a poisoned table overflows a
-    large read) and upserts, so an interrupted run is finished by the next one.
-    The column is dropped only after a second pass proves every page is in the
-    pages table with equal text; any gap leaves the column, and the data, in place.
+    A chunk written after the pages table existed has no inline text (null), so a
+    null is never page content: it is skipped, and the page its writer put is the
+    one that counts.  The backfill reads in small adaptive batches, writes each
+    batch once, and skips a page already stored with equal text, so a rerun after
+    an interrupted or incomplete run does little work.  Two different inline
+    values for one page, or a page over the budget, leave the column in place.
+    The column is dropped only when a second pass finds every inline value equal
+    to the stored page and every chunk's page present.
     """
 
-    __slots__ = ("_db", "_pages")
+    __slots__ = ("_budget", "_db", "_pages")
 
+    _budget: RowBudget
     _db: LanceDB
     _pages: PageStore
 
     def __new__(cls, db: LanceDB) -> Self:
         self = super().__new__(cls)
+        self._budget = RowBudget()
         self._db = db
         self._pages = PageStore(db)
         return self
+
+    def run_failing_open(self) -> MigrationOutcome:
+        """Run the migration; a failure is logged and reported as incomplete.
+
+        For daemon startup, which must keep serving when a legacy table cannot be
+        migrated: the inline column is only dropped after a clean verification, so
+        a failure leaves every page readable.
+        """
+        try:
+            return self.run()
+        except (OSError, RuntimeError, ValueError):
+            logger.warning(
+                "pages migration failed; %s kept on the chunks table",
+                LEGACY_COLUMN,
+                exc_info=True,
+            )
+            return MigrationOutcome.INCOMPLETE
 
     def run(self) -> MigrationOutcome:
         """Migrate when the chunks table still holds page text; report the result."""
@@ -59,8 +82,7 @@ class PagesMigration:
         table = self._db.open_table(TABLE_NAME)
         if LEGACY_COLUMN not in {f.name for f in table.schema}:
             return MigrationOutcome.NOT_NEEDED
-        skipped = self._backfill(table)
-        if skipped or not self._verified(table):
+        if self._backfill(table) or not self._verified(table):
             logger.warning(
                 "pages migration incomplete; %s kept on the chunks table", LEGACY_COLUMN
             )
@@ -70,59 +92,70 @@ class PagesMigration:
         return MigrationOutcome.MIGRATED
 
     def _backfill(self, table: LanceTable) -> int:
-        """Upsert every distinct page; return how many were refused."""
-        seen: set[tuple[str, str, int]] = set()
+        """Write every distinct inline page; return how many could not be moved."""
+        first: dict[tuple[str, str, int], str] = {}
         pending: list[PageRecord] = []
-        skipped = 0
+        unmoved = 0
         for batch in AdaptiveScan(table, _SCAN_COLUMNS, start=_START_BATCH_ROWS):
             for row in batch:
                 page = self._page_of(row)
-                key = (page.collection, page.document_name, page.page_number)
-                if key in seen:
+                if page is None:
                     continue
-                seen.add(key)
+                key = (page.collection, page.document_name, page.page_number)
+                if key in first:
+                    unmoved += first[key] != page.text
+                    continue
+                first[key] = page.text
+                if self._stored_equal(page):
+                    continue
                 pending.append(page)
                 if len(pending) >= _PUT_PAGES:
-                    skipped += self._put(pending)
+                    unmoved += self._put(pending)
                     pending = []
-        return skipped + self._put(pending)
+        return unmoved + self._put(pending)
 
     def _put(self, pages: list[PageRecord]) -> int:
-        """Write *pages*; return how many were refused for exceeding the budget."""
-        refused = 0
-        for page in pages:
-            try:
-                self._pages.put([page])
-            except RowBudgetError:
-                refused += 1
-                logger.warning(
-                    "page %d of a document is over the page budget; not migrated",
-                    page.page_number,
-                )
-        return refused
+        """Write *pages* in one commit; return how many were over the budget."""
+        accepted = [p for p in pages if self._fits(p)]
+        if accepted:
+            self._pages.put(accepted)
+        return len(pages) - len(accepted)
+
+    def _fits(self, page: PageRecord) -> bool:
+        try:
+            self._budget.require_page(page.text)
+        except RowBudgetError:
+            logger.warning(
+                "page %d of a document is over the page budget; not migrated",
+                page.page_number,
+            )
+            return False
+        return True
+
+    def _stored_equal(self, page: PageRecord) -> bool:
+        stored = self._pages.get_page_text(
+            page.document_name, page.page_number, page.collection
+        )
+        return stored == page.text
 
     def _verified(self, table: LanceTable) -> bool:
-        """Return whether every chunk's page is stored with equal text."""
-        checked: set[tuple[str, str, int]] = set()
+        """Return whether every inline value equals its stored page."""
         for batch in AdaptiveScan(table, _SCAN_COLUMNS, start=_START_BATCH_ROWS):
             for row in batch:
                 page = self._page_of(row)
-                key = (page.collection, page.document_name, page.page_number)
-                if key in checked:
-                    continue
-                checked.add(key)
-                stored = self._pages.get_page_text(
-                    page.document_name, page.page_number, page.collection
-                )
-                if stored != page.text:
+                if page is not None and not self._stored_equal(page):
                     return False
         return True
 
     @staticmethod
-    def _page_of(row: dict[str, object]) -> PageRecord:
+    def _page_of(row: dict[str, object]) -> PageRecord | None:
+        """Return the page *row* carries inline, or ``None`` when its text is null."""
+        text = row[LEGACY_COLUMN]
+        if text is None:
+            return None
         return PageRecord(
             str(row["collection"]),
             str(row["document_name"]),
             int(str(row["page_number"])),
-            str(row[LEGACY_COLUMN]),
+            str(text),
         )

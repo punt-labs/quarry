@@ -396,4 +396,4 @@ def test_a_sibling_database_is_migrated_when_its_connection_opens(
     ):
         roster.ensure_database("sibling")
     migration.assert_called_once_with(connect.return_value.db)
-    migration.return_value.run.assert_called_once_with()
+    migration.return_value.run_failing_open.assert_called_once_with()

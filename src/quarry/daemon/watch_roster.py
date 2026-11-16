@@ -123,7 +123,7 @@ class WatchRoster:
         )
         self._db_settings[name] = settings
         database = Database.connect(settings.lancedb_path)
-        PagesMigration(database.db).run()
+        PagesMigration(database.db).run_failing_open()
         self._conns[name] = database
 
     def database_of(self, name: str) -> Database:

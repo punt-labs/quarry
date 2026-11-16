@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 PAGES_TABLE = "pages"
 _FULL_SCAN_LIMIT = 1_000_000
 
-# Serializes page writes and the lazy table creation, as the chunk write lock does.
-_pages_lock = threading.Lock()
+# Serializes every write to the pages and chunks tables.  It is reentrant so a
+# writer can hold it across a whole page-and-chunk operation while the page
+# store takes it again for each page write.
+WRITE_LOCK = threading.RLock()
 
 
 @final
@@ -85,7 +87,7 @@ class PageStore:
                     "ingestion_timestamp": now,
                 }
             )
-        with _pages_lock:
+        with WRITE_LOCK:
             table = self._open_or_create(rows)
             if table is not None:
                 table.delete(self._keys_predicate(distinct))
@@ -115,11 +117,19 @@ class PageStore:
 
     def delete(self, ref: DocumentRef) -> None:
         """Delete every page of the document *ref* names."""
-        self._delete_where(ref.predicate())
+        self.delete_where(ref.predicate())
 
     def delete_collection(self, collection: str) -> None:
         """Delete every page of *collection*."""
-        self._delete_where(CollectionRef(collection).clause())
+        self.delete_where(CollectionRef(collection).clause())
+
+    def delete_where(self, predicate: str) -> None:
+        """Delete the pages *predicate* selects, serialized with every page write."""
+        table = self.open_or_none()
+        if table is None:
+            return
+        with WRITE_LOCK:
+            table.delete(predicate)
 
     def open_or_none(self) -> LanceTable | None:
         """Return the pages table, or ``None`` when it does not exist."""
@@ -140,13 +150,6 @@ class PageStore:
             f" AND page_number = {n})"
             for c, d, n in pages
         )
-
-    def _delete_where(self, predicate: str) -> None:
-        table = self.open_or_none()
-        if table is None:
-            return
-        with _pages_lock:
-            table.delete(predicate)
 
     def _open_or_create(self, rows: list[dict[str, object]]) -> LanceTable | None:
         """Return the table to upsert into, or ``None`` when creation wrote *rows*."""

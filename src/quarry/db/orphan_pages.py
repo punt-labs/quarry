@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._sql import escape_sql
-from quarry.db.page_store import PageStore
+from quarry.db.page_store import WRITE_LOCK, PageStore
 from quarry.db.schema import TABLE_NAME
 
 if TYPE_CHECKING:
@@ -17,7 +16,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 GRACE_PERIOD = timedelta(hours=24)
-_FULL_SCAN_LIMIT = 1_000_000
+_BATCH_ROWS = 1_000
+_CHUNK_QUERY_ROWS = 1
 
 
 @final
@@ -25,7 +25,10 @@ class OrphanPageSweep:
     """Delete pages that have no chunk and are past the grace period.
 
     A writer puts a page before its chunks, so a young page without chunks may
-    be mid-write; only an old one is an orphan left by a crash.
+    be mid-write; only an old one is an orphan left by a crash.  Old pages are
+    read in bounded batches that advance past live pages as well as deleted
+    ones, and each candidate is checked against the chunks table on its own, so
+    no fixed result limit can hide an orphan or make a live page look orphaned.
     """
 
     __slots__ = ("_db", "_pages")
@@ -41,53 +44,56 @@ class OrphanPageSweep:
 
     def run(self, now: datetime | None = None) -> int:
         """Delete the orphan pages older than the grace period; return the count."""
-        table = self._pages.open_or_none()
-        if table is None:
+        if self._pages.open_or_none() is None:
             return 0
         cutoff = (now or datetime.now(UTC)) - GRACE_PERIOD
         stamp = cutoff.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
-        old = (
-            table.search()
-            .where(f"ingestion_timestamp < timestamp '{stamp}'")
-            .select(["collection", "document_name", "page_number"])
-            .limit(_FULL_SCAN_LIMIT)
-            .to_list()
-        )
-        by_document: dict[tuple[str, str], list[int]] = defaultdict(list)
-        for row in old:
-            key = (str(row["collection"]), str(row["document_name"]))
-            by_document[key].append(int(str(row["page_number"])))
-        swept = 0
-        for (collection, name), numbers in by_document.items():
-            held = self._pages_with_chunks(collection, name, numbers)
-            orphans = [n for n in numbers if n not in held]
-            if orphans:
-                table.delete(self._predicate(collection, name, orphans))
-                swept += len(orphans)
+        old = f"ingestion_timestamp < timestamp '{stamp}'"
+        swept, offset = 0, 0
+        while batch := self._batch(old, offset):
+            orphans = sum(self._sweep_one(row) for row in batch)
+            swept += orphans
+            offset += len(batch) - orphans
         if swept:
             logger.info("swept %d orphan pages", swept)
         return swept
 
-    def _pages_with_chunks(
-        self, collection: str, name: str, numbers: list[int]
-    ) -> set[int]:
+    def _batch(self, old: str, offset: int) -> list[dict[str, object]]:
+        # A handle opened before a delete keeps reading the old version, so each
+        # batch reopens the table.
+        table = self._pages.open_or_none()
+        if table is None:
+            return []
+        query = (
+            table.search()
+            .where(old)
+            .select(["collection", "document_name", "page_number"])
+            .limit(_BATCH_ROWS)
+        )
+        return query.offset(offset).to_list()
+
+    def _sweep_one(self, row: dict[str, object]) -> int:
+        """Delete *row*'s page if no chunk holds it; return 1 when deleted."""
+        predicate = (
+            f"collection = '{escape_sql(str(row['collection']))}'"
+            f" AND document_name = '{escape_sql(str(row['document_name']))}'"
+            f" AND page_number = {int(str(row['page_number']))}"
+        )
+        with WRITE_LOCK:
+            if self._has_chunk(predicate):
+                return 0
+            self._pages.delete_where(predicate)
+        return 1
+
+    def _has_chunk(self, predicate: str) -> bool:
         if TABLE_NAME not in self._db.list_tables().tables:
-            return set()
+            return False
         chunks = self._db.open_table(TABLE_NAME)
-        rows = (
+        found = (
             chunks.search()
-            .where(self._predicate(collection, name, numbers))
+            .where(predicate)
             .select(["page_number"])
-            .limit(_FULL_SCAN_LIMIT)
+            .limit(_CHUNK_QUERY_ROWS)
             .to_list()
         )
-        return {int(str(row["page_number"])) for row in rows}
-
-    @staticmethod
-    def _predicate(collection: str, name: str, numbers: list[int]) -> str:
-        listed = ", ".join(str(n) for n in numbers)
-        return (
-            f"collection = '{escape_sql(collection)}'"
-            f" AND document_name = '{escape_sql(name)}'"
-            f" AND page_number IN ({listed})"
-        )
+        return bool(found)

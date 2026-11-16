@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from quarry.db.page_store import PageStore
+    from quarry.db.readable_page import ReadablePage
     from quarry.models import Chunk
     from quarry.types import LanceDB, LanceTable
 
@@ -69,6 +70,11 @@ class ChunkStore:
     def pages(self) -> PageStore:
         """Page text: one row per page, read by document and page number."""
         return self._writer.pages
+
+    @property
+    def readable(self) -> ReadablePage:
+        """The reader for a page's text: only pages a live chunk still holds."""
+        return self._writer.readable
 
     def delete_document(
         self,
