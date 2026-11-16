@@ -57,7 +57,10 @@ class FootprintCheck:
         if sizes.disk_bytes >= cls.MIN_DISK_BYTES and sizes.ratio > cls.MAX_RATIO:
             return cls._result(
                 passed=False,
-                message=f"{summary} ({sizes.ratio:.0f}x) — compaction not keeping up",
+                message=(
+                    f"{summary} ({sizes.ratio:.0f}x) — compaction not keeping up; "
+                    "no repair command yet"
+                ),
             )
         return cls._result(passed=True, message=summary)
 

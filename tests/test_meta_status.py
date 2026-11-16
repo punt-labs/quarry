@@ -116,3 +116,14 @@ def test_format_status_shows_size_and_free_disk() -> None:
     assert "3.00 GiB on disk" in text
     assert "1.00 GiB live" in text
     assert "50.0 GiB free" in text
+
+
+def test_daemon_status_measures_through_its_managed_connection(
+    daemon: InProcessDaemon,
+) -> None:
+    with TestClient(daemon.app) as http:
+        http.get("/v1/status")  # opens the daemon's managed connection
+        with patch("lancedb.connect") as connect:
+            http.get("/v1/status")
+
+    connect.assert_not_called()

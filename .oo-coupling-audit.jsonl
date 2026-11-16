@@ -956,3 +956,8 @@
 {"ts":"2026-11-16T20:04:41Z","commit":"4075a8e","source":null,"files_scored":463,"files_improved":0,"files_regressed":1,"verdict":"fail","reason":null,"deltas":{}}
 {"ts":"2026-11-16T20:04:53Z","commit":"4075a8e","source":null,"files_scored":463,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"efferent_coupling +1: table_probe now imports PAGES_TABLE from db/page_store so the footprint covers the pages table","deltas":{"src/quarry/db/table_probe.py":{"efferent_coupling":[1.0,2.0]}}}
 {"ts":"2026-11-16T20:04:54Z","commit":"4075a8e","source":null,"files_scored":463,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-11-16T20:49:30Z","commit":"3a9f5ae","source":null,"files_scored":463,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-11-16T20:49:37Z","commit":"3a9f5ae","source":null,"files_scored":463,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
+{"ts":"2026-11-16T20:50:23Z","commit":"3a9f5ae","source":null,"files_scored":463,"files_improved":0,"files_regressed":1,"verdict":"fail","reason":null,"deltas":{}}
+{"ts":"2026-11-16T20:50:30Z","commit":"3a9f5ae","source":null,"files_scored":463,"files_improved":0,"files_regressed":1,"verdict":"relaxed","reason":"efferent_coupling +1: opens its fallback connection through the shared get_db instead of a raw lancedb.connect","deltas":{"src/quarry/db/table_probe.py":{"efferent_coupling":[2.0,3.0]}}}
+{"ts":"2026-11-16T20:50:31Z","commit":"3a9f5ae","source":null,"files_scored":463,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}

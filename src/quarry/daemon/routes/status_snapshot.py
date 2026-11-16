@@ -38,7 +38,7 @@ class StatusSnapshot:
             "embedding_model": settings.embedding_model,
             "provider": ProviderSelection.display_cached(),
             "embedding_dimension": settings.embedding_dimension,
-            **StatusStorage(settings.lancedb_path).fields(),
+            **StatusStorage(settings.lancedb_path, self._ctx.database.db).fields(),
         }
 
     def _registered_directories(self) -> int:

@@ -11,6 +11,8 @@ from quarry.db.table_probe import StorageSizes, TableProbe
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from quarry.types import LanceDB
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,13 +26,15 @@ class StatusStorage:
     measured zero.  ``quarry doctor`` is the authoritative gate and fails loudly.
     """
 
-    __slots__ = ("_db_path",)
+    __slots__ = ("_db", "_db_path")
 
     _db_path: Path
+    _db: LanceDB
 
-    def __new__(cls, db_path: Path) -> Self:
+    def __new__(cls, db_path: Path, db: LanceDB) -> Self:
         self = super().__new__(cls)
         self._db_path = db_path
+        self._db = db
         return self
 
     def fields(self) -> dict[str, int | None]:
@@ -45,7 +49,7 @@ class StatusStorage:
     def _sizes(self) -> StorageSizes | None:
         # None: the table could not be measured; not an empty table.
         try:
-            return TableProbe.sizes(self._db_path)
+            return TableProbe.sizes(self._db_path, self._db)
         except (OSError, ValueError, RuntimeError):
             logger.warning("status: could not measure the table size", exc_info=True)
             return None

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import os
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import lancedb
+import pytest
 
+from quarry.db.storage import get_db
 from quarry.db.table_probe import TableProbe
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 _ROW = {"id": 1, "text": "hello" * 200}
 
@@ -52,3 +53,52 @@ def test_chunks_alone_still_measures(tmp_path: Path) -> None:
 
 def test_no_tables_measures_zero(tmp_path: Path) -> None:
     assert TableProbe.sizes(tmp_path).disk_bytes == 0
+
+
+def test_file_deleted_mid_walk_does_not_abort_the_measurement(tmp_path: Path) -> None:
+    _tables(tmp_path, "chunks")
+    table_dir = tmp_path / "chunks.lance"
+    expected = _dir_bytes(table_dir)
+    listed = [*table_dir.rglob("*"), table_dir / "compacted-away.lance"]
+    real_stat = Path.stat
+
+    def racing_stat(self: Path, **kwargs: bool) -> os.stat_result:
+        if self.name == "compacted-away.lance":
+            raise FileNotFoundError(str(self))
+        return real_stat(self, **kwargs)
+
+    with (
+        patch.object(Path, "rglob", lambda _self, _pattern: iter(listed)),
+        patch.object(Path, "stat", racing_stat),
+    ):
+        assert TableProbe.sizes(tmp_path).disk_bytes == expected
+
+
+def test_other_os_errors_still_propagate(tmp_path: Path) -> None:
+    _tables(tmp_path, "chunks")
+
+    with (
+        patch.object(Path, "stat", side_effect=PermissionError("denied")),
+        pytest.raises(PermissionError),
+    ):
+        TableProbe.sizes(tmp_path)
+
+
+def test_passed_connection_is_used_and_no_new_one_opened(tmp_path: Path) -> None:
+    _tables(tmp_path, "chunks")
+    db = get_db(tmp_path)
+
+    with patch("lancedb.connect") as connect:
+        sizes = TableProbe.sizes(tmp_path, db)
+
+    connect.assert_not_called()
+    assert sizes.disk_bytes > 0
+
+
+def test_list_tables_called_once(tmp_path: Path) -> None:
+    _tables(tmp_path, "chunks", "pages")
+    db = MagicMock(wraps=get_db(tmp_path))
+
+    TableProbe.sizes(tmp_path, db)
+
+    assert db.list_tables.call_count == 1

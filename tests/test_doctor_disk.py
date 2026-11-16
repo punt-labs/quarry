@@ -55,6 +55,7 @@ class TestFootprintCheck:
         result = FootprintCheck.check(tmp_path)
         assert (result.passed, result.required) == (False, False)
         assert "quarry doctor" not in result.message
+        assert "no repair command yet" in result.message
         assert "GiB" in result.message
 
     def test_unexpected_statistics_shape_is_a_failed_check(
