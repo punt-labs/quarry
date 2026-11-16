@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from quarry.daemon.content_jobs import ScrubbedIngestJob
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.job_spool import SpoolRecord
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 
 @final

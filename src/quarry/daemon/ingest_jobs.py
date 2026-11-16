@@ -23,7 +23,7 @@ from quarry.daemon.store_run import StoreRun
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_labels import IngestLabels
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
     from quarry.http_url import HttpUrl
 
 

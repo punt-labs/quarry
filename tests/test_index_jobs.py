@@ -19,7 +19,7 @@ from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileI
 from quarry.daemon.ingest_queue import IngestQueue
 from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.db import Database
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync_registry import SyncRegistry
@@ -236,7 +236,7 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
         finally:
             dconn.close()
         purge_state = ctx.tasks.begin("deregister")
-        purge_state.results = {"deleted_chunks": 0}
+        purge_state.record({"deleted_chunks": 0})
         await RegistrationLifecycle(ctx).run_purge(purge_state, "col")
         await ctx.ingest_queue.aclose(drain_timeout=30.0)
         # 3. no orphan chunks survive for the deregistered collection.

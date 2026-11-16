@@ -14,7 +14,7 @@ from quarry.refusal import RefusalError
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
 
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 

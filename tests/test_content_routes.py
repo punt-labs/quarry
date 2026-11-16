@@ -21,7 +21,7 @@ from quarry.client import QuarryClient, TargetResolver
 from quarry.content_guard import BinaryContent
 from quarry.daemon.content_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.ingest_labels import IngestLabels
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.mcp_server import McpTools
 from tests.inproc_daemon import InProcessDaemon
 

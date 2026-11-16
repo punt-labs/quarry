@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.job_lifecycle import JobLifecycle
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 
 if TYPE_CHECKING:
-    from quarry.daemon.tasks import TaskStatus
+    from quarry.daemon.task_state import TaskStatus
 
 
 @final
@@ -24,17 +24,28 @@ class JobStates:
     _life: JobLifecycle
     _state: TaskState
 
-    def __new__(cls, kind: str, status: TaskStatus) -> Self:
+    def __new__(
+        cls,
+        kind: str,
+        status: TaskStatus,
+        task_id: str | None = None,  # None: named for its kind and status
+    ) -> Self:
         self = super().__new__(cls)
-        self._state = TaskState(task_id=f"{kind}-{status}", kind=kind, status="new")
+        self._state = TaskState(task_id or f"{kind}-{status}", kind, status="new")
         self._life = JobLifecycle(self._state)
         self._reach(status)
         return self
 
     @classmethod
-    def reaching(cls, status: TaskStatus, *, kind: str = "remember") -> TaskState:
+    def reaching(
+        cls,
+        status: TaskStatus,
+        *,
+        kind: str = "remember",
+        task_id: str | None = None,  # None: named for its kind and status
+    ) -> TaskState:
         """Return a job's state in *status*."""
-        return cls(kind, status).state
+        return cls(kind, status, task_id).state
 
     @property
     def state(self) -> TaskState:

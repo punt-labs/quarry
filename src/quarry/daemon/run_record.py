@@ -9,7 +9,7 @@ from quarry.run_progress import RunProgress
 
 if TYPE_CHECKING:
     from quarry.backfill_stats import BackfillStats
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
     from quarry.stop_signal import StopSignal
 
 logger = logging.getLogger(__name__)
@@ -47,12 +47,12 @@ class RunRecord:
 
     def record(self, stats: BackfillStats) -> None:
         """Record *stats* and how the run ended on the task state."""
-        self._state.results = stats.as_results(dry_run=self._dry_run)
+        results = stats.as_results(dry_run=self._dry_run)
         if stats.stored_nothing:
-            self._state.status = "failed"
-            self._state.error = f"backfill stored nothing: {stats.errors[0]}"
+            self._state.record(results)
+            self._state.fail(f"backfill stored nothing: {stats.errors[0]}")
         else:
-            self._state.status = "completed"
+            self._state.complete(results)
 
     def late(self, stats: BackfillStats) -> None:
         """Record the stats of a scan that returned after its task gave up on it."""

@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     from quarry.backfill import BackfillRuntime
     from quarry.daemon.context import DaemonContext
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 _ARGS = BackfillArgs(dry_run=False, collection="", project="", limit=0)
 _SETTLE = 0.3  # long enough for the poll loops (0.1s and 0.5s) to have looked
@@ -136,7 +136,7 @@ async def _replay(
 
     async def records(_self: ScrubbedIngestJob, _ctx: object, state: TaskState) -> None:
         world.wrote.append("written")
-        state.status = "completed"
+        state.complete({})
 
     async def as_the_route_runs_it() -> None:
         with Terminal.for_task(world.state).recording():

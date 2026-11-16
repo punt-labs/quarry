@@ -15,7 +15,7 @@ from quarry.refusal import RefusalError
 
 if TYPE_CHECKING:
     from quarry.daemon.queued_ingest import QueuedIngest
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
     from quarry.daemon.thread_call import ThreadCall
 
 # What each way the wait can end means for the backfill run.  An unfinished job

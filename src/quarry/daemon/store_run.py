@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from quarry.daemon.ingest_unit import IngestUnit
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class StoreRun:
         same rule as one the worker waits for.
         """
         run = cls(job, state, lambda: settle(call()))
-        state.store = run
+        state.attach_store(run)
         return run
 
     async def wait(self) -> Settlement:

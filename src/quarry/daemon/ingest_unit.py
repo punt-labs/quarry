@@ -2,7 +2,7 @@
 
 A unit names the LanceDB collection it writes (so the queue can route it to that
 collection's single FIFO worker) and owns its own background execution against a
-:class:`~quarry.daemon.tasks.TaskState`.  Every daemon job satisfies it
+:class:`~quarry.daemon.task_state.TaskState`.  Every daemon job satisfies it
 structurally, so the queue never imports a concrete job type: the content jobs
 (inline scrub, URL ingest, web-fetch capture) and the watch-loop jobs
 (``FileIndexJob``, ``DocumentDeleteJob``, ``CollectionSyncJob``,
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.job_spool import SpoolRecord
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 
 class IngestUnit(Protocol):

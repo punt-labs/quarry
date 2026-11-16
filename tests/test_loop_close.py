@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from quarry.daemon.collection_worker import CollectionWorker
     from quarry.daemon.context import DaemonContext
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 
 @final
@@ -62,8 +62,7 @@ class _Gate:
 
 
 def _store(gate: Callable[[], dict[str, object]], task: str) -> StoreRun:
-    state = JobStates.reaching("running")
-    state.task_id = task
+    state = JobStates.reaching("running", task_id=task)
     return StoreRun.start(_Job(), state, gate, Settlement.done)
 
 

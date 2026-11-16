@@ -12,7 +12,7 @@ from quarry.backfill_stats import BackfillStats
 from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.backfill_task import BackfillTask
 from quarry.daemon.queued_transcript_writer import QueuedTranscriptWriter
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.daemon.terminal import Terminal
 from tests.queue_fixtures import ctx_with_queue
 

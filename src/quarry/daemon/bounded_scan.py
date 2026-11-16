@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
     from quarry.backfill_stats import BackfillStats
     from quarry.daemon.run_record import RunRecord
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
     from quarry.stop_signal import StopSignal
 
 
@@ -58,7 +58,7 @@ class BoundedScan:
         self, scan: Callable[[], BackfillStats], state: TaskState, record: RunRecord
     ) -> BackfillStats:
         """Return *scan*'s result, recording it; stop and outwait it if cancelled."""
-        state.holds_thread = True
+        state.hold_thread()
         running = asyncio.ensure_future(run_in_threadpool(scan))
         late = LateOutcome(state, record)
         running.add_done_callback(late.returned)

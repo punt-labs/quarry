@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.route_key import RouteKey
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 _FIRST_BACKOFF_S = 0.05
 _MAX_BACKOFF_S = 1.0

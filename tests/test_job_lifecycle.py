@@ -12,22 +12,27 @@ import pytest
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.owner_lock import ClaimNotHeldError
 from quarry.daemon.settlement import Settlement
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from tests.job_states import JobStates
+from tests.task_states import completed, failed
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.owner_lock import Claim
     from quarry.daemon.store_run import StoreRun
-    from quarry.daemon.tasks import TaskStatus
+    from quarry.daemon.task_state import TaskStatus
 
 _CTX = cast("DaemonContext", SimpleNamespace())
 _Withdrawn = JobLifecycle.Withdrawn
 
 
 def _state(status: TaskStatus) -> TaskState:
-    return TaskState(task_id="j", kind="backfill", status=status)
+    if status == "completed":
+        return completed("j", "backfill")
+    if status == "failed":
+        return failed("j", "backfill", "it failed")
+    return TaskState("j", "backfill", status=status)
 
 
 @final
@@ -233,7 +238,7 @@ def test_settle_stored_completes_a_job_the_worker_owns_and_clears_its_reason(
     status: TaskStatus,
 ) -> None:
     state = _job(status)
-    state.error = "daemon shut down before ingest"
+    state.note("daemon shut down before ingest")
 
     moved = JobLifecycle(state).settle_stored({"chunks": 2})
     assert moved
@@ -319,7 +324,7 @@ def test_the_abort_fails_only_what_it_owns(
 def test_observing_a_store_that_landed_completes_a_failed_or_committing_job() -> None:
     for status in ("failed", "committing"):
         state = _job(status)
-        state.error = "daemon shut down before ingest"
+        state.note("daemon shut down before ingest")
 
         observed = JobLifecycle(state).observe_store(Settlement.done({"chunks": 2}))
 
@@ -358,7 +363,7 @@ def test_observing_a_store_leaves_a_status_somebody_else_settled(
 
 def test_observing_a_failed_store_leaves_a_failed_job_and_its_reason() -> None:
     state = _job("failed")
-    state.error = "kept"
+    state.note("kept")
 
     observed = JobLifecycle(state).observe_store(Settlement.failed("later"))
 
@@ -409,7 +414,7 @@ def _cancelled(
 ) -> tuple[TaskState, _Store]:
     state = _job(status)
     store = _Store(outcome, state.claim)
-    state.store = cast("StoreRun", store)
+    state.attach_store(cast("StoreRun", store))
     JobLifecycle(state).cancelled("task was cancelled")
     return state, store
 
@@ -469,7 +474,7 @@ def test_a_job_the_abort_failed_is_taken_again_as_settled_when_its_store_refused
 ):
     state = _job("running")
     store = _Store(Settlement.failed("blank"), state.claim)
-    state.store = cast("StoreRun", store)
+    state.attach_store(cast("StoreRun", store))
     JobLifecycle(state).fail_aborted("shut down")  # the abort's own provisional
 
     again = JobLifecycle(state).take_for_abort("shut down")
@@ -503,8 +508,7 @@ class _UnheldClaim:
 
 
 def test_a_write_without_the_claim_raises_and_changes_nothing() -> None:
-    state = _job("running")
-    state.claim = _UnheldClaim()
+    state = TaskState("j", "backfill", status="running", claim=_UnheldClaim())
 
     with pytest.raises(ClaimNotHeldError):
         JobLifecycle(state).settle_failed("sneaked")

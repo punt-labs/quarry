@@ -11,7 +11,7 @@ from quarry.content_guard import UnindexableContentError
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
 from quarry.daemon.settlement import Settlement
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.db.row_budget import RowBudgetError
 from tests.job_states import JobStates
 

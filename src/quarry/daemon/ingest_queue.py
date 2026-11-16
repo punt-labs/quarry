@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.route_key import RouteKey
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 logger = logging.getLogger(__name__)
 

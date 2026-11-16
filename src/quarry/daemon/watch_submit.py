@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.debounce import DebouncedDispatcher, FlushBatch
     from quarry.daemon.ingest_unit import IngestUnit
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
     from quarry.daemon.watch_roster import WatchRoster
     from quarry.db import Database
 
@@ -208,20 +208,20 @@ class WatchSubmitter:
             child_errors = child.results.get("errors")
             if isinstance(child_errors, list):
                 errors.extend(str(error) for error in child_errors)
-        umbrella.results = {
+        results: dict[str, object] = {
             "collections": collections,
             "failed": file_failures,
             "shed": shed,
             "errors": errors,
         }
         if timed_out:
-            umbrella.status = "failed"
-            umbrella.error = "scan timed out before all jobs completed"
+            umbrella.record(results)
+            umbrella.fail("scan timed out before all jobs completed")
         elif shed or file_failures:
-            umbrella.status = "failed"
-            umbrella.error = f"{shed} scan job(s) shed, {file_failures} file(s) failed"
+            umbrella.record(results)
+            umbrella.fail(f"{shed} scan job(s) shed, {file_failures} file(s) failed")
         else:
-            umbrella.status = "completed"
+            umbrella.complete(results)
 
     def _submit_deltas(
         self, batch: FlushBatch, db: Database, settings: Settings, root: Path

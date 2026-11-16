@@ -12,68 +12,12 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Self, final
+from typing import Self, final
 
-from quarry.daemon.owner_lock import Claim, OwnerLock
-
-if TYPE_CHECKING:
-    from quarry.daemon.store_run import StoreRun
+from quarry.daemon.task_state import TERMINAL_STATUSES, TaskState
 
 # Task GC: completed/failed tasks are evicted after this many seconds.
 TASK_TTL_SECONDS = 3600  # 1 hour
-
-# The one status vocabulary of a background task and of a queued job.  ``new``,
-# ``queued``, ``running``, ``committing``, ``aborted`` and ``withdrawn`` belong to
-# a queued job's life (:class:`~quarry.daemon.job_lifecycle.JobLifecycle`); a
-# polled task is ``running`` until it is ``completed`` or ``failed``.
-TaskStatus = Literal[
-    "new",
-    "queued",
-    "running",
-    "committing",
-    "aborted",
-    "withdrawn",
-    "completed",
-    "failed",
-]
-
-# Terminal statuses, eligible for GC.  A task in any other status is still live
-# and must never be evicted out from under a client polling it, and a job whose
-# body exits in one of them did not finish.
-TERMINAL_STATUSES: frozenset[TaskStatus] = frozenset({"completed", "failed"})
-
-
-@dataclass(slots=True)
-class TaskState:
-    """Tracks the state of an in-progress or completed background task.
-
-    ``holds_thread`` is set while a scan thread this task started is alive: the
-    singleton guard counts the task as running until the thread has returned,
-    whatever ``status`` says.  ``claim`` is the lock under which the status moves:
-    a queued job is run or withdrawn, never both
-    (:class:`~quarry.daemon.job_lifecycle.JobLifecycle`); any other task is only
-    ``running``, ``completed`` or ``failed``
-    (:class:`~quarry.daemon.task_lifecycle.TaskLifecycle`).
-    """
-
-    task_id: str
-    kind: str  # "sync", "ingest", "remember", "delete", "register", "deregister"
-    status: TaskStatus = "running"
-    results: dict[str, object] = field(default_factory=dict)
-    error: str = ""
-    created_at: float = field(default_factory=time.monotonic)
-    holds_thread: bool = False
-    # The job's store, kept so a cancelled worker's store can still be read when
-    # it ends.  ``None`` until the job starts one: absence is the contract.
-    store: StoreRun | None = field(default=None, init=False, repr=False, compare=False)
-    claim: Claim = field(
-        default_factory=OwnerLock, init=False, repr=False, compare=False
-    )
-
-    def reason_or(self, default: str) -> str:
-        """Return the reason the task has already given, else *default*."""
-        return self.error or default
 
 
 @final
@@ -100,7 +44,7 @@ class TaskRegistry:
         """Create a fresh ``TaskState``, evicting states older than the TTL."""
         self._evict_expired()
         task_id = f"{kind}-{uuid.uuid4().hex[:12]}"
-        state = TaskState(task_id=task_id, kind=kind)
+        state = TaskState(task_id, kind)
         self._states[task_id] = state
         return state
 

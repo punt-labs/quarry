@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from quarry.backfill_stats import BackfillStats
 from quarry.backfill_tally import BackfillTally
 from quarry.daemon.run_record import RunRecord
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.stop_signal import StopSignal
 
 if TYPE_CHECKING:

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Self, final
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 
 @final
@@ -46,16 +46,13 @@ class TaskLifecycle:
     def settle_stored(self, results: Mapping[str, object]) -> bool:
         """Complete the task with *results*; always done, so always ``True``."""
         with self._state.claim:
-            self._state.status = "completed"
-            self._state.error = ""
-            self._state.results = dict(results)
+            self._state.complete(results)
         return True
 
     def settle_failed(self, reason: str) -> bool:
         """Fail the task with *reason*; always done, so always ``True``."""
         with self._state.claim:
-            self._state.status = "failed"
-            self._state.error = reason
+            self._state.fail(reason)
         return True
 
     def cancelled(self, default: str) -> None:
@@ -71,5 +68,4 @@ class TaskLifecycle:
 
     def _fail(self, default: str) -> None:
         """Fail with the reason the task gave, else *default* (claim held)."""
-        self._state.status = "failed"
-        self._state.error = self._state.reason_or(default)
+        self._state.fail(self._state.reason_or(default))

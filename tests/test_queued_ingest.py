@@ -13,7 +13,7 @@ from quarry.daemon.ingest_refusal import IngestRefusal, IngestRefusedError
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.queued_ingest import QueuedIngest, QueuePolicy
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.daemon.terminal import Terminal
 from tests.queue_fixtures import ctx_with_queue
 

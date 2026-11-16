@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
-    from quarry.daemon.tasks import TaskState
+    from quarry.daemon.task_state import TaskState
 
 
 @final
@@ -83,17 +83,17 @@ class _RecordingQueue:
             raise RuntimeError(msg)
         self.submitted.append((key, job))
         if not self.admit:
-            state.status = "failed"
+            state.fail("queue refused")
             return False
         # Simulate the worker running the admitted job: a CollectionSyncJob
         # reports its injected per-file result; a FileIndexJob fails at run time
         # when fail_index is set (the admitted-then-failed case).
-        state.status = "completed"
-        if isinstance(job, CollectionSyncJob):
-            state.results = dict(self.scan_result)
-        elif isinstance(job, FileIndexJob) and self.fail_index:
-            state.status = "failed"
-            state.error = "index boom"
+        if isinstance(job, FileIndexJob) and self.fail_index:
+            state.fail("index boom")
+        elif isinstance(job, CollectionSyncJob):
+            state.complete(self.scan_result)
+        else:
+            state.complete({})
         return True
 
     def jobs(self, kind: type) -> list[IngestUnit]:
@@ -1210,7 +1210,7 @@ def test_failed_deregister_purge_is_retried_on_reconcile(
             conn.close()
         queue.admit = False
         purge_state = ctx.tasks.begin("deregister")
-        purge_state.results = {"deleted_chunks": 0}
+        purge_state.record({"deleted_chunks": 0})
         await RegistrationLifecycle(ctx).run_purge(purge_state, "col")
         assert purge_state.status == "failed"
         assert col in _reconciler(loop)._pending_purges  # deferred, not orphaned

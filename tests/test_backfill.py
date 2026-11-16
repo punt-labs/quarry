@@ -37,7 +37,7 @@ from quarry.config import Settings
 from quarry.daemon.content_jobs import ScrubbedIngestJob
 from quarry.daemon.queued_ingest import QueuedIngest, QueuePolicy
 from quarry.daemon.run_record import RunRecord
-from quarry.daemon.tasks import TaskState
+from quarry.daemon.task_state import TaskState
 from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.facade import Database
 from quarry.file_stamp import FileStamp
