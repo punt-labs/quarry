@@ -468,12 +468,26 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/cli_registry.py": {
+    "efferent_coupling": 12.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/cli_remote.py": {
     "efferent_coupling": 5.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.733,
     "avg_lcom": 0.366
+  },
+  "src/quarry/cli_repair.py": {
+    "efferent_coupling": 4.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/cli_search.py": {
     "efferent_coupling": 1.0,
@@ -1202,6 +1216,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/quarry/daemon_guard.py": {
+    "efferent_coupling": 3.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.4,
+    "avg_lcom": 0.4
   },
   "src/quarry/daemon_unready_error.py": {
     "efferent_coupling": 0.0,
@@ -2480,6 +2501,27 @@
   "src/quarry/remote.py": {
     "efferent_coupling": 3.0,
     "public_names": 11.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
+  "src/quarry/repair.py": {
+    "efferent_coupling": 8.0,
+    "public_names": 3.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.694,
+    "avg_lcom": 0.694
+  },
+  "src/quarry/repair_plan.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 1.0,
+    "avg_lcom": 1.0
+  },
+  "src/quarry/repair_rows.py": {
+    "efferent_coupling": 2.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
