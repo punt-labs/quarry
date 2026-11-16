@@ -35,6 +35,7 @@ from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.task_drain import TaskDrain
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
+from quarry.finalize_ledger import FinalizeLedgers
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.results import SearchResult
@@ -175,6 +176,20 @@ class TestHealth:
         assert data["state"] == "starting"
         assert data["api_version"] == "1"
         assert data["quarry_version"]
+
+    def test_reports_finalize_ledger(self, client: TestClient) -> None:
+        """/health.finalize carries one entry per database that failed optimize."""
+        ledger = FinalizeLedgers.for_database(
+            Path("/x/health-test/lancedb"), Path("/x")
+        )
+        ledger.record_failure("Offset overflow error")
+        try:
+            finalize = client.get("/health").json()["finalize"]
+        finally:
+            ledger.clear()
+        (entry,) = (d for d in finalize["databases"] if d["database"] == "health-test")
+        assert entry["consecutive_failures"] == 1
+        assert entry["last_error"] == "Offset overflow error"
 
     def test_state_ready_after_warm(self, tmp_path: Path) -> None:
         """A warmed context flips /health state to ``ready``."""
@@ -4691,3 +4706,72 @@ class TestCoverageRoute:
             "transcripts_captured": 1,
             "memories_saved": 0,
         }
+
+
+class TestManualOptimizeClearsLedger:
+    def test_successful_forced_optimize_clears_failure_state(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
+        settings = _mock_settings(tmp_path)
+        ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
+        ledger.record_failure("RuntimeError")
+        ran = OptimizeOutcome(optimized=True, fragments=3)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with (
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=ran),
+            TestClient(build_app(ctx)) as tc,
+        ):
+            task_id = tc.post("/v1/optimize", json={"force": True}).json()["task_id"]
+            tc.get(f"/v1/tasks/{task_id}")
+        assert ledger.health().consecutive_failures == 0
+
+    def test_skipped_manual_optimize_keeps_failure_state(self, tmp_path: Path) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
+        settings = _mock_settings(tmp_path)
+        ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
+        ledger.record_failure("RuntimeError")
+        skip = OptimizeOutcome(optimized=False, fragments=99999, reason="threshold")
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with (
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=skip),
+            TestClient(build_app(ctx)) as tc,
+        ):
+            task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
+            tc.get(f"/v1/tasks/{task_id}")
+        assert ledger.health().consecutive_failures == 1
+
+
+class TestManualOptimizeKeepsIndexFailure:
+    def test_index_failure_is_not_cleared_by_a_compaction_alone(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
+        settings = _mock_settings(tmp_path)
+        ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
+        ledger.record_failure("RuntimeError")
+        ran = OptimizeOutcome(optimized=True, fragments=3)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with (
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=ran),
+            patch(
+                "quarry.db.optimizer.TableOptimizer.create_collection_index",
+                side_effect=RuntimeError("index build failed"),
+            ),
+            TestClient(build_app(ctx)) as tc,
+        ):
+            task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
+            tc.get(f"/v1/tasks/{task_id}")
+        assert ledger.health().consecutive_failures == 1

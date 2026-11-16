@@ -44,8 +44,8 @@ forbidden_modules =
 # diagnostic command runs. A NEW engine import from any other client-reachable
 # module still fails the contract.
 ignore_imports =
-    quarry.doctor -> quarry.db.facade
-    quarry.doctor -> quarry.db.schema
+    quarry.doctor_fts -> quarry.db.facade
+    quarry.doctor_fts -> quarry.db.schema
     quarry.doctor -> quarry.embeddings
     quarry.doctor_inference -> quarry.ingestion.provider
     quarry.doctor_captures -> quarry.db.facade
