@@ -11,6 +11,7 @@ from quarry.api.insights import InsightsResponse
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.routes.health_snapshot import HealthSnapshot
 from quarry.daemon.routes.insights_builder import InsightsBuilder
+from quarry.daemon.routes.status_storage import StatusStorage
 from quarry.home_paths import QuarryHome
 from quarry.ingestion.provider import ProviderSelection
 from quarry.query_log import get_query_log
@@ -72,6 +73,7 @@ class MetaRoutes(RouteGroup):
                 "embedding_model": settings.embedding_model,
                 "provider": ProviderSelection.display_cached(),
                 "embedding_dimension": settings.embedding_dimension,
+                **StatusStorage(settings.lancedb_path).fields(),
             }
         )
 

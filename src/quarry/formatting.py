@@ -329,6 +329,11 @@ def format_registrations(regs: Sequence[Mapping[str, Any]]) -> str:
     )
 
 
+def _gib(size: int, *, places: int = 2) -> str:
+    """Render a byte count as GiB."""
+    return f"{size / 1024**3:.{places}f} GiB"
+
+
 def format_status(info: Mapping[str, Any]) -> str:
     """Format database status as key-value pairs."""
     lines = [
@@ -338,6 +343,11 @@ def format_status(info: Mapping[str, Any]) -> str:
         f"   Chunks:         {info.get('chunk_count', 0):,}",
         f"   Directories:    {info.get('registered_directories', 0)}",
         f"   Database:       {info.get('database_path', '?')}",
+        (
+            f"   Table size:     {_gib(info.get('disk_bytes', 0))} on disk, "
+            f"{_gib(info.get('live_bytes', 0))} live"
+        ),
+        f"   Free disk:      {_gib(info.get('free_disk_bytes', 0), places=1)} free",
         f"   Model:          {info.get('embedding_model', '?')}",
         f"   Provider:       {info.get('provider', '?')}",
     ]

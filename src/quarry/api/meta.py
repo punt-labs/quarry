@@ -41,6 +41,11 @@ class StatusResponse(BaseModel):
     embedding_model: str
     provider: str
     embedding_dimension: int
+    # Bytes: the chunks table's on-disk size, its live-data estimate, and the free
+    # space on its filesystem. Each is 0 when it could not be measured.
+    disk_bytes: int = 0
+    live_bytes: int = 0
+    free_disk_bytes: int = 0
 
 
 class CoverageResponse(BaseModel):
