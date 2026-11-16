@@ -4704,7 +4704,29 @@ class TestManualOptimizeClearsLedger:
             TestClient(build_app(ctx)) as tc,
         ):
             task_id = tc.post("/v1/optimize", json={"force": True}).json()["task_id"]
-            tc.get(f"/v1/tasks/{task_id}")
+            _poll_task_done(tc, task_id)
+        assert ledger.health().consecutive_failures == 0
+
+    def test_a_slow_forced_optimize_is_waited_for(self, tmp_path: Path) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
+        def slow(**_: object) -> OptimizeOutcome:
+            time.sleep(0.5)
+            return OptimizeOutcome(optimized=True, fragments=3)
+
+        settings = _mock_settings(tmp_path)
+        ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
+        ledger.record_failure("RuntimeError")
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with (
+            patch("quarry.db.optimizer.TableOptimizer.optimize", side_effect=slow),
+            TestClient(build_app(ctx)) as tc,
+        ):
+            task_id = tc.post("/v1/optimize", json={"force": True}).json()["task_id"]
+            _poll_task_done(tc, task_id)
         assert ledger.health().consecutive_failures == 0
 
     def test_skipped_manual_optimize_keeps_failure_state(self, tmp_path: Path) -> None:
@@ -4723,7 +4745,7 @@ class TestManualOptimizeClearsLedger:
             TestClient(build_app(ctx)) as tc,
         ):
             task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
-            tc.get(f"/v1/tasks/{task_id}")
+            _poll_task_done(tc, task_id)
         assert ledger.health().consecutive_failures == 1
 
 
@@ -4750,5 +4772,5 @@ class TestManualOptimizeKeepsIndexFailure:
             TestClient(build_app(ctx)) as tc,
         ):
             task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
-            tc.get(f"/v1/tasks/{task_id}")
+            _poll_task_done(tc, task_id)
         assert ledger.health().consecutive_failures == 1
