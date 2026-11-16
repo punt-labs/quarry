@@ -1,0 +1,319 @@
+"""TableRepair rebuilds a chunks table optimize() can no longer compact."""
+
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import os
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import TYPE_CHECKING
+from unittest.mock import patch
+
+import lancedb
+import pytest
+
+from quarry.daemon_guard import DaemonGuard
+from quarry.db.adaptive_scan import AdaptiveScan
+from quarry.db.orphan_pages import OrphanPageSweep
+from quarry.db.page_store import PageStore
+from quarry.db.readable_page import ReadablePage
+from quarry.db.schema import TABLE_NAME, SchemaManager
+from quarry.db.storage import get_db
+from quarry.page_record import PageRecord
+from quarry.repair import TableRepair
+from quarry.run_dir import RunDir
+
+if TYPE_CHECKING:
+    from quarry.types import LanceDB, LanceTable
+
+_DIM = 768
+_OVER_BUDGET = "x" * (2**20 + 16)
+_BINARY = "�" * 64 + "binary"
+
+
+def _row(
+    doc: str, index: int, text: str, value: float = 0.25, collection: str = "col"
+) -> dict[str, object]:
+    return {
+        "text": text,
+        "vector": [value + index / 1000] * _DIM,
+        "document_name": doc,
+        "document_path": f"/d/{doc}",
+        "collection": collection,
+        "page_number": 1,
+        "total_pages": 1,
+        "chunk_index": index,
+        "page_type": "text",
+        "source_format": ".txt",
+        "ingestion_timestamp": datetime.now(UTC),
+        "agent_handle": "",
+        "memory_type": "",
+        "summary": "",
+        "source_version": "",
+    }
+
+
+def _seed(path: Path, rows: list[dict[str, object]]) -> LanceDB:
+    db = get_db(path)
+    table = db.create_table(TABLE_NAME, data=[], schema=SchemaManager.schema())
+    for row in rows:
+        table.add([row])  # one version per add, like the daemon's flushes
+    return db
+
+
+def _leak(path: Path, megabytes: int) -> None:
+    data = path / f"{TABLE_NAME}.lance" / "data"
+    data.mkdir(exist_ok=True)
+    (data / "leaked.lance").write_bytes(b"\0" * megabytes * 2**20)
+
+
+def _tree(path: Path) -> dict[str, str]:
+    return {
+        str(p.relative_to(path)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(path.rglob("*"))
+        if p.is_file()
+    }
+
+
+def _size(path: Path) -> int:
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+
+
+def _mixed(path: Path) -> LanceDB:
+    rows = [_row("good.txt", i, f"good chunk {i}") for i in range(5)]
+    rows += [_row("pdf.bin", i, _BINARY) for i in range(2)]
+    rows += [_row("huge.txt", 0, _OVER_BUDGET)]
+    return _seed(path, rows)
+
+
+class TestPlan:
+    def test_counts_binary_over_budget_and_kept_rows(self, tmp_path: Path) -> None:
+        _mixed(tmp_path / "lancedb")
+        plan = TableRepair(tmp_path / "lancedb").plan()
+        assert (plan.rows, plan.binary_rows, plan.over_budget_rows) == (8, 2, 1)
+        assert plan.kept_rows == 5
+
+    def test_reports_on_disk_size_larger_than_live_size_with_leaks(
+        self, tmp_path: Path
+    ) -> None:
+        _mixed(tmp_path / "lancedb")
+        _leak(tmp_path / "lancedb", 6)
+        plan = TableRepair(tmp_path / "lancedb").plan()
+        assert plan.on_disk_bytes > 6 * 2**20 > plan.live_bytes
+
+    def test_changes_nothing_on_disk(self, tmp_path: Path) -> None:
+        _mixed(tmp_path / "lancedb")
+        before = _tree(tmp_path / "lancedb")
+        TableRepair(tmp_path / "lancedb").plan()
+        assert _tree(tmp_path / "lancedb") == before
+
+    def test_absent_table_is_an_empty_plan(self, tmp_path: Path) -> None:
+        get_db(tmp_path / "lancedb")
+        assert TableRepair(tmp_path / "lancedb").plan().rows == 0
+
+    def test_reads_in_batches_of_at_most_256_rows(self, tmp_path: Path) -> None:
+        _mixed(tmp_path / "lancedb")
+        starts: list[int] = []
+        real = AdaptiveScan
+
+        def spy(table: LanceTable, columns: list[str], *, start: int) -> AdaptiveScan:
+            starts.append(start)
+            return real(table, columns, start=start)
+
+        with patch("quarry.repair.AdaptiveScan", spy):
+            TableRepair(tmp_path / "lancedb").plan()
+        assert starts
+        assert max(starts) <= 256
+
+
+class TestRebuild:
+    def test_drops_bad_rows_and_keeps_good_rows_with_their_vectors(
+        self, tmp_path: Path
+    ) -> None:
+        _mixed(tmp_path / "lancedb")
+        TableRepair(tmp_path / "lancedb").rebuild()
+        rows = (
+            get_db(tmp_path / "lancedb")
+            .open_table(TABLE_NAME)
+            .search()
+            .limit(100)
+            .to_list()
+        )
+        assert sorted(str(r["text"]) for r in rows) == [
+            f"good chunk {i}" for i in range(5)
+        ]
+        by_text = {str(r["text"]): r["vector"] for r in rows}
+        assert by_text["good chunk 3"] == pytest.approx([0.25 + 3 / 1000] * _DIM)
+
+    def test_recreates_the_collection_and_text_indexes(self, tmp_path: Path) -> None:
+        _mixed(tmp_path / "lancedb")
+        TableRepair(tmp_path / "lancedb").rebuild()
+        table = lancedb.connect(str(tmp_path / "lancedb")).open_table(TABLE_NAME)
+        assert {i.name for i in table.list_indices()} == {"collection_idx", "text_idx"}
+
+    def test_full_text_search_works_after_the_rebuild(self, tmp_path: Path) -> None:
+        _mixed(tmp_path / "lancedb")
+        TableRepair(tmp_path / "lancedb").rebuild()
+        table = lancedb.connect(str(tmp_path / "lancedb")).open_table(TABLE_NAME)
+        assert len(table.search("chunk", query_type="fts").limit(10).to_list()) == 5
+
+    def test_on_disk_size_collapses_when_files_were_leaked(
+        self, tmp_path: Path
+    ) -> None:
+        _mixed(tmp_path / "lancedb")
+        _leak(tmp_path / "lancedb", 8)
+        before = _size(tmp_path / "lancedb")
+        after = TableRepair(tmp_path / "lancedb").rebuild()
+        assert before > 8 * 2**20
+        assert after < 2**20
+        assert _size(tmp_path / "lancedb") == after
+
+    def test_leaves_no_scratch_or_backup_directory_behind(self, tmp_path: Path) -> None:
+        _mixed(tmp_path / "lancedb")
+        TableRepair(tmp_path / "lancedb").rebuild()
+        assert [p.name for p in (tmp_path / "lancedb").iterdir()] == [
+            f"{TABLE_NAME}.lance"
+        ]
+
+    def test_a_table_with_no_bad_rows_keeps_every_row(self, tmp_path: Path) -> None:
+        _seed(tmp_path / "lancedb", [_row("a", i, f"t{i}") for i in range(3)])
+        TableRepair(tmp_path / "lancedb").rebuild()
+        table = get_db(tmp_path / "lancedb").open_table(TABLE_NAME)
+        assert table.count_rows() == 3
+
+    def test_more_rows_than_one_batch_are_all_kept(self, tmp_path: Path) -> None:
+        db = get_db(tmp_path / "lancedb")
+        table = db.create_table(TABLE_NAME, data=[], schema=SchemaManager.schema())
+        table.add([_row("big", i, f"t{i}") for i in range(600)])
+        TableRepair(tmp_path / "lancedb").rebuild()
+        assert get_db(tmp_path / "lancedb").open_table(TABLE_NAME).count_rows() == 600
+
+    def test_a_failure_mid_rebuild_leaves_the_original_byte_for_byte(
+        self, tmp_path: Path
+    ) -> None:
+        _mixed(tmp_path / "lancedb")
+        _leak(tmp_path / "lancedb", 1)
+        before = _tree(tmp_path / "lancedb")
+        with (
+            patch.object(TableRepair, "_create_indexes", side_effect=OSError("boom")),
+            pytest.raises(OSError, match="boom"),
+        ):
+            TableRepair(tmp_path / "lancedb").rebuild()
+        assert _tree(tmp_path / "lancedb") == before
+
+    def test_a_failure_leaves_no_temporary_sibling(self, tmp_path: Path) -> None:
+        _mixed(tmp_path / "lancedb")
+        before = sorted(p.name for p in (tmp_path / "lancedb").iterdir())
+        with (
+            patch.object(TableRepair, "_create_indexes", side_effect=OSError("boom")),
+            pytest.raises(OSError, match="boom"),
+        ):
+            TableRepair(tmp_path / "lancedb").rebuild()
+        assert sorted(p.name for p in (tmp_path / "lancedb").iterdir()) == before
+
+    def test_a_kept_row_missing_its_vector_aborts_before_the_swap(
+        self, tmp_path: Path
+    ) -> None:
+        _mixed(tmp_path / "lancedb")
+        before = _tree(tmp_path / "lancedb")
+        with (
+            patch.object(TableRepair, "_vector_is_whole", return_value=False),
+            pytest.raises(ValueError, match="vector"),
+        ):
+            TableRepair(tmp_path / "lancedb").rebuild()
+        assert _tree(tmp_path / "lancedb") == before
+
+    def test_absent_table_is_refused(self, tmp_path: Path) -> None:
+        get_db(tmp_path / "lancedb")
+        with pytest.raises(ValueError, match="no chunks table"):
+            TableRepair(tmp_path / "lancedb").rebuild()
+
+
+class TestPagesOfDroppedDocuments:
+    """Pages of a dropped document stay as orphans for OrphanPageSweep."""
+
+    def _seed_pages(self, db: LanceDB) -> None:
+        PageStore(db).put(
+            [
+                PageRecord("col", "good.txt", 1, "good page"),
+                PageRecord("col", "pdf.bin", 1, "binary page"),
+            ]
+        )
+
+    def test_repair_leaves_every_page_row_in_place(self, tmp_path: Path) -> None:
+        self._seed_pages(_mixed(tmp_path / "lancedb"))
+        TableRepair(tmp_path / "lancedb").rebuild()
+        assert PageStore(get_db(tmp_path / "lancedb")).count() == 2
+
+    def test_a_dropped_documents_page_is_not_readable(self, tmp_path: Path) -> None:
+        self._seed_pages(_mixed(tmp_path / "lancedb"))
+        TableRepair(tmp_path / "lancedb").rebuild()
+        pages = ReadablePage(get_db(tmp_path / "lancedb"))
+        assert pages.text_of("good.txt", 1, "col") == "good page"
+        with pytest.raises(KeyError):
+            pages.text_of("pdf.bin", 1, "col")
+
+    def test_the_orphan_sweep_removes_only_the_dropped_documents_page(
+        self, tmp_path: Path
+    ) -> None:
+        self._seed_pages(_mixed(tmp_path / "lancedb"))
+        TableRepair(tmp_path / "lancedb").rebuild()
+        db = get_db(tmp_path / "lancedb")
+        swept = OrphanPageSweep(db).run(now=datetime.now(UTC) + timedelta(hours=25))
+        assert swept == 1
+        assert PageStore(db).get_page_text("good.txt", 1, "col") == "good page"
+
+
+class TestDaemonGuard:
+    def _guard(self, tmp_path: Path) -> DaemonGuard:
+        return DaemonGuard(RunDir(tmp_path))
+
+    def test_no_port_file_and_no_lock_means_stopped(self, tmp_path: Path) -> None:
+        assert not self._guard(tmp_path).is_running()
+
+    def test_a_stale_port_file_with_nothing_listening_means_stopped(
+        self, tmp_path: Path
+    ) -> None:
+        RunDir(tmp_path).port_file.write(65000)
+        with patch("quarry.daemon_guard.HealthProbe.fetch", return_value=None):
+            assert not self._guard(tmp_path).is_running()
+
+    def test_a_port_that_answers_health_means_running(self, tmp_path: Path) -> None:
+        RunDir(tmp_path).port_file.write(65000)
+        with patch(
+            "quarry.daemon_guard.HealthProbe.fetch", return_value={"state": "ready"}
+        ):
+            assert self._guard(tmp_path).is_running()
+
+    def test_a_held_run_dir_lock_means_running_without_a_port_file(
+        self, tmp_path: Path
+    ) -> None:
+        fd = os.open(str(RunDir(tmp_path).lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert self._guard(tmp_path).is_running()
+        finally:
+            os.close(fd)
+
+    def test_exclusive_blocks_a_daemon_from_starting_meanwhile(
+        self, tmp_path: Path
+    ) -> None:
+        guard = self._guard(tmp_path)
+        with guard.exclusive():
+            assert self._guard(tmp_path).is_running()
+        assert not self._guard(tmp_path).is_running()
+
+    def test_exclusive_refuses_when_a_daemon_holds_the_lock(
+        self, tmp_path: Path
+    ) -> None:
+        fd = os.open(str(RunDir(tmp_path).lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with (
+                pytest.raises(ValueError, match="daemon"),
+                self._guard(tmp_path).exclusive(),
+            ):
+                pass
+        finally:
+            os.close(fd)

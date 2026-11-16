@@ -12,17 +12,8 @@ import typer.core
 from rich.console import Console
 
 from quarry._cli_entry import CliEntry
-from quarry.cli_admin import AdminCli
-from quarry.cli_captures import CapturesCli, CliPlumbing
-from quarry.cli_documents import DocumentsCli
-from quarry.cli_ingest import IngestCli
-from quarry.cli_maintenance import MaintenanceCli
-from quarry.cli_missions import MissionsCli
-from quarry.cli_project import ProjectCli
-from quarry.cli_remote import RemoteCli
-from quarry.cli_search import SearchCli
-from quarry.cli_skills import SkillsCli
-from quarry.cli_sync import SyncCli
+from quarry.cli_captures import CliPlumbing
+from quarry.cli_registry import CliRegistry
 from quarry.client import (
     HttpError,
     QuarryConnectionError,
@@ -63,6 +54,7 @@ _COMMAND_ORDER: list[str] = [
     "enable",
     "disable",
     "optimize",
+    "repair",
     "captures",
     "missions",
     "skills",
@@ -247,17 +239,7 @@ _plumbing = CliPlumbing(
     is_quiet=lambda: _quiet,
 )
 
-SearchCli(_plumbing).register(app)
-IngestCli(_plumbing).register(app)
-DocumentsCli(_plumbing).register(app)
-SyncCli(_plumbing).register(app)
-ProjectCli(_plumbing).register(app)
-MaintenanceCli(_plumbing).register(app)
-RemoteCli(_plumbing).register(app)
-AdminCli(_plumbing).register(app)
-app.add_typer(CapturesCli(_plumbing).build(), name="captures")
-app.add_typer(MissionsCli(_plumbing).build(), name="missions")
-app.add_typer(SkillsCli(_plumbing).build(), name="skills")
+CliRegistry(_plumbing).register(app)
 
 
 @app.command(name="use")
