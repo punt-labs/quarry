@@ -15,11 +15,12 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Self
 
 from quarry.db import Database
+from quarry.db.pages_migration import PagesMigration
 from quarry.ingestion.backends import new_embedding_backend
 
 if TYPE_CHECKING:
+    from quarry.backend_protocols import EmbeddingBackend
     from quarry.config import Settings
-    from quarry.types import EmbeddingBackend
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class QuarryResources:
         distinctly so a failure is attributed to the resource that failed.
         """
         logger.info("Warming write database connection...")
-        _ = self.database
+        PagesMigration(self.database.db).run_failing_open()
         logger.info("Warming isolated query database connection...")
         _ = self.query_database
         # Only the real-load path builds ONNX; an injected override just returns

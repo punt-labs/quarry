@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.db.orphan_pages import OrphanPageSweep
 from quarry.finalize_steps import OptimizeStep, ShadowPushStep
 
 if TYPE_CHECKING:
@@ -33,13 +34,20 @@ class SyncFinalizer:
         return self
 
     def run(self) -> None:
-        """Optimize the table, push enabled capture shadows, then GC, each isolated."""
+        """Optimize, sweep orphan pages, push shadows, then GC, each isolated."""
         self._optimize()
+        self._sweep_pages()
         self._push_shadows()
         self._gc()
 
     def _optimize(self) -> None:
         OptimizeStep(self._db, self._settings).run()
+
+    def _sweep_pages(self) -> None:
+        try:
+            OrphanPageSweep(self._db).run()
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.warning("sync: orphan page sweep failed: %s", exc, exc_info=True)
 
     def _push_shadows(self) -> None:
         ShadowPushStep(self._settings).run()

@@ -26,10 +26,9 @@ that the connection underneath them is periodically replaced.
 from __future__ import annotations
 
 import logging
-import threading
 from typing import TYPE_CHECKING, Self
 
-from quarry.types import LanceDB, LanceTable
+from quarry.db.recycle_gate import RecycleGate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -38,7 +37,7 @@ if TYPE_CHECKING:
     import pyarrow as pa
     from lancedb.index import FTS, Bitmap, BTree
 
-    from quarry.types import LanceQuery, ListTablesResult
+    from quarry.types import LanceDB, LanceQuery, LanceTable, ListTablesResult
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +113,10 @@ class RecyclingTable:
         """Add computed columns to the wrapped table."""
         self._table.add_columns(transforms)
 
+    def drop_columns(self, columns: list[str]) -> None:
+        """Drop *columns* from the wrapped table (metadata-only)."""
+        self._table.drop_columns(columns)
+
     def optimize(self, *, cleanup_older_than: timedelta | None = None) -> object:
         """Compact data fragments and prune old manifest versions."""
         return self._table.optimize(cleanup_older_than=cleanup_older_than)
@@ -149,23 +152,11 @@ class LanceConnection:
     keeping this class free of storage-layer imports.
     """
 
-    __slots__ = (
-        "_connect",
-        "_inner",
-        "_lock",
-        "_rebuilds",
-        "_recycle",
-        "_recycle_after",
-        "_recycling",
-    )
+    __slots__ = ("_connect", "_gate", "_inner")
 
     _connect: Callable[[], LanceDB]
+    _gate: RecycleGate
     _inner: LanceDB
-    _rebuilds: int
-    _recycle_after: int
-    _recycle: bool
-    _recycling: bool
-    _lock: threading.Lock
 
     def __new__(
         cls,
@@ -176,11 +167,7 @@ class LanceConnection:
         self = super().__new__(cls)
         self._connect = connect
         self._inner = connect()
-        self._rebuilds = 0
-        self._recycle_after = recycle_after
-        self._recycle = False
-        self._recycling = False
-        self._lock = threading.Lock()
+        self._gate = RecycleGate(recycle_after)
         return self
 
     def list_tables(self) -> ListTablesResult:
@@ -214,10 +201,7 @@ class LanceConnection:
         handles: handles already handed out keep working against the old
         connection after the swap.
         """
-        with self._lock:
-            self._rebuilds += 1
-            if self._rebuilds >= self._recycle_after:
-                self._recycle = True
+        self._gate.note_rebuild()
 
     def _maybe_recycle(self) -> None:
         """Reopen the underlying connection when a recycle is armed.
@@ -249,27 +233,19 @@ class LanceConnection:
         automatic gen-2 collection bounds it. A per-recycle full-heap collection
         would be redundant work on the hot sync path.
         """
-        with self._lock:
-            if not self._recycle or self._recycling:
-                return
-            self._recycling = True
-        succeeded = False
+        if not self._gate.begin():
+            return
         try:
             fresh = self._connect()
-            # Swap and disarm atomically under one lock: a concurrent boundary
-            # must never observe the recycle still armed with the guard already
-            # dropped, or it would open a second connection on top of this one.
-            with self._lock:
-                self._inner = fresh
-                self._recycle = False
-                self._rebuilds = 0
-                self._recycling = False
-            succeeded = True
-        finally:
-            if not succeeded:
-                # The reopen raised: drop only the in-progress guard, leaving
-                # _recycle armed so the next boundary retries onto the still-live
-                # old connection. The exception propagates to the caller.
-                with self._lock:
-                    self._recycling = False
+        except BaseException:
+            # The reopen raised: release only the claim, leaving the gate armed
+            # so the next boundary retries onto the still-live old connection.
+            self._gate.fail()
+            raise
+        # Swap and disarm atomically under one lock: a concurrent boundary must
+        # never observe the gate still armed with the claim already dropped, or
+        # it would open a second connection on top of this one.
+        with self._gate.lock:
+            self._inner = fresh
+            self._gate.succeed()
         logger.debug("Recycled LanceDB connection to release cached fds")

@@ -1,4 +1,4 @@
-"""Chunk catalog: list documents, list collections, get page text."""
+"""Chunk catalog: list documents and collections."""
 
 from __future__ import annotations
 
@@ -194,37 +194,3 @@ class ChunkCatalog:
         predicate = self._by_name_and_collection(document_name, collection)
         query = table.search().where(predicate).limit(_FULL_SCAN_LIMIT)
         return bool(query.select(["document_name"]).to_list())
-
-    def get_page_text(
-        self,
-        document_name: str,
-        page_number: int,
-        collection: str | None = None,
-    ) -> str | None:
-        """Retrieve the full raw text for a specific page."""
-        logger.debug("get_page_text: document=%s, page=%d", document_name, page_number)
-
-        table = self._table_or_none(self._db)
-        if table is None:
-            logger.debug("get_page_text: table %s not found", TABLE_NAME)
-            return None
-
-        predicate = (
-            f"document_name = '{escape_sql(document_name)}'"
-            f" AND page_number = {page_number}"
-        )
-        if collection:
-            predicate += f" AND collection = '{escape_sql(collection)}'"
-
-        results = (
-            table.search()
-            .where(predicate)
-            .limit(_FULL_SCAN_LIMIT)
-            .select(["page_raw_text"])
-            .to_list()
-        )
-
-        if not results:
-            logger.debug("get_page_text: no results found")
-            return None
-        return str(results[0]["page_raw_text"])

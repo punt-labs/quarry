@@ -6,8 +6,8 @@ import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from quarry.backend_protocols import EmbeddingBackend, OcrBackend
     from quarry.config import Settings
-    from quarry.types import EmbeddingBackend, OcrBackend
 
 _ocr_cache: dict[str, OcrBackend] = {}
 _embedding_cache: dict[str, EmbeddingBackend] = {}

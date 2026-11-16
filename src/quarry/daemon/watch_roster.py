@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.route_key import RouteKey
 from quarry.db import Database
+from quarry.db.pages_migration import PagesMigration
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
@@ -121,7 +122,9 @@ class WatchRoster:
             }
         )
         self._db_settings[name] = settings
-        self._conns[name] = Database.connect(settings.lancedb_path)
+        database = Database.connect(settings.lancedb_path)
+        PagesMigration(database.db).run_failing_open()
+        self._conns[name] = database
 
     def database_of(self, name: str) -> Database:
         """Return *name*'s open connection (call :meth:`ensure_database` first)."""

@@ -55,10 +55,9 @@ class ShowRoutes(RouteGroup):
     def _page_text(
         self, document: str, page: int, collection: str | None
     ) -> JSONResponse:
-        text = self.ctx.database.catalog.get_page_text(
-            document, page, collection=collection
-        )
-        if text is None:
+        try:
+            text = self.ctx.database.store.readable.text_of(document, page, collection)
+        except KeyError:
             return JSONResponse({"error": "Not found"}, status_code=404)
         return JSONResponse(
             {"document_name": document, "page_number": page, "text": text}

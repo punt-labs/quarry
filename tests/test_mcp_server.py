@@ -421,7 +421,7 @@ class TestListResources:
 class TestShow:
     def test_page_text(self, harness: _ToolHarness) -> None:
         with patch(
-            "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
+            "quarry.db.readable_page.ReadablePage.text_of",
             return_value="The quick brown fox",
         ):
             result = harness.documents.show("report.pdf", page_number=3)
@@ -448,7 +448,7 @@ class TestShow:
     def test_missing_page_is_friendly_not_found(self, harness: _ToolHarness) -> None:
         """A 404 renders the plain domain message, not "Error: HttpError"."""
         with patch(
-            "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
+            "quarry.db.readable_page.ReadablePage.text_of", side_effect=KeyError(1)
         ):
             result = harness.documents.show("missing.pdf", page_number=99)
         assert result == "No data found for missing.pdf page 99"

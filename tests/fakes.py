@@ -23,8 +23,8 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
+    from quarry.backend_protocols import EmbeddingBackend
     from quarry.config import Settings
-    from quarry.types import EmbeddingBackend
 
 DEFAULT_DIMENSION: Final[int] = 768
 
@@ -48,7 +48,7 @@ class FakeEmbeddingBackend:
     ``embedded`` records every text that passed through, queries included, so a
     test can assert on what was embedded without a second spy.
 
-    Satisfies :class:`quarry.types.EmbeddingBackend` structurally.
+    Satisfies :class:`quarry.backend_protocols.EmbeddingBackend` structurally.
     """
 
     __slots__ = ("_dimension", "_embedded", "_model_name")

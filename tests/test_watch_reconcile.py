@@ -369,3 +369,31 @@ def test_sweep_fail_closed_on_scan_error(tmp_path: Path) -> None:
         assert _live_collections(ctx) == set()  # orphan purged next cycle
 
     asyncio.run(_run())
+
+
+def test_a_sibling_database_is_migrated_when_its_connection_opens(
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from quarry.config import Settings
+    from quarry.daemon.watch_roster import WatchRoster
+
+    base = Settings(
+        quarry_root=tmp_path,
+        lancedb_path=tmp_path / "default" / "lancedb",
+        registry_path=tmp_path / "default" / "registry.db",
+    )
+    roster = WatchRoster(
+        MagicMock(),
+        active_db="default",
+        active_database=MagicMock(),
+        base_settings=base,
+    )
+    with (
+        patch("quarry.daemon.watch_roster.Database.connect") as connect,
+        patch("quarry.daemon.watch_roster.PagesMigration") as migration,
+    ):
+        roster.ensure_database("sibling")
+    migration.assert_called_once_with(connect.return_value.db)
+    migration.return_value.run_failing_open.assert_called_once_with()

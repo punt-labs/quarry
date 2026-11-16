@@ -16,6 +16,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -39,6 +40,7 @@ from quarry.fd_headroom import FdHeadroom
 from quarry.finalize_ledger import FinalizeLedgers
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
+from quarry.models import Chunk
 from quarry.results import SearchResult
 from quarry.web_fetch_name import WebFetchName
 from tests.task_states import completed, failed
@@ -1395,7 +1397,7 @@ class TestShow:
 
     def test_show_page_text(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
+            "quarry.db.readable_page.ReadablePage.text_of",
             return_value="Hello world",
         ):
             data = client.get("/v1/show?document=foo&page=1").json()
@@ -1403,6 +1405,34 @@ class TestShow:
         assert data["document_name"] == "foo"
         assert data["page_number"] == 1
         assert data["text"] == "Hello world"
+
+    def test_show_page_text_matches_the_local_read(self, tmp_path: Path) -> None:
+        """Remote /show and the local catalog return the same page text and fields."""
+        ctx = DaemonContext(_mock_settings(tmp_path))
+        _inject_mocks(ctx)
+        chunk = Chunk(
+            document_name="doc.txt",
+            document_path="/d/doc.txt",
+            collection="col",
+            page_number=3,
+            total_pages=4,
+            chunk_index=0,
+            text="a chunk",
+            page_raw_text="the whole page",
+            page_type="text",
+            source_format=".txt",
+            ingestion_timestamp=datetime.now(UTC),
+        )
+        ctx.database.store.insert([chunk], np.zeros((1, 768), dtype=np.float32))
+        local = ctx.database.store.pages.get_page_text("doc.txt", 3, collection="col")
+        with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
+            remote = tc.get("/v1/show?document=doc.txt&page=3&collection=col").json()
+        assert local == "the whole page"
+        assert remote == {
+            "document_name": "doc.txt",
+            "page_number": 3,
+            "text": local,
+        }
 
     def test_show_metadata(self, client: TestClient) -> None:
         mock_doc = {
@@ -1433,7 +1463,7 @@ class TestShow:
 
     def test_show_page_not_found(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_catalog.ChunkCatalog.get_page_text", return_value=None
+            "quarry.db.readable_page.ReadablePage.text_of", side_effect=KeyError(1)
         ):
             resp = client.get("/v1/show?document=foo&page=1")
 
@@ -1451,13 +1481,13 @@ class TestShow:
 
     def test_show_with_collection(self, client: TestClient) -> None:
         with patch(
-            "quarry.db.chunk_catalog.ChunkCatalog.get_page_text",
+            "quarry.db.readable_page.ReadablePage.text_of",
             return_value="page text",
         ) as mock_get_page:
             client.get("/v1/show?document=foo&page=1&collection=math")
 
-        _, kwargs = mock_get_page.call_args
-        assert kwargs["collection"] == "math"
+        args, _ = mock_get_page.call_args
+        assert args[2] == "math"
 
     def test_show_metadata_with_collection(self, client: TestClient) -> None:
         with patch(
@@ -4676,7 +4706,29 @@ class TestManualOptimizeClearsLedger:
             TestClient(build_app(ctx)) as tc,
         ):
             task_id = tc.post("/v1/optimize", json={"force": True}).json()["task_id"]
-            tc.get(f"/v1/tasks/{task_id}")
+            _poll_task_done(tc, task_id)
+        assert ledger.health().consecutive_failures == 0
+
+    def test_a_slow_forced_optimize_is_waited_for(self, tmp_path: Path) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+
+        def slow(**_: object) -> OptimizeOutcome:
+            time.sleep(0.5)
+            return OptimizeOutcome(optimized=True, fragments=3)
+
+        settings = _mock_settings(tmp_path)
+        ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
+        ledger.record_failure("RuntimeError")
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with (
+            patch("quarry.db.optimizer.TableOptimizer.optimize", side_effect=slow),
+            TestClient(build_app(ctx)) as tc,
+        ):
+            task_id = tc.post("/v1/optimize", json={"force": True}).json()["task_id"]
+            _poll_task_done(tc, task_id)
         assert ledger.health().consecutive_failures == 0
 
     def test_skipped_manual_optimize_keeps_failure_state(self, tmp_path: Path) -> None:
@@ -4695,7 +4747,7 @@ class TestManualOptimizeClearsLedger:
             TestClient(build_app(ctx)) as tc,
         ):
             task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
-            tc.get(f"/v1/tasks/{task_id}")
+            _poll_task_done(tc, task_id)
         assert ledger.health().consecutive_failures == 1
 
 
@@ -4722,5 +4774,5 @@ class TestManualOptimizeKeepsIndexFailure:
             TestClient(build_app(ctx)) as tc,
         ):
             task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
-            tc.get(f"/v1/tasks/{task_id}")
+            _poll_task_done(tc, task_id)
         assert ledger.health().consecutive_failures == 1

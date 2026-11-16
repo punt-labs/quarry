@@ -16,9 +16,9 @@ from quarry.daemon.watch_loop import WatchLoop
 from quarry.http_resources import QuarryResources
 
 if TYPE_CHECKING:
+    from quarry.backend_protocols import EmbeddingBackend
     from quarry.config import Settings
     from quarry.db import Database
-    from quarry.types import EmbeddingBackend
 
 # CORS origins allowed by default when the caller does not override them.
 DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
