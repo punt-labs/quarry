@@ -29,16 +29,13 @@ __all__ = ["QUARRY_RULES", "PermissionChange", "ProjectPermissions"]
 # that connection; ``install``/``uninstall`` manage the daemon; ``enable`` and
 # ``disable`` change permissions in any repo; ``captures``/``skills`` write
 # outside the repo; ``mcp`` starts a server; ``delete`` (CLI and MCP) drops
-# remembered content that cannot be re-ingested. ``Bash(quarry -*)`` asks for a
-# global option before the verb, which the verb rules would not match. The
-# deterministic rule set:
-# enable adds every missing member, disable removes these exact values (§ 2.8).
-# A rule dropped from the set is no longer removed by disable; there is no
-# cleanup code for it (punt-kit#396).
+# remembered content that cannot be re-ingested. A global option before the
+# verb runs under the broad allow: the ask tier is a safety net, not a security
+# boundary (punt-kit DES-039). The deterministic rule set: enable adds every
+# missing member, disable removes these exact values (§ 2.8).
 QUARRY_RULES: Final[dict[str, tuple[str, ...]]] = {
     "allow": ("Bash(quarry:*)", "mcp__quarry__*", "Skill(quarry:*)"),
     "ask": (
-        "Bash(quarry -*)",
         *(
             f"Bash(quarry {verb}:*)"
             for verb in (
@@ -60,6 +57,10 @@ QUARRY_RULES: Final[dict[str, tuple[str, ...]]] = {
         "mcp__quarry__delete",
     ),
 }
+
+# Repo rules an earlier quarry enable granted and this one does not; grant and
+# revoke both strip them. ``Bash(quarry -*)`` made ``quarry --version`` prompt.
+_LEGACY_RULES: Final[dict[str, tuple[str, ...]]] = {"ask": ("Bash(quarry -*)",)}
 
 _SETTINGS: Final = (".claude", "settings.json")
 
@@ -95,10 +96,11 @@ class _RuleList:
     rules are added, and containers are only written when a rule changes.
     """
 
-    __slots__ = ("_owned", "_rules")
+    __slots__ = ("_legacy", "_owned", "_rules")
 
     _rules: list[object]
     _owned: tuple[str, ...]
+    _legacy: tuple[str, ...]
 
     def __new__(cls, settings: dict[str, object], tier: str, *, create: bool) -> Self:
         permissions = settings.setdefault("permissions", {})
@@ -114,6 +116,7 @@ class _RuleList:
         self = super().__new__(cls)
         self._rules = rules
         self._owned = QUARRY_RULES[tier]
+        self._legacy = _LEGACY_RULES.get(tier, ())
         return self
 
     def add_missing(self) -> tuple[str, ...]:
@@ -127,6 +130,13 @@ class _RuleList:
         removed = tuple(rule for rule in self._owned if rule in self._rules)
         self._rules[:] = [rule for rule in self._rules if rule not in self._owned]
         return removed
+
+    def retire_legacy(self) -> bool:
+        """Remove this tier's legacy quarry rules; return whether any was."""
+        kept = [rule for rule in self._rules if rule not in self._legacy]
+        retired = len(kept) != len(self._rules)
+        self._rules[:] = kept
+        return retired
 
 
 @final
@@ -202,7 +212,8 @@ class ProjectPermissions:
             for tier in tiers
             for rule in (tier.add_missing() if add else tier.remove_present())
         )
-        if changed:
+        retired = [tier.retire_legacy() for tier in tiers]
+        if changed or any(retired):
             self._file.write_atomic(json.dumps(settings, indent=2) + "\n")
         return changed
 
