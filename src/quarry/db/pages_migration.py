@@ -32,6 +32,33 @@ class MigrationOutcome(enum.Enum):
 
 
 @final
+class _SeenPages:
+    """The first inline text seen for each page, to catch a later conflicting one."""
+
+    __slots__ = ("_first",)
+
+    _first: dict[tuple[str, str, int], str]
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self._first = {}
+        return self
+
+    def is_new(self, page: PageRecord) -> bool:
+        """Record *page* and return whether its key had not been seen."""
+        key = (page.collection, page.document_name, page.page_number)
+        if key in self._first:
+            return False
+        self._first[key] = page.text
+        return True
+
+    def conflicts(self, page: PageRecord) -> int:
+        """Return 1 when *page* differs from the first text seen for its key."""
+        key = (page.collection, page.document_name, page.page_number)
+        return int(self._first[key] != page.text)
+
+
+@final
 class PagesMigration:
     """Backfill ``pages`` from ``chunks.page_raw_text``, verify, then drop the column.
 
@@ -93,25 +120,18 @@ class PagesMigration:
 
     def _backfill(self, table: LanceTable) -> int:
         """Write every distinct inline page; return how many could not be moved."""
-        first: dict[tuple[str, str, int], str] = {}
+        seen = _SeenPages()
         pending: list[PageRecord] = []
         unmoved = 0
         for batch in AdaptiveScan(table, _SCAN_COLUMNS, start=_START_BATCH_ROWS):
-            for row in batch:
-                page = self._page_of(row)
-                if page is None:
-                    continue
-                key = (page.collection, page.document_name, page.page_number)
-                if key in first:
-                    unmoved += first[key] != page.text
-                    continue
-                first[key] = page.text
-                if self._stored_equal(page):
-                    continue
-                pending.append(page)
-                if len(pending) >= _PUT_PAGES:
-                    unmoved += self._put(pending)
-                    pending = []
+            for page in filter(None, map(self._page_of, batch)):
+                if not seen.is_new(page):
+                    unmoved += seen.conflicts(page)
+                elif not self._stored_equal(page):
+                    pending.append(page)
+            if len(pending) >= _PUT_PAGES:
+                unmoved += self._put(pending)
+                pending = []
         return unmoved + self._put(pending)
 
     def _put(self, pages: list[PageRecord]) -> int:
