@@ -115,7 +115,9 @@ class TableRepair:
     def _judge_for(self, table: LanceTable) -> RowJudge:
         judge = RowJudge(table.schema.names)
         for batch in AdaptiveScan(
-            table, ["collection", "document_name", "text"], start=BATCH_ROWS
+            table,
+            ["collection", "document_name", "chunk_index", "text"],
+            start=BATCH_ROWS,
         ):
             for row in batch:
                 judge.note(row)

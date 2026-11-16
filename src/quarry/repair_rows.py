@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Self, final
 
 from quarry.content_guard import BinaryContent, UnindexableContentError
@@ -12,30 +14,49 @@ if TYPE_CHECKING:
 
 Verdict = Literal["keep", "binary", "over_budget"]
 
-_TEXT_COLUMNS = ("text", "page_raw_text")
+_OPENING_CHARS = 512
+_PAD_FACTOR = 64
+_LEGACY_PAGE_COLUMN = "page_raw_text"
+# The same class of characters BinaryContent counts as non-text.
+_NONTEXT = re.compile(r"[\x00-\x08\x0b\x0e-\x1f\ufffd]")
+
+
+@final
+@dataclass(slots=True)
+class _DocumentTally:
+    """What the document-level binary verdict needs, held in constant space."""
+
+    opening: str = ""
+    nontext: int = 0
+    total: int = 0
 
 
 @final
 class RowJudge:
     """Classify rows against the row budget and a set of binary documents.
 
-    A document is binary when any one of its rows sniffs as binary, so every
-    row of it is dropped together.  A row over the budget is dropped on its own.
+    A document is binary by the bar ingest admitted it with: it opens with a
+    binary signature, or its non-text share over all its chunks exceeds the
+    limit.  One odd chunk among clean ones does not condemn it.  A row over the
+    budget (a chunk over the chunk limit, a page over the page limit, a label
+    over the label limit) is dropped on its own.
     """
 
-    __slots__ = ("_bad_documents", "_binary", "_budget", "_labels")
+    __slots__ = ("_binary", "_budget", "_labels", "_tallies", "_verdicts")
 
     _budget: RowBudget
     _binary: BinaryContent
     _labels: tuple[str, ...]
-    _bad_documents: set[tuple[str, str]]
+    _tallies: dict[tuple[str, str], _DocumentTally]
+    _verdicts: dict[tuple[str, str], bool] | None
 
     def __new__(cls, columns: Collection[str]) -> Self:
         self = super().__new__(cls)
         self._budget = RowBudget()
         self._binary = BinaryContent()
         self._labels = tuple(c for c in RowBudget.LABEL_COLUMNS if c in columns)
-        self._bad_documents = set()
+        self._tallies = {}
+        self._verdicts = None
         return self
 
     @staticmethod
@@ -44,22 +65,44 @@ class RowJudge:
         return (str(row["collection"]), str(row["document_name"]))
 
     def note(self, row: dict[str, object]) -> None:
-        """Record the row's document as binary when its text sniffs as binary."""
-        try:
-            self._binary.sniff(str(row["text"]))
-        except UnindexableContentError:
-            self._bad_documents.add(self.document_of(row))
+        """Add the row's chunk text to its document's tally."""
+        text = str(row["text"])
+        tally = self._tallies.setdefault(self.document_of(row), _DocumentTally())
+        if int(str(row["chunk_index"])) == 0 or not tally.opening:
+            tally.opening = tally.opening or text[:_OPENING_CHARS]
+        tally.nontext += len(_NONTEXT.findall(text))
+        tally.total += len(text)
 
     def verdict(self, row: dict[str, object]) -> Verdict:
         """Return whether to keep *row*, or why it is dropped."""
-        if self.document_of(row) in self._bad_documents:
+        if self._is_binary(self.document_of(row)):
             return "binary"
         try:
-            for column in _TEXT_COLUMNS:
-                if column in row:
-                    self._budget.require_page(str(row[column]))
+            self._budget.require_chunk(str(row["text"]))
+            if _LEGACY_PAGE_COLUMN in row:
+                self._budget.require_page(str(row[_LEGACY_PAGE_COLUMN]))
             for column in self._labels:
                 self._budget.require_label(column, str(row[column]))
         except RowBudgetError:
             return "over_budget"
         return "keep"
+
+    def _is_binary(self, document: tuple[str, str]) -> bool:
+        if self._verdicts is None:
+            self._verdicts = {k: self._judge(t) for k, t in self._tallies.items()}
+        return self._verdicts.get(document, False)
+
+    def _judge(self, tally: _DocumentTally) -> bool:
+        if tally.total == 0:
+            return False
+        if tally.nontext > self._binary.max_nontext_ratio * tally.total:
+            return True
+        # Only the opening's signature is wanted here; the ratio was judged over
+        # every chunk above, so pad the opening with clean text until it cannot
+        # trip the ratio on its own.
+        padded = tally.opening + " " * (_OPENING_CHARS * _PAD_FACTOR)
+        try:
+            self._binary.sniff(padded)
+        except UnindexableContentError:
+            return True
+        return False

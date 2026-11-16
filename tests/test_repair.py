@@ -127,6 +127,74 @@ class TestPlan:
         assert max(starts) <= 256
 
 
+class TestChunkBudget:
+    """A chunk is held to the chunk budget (64 KiB), not the page budget (1 MiB)."""
+
+    def _seed_mid_sized(self, path: Path) -> None:
+        mid = "x" * 100_000  # over a chunk's limit, under a page's
+        _seed(path, [_row("ok.txt", 0, "fine"), _row("mid.txt", 0, mid)])
+
+    def test_plan_counts_a_chunk_over_the_chunk_budget(self, tmp_path: Path) -> None:
+        self._seed_mid_sized(tmp_path / "lancedb")
+        assert TableRepair(tmp_path / "lancedb").plan().over_budget_rows == 1
+
+    def test_rebuild_drops_a_chunk_over_the_chunk_budget(self, tmp_path: Path) -> None:
+        self._seed_mid_sized(tmp_path / "lancedb")
+        TableRepair(tmp_path / "lancedb").rebuild()
+        rows = get_db(tmp_path / "lancedb").open_table(TABLE_NAME).search().to_list()
+        assert [r["document_name"] for r in rows] == ["ok.txt"]
+
+
+class TestDocumentLevelBinaryVerdict:
+    """A document is binary by the bar ingest used, not by one odd chunk."""
+
+    def _doc(
+        self, name: str, odd: str, odd_at: int, chunks: int = 40
+    ) -> list[dict[str, object]]:
+        return [
+            _row(name, i, odd if i == odd_at else "clean prose " * 150)
+            for i in range(chunks)
+        ]
+
+    def test_one_dense_chunk_among_clean_ones_keeps_the_document(
+        self, tmp_path: Path
+    ) -> None:
+        dense = "\ufffd" * 120 + " math"
+        _seed(tmp_path / "lancedb", self._doc("math.txt", dense, odd_at=7))
+        plan = TableRepair(tmp_path / "lancedb").plan()
+        assert (plan.binary_rows, plan.kept_rows) == (0, 40)
+
+    def test_a_later_chunk_that_opens_with_replacement_characters_is_kept(
+        self, tmp_path: Path
+    ) -> None:
+        opens_bad = "\ufffd\ufffd\ufffd table of symbols"
+        _seed(tmp_path / "lancedb", self._doc("tbl.txt", opens_bad, odd_at=5))
+        assert TableRepair(tmp_path / "lancedb").plan().binary_rows == 0
+
+    def test_a_dense_opening_chunk_of_an_otherwise_clean_document_is_kept(
+        self, tmp_path: Path
+    ) -> None:
+        dense_head = "sym " + "\ufffd" * 300 + " symbols"
+        _seed(tmp_path / "lancedb", self._doc("sym.txt", dense_head, odd_at=0))
+        assert TableRepair(tmp_path / "lancedb").plan().binary_rows == 0
+
+    def test_a_document_that_opens_with_a_binary_signature_is_dropped(
+        self, tmp_path: Path
+    ) -> None:
+        _seed(
+            tmp_path / "lancedb",
+            self._doc("img.png", "\x89PNG then bytes", odd_at=0),
+        )
+        assert TableRepair(tmp_path / "lancedb").plan().binary_rows == 40
+
+    def test_a_document_that_is_mostly_non_text_is_dropped(
+        self, tmp_path: Path
+    ) -> None:
+        rows = [_row("bin.dat", i, "\ufffd" * 900 + "abc" * 30) for i in range(10)]
+        _seed(tmp_path / "lancedb", rows)
+        assert TableRepair(tmp_path / "lancedb").plan().binary_rows == 10
+
+
 class TestRebuild:
     def test_drops_bad_rows_and_keeps_good_rows_with_their_vectors(
         self, tmp_path: Path
