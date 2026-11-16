@@ -453,3 +453,40 @@ class TestSweepKeepsTheWriteLockShort:
         with patch.object(OrphanPageSweep, "_batch_live_pages", late_writer):
             assert OrphanPageSweep(lance_db).run(now=_aged()) == 0
         assert PageStore(lance_db).get_page_text("d.txt", 1, "col") is not None
+
+
+class TestChunkCapFallback:
+    """A chunk lookup cut short at the cap must not misclassify live pages."""
+
+    def test_a_cut_short_lookup_never_sends_a_live_page_to_the_locked_recheck(
+        self, lance_db: LanceDB
+    ) -> None:
+        PageStore(lance_db).put([_page("d.txt", n, f"p{n}") for n in (1, 2, 3)])
+        _insert(
+            ChunkStore(lance_db),
+            [_chunk(1, 0), _chunk(1, 1), _chunk(2, 2), _chunk(3, 3)],
+        )
+        rechecked: list[str] = []
+        real = OrphanPageSweep._delete_if_still_orphan
+
+        def spy(sweep: OrphanPageSweep, row: dict[str, object]) -> int:
+            rechecked.append(str(row["page_number"]))
+            return real(sweep, row)
+
+        with (
+            patch("quarry.db.orphan_pages._CHUNK_CAP", 2),
+            patch.object(OrphanPageSweep, "_delete_if_still_orphan", spy),
+        ):
+            swept = OrphanPageSweep(lance_db).run(now=_aged())
+        assert swept == 0
+        assert rechecked == []
+
+    def test_a_cut_short_lookup_still_sweeps_a_real_orphan(
+        self, lance_db: LanceDB
+    ) -> None:
+        PageStore(lance_db).put([_page("d.txt", 1, "live"), _page("d.txt", 9, "gone")])
+        _insert(ChunkStore(lance_db), [_chunk(1, 0), _chunk(1, 1)])
+        with patch("quarry.db.orphan_pages._CHUNK_CAP", 2):
+            swept = OrphanPageSweep(lance_db).run(now=_aged())
+        assert swept == 1
+        assert PageStore(lance_db).get_page_text("d.txt", 9, "col") is None
