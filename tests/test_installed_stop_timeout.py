@@ -14,9 +14,10 @@ import pytest
 from quarry.config import Settings
 from quarry.daemon.bind_options import BindOptions
 from quarry.daemon.launcher import DaemonLauncher
+from quarry.doctor_check_runner import CheckRunner
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_preconditions import Need, Preconditions
-from quarry.doctor_runner import CheckEntry, CheckRunner
+from quarry.doctor_runner import CheckEntry
 from quarry.installed_budget import BudgetState
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.shutdown_policy import ShutdownPolicy

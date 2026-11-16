@@ -2,28 +2,26 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
-from quarry.doctor_failure import CheckFailure
+from quarry.doctor_disk import FootprintCheck, FreeDiskCheck
+from quarry.doctor_fts import FtsIndexCheck
 from quarry.doctor_memory import MemoryDiagnostics
 from quarry.doctor_preconditions import Need
 from quarry.doctor_recall import RecallDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
-from quarry.redacted_failure import RedactedFailure
 from quarry.results import CheckResult
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable
 
     from quarry.config import Settings
     from quarry.doctor_preconditions import Preconditions
-
-logger = logging.getLogger(__name__)
 
 
 @final
@@ -46,61 +44,6 @@ class CheckEntry:
 
 
 @final
-class CheckRunner:
-    """Run checks (and install steps) so that whatever they raise is a result."""
-
-    __slots__ = ()
-
-    @staticmethod
-    # None: the entry's diagnostic had nothing to report.
-    def attempt(entry: CheckEntry) -> CheckResult | None:
-        """Run one entry; whatever it raises becomes a failed result naming it.
-
-        The report must always complete, so no single check, whatever it hits,
-        may stop the others.  The failure keeps the entry's ``required`` flag and
-        is also logged with its frames.
-        """
-        try:
-            return entry.call()
-        except Exception as exc:
-            # The report line names the cause; the frames go to the log file only.
-            logger.info(
-                "doctor: check %s failed", entry.name, exc_info=RedactedFailure.of(exc)
-            )
-            return CheckResult(
-                name=entry.name,
-                passed=False,
-                message=f"check could not run ({CheckFailure.detail(exc)})",
-                required=entry.required,
-            )
-
-    @classmethod
-    def run(
-        cls, entries: Iterable[CheckEntry], pre: Preconditions
-    ) -> list[CheckResult]:
-        """Run every entry in order; return the results that have something to say.
-
-        An entry whose needs do not hold is skipped, with a line saying what it
-        lacked; a skip is never an issue, because the Home and Settings checks
-        are where those faults are counted.
-        """
-        results = [cls._one(entry, pre) for entry in entries]
-        return [result for result in results if result is not None]
-
-    @classmethod
-    # None: the entry's diagnostic had nothing to report.
-    def _one(cls, entry: CheckEntry, pre: Preconditions) -> CheckResult | None:
-        if (lacks := pre.missing(entry.needs)) is not None:
-            return CheckResult(
-                name=entry.name,
-                passed=False,
-                message=f"skipped (needs {lacks})",
-                required=False,
-            )
-        return cls.attempt(entry)
-
-
-@final
 class SettingsChecks:
     """The checks that read the resolved settings or the daemon they describe."""
 
@@ -119,11 +62,9 @@ class SettingsChecks:
             raise RuntimeError(msg) from exc
 
     @classmethod
-    def entries(
-        cls, pre: Preconditions, fts: Callable[[Path], CheckResult]
-    ) -> list[CheckEntry]:
-        """Return the entries that need the settings; *fts* is the index check."""
-        return [*cls._daemon_entries(pre), *cls._settings_entries(pre, fts)]
+    def entries(cls, pre: Preconditions) -> list[CheckEntry]:
+        """Return the entries that need the settings."""
+        return [*cls._daemon_entries(pre), *cls._settings_entries(pre)]
 
     @classmethod
     def _daemon_entries(cls, pre: Preconditions) -> list[CheckEntry]:
@@ -148,12 +89,25 @@ class SettingsChecks:
         return lambda: check(pre.settings)
 
     @staticmethod
-    def _settings_entries(
-        pre: Preconditions, fts: Callable[[Path], CheckResult]
-    ) -> list[CheckEntry]:
+    def _on_database(
+        check: Callable[[Path], CheckResult], pre: Preconditions
+    ) -> CheckResult:
+        """Run *check* on the database path, read only after the entry's gate."""
+        return check(pre.settings.lancedb_path)
+
+    @classmethod
+    def _settings_entries(cls, pre: Preconditions) -> list[CheckEntry]:
         need = Need.SETTINGS
+        database_checks: tuple[tuple[str, Callable[[Path], CheckResult]], ...] = (
+            ("FTS index", FtsIndexCheck.check),
+            ("Disk footprint", FootprintCheck.check),
+            ("Free disk", FreeDiskCheck.check),
+        )
         return [
-            CheckEntry("FTS index", lambda: fts(pre.settings.lancedb_path), needs=need),
+            *(
+                CheckEntry(name, partial(cls._on_database, check, pre), needs=need)
+                for name, check in database_checks
+            ),
             CheckEntry(
                 "Sync directories",
                 lambda: SyncDiagnostics.directories(pre.settings.registry_path),
@@ -180,7 +134,7 @@ class SettingsChecks:
             ),
             CheckEntry(
                 "Memory corpus",
-                lambda: MemoryDiagnostics.corpus(pre.settings.lancedb_path),
+                partial(cls._on_database, MemoryDiagnostics.corpus, pre),
                 needs=need,
             ),
             CheckEntry(

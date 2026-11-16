@@ -46,6 +46,7 @@ forbidden_modules =
 ignore_imports =
     quarry.doctor_fts -> quarry.db.facade
     quarry.doctor_fts -> quarry.db.schema
+    quarry.doctor_disk -> quarry.db.table_probe
     quarry.doctor -> quarry.embeddings
     quarry.doctor_inference -> quarry.ingestion.provider
     quarry.doctor_captures -> quarry.db.facade
