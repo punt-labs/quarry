@@ -126,16 +126,16 @@ class _RuleList:
         return added
 
     def remove_present(self) -> tuple[str, ...]:
-        """Remove every quarry rule of this tier; return those removed."""
-        removed = tuple(rule for rule in self._owned if rule in self._rules)
-        self._rules[:] = [rule for rule in self._rules if rule not in self._owned]
+        """Remove every quarry rule of this tier, legacy included; return those."""
+        owned = (*self._owned, *self._legacy)
+        removed = tuple(rule for rule in owned if rule in self._rules)
+        self._rules[:] = [rule for rule in self._rules if rule not in owned]
         return removed
 
-    def retire_legacy(self) -> bool:
-        """Remove this tier's legacy quarry rules; return whether any was."""
-        kept = [rule for rule in self._rules if rule not in self._legacy]
-        retired = len(kept) != len(self._rules)
-        self._rules[:] = kept
+    def retire_legacy(self) -> tuple[str, ...]:
+        """Remove this tier's legacy quarry rules; return those removed."""
+        retired = tuple(rule for rule in self._legacy if rule in self._rules)
+        self._rules[:] = [rule for rule in self._rules if rule not in self._legacy]
         return retired
 
 
@@ -212,8 +212,8 @@ class ProjectPermissions:
             for tier in tiers
             for rule in (tier.add_missing() if add else tier.remove_present())
         )
-        retired = [tier.retire_legacy() for tier in tiers]
-        if changed or any(retired):
+        retired = tuple(rule for tier in tiers for rule in tier.retire_legacy())
+        if changed or retired:
             self._file.write_atomic(json.dumps(settings, indent=2) + "\n")
         return changed
 

@@ -75,7 +75,8 @@ class TestRuleSet:
     @pytest.mark.parametrize("verb", ["grant", "revoke"])
     def test_legacy_flag_rule_is_stripped(self, tmp_path: Path, verb: str) -> None:
         _write(tmp_path, {"permissions": {"ask": ["Bash(ls:*)", "Bash(quarry -*)"]}})
-        getattr(ProjectPermissions(tmp_path), verb)()
+        change = getattr(ProjectPermissions(tmp_path), verb)()
+        assert ("Bash(quarry -*)" in change.changed) == (verb == "revoke")
         assert _ask(tmp_path) == ["Bash(ls:*)", *(_ASK if verb == "grant" else ())]
 
     def test_mcp_delete_asks(self) -> None:
