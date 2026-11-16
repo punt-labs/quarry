@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import shutil
 from typing import TYPE_CHECKING, Self, final
 
 from lancedb.index import FTS, Bitmap
@@ -16,6 +14,7 @@ from quarry.db.schema import TABLE_NAME
 from quarry.db.storage import get_db
 from quarry.repair_plan import RepairPlan
 from quarry.repair_rows import RowJudge
+from quarry.repair_scratch import RepairScratch
 from quarry.run_dir import RunDir
 
 if TYPE_CHECKING:
@@ -85,13 +84,8 @@ class TableRepair:
                 msg = f"no chunks table in {self._path}"
                 raise ValueError(msg)
             judge = self._judge_for(table)
-            scratch = self._path.parent / f".repair-{os.getpid()}"
-            shutil.rmtree(scratch, ignore_errors=True)
-            try:
-                kept = self._write_kept(table, judge, scratch)
-                self._swap_in(scratch, kept)
-            finally:
-                shutil.rmtree(scratch, ignore_errors=True)
+            with RepairScratch(self._path.parent).open() as scratch:
+                self._swap_in(scratch, self._write_kept(table, judge, scratch))
         return self._disk_bytes()
 
     def _write_kept(self, table: LanceTable, judge: RowJudge, scratch: Path) -> int:

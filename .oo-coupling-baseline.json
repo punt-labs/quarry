@@ -2506,7 +2506,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/repair.py": {
-    "efferent_coupling": 8.0,
+    "efferent_coupling": 9.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.694,

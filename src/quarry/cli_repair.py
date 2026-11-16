@@ -25,6 +25,10 @@ if TYPE_CHECKING:
     from quarry.repair_plan import RepairPlan
 
 _MIB = 2**20
+_RUNNING = (
+    "Error: quarryd is running; stop it first (the repair swaps the table "
+    "directory out from under a running daemon)"
+)
 
 
 class _Repair(Protocol):
@@ -68,14 +72,14 @@ class RepairCli:
         the new table in atomically, so a failure leaves the original intact.
         Without ``--yes`` it names what it will drop and asks before changing
         anything.
+
+        If a crash leaves the table in ``.chunks.lance.bak-<pid>`` beside it,
+        repair refuses to run; restore it with
+        ``mv .chunks.lance.bak-<pid> chunks.lance`` and run again.
         """
         db_path = Settings.load().resolve_db_paths(SELECTION.active()).lancedb_path
         if DaemonGuard(RunDir(db_path.parent)).is_running():
-            self._p.err_console.print(
-                "Error: quarryd is running; stop it first (the repair swaps the "
-                "table directory out from under a running daemon)",
-                style="red",
-            )
+            self._p.err_console.print(_RUNNING, style="red")
             raise typer.Exit(code=1)
         # The engine (lancedb) loads only when a repair actually runs.
         engine = importlib.import_module("quarry.repair")

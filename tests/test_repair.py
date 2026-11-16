@@ -224,6 +224,16 @@ class TestRebuild:
             TableRepair(tmp_path / "lancedb").rebuild()
         assert _tree(tmp_path / "lancedb") == before
 
+    def test_a_scratch_directory_stranded_by_a_dead_run_is_removed(
+        self, tmp_path: Path
+    ) -> None:
+        _mixed(tmp_path / "lancedb")
+        stranded = tmp_path / ".repair-99999"
+        stranded.mkdir()
+        (stranded / "junk").write_bytes(b"x")
+        TableRepair(tmp_path / "lancedb").rebuild()
+        assert not stranded.exists()
+
     def test_absent_table_is_refused(self, tmp_path: Path) -> None:
         get_db(tmp_path / "lancedb")
         with pytest.raises(ValueError, match="no chunks table"):
