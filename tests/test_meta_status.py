@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
 
 from quarry.api.meta import StatusResponse
+from quarry.db.table_probe import TableProbe
 from quarry.reports import StatusReport
 
 from .inproc_daemon import InProcessDaemon
@@ -43,9 +45,9 @@ def test_daemon_status_body_carries_exactly_the_declared_fields(
 def test_daemon_status_body_populates_the_new_fields_as_non_negative_ints(
     body: dict[str, object],
 ) -> None:
-    parsed = StatusResponse.model_validate(body)
+    values = [body[f] for f in sorted(_NEW_FIELDS)]
 
-    assert min(parsed.disk_bytes, parsed.live_bytes, parsed.free_disk_bytes) >= 0
+    assert all(isinstance(v, int) and v >= 0 for v in values)
 
 
 def test_cli_client_path_matches_the_daemon_body(
@@ -61,7 +63,37 @@ def test_cli_client_path_populates_free_disk(daemon: InProcessDaemon) -> None:
     with daemon.client() as client:
         parsed = client.status()
 
+    assert parsed.free_disk_bytes is not None
     assert parsed.free_disk_bytes > 0
+
+
+def test_unmeasurable_table_is_none_not_zero(daemon: InProcessDaemon) -> None:
+    with (
+        patch.object(TableProbe, "sizes", side_effect=OSError("vanished")),
+        TestClient(daemon.app) as http,
+    ):
+        body = http.get("/v1/status").json()
+
+    assert (body["disk_bytes"], body["live_bytes"]) == (None, None)
+
+
+def test_unmeasurable_free_disk_is_none_not_zero(daemon: InProcessDaemon) -> None:
+    with (
+        patch("shutil.disk_usage", side_effect=OSError("gone")),
+        TestClient(daemon.app) as http,
+    ):
+        body = http.get("/v1/status").json()
+
+    assert body["free_disk_bytes"] is None
+
+
+def test_report_says_unmeasured_for_none_not_a_healthy_zero() -> None:
+    text = StatusReport(
+        {"disk_bytes": None, "live_bytes": None, "free_disk_bytes": None}
+    ).render()
+
+    assert "unmeasured" in text
+    assert "0.00 GiB" not in text
 
 
 def test_format_status_shows_size_and_free_disk() -> None:

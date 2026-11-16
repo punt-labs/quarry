@@ -18,9 +18,10 @@ logger = logging.getLogger(__name__)
 class StatusStorage:
     """On-disk bytes, live bytes, and free disk for one database directory.
 
-    A figure that cannot be measured is reported as ``0`` rather than failing the
-    whole status call: status must stay readable on exactly the machines whose
-    disk is in trouble.
+    A figure that cannot be measured is reported as ``None`` rather than failing
+    the whole status call: status must stay readable on exactly the machines whose
+    disk is in trouble, and ``None`` keeps a failed measurement distinct from a
+    measured zero.  ``quarry doctor`` is the authoritative gate and fails loudly.
     """
 
     __slots__ = ("_db_path",)
@@ -32,25 +33,27 @@ class StatusStorage:
         self._db_path = db_path
         return self
 
-    def fields(self) -> dict[str, int]:
+    def fields(self) -> dict[str, int | None]:
         """Return the ``disk_bytes``, ``live_bytes`` and ``free_disk_bytes`` fields."""
         sizes = self._sizes()
         return {
-            "disk_bytes": sizes.disk_bytes,
-            "live_bytes": sizes.live_bytes,
+            "disk_bytes": sizes.disk_bytes if sizes else None,
+            "live_bytes": sizes.live_bytes if sizes else None,
             "free_disk_bytes": self._free(),
         }
 
-    def _sizes(self) -> StorageSizes:
+    def _sizes(self) -> StorageSizes | None:
+        # None: the table could not be measured; not an empty table.
         try:
             return TableProbe.sizes(self._db_path)
         except (OSError, ValueError, RuntimeError):
             logger.warning("status: could not measure the table size", exc_info=True)
-            return StorageSizes(disk_bytes=0, live_bytes=0)
+            return None
 
-    def _free(self) -> int:
+    def _free(self) -> int | None:
+        # None: free space could not be read; not a full disk.
         try:
             return shutil.disk_usage(self._db_path).free
         except OSError:
             logger.warning("status: could not read free disk space", exc_info=True)
-            return 0
+            return None

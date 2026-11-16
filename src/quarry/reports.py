@@ -37,17 +37,20 @@ class StatusReport:
             f"   Directories:    {get('registered_directories', 0)}",
             f"   Database:       {get('database_path', '?')}",
             (
-                f"   Table size:     {self._gib('disk_bytes')} on disk, "
-                f"{self._gib('live_bytes')} live"
+                f"   Table size:     {self._size('disk_bytes', 'on disk')}, "
+                f"{self._size('live_bytes', 'live')}"
             ),
-            f"   Free disk:      {self._gib('free_disk_bytes', places=1)} free",
+            f"   Free disk:      {self._size('free_disk_bytes', 'free', places=1)}",
             f"   Model:          {get('embedding_model', '?')}",
             f"   Provider:       {get('provider', '?')}",
         ]
         return "\n".join(lines)
 
-    def _gib(self, key: str, *, places: int = 2) -> str:
-        return f"{self._info.get(key, 0) / _GIB:.{places}f} GiB"
+    def _size(self, key: str, label: str, *, places: int = 2) -> str:
+        size = self._info.get(key, 0)
+        if size is None:
+            return f"{label} unmeasured"
+        return f"{size / _GIB:.{places}f} GiB {label}"
 
 
 @dataclass(frozen=True, slots=True)

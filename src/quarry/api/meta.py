@@ -41,8 +41,9 @@ class StatusResponse(BaseModel):
     embedding_model: str
     provider: str
     embedding_dimension: int
-    # Bytes: the chunks table's on-disk size, its live-data estimate, and the free
-    # space on its filesystem. Each is 0 when it could not be measured.
-    disk_bytes: int = 0
-    live_bytes: int = 0
-    free_disk_bytes: int = 0
+    # Bytes: the tables' on-disk size, their live-data estimate, and the free space
+    # on the filesystem. None distinguishes a measurement failure from a measured
+    # zero; status stays readable on a sick machine (doctor is the authoritative gate).
+    disk_bytes: int | None = None
+    live_bytes: int | None = None
+    free_disk_bytes: int | None = None

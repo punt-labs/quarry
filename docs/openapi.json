@@ -765,9 +765,15 @@
             "type": "string"
           },
           "disk_bytes": {
-            "default": 0,
-            "title": "Disk Bytes",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Bytes"
           },
           "document_count": {
             "title": "Document Count",
@@ -782,14 +788,26 @@
             "type": "string"
           },
           "free_disk_bytes": {
-            "default": 0,
-            "title": "Free Disk Bytes",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Disk Bytes"
           },
           "live_bytes": {
-            "default": 0,
-            "title": "Live Bytes",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Bytes"
           },
           "provider": {
             "title": "Provider",

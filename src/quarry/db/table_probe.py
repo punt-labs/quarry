@@ -1,12 +1,13 @@
-"""Read-only probes of the chunks table that load no row data."""
+"""Read-only probes of the database tables that load no row data."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, ClassVar, final
 
 import lancedb
 
+from quarry.db.page_store import PAGES_TABLE
 from quarry.db.schema import TABLE_NAME
 
 if TYPE_CHECKING:
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 @final
 @dataclass(frozen=True, slots=True)
 class StorageSizes:
-    """On-disk and live bytes of the chunks table; both zero when it is absent.
+    """On-disk and live bytes of the chunks and pages tables; zero when absent.
 
     The two diverge when compaction fails: superseded files pile up on disk while
     the live data stays small, so their ratio is the bloat signal.
@@ -33,27 +34,31 @@ class StorageSizes:
 
 @final
 class TableProbe:
-    """Open and measure the chunks table of the database at a path."""
+    """Open and measure the chunks and pages tables of the database at a path."""
 
     __slots__ = ()
 
+    _TABLES: ClassVar[tuple[str, ...]] = (TABLE_NAME, PAGES_TABLE)
+
     @classmethod
     def sizes(cls, db_path: Path) -> StorageSizes:
-        """Return the table's on-disk bytes and its live-data estimate.
+        """Return the tables' on-disk bytes and their live-data estimate.
 
-        Live bytes come from the table's own fragment statistics, so no row is
-        loaded; disk bytes are the sizes of the files under the table directory.
+        Live bytes come from each table's own fragment statistics, so no row is
+        loaded; disk bytes are the sizes of the files under each table directory.
+        Page text lives in its own table and bloats the same way chunks do, so
+        both count.
         """
         db = lancedb.connect(str(db_path))
-        if TABLE_NAME not in db.list_tables().tables:
-            return StorageSizes(disk_bytes=0, live_bytes=0)
-        table_dir = db_path / f"{TABLE_NAME}.lance"
+        present = [t for t in cls._TABLES if t in db.list_tables().tables]
         return StorageSizes(
-            disk_bytes=sum(
-                f.stat().st_size for f in table_dir.rglob("*") if f.is_file()
-            ),
-            live_bytes=cls._live_bytes(db.open_table(TABLE_NAME).stats()),
+            disk_bytes=sum(cls._disk_bytes(db_path / f"{t}.lance") for t in present),
+            live_bytes=sum(cls._live_bytes(db.open_table(t).stats()) for t in present),
         )
+
+    @staticmethod
+    def _disk_bytes(table_dir: Path) -> int:
+        return sum(f.stat().st_size for f in table_dir.rglob("*") if f.is_file())
 
     @staticmethod
     def _live_bytes(stats: object) -> int:
