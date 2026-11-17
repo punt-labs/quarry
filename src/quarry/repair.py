@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Self, final
 
 from lancedb.index import FTS, Bitmap
@@ -15,9 +16,9 @@ from quarry.db.storage import get_db
 from quarry.repair_plan import RepairPlan
 from quarry.repair_rows import RowJudge
 from quarry.repair_scratch import RepairScratch
-from quarry.run_dir import RunDir
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
     from pathlib import Path
 
     import pyarrow as pa
@@ -45,14 +46,27 @@ class TableRepair:
     period.
     """
 
-    __slots__ = ("_path",)
+    __slots__ = ("_path", "_root")
 
     _path: Path
+    _root: Path
 
-    def __new__(cls, db_path: Path) -> Self:
+    def __new__(cls, db_path: Path, quarry_root: Path) -> Self:
         self = super().__new__(cls)
         self._path = db_path
+        self._root = quarry_root
         return self
+
+    @contextmanager
+    def session(self) -> Generator[Self]:
+        """Hold every roster run dir's daemon lock, and yield this repair.
+
+        :meth:`plan` and :meth:`rebuild` are meant to run inside it, so the
+        state an operator consents to is the state that gets rebuilt.  Raises
+        ``ValueError`` on entry when a daemon owns any of them.
+        """
+        with DaemonGuard.roster(self._path.parent, self._root).exclusive():
+            yield self
 
     def plan(self) -> RepairPlan:
         """Count what a rebuild would drop and keep; change nothing."""
@@ -73,19 +87,17 @@ class TableRepair:
     def rebuild(self) -> int:
         """Rebuild the table and swap it in; return its new on-disk size in bytes.
 
-        Raises ``ValueError`` when there is no chunks table, a kept row fails
-        verification, or a daemon owns the run dir.  Any failure leaves the
-        original table as it was.
+        Call it inside :meth:`session`, which holds the daemon locks.  Raises
+        ``ValueError`` when there is no chunks table or a kept row fails
+        verification.  Any failure leaves the original table as it was.
         """
-        run_dir = RunDir(self._path.parent)
-        with DaemonGuard(run_dir).exclusive():
-            table = self._open()
-            if table is None:
-                msg = f"no chunks table in {self._path}"
-                raise ValueError(msg)
-            judge = self._judge_for(table)
-            with RepairScratch(self._path.parent).open() as scratch:
-                self._swap_in(scratch, self._write_kept(table, judge, scratch))
+        table = self._open()
+        if table is None:
+            msg = f"no chunks table in {self._path}"
+            raise ValueError(msg)
+        judge = self._judge_for(table)
+        with RepairScratch(self._path.parent).open() as scratch:
+            self._swap_in(scratch, self._write_kept(table, judge, scratch))
         return self._disk_bytes()
 
     def _write_kept(self, table: LanceTable, judge: RowJudge, scratch: Path) -> int:

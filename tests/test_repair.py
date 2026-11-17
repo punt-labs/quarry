@@ -22,6 +22,7 @@ from quarry.db.schema import TABLE_NAME, SchemaManager
 from quarry.db.storage import get_db
 from quarry.page_record import PageRecord
 from quarry.repair import TableRepair
+from quarry.repair_plan import RepairPlan
 from quarry.run_dir import RunDir
 
 if TYPE_CHECKING:
@@ -80,6 +81,25 @@ def _size(path: Path) -> int:
     return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
 
 
+class _Locked:
+    """A TableRepair whose plan() and rebuild() each run inside a held session."""
+
+    def __init__(self, path: Path) -> None:
+        self._repair = TableRepair(path, path.parent)
+
+    def plan(self) -> RepairPlan:
+        with self._repair.session() as session:
+            return session.plan()
+
+    def rebuild(self) -> int:
+        with self._repair.session() as session:
+            return session.rebuild()
+
+
+def _repair(path: Path) -> _Locked:
+    return _Locked(path)
+
+
 def _mixed(path: Path) -> LanceDB:
     rows = [_row("good.txt", i, f"good chunk {i}") for i in range(5)]
     rows += [_row("pdf.bin", i, _BINARY) for i in range(2)]
@@ -87,10 +107,36 @@ def _mixed(path: Path) -> LanceDB:
     return _seed(path, rows)
 
 
+class TestScanCostIsLinear:
+    """Reads at a deep offset cost no more than at the start (no re-skipping)."""
+
+    def test_a_read_near_the_end_costs_about_the_same_as_one_at_the_start(
+        self, tmp_path: Path
+    ) -> None:
+        import time
+
+        db = get_db(tmp_path / "lancedb")
+        table = db.create_table(TABLE_NAME, data=[], schema=SchemaManager.schema())
+        for i in range(20):
+            table.add([_row(f"d{i}", j, "t" * 500) for j in range(500)])
+        cols = list(SchemaManager.schema().names)
+
+        def best_of(offset: int) -> float:
+            times = []
+            for _ in range(5):
+                start = time.perf_counter()
+                table.search().select(cols).limit(256).offset(offset).to_list()
+                times.append(time.perf_counter() - start)
+            return min(times)
+
+        # A re-skipping scan would make the deep read ~40x the first one.
+        assert best_of(9_700) < 10 * max(best_of(0), 0.002)
+
+
 class TestPlan:
     def test_counts_binary_over_budget_and_kept_rows(self, tmp_path: Path) -> None:
         _mixed(tmp_path / "lancedb")
-        plan = TableRepair(tmp_path / "lancedb").plan()
+        plan = _repair(tmp_path / "lancedb").plan()
         assert (plan.rows, plan.binary_rows, plan.over_budget_rows) == (8, 2, 1)
         assert plan.kept_rows == 5
 
@@ -99,18 +145,18 @@ class TestPlan:
     ) -> None:
         _mixed(tmp_path / "lancedb")
         _leak(tmp_path / "lancedb", 6)
-        plan = TableRepair(tmp_path / "lancedb").plan()
+        plan = _repair(tmp_path / "lancedb").plan()
         assert plan.on_disk_bytes > 6 * 2**20 > plan.live_bytes
 
     def test_changes_nothing_on_disk(self, tmp_path: Path) -> None:
         _mixed(tmp_path / "lancedb")
         before = _tree(tmp_path / "lancedb")
-        TableRepair(tmp_path / "lancedb").plan()
+        _repair(tmp_path / "lancedb").plan()
         assert _tree(tmp_path / "lancedb") == before
 
     def test_absent_table_is_an_empty_plan(self, tmp_path: Path) -> None:
         get_db(tmp_path / "lancedb")
-        assert TableRepair(tmp_path / "lancedb").plan().rows == 0
+        assert _repair(tmp_path / "lancedb").plan().rows == 0
 
     def test_reads_in_batches_of_at_most_256_rows(self, tmp_path: Path) -> None:
         _mixed(tmp_path / "lancedb")
@@ -122,7 +168,7 @@ class TestPlan:
             return real(table, columns, start=start)
 
         with patch("quarry.repair.AdaptiveScan", spy):
-            TableRepair(tmp_path / "lancedb").plan()
+            _repair(tmp_path / "lancedb").plan()
         assert starts
         assert max(starts) <= 256
 
@@ -136,11 +182,11 @@ class TestChunkBudget:
 
     def test_plan_counts_a_chunk_over_the_chunk_budget(self, tmp_path: Path) -> None:
         self._seed_mid_sized(tmp_path / "lancedb")
-        assert TableRepair(tmp_path / "lancedb").plan().over_budget_rows == 1
+        assert _repair(tmp_path / "lancedb").plan().over_budget_rows == 1
 
     def test_rebuild_drops_a_chunk_over_the_chunk_budget(self, tmp_path: Path) -> None:
         self._seed_mid_sized(tmp_path / "lancedb")
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         rows = get_db(tmp_path / "lancedb").open_table(TABLE_NAME).search().to_list()
         assert [r["document_name"] for r in rows] == ["ok.txt"]
 
@@ -161,7 +207,7 @@ class TestDocumentLevelBinaryVerdict:
     ) -> None:
         dense = "\ufffd" * 120 + " math"
         _seed(tmp_path / "lancedb", self._doc("math.txt", dense, odd_at=7))
-        plan = TableRepair(tmp_path / "lancedb").plan()
+        plan = _repair(tmp_path / "lancedb").plan()
         assert (plan.binary_rows, plan.kept_rows) == (0, 40)
 
     def test_a_later_chunk_that_opens_with_replacement_characters_is_kept(
@@ -169,14 +215,14 @@ class TestDocumentLevelBinaryVerdict:
     ) -> None:
         opens_bad = "\ufffd\ufffd\ufffd table of symbols"
         _seed(tmp_path / "lancedb", self._doc("tbl.txt", opens_bad, odd_at=5))
-        assert TableRepair(tmp_path / "lancedb").plan().binary_rows == 0
+        assert _repair(tmp_path / "lancedb").plan().binary_rows == 0
 
     def test_a_dense_opening_chunk_of_an_otherwise_clean_document_is_kept(
         self, tmp_path: Path
     ) -> None:
         dense_head = "sym " + "\ufffd" * 300 + " symbols"
         _seed(tmp_path / "lancedb", self._doc("sym.txt", dense_head, odd_at=0))
-        assert TableRepair(tmp_path / "lancedb").plan().binary_rows == 0
+        assert _repair(tmp_path / "lancedb").plan().binary_rows == 0
 
     def test_a_document_that_opens_with_a_binary_signature_is_dropped(
         self, tmp_path: Path
@@ -185,14 +231,14 @@ class TestDocumentLevelBinaryVerdict:
             tmp_path / "lancedb",
             self._doc("img.png", "\x89PNG then bytes", odd_at=0),
         )
-        assert TableRepair(tmp_path / "lancedb").plan().binary_rows == 40
+        assert _repair(tmp_path / "lancedb").plan().binary_rows == 40
 
     def test_a_document_that_is_mostly_non_text_is_dropped(
         self, tmp_path: Path
     ) -> None:
         rows = [_row("bin.dat", i, "\ufffd" * 900 + "abc" * 30) for i in range(10)]
         _seed(tmp_path / "lancedb", rows)
-        assert TableRepair(tmp_path / "lancedb").plan().binary_rows == 10
+        assert _repair(tmp_path / "lancedb").plan().binary_rows == 10
 
 
 class TestRebuild:
@@ -200,7 +246,7 @@ class TestRebuild:
         self, tmp_path: Path
     ) -> None:
         _mixed(tmp_path / "lancedb")
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         rows = (
             get_db(tmp_path / "lancedb")
             .open_table(TABLE_NAME)
@@ -216,13 +262,13 @@ class TestRebuild:
 
     def test_recreates_the_collection_and_text_indexes(self, tmp_path: Path) -> None:
         _mixed(tmp_path / "lancedb")
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         table = lancedb.connect(str(tmp_path / "lancedb")).open_table(TABLE_NAME)
         assert {i.name for i in table.list_indices()} == {"collection_idx", "text_idx"}
 
     def test_full_text_search_works_after_the_rebuild(self, tmp_path: Path) -> None:
         _mixed(tmp_path / "lancedb")
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         table = lancedb.connect(str(tmp_path / "lancedb")).open_table(TABLE_NAME)
         assert len(table.search("chunk", query_type="fts").limit(10).to_list()) == 5
 
@@ -232,21 +278,21 @@ class TestRebuild:
         _mixed(tmp_path / "lancedb")
         _leak(tmp_path / "lancedb", 8)
         before = _size(tmp_path / "lancedb")
-        after = TableRepair(tmp_path / "lancedb").rebuild()
+        after = _repair(tmp_path / "lancedb").rebuild()
         assert before > 8 * 2**20
         assert after < 2**20
         assert _size(tmp_path / "lancedb") == after
 
     def test_leaves_no_scratch_or_backup_directory_behind(self, tmp_path: Path) -> None:
         _mixed(tmp_path / "lancedb")
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         assert [p.name for p in (tmp_path / "lancedb").iterdir()] == [
             f"{TABLE_NAME}.lance"
         ]
 
     def test_a_table_with_no_bad_rows_keeps_every_row(self, tmp_path: Path) -> None:
         _seed(tmp_path / "lancedb", [_row("a", i, f"t{i}") for i in range(3)])
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         table = get_db(tmp_path / "lancedb").open_table(TABLE_NAME)
         assert table.count_rows() == 3
 
@@ -254,7 +300,7 @@ class TestRebuild:
         db = get_db(tmp_path / "lancedb")
         table = db.create_table(TABLE_NAME, data=[], schema=SchemaManager.schema())
         table.add([_row("big", i, f"t{i}") for i in range(600)])
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         assert get_db(tmp_path / "lancedb").open_table(TABLE_NAME).count_rows() == 600
 
     def test_a_failure_mid_rebuild_leaves_the_original_byte_for_byte(
@@ -267,7 +313,7 @@ class TestRebuild:
             patch.object(TableRepair, "_create_indexes", side_effect=OSError("boom")),
             pytest.raises(OSError, match="boom"),
         ):
-            TableRepair(tmp_path / "lancedb").rebuild()
+            _repair(tmp_path / "lancedb").rebuild()
         assert _tree(tmp_path / "lancedb") == before
 
     def test_a_failure_leaves_no_temporary_sibling(self, tmp_path: Path) -> None:
@@ -277,7 +323,7 @@ class TestRebuild:
             patch.object(TableRepair, "_create_indexes", side_effect=OSError("boom")),
             pytest.raises(OSError, match="boom"),
         ):
-            TableRepair(tmp_path / "lancedb").rebuild()
+            _repair(tmp_path / "lancedb").rebuild()
         assert sorted(p.name for p in (tmp_path / "lancedb").iterdir()) == before
 
     def test_a_kept_row_missing_its_vector_aborts_before_the_swap(
@@ -289,7 +335,7 @@ class TestRebuild:
             patch.object(TableRepair, "_vector_is_whole", return_value=False),
             pytest.raises(ValueError, match="vector"),
         ):
-            TableRepair(tmp_path / "lancedb").rebuild()
+            _repair(tmp_path / "lancedb").rebuild()
         assert _tree(tmp_path / "lancedb") == before
 
     def test_a_scratch_directory_stranded_by_a_dead_run_is_removed(
@@ -299,13 +345,13 @@ class TestRebuild:
         stranded = tmp_path / ".repair-99999"
         stranded.mkdir()
         (stranded / "junk").write_bytes(b"x")
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         assert not stranded.exists()
 
     def test_absent_table_is_refused(self, tmp_path: Path) -> None:
         get_db(tmp_path / "lancedb")
         with pytest.raises(ValueError, match="no chunks table"):
-            TableRepair(tmp_path / "lancedb").rebuild()
+            _repair(tmp_path / "lancedb").rebuild()
 
 
 class TestPagesOfDroppedDocuments:
@@ -321,12 +367,12 @@ class TestPagesOfDroppedDocuments:
 
     def test_repair_leaves_every_page_row_in_place(self, tmp_path: Path) -> None:
         self._seed_pages(_mixed(tmp_path / "lancedb"))
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         assert PageStore(get_db(tmp_path / "lancedb")).count() == 2
 
     def test_a_dropped_documents_page_is_not_readable(self, tmp_path: Path) -> None:
         self._seed_pages(_mixed(tmp_path / "lancedb"))
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         pages = ReadablePage(get_db(tmp_path / "lancedb"))
         assert pages.text_of("good.txt", 1, "col") == "good page"
         with pytest.raises(KeyError):
@@ -336,7 +382,7 @@ class TestPagesOfDroppedDocuments:
         self, tmp_path: Path
     ) -> None:
         self._seed_pages(_mixed(tmp_path / "lancedb"))
-        TableRepair(tmp_path / "lancedb").rebuild()
+        _repair(tmp_path / "lancedb").rebuild()
         db = get_db(tmp_path / "lancedb")
         swept = OrphanPageSweep(db).run(now=datetime.now(UTC) + timedelta(hours=25))
         assert swept == 1
@@ -345,7 +391,7 @@ class TestPagesOfDroppedDocuments:
 
 class TestDaemonGuard:
     def _guard(self, tmp_path: Path) -> DaemonGuard:
-        return DaemonGuard(RunDir(tmp_path))
+        return DaemonGuard((RunDir(tmp_path),))
 
     def test_no_port_file_and_no_lock_means_stopped(self, tmp_path: Path) -> None:
         assert not self._guard(tmp_path).is_running()
@@ -382,6 +428,33 @@ class TestDaemonGuard:
             assert self._guard(tmp_path).is_running()
         assert not self._guard(tmp_path).is_running()
 
+    def test_exclusive_refuses_when_a_live_port_answers_though_no_lock_is_held(
+        self, tmp_path: Path
+    ) -> None:
+        RunDir(tmp_path).port_file.write(65000)
+        with (
+            patch(
+                "quarry.daemon_guard.HealthProbe.fetch", return_value={"state": "ready"}
+            ),
+            pytest.raises(ValueError, match="daemon"),
+            self._guard(tmp_path).exclusive(),
+        ):
+            pass
+
+    def test_exclusive_refuses_before_taking_any_lock_when_a_port_answers(
+        self, tmp_path: Path
+    ) -> None:
+        RunDir(tmp_path).port_file.write(65000)
+        with (
+            patch(
+                "quarry.daemon_guard.HealthProbe.fetch", return_value={"state": "ready"}
+            ),
+            pytest.raises(ValueError, match="daemon"),
+            self._guard(tmp_path).exclusive(),
+        ):
+            pass
+        assert not RunDir(tmp_path).lock_path.exists()
+
     def test_exclusive_refuses_when_a_daemon_holds_the_lock(
         self, tmp_path: Path
     ) -> None:
@@ -395,3 +468,102 @@ class TestDaemonGuard:
                 pass
         finally:
             os.close(fd)
+
+
+def _hold(run_dir: Path) -> int:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(RunDir(run_dir).lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fd
+
+
+class TestSiblingDatabases:
+    """A daemon started for one database writes to every sibling in its roster."""
+
+    def _roster(self, tmp_path: Path) -> tuple[Path, Path]:
+        root = tmp_path / "data"
+        for name in ("default", "work"):
+            (root / name).mkdir(parents=True)
+            (root / name / "registry.db").write_bytes(b"")
+        _mixed(root / "work" / "lancedb")
+        return root, root / "work" / "lancedb"
+
+    def test_a_daemon_on_another_database_blocks_the_guard(
+        self, tmp_path: Path
+    ) -> None:
+        root, work = self._roster(tmp_path)
+        fd = _hold(root / "default")
+        try:
+            assert DaemonGuard.roster(work.parent, root).is_running()
+        finally:
+            os.close(fd)
+
+    def test_no_daemon_anywhere_means_stopped(self, tmp_path: Path) -> None:
+        root, work = self._roster(tmp_path)
+        assert not DaemonGuard.roster(work.parent, root).is_running()
+
+    def test_a_directory_without_a_registry_is_not_a_roster_member(
+        self, tmp_path: Path
+    ) -> None:
+        root, work = self._roster(tmp_path)
+        (root / "scratch").mkdir()
+        fd = _hold(root / "scratch")
+        try:
+            assert not DaemonGuard.roster(work.parent, root).is_running()
+        finally:
+            os.close(fd)
+
+    def test_repair_of_one_database_refuses_while_a_sibling_has_a_daemon(
+        self, tmp_path: Path
+    ) -> None:
+        root, work = self._roster(tmp_path)
+        before = _tree(work)
+        fd = _hold(root / "default")
+        try:
+            with pytest.raises(ValueError, match="daemon"):
+                TableRepair(work, root).session().__enter__()
+        finally:
+            os.close(fd)
+        assert _tree(work) == before
+
+    def test_the_session_keeps_every_sibling_locked_until_it_ends(
+        self, tmp_path: Path
+    ) -> None:
+        root, work = self._roster(tmp_path)
+        with TableRepair(work, root).session():
+            assert DaemonGuard.roster(work.parent, root).is_running()
+        assert not DaemonGuard.roster(work.parent, root).is_running()
+
+
+class TestPlanAndRebuildShareOneLockedState:
+    def test_a_write_between_plan_and_rebuild_cannot_happen_under_the_lock(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "data"
+        (root / "default").mkdir(parents=True)
+        (root / "default" / "registry.db").write_bytes(b"")
+        db = root / "default" / "lancedb"
+        _mixed(db)
+        with TableRepair(db, root).session() as session:
+            plan = session.plan()
+            # A would-be daemon cannot take the lock while the session holds it.
+            with (
+                pytest.raises(ValueError, match="daemon"),
+                DaemonGuard.roster(db.parent, root).exclusive(),
+            ):
+                pass
+            session.rebuild()
+        kept = get_db(db).open_table(TABLE_NAME).count_rows()
+        assert kept == plan.kept_rows
+
+    def test_rebuild_does_not_reacquire_the_lock_it_was_given(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "data"
+        (root / "default").mkdir(parents=True)
+        (root / "default" / "registry.db").write_bytes(b"")
+        db = root / "default" / "lancedb"
+        _mixed(db)
+        with TableRepair(db, root).session() as session:
+            session.rebuild()  # would raise "a quarryd daemon owns" if it re-locked
+        assert get_db(db).open_table(TABLE_NAME).count_rows() == 5

@@ -77,7 +77,7 @@ def _app(
         is_quiet=lambda: False,
     )
     app = typer.Typer()
-    settings = Settings(lancedb_path=db_path)
+    settings = Settings(lancedb_path=db_path, quarry_root=db_path.parent.parent)
     with patch("quarry.cli_repair.Settings.load", return_value=settings):
         RepairCli(plumbing).register(app)
     app.command(name="noop")(
@@ -91,7 +91,7 @@ def _run(
 ) -> tuple[int, list[object]]:
     out: list[object] = []
     app = _app(db_path, out)
-    settings = Settings(lancedb_path=db_path)
+    settings = Settings(lancedb_path=db_path, quarry_root=db_path.parent.parent)
     with (
         patch("quarry.cli_repair.Settings.load", return_value=settings),
         patch("quarry.daemon_guard.HealthProbe.fetch", return_value=None),
@@ -155,7 +155,7 @@ class TestDaemonRefusal:
         out: list[object] = []
         err = MagicMock()
         app = _app(db, out, err=err)
-        settings = Settings(lancedb_path=db)
+        settings = Settings(lancedb_path=db, quarry_root=db.parent.parent)
         with (
             patch("quarry.cli_repair.Settings.load", return_value=settings),
             patch(
@@ -176,11 +176,93 @@ class TestDaemonRefusal:
         assert get_db(db).open_table(TABLE_NAME).count_rows() == 1
 
 
+class TestReclaimWithoutDroppedRows:
+    """A table of valid rows bloated by leaked files is reclaimed, with consent."""
+
+    def _bloated(self, tmp_path: Path) -> Path:
+        path = tmp_path / "default" / "lancedb"
+        get_db(path).create_table(
+            TABLE_NAME, data=[], schema=SchemaManager.schema()
+        ).add([_row("ok", 0, "fine")])
+        data = path / f"{TABLE_NAME}.lance" / "data"
+        data.mkdir(exist_ok=True)
+        (data / "leaked.lance").write_bytes(b"\0" * 4 * 2**20)
+        return path
+
+    def _size(self, path: Path) -> int:
+        return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+
+    def test_consent_rebuilds_and_shrinks_the_table(self, tmp_path: Path) -> None:
+        path = self._bloated(tmp_path)
+        before = self._size(path)
+        code, _ = _run(path, [], input="y\n")
+        assert code == 0
+        assert self._size(path) < before / 2
+        assert get_db(path).open_table(TABLE_NAME).count_rows() == 1
+
+    def test_declining_leaves_the_bloated_table_untouched(self, tmp_path: Path) -> None:
+        path = self._bloated(tmp_path)
+        before = _digest(path)
+        code, _ = _run(path, [], input="n\n")
+        assert (code, _digest(path)) == (0, before)
+
+    def test_the_prompt_names_reclaiming_disk_not_deleting_rows(
+        self, tmp_path: Path
+    ) -> None:
+        path = self._bloated(tmp_path)
+        _, out = _run(path, [], input="n\n")
+        text = "\n".join(str(o) for o in out)
+        assert "reclaim" in text.lower()
+        assert "0 binary" in text
+
+    def test_dry_run_stays_read_only(self, tmp_path: Path) -> None:
+        path = self._bloated(tmp_path)
+        before = _digest(path)
+        code, _ = _run(path, ["--dry-run"])
+        assert (code, _digest(path)) == (0, before)
+
+    def test_a_clean_compact_table_is_left_alone(self, tmp_path: Path) -> None:
+        path = tmp_path / "default" / "lancedb"
+        get_db(path).create_table(
+            TABLE_NAME, data=[], schema=SchemaManager.schema()
+        ).add([_row("ok", 0, "fine")])
+        before = _digest(path)
+        code, _ = _run(path, [], input="y\n")
+        assert (code, _digest(path)) == (0, before)
+
+
+class TestSiblingDaemon:
+    def test_a_daemon_on_the_default_database_refuses_a_repair_of_another(
+        self, tmp_path: Path
+    ) -> None:
+        import fcntl
+        import os
+
+        root = tmp_path / "data"
+        for name in ("default", "work"):
+            (root / name).mkdir(parents=True)
+            (root / name / "registry.db").write_bytes(b"")
+        work = root / "work" / "lancedb"
+        table = get_db(work).create_table(
+            TABLE_NAME, data=[], schema=SchemaManager.schema()
+        )
+        table.add([_row("ok", 0, "fine text"), _row("pdf", 0, "\ufffd" * 80)])
+        before = _digest(work)
+        fd = os.open(str(root / "default" / "serve.lock"), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            code, _ = _run(work, ["--yes"])
+        finally:
+            os.close(fd)
+        assert code != 0
+        assert _digest(work) == before
+
+
 def test_json_mode_emits_the_plan(tmp_path: Path) -> None:
     db = _db_path(tmp_path)
     out: list[object] = []
     app = _app(db, out, json_mode=True)
-    settings = Settings(lancedb_path=db)
+    settings = Settings(lancedb_path=db, quarry_root=db.parent.parent)
     with (
         patch("quarry.cli_repair.Settings.load", return_value=settings),
         patch("quarry.daemon_guard.HealthProbe.fetch", return_value=None),

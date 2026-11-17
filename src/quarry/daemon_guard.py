@@ -1,54 +1,89 @@
-"""Tell whether a quarryd daemon owns a run directory, and hold it exclusively."""
+"""Tell whether a quarryd daemon owns any run directory, and hold them all."""
 
 from __future__ import annotations
 
 import importlib
 import os
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon_ca_error import DaemonCaError
 from quarry.daemon_unready_error import DaemonUnreadyError
 from quarry.doctor_health_probe import HealthProbe
+from quarry.run_dir import RunDir
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-
-    from quarry.run_dir import RunDir
+    from pathlib import Path
 
 _fcntl = importlib.import_module("fcntl")
 
 
 @final
 class DaemonGuard:
-    """Decide whether a daemon is running for a run dir; keep a new one out.
+    """Decide whether a daemon is running for a set of run dirs; keep one out.
 
-    A daemon is running when it holds the run dir's ``serve.lock``, or when the
-    port in ``serve.port`` answers ``/health``.  A port file alone is not proof:
-    one outlives a crashed daemon, so the port is probed.  A port that answers
-    with a certificate fault is something alive, so it counts as running.
+    A daemon started for one database watches every database in its roster, so
+    it can write to a sibling's tables.  :meth:`roster` therefore guards the
+    target run dir plus every sibling that holds a ``registry.db``, the same set
+    the daemon's watch roster opens.
+
+    A run dir is owned when its ``serve.lock`` is held, or when the port in
+    ``serve.port`` answers ``/health``.  A port file alone is not proof: one
+    outlives a crashed daemon, so the port is probed.  A port that answers with
+    a certificate fault is something alive, so it counts as running.
     """
 
-    __slots__ = ("_run_dir",)
+    __slots__ = ("_run_dirs",)
 
-    _run_dir: RunDir
+    _run_dirs: tuple[RunDir, ...]
 
-    def __new__(cls, run_dir: RunDir) -> Self:
+    def __new__(cls, run_dirs: tuple[RunDir, ...]) -> Self:
         self = super().__new__(cls)
-        self._run_dir = run_dir
+        self._run_dirs = run_dirs
         return self
 
+    @classmethod
+    def roster(cls, target: Path, quarry_root: Path) -> Self:
+        """Return the guard over *target* and every roster database under the root."""
+        dirs = {target}
+        # No root yet means only the target can have a daemon.
+        with suppress(FileNotFoundError):
+            dirs.update(
+                entry
+                for entry in quarry_root.iterdir()
+                if entry.is_dir() and (entry / "registry.db").exists()
+            )
+        return cls(tuple(RunDir(d) for d in sorted(dirs)))
+
     def is_running(self) -> bool:
-        """Return whether a daemon owns the run dir; never creates a file."""
-        return self._lock_is_held() or self._port_answers()
+        """Return whether a daemon owns any guarded run dir; creates no file."""
+        return any(
+            self._lock_is_held(d) or self._port_answers(d) for d in self._run_dirs
+        )
 
     @contextmanager
     def exclusive(self) -> Generator[None]:
-        """Hold the run dir's daemon lock, so no daemon can start meanwhile.
+        """Hold every guarded run dir's daemon lock, so none can start meanwhile.
 
-        Raises ``ValueError`` when a daemon already holds it.
+        Locks are taken in a fixed (sorted) order so two concurrent repairs
+        cannot deadlock.  Raises ``ValueError`` when a daemon holds any of them,
+        or answers on a recorded port; a refusal creates no lock file.
         """
-        path = self._run_dir.lock_path
+        for run_dir in self._run_dirs:
+            if self._port_answers(run_dir):
+                where = run_dir.lock_path.parent
+                msg = f"a quarryd daemon answers for {where}; stop it first"
+                raise ValueError(msg)
+        with ExitStack() as stack:
+            for run_dir in self._run_dirs:
+                stack.enter_context(self._hold(run_dir))
+            yield
+
+    @staticmethod
+    @contextmanager
+    def _hold(run_dir: RunDir) -> Generator[None]:
+        path = run_dir.lock_path
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(path), os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
         try:
@@ -61,10 +96,10 @@ class DaemonGuard:
         finally:
             os.close(fd)
 
-    def _lock_is_held(self) -> bool:
-        path = self._run_dir.lock_path
+    @staticmethod
+    def _lock_is_held(run_dir: RunDir) -> bool:
         try:
-            fd = os.open(str(path), os.O_RDWR | os.O_CLOEXEC)
+            fd = os.open(str(run_dir.lock_path), os.O_RDWR | os.O_CLOEXEC)
         except FileNotFoundError:
             return False
         try:
@@ -75,9 +110,10 @@ class DaemonGuard:
             os.close(fd)
         return False
 
-    def _port_answers(self) -> bool:
+    @staticmethod
+    def _port_answers(run_dir: RunDir) -> bool:
         try:
-            port = self._run_dir.port_file.read()
+            port = run_dir.port_file.read()
         except (OSError, ValueError):
             return False
         try:

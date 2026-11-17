@@ -13,29 +13,29 @@ from typing import TYPE_CHECKING, Annotated, Protocol, Self, cast, final
 import typer
 
 from quarry.config import Settings
-from quarry.daemon_guard import DaemonGuard
 from quarry.db_pointer import SELECTION
-from quarry.run_dir import RunDir
+from quarry.repair_plan import MIB
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from contextlib import AbstractContextManager
     from pathlib import Path
 
     from quarry.cli_captures import CliPlumbing
     from quarry.repair_plan import RepairPlan
 
-_MIB = 2**20
-_RUNNING = (
-    "Error: quarryd is running; stop it first (the repair swaps the table "
-    "directory out from under a running daemon)"
-)
+
+class _Session(Protocol):
+    """The slice of ``TableRepair`` a locked session drives."""
+
+    def plan(self) -> RepairPlan: ...
+    def rebuild(self) -> int: ...
 
 
 class _Repair(Protocol):
     """The slice of ``TableRepair`` this command drives, loaded only on demand."""
 
-    def plan(self) -> RepairPlan: ...
-    def rebuild(self) -> int: ...
+    def session(self) -> AbstractContextManager[_Session]: ...
 
 
 @final
@@ -77,39 +77,43 @@ class RepairCli:
         repair refuses to run; restore it with
         ``mv .chunks.lance.bak-<pid> chunks.lance`` and run again.
         """
-        db_path = Settings.load().resolve_db_paths(SELECTION.active()).lancedb_path
-        if DaemonGuard(RunDir(db_path.parent)).is_running():
-            self._p.err_console.print(_RUNNING, style="red")
-            raise typer.Exit(code=1)
+        settings = Settings.load().resolve_db_paths(SELECTION.active())
+        db_path = settings.lancedb_path
         # The engine (lancedb) loads only when a repair actually runs.
         engine = importlib.import_module("quarry.repair")
-        repair = cast("Callable[[Path], _Repair]", engine.TableRepair)(db_path)
-        plan = repair.plan()
-        self._p.emit(asdict(plan), self._describe(plan))
-        if dry_run or plan.dropped_rows == 0:
+        repair = cast("Callable[[Path, Path], _Repair]", engine.TableRepair)(
+            db_path, settings.quarry_root
+        )
+        try:
+            with repair.session() as session:
+                self._run(session, yes=yes, dry_run=dry_run)
+        except ValueError as exc:
+            self._p.err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+
+    def _run(self, session: _Session, *, yes: bool, dry_run: bool) -> None:
+        """Plan, ask and rebuild without ever letting go of the daemon locks."""
+        plan = session.plan()
+        self._p.emit(asdict(plan), plan.describe())
+        if dry_run or not plan.needs_repair:
             return
-        if not (yes or self._consents()):
+        if not (yes or self._consents(plan)):
             self._p.emit({"repaired": False}, "Cancelled; nothing was changed.")
             return
-        size = repair.rebuild()
+        size = session.rebuild()
         self._p.emit(
             {"repaired": True, "on_disk_bytes": size},
-            f"Repaired: kept {plan.kept_rows} rows, table is now {size / _MIB:.1f} MiB",
+            f"Repaired: kept {plan.kept_rows} rows, table is now {size / MIB:.1f} MiB",
         )
 
     @staticmethod
-    def _consents() -> bool:
+    def _consents(plan: RepairPlan) -> bool:
+        question = (
+            "Delete these rows and rebuild the table?"
+            if plan.dropped_rows
+            else "Rebuild the table to reclaim the leaked disk space?"
+        )
         try:
-            return typer.confirm("Delete these rows and rebuild the table?")
+            return typer.confirm(question)
         except typer.Abort:
             return False
-
-    @staticmethod
-    def _describe(plan: RepairPlan) -> str:
-        return (
-            f"{plan.rows} rows: {plan.binary_rows} binary and "
-            f"{plan.over_budget_rows} over-budget rows will be dropped, "
-            f"{plan.kept_rows} kept.\n"
-            f"live data {plan.live_bytes / _MIB:.1f} MiB, "
-            f"on disk {plan.on_disk_bytes / _MIB:.1f} MiB"
-        )
