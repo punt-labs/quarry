@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-11-16
+
 ### Added
 
 - cli: `quarry repair` rebuilds a chunks table that `optimize()` can no longer compact (the Arrow i32 offset overflow). It reads the table in small batches, drops provably-binary and over-budget rows, verifies every kept row including its vector, recreates the bitmap and full-text indexes, and swaps the new table in atomically — a failure before the swap leaves the original byte-for-byte intact, and leaked data files are reclaimed. It refuses to run while the daemon is up and asks for consent first (`--yes` skips the prompt, `--dry-run` previews what would drop). Recovery half of DES-057 decision 4 (PL-303).
