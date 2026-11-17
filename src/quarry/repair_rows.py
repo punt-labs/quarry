@@ -68,8 +68,10 @@ class RowJudge:
         """Add the row's chunk text to its document's tally."""
         text = str(row["text"])
         tally = self._tallies.setdefault(self.document_of(row), _DocumentTally())
-        if int(str(row["chunk_index"])) == 0 or not tally.opening:
-            tally.opening = tally.opening or text[:_OPENING_CHARS]
+        # Rows come back in storage order, not chunk order, so only the row that
+        # is chunk 0 may speak for the document's opening.
+        if int(str(row["chunk_index"])) == 0:
+            tally.opening = text[:_OPENING_CHARS]
         tally.nontext += len(_NONTEXT.findall(text))
         tally.total += len(text)
 

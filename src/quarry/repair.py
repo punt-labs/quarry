@@ -16,6 +16,7 @@ from quarry.db.storage import get_db
 from quarry.repair_plan import RepairPlan
 from quarry.repair_rows import RowJudge
 from quarry.repair_scratch import RepairScratch
+from quarry.repair_session import RepairSession
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -58,17 +59,22 @@ class TableRepair:
         return self
 
     @contextmanager
-    def session(self) -> Generator[Self]:
-        """Hold every roster run dir's daemon lock, and yield this repair.
+    def session(self) -> Generator[RepairSession]:
+        """Hold every roster run dir's daemon lock, and yield the operations.
 
-        :meth:`plan` and :meth:`rebuild` are meant to run inside it, so the
-        state an operator consents to is the state that gets rebuilt.  Raises
-        ``ValueError`` on entry when a daemon owns any of them.
+        Planning and rebuilding exist only on the yielded session, so the state
+        an operator consents to is the state that gets rebuilt, and neither can
+        run without the locks.  Raises ``ValueError`` on entry when a daemon
+        owns any of them.
         """
         with DaemonGuard.roster(self._path.parent, self._root).exclusive():
-            yield self
+            session = RepairSession(self._plan, self._rebuild)
+            try:
+                yield session
+            finally:
+                session.close()
 
-    def plan(self) -> RepairPlan:
+    def _plan(self) -> RepairPlan:
         """Count what a rebuild would drop and keep; change nothing."""
         table = self._open()
         if table is None:
@@ -84,11 +90,10 @@ class TableRepair:
                 live += self._row_bytes(row) if verdict == "keep" else 0
         return RepairPlan(rows, binary, over, live, self._disk_bytes())
 
-    def rebuild(self) -> int:
+    def _rebuild(self) -> int:
         """Rebuild the table and swap it in; return its new on-disk size in bytes.
 
-        Call it inside :meth:`session`, which holds the daemon locks.  Raises
-        ``ValueError`` when there is no chunks table or a kept row fails
+        Raises ``ValueError`` when there is no chunks table or a kept row fails
         verification.  Any failure leaves the original table as it was.
         """
         table = self._open()

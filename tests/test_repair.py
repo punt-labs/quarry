@@ -241,6 +241,47 @@ class TestDocumentLevelBinaryVerdict:
         assert _repair(tmp_path / "lancedb").plan().binary_rows == 10
 
 
+class TestOutOfOrderChunks:
+    """Physical scan order is not chunk_index order on a compacted table."""
+
+    def _scrambled(self, name: str, odd: str, odd_at: int) -> list[dict[str, object]]:
+        rows = [
+            _row(name, i, odd if i == odd_at else "clean prose " * 150)
+            for i in range(40)
+        ]
+        return list(reversed(rows))  # chunk 0 is stored last
+
+    def test_a_symbol_chunk_met_first_does_not_condemn_a_clean_document(
+        self, tmp_path: Path
+    ) -> None:
+        symbols = "\ufffd\ufffd\ufffd table of symbols"
+        rows = self._scrambled("sym.txt", symbols, odd_at=5)
+        rows.insert(
+            0, rows.pop(rows.index(next(r for r in rows if r["chunk_index"] == 5)))
+        )
+        _seed(tmp_path / "lancedb", rows)
+        plan = _repair(tmp_path / "lancedb").plan()
+        assert (plan.binary_rows, plan.kept_rows) == (0, 40)
+
+    def test_a_binary_signature_on_chunk_zero_is_caught_though_scanned_last(
+        self, tmp_path: Path
+    ) -> None:
+        png = "\x89PNG header bytes"
+        # Dilute the aggregate ratio so only the opening signature can condemn it.
+        rows = self._scrambled("img.png", png, odd_at=0)
+        _seed(tmp_path / "lancedb", rows)
+        assert _repair(tmp_path / "lancedb").plan().binary_rows == 40
+
+    def test_a_document_with_no_chunk_zero_row_is_judged_by_ratio_alone(
+        self, tmp_path: Path
+    ) -> None:
+        rows = [
+            r for r in self._scrambled("gap.txt", "x", odd_at=99) if r["chunk_index"]
+        ]
+        _seed(tmp_path / "lancedb", rows)
+        assert _repair(tmp_path / "lancedb").plan().binary_rows == 0
+
+
 class TestRebuild:
     def test_drops_bad_rows_and_keeps_good_rows_with_their_vectors(
         self, tmp_path: Path
@@ -498,10 +539,6 @@ class TestSiblingDatabases:
         finally:
             os.close(fd)
 
-    def test_no_daemon_anywhere_means_stopped(self, tmp_path: Path) -> None:
-        root, work = self._roster(tmp_path)
-        assert not DaemonGuard.roster(work.parent, root).is_running()
-
     def test_a_directory_without_a_registry_is_not_a_roster_member(
         self, tmp_path: Path
     ) -> None:
@@ -512,6 +549,10 @@ class TestSiblingDatabases:
             assert not DaemonGuard.roster(work.parent, root).is_running()
         finally:
             os.close(fd)
+
+    def test_no_daemon_anywhere_means_stopped(self, tmp_path: Path) -> None:
+        root, work = self._roster(tmp_path)
+        assert not DaemonGuard.roster(work.parent, root).is_running()
 
     def test_repair_of_one_database_refuses_while_a_sibling_has_a_daemon(
         self, tmp_path: Path
@@ -533,6 +574,37 @@ class TestSiblingDatabases:
         with TableRepair(work, root).session():
             assert DaemonGuard.roster(work.parent, root).is_running()
         assert not DaemonGuard.roster(work.parent, root).is_running()
+
+
+class TestRebuildNeedsTheLock:
+    def test_a_repair_outside_a_session_cannot_rebuild_or_plan(
+        self, tmp_path: Path
+    ) -> None:
+        repair = TableRepair(tmp_path / "default" / "lancedb", tmp_path)
+        assert not hasattr(repair, "rebuild")
+        assert not hasattr(repair, "plan")
+
+    def test_the_session_object_carries_the_operations(self, tmp_path: Path) -> None:
+        root = tmp_path / "data"
+        (root / "default").mkdir(parents=True)
+        db = root / "default" / "lancedb"
+        _mixed(db)
+        with TableRepair(db, root).session() as session:
+            assert session.plan().rows == 8
+
+    def test_a_session_kept_past_its_lock_refuses_to_rebuild(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "data"
+        (root / "default").mkdir(parents=True)
+        db = root / "default" / "lancedb"
+        _mixed(db)
+        before = _tree(db)
+        with TableRepair(db, root).session() as session:
+            pass
+        with pytest.raises(ValueError, match="session"):
+            session.rebuild()
+        assert _tree(db) == before
 
 
 class TestPlanAndRebuildShareOneLockedState:

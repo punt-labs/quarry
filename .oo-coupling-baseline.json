@@ -2562,7 +2562,7 @@
     "avg_lcom": 0.0
   },
   "src/quarry/repair.py": {
-    "efferent_coupling": 8.0,
+    "efferent_coupling": 9.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.644,
@@ -2588,6 +2588,13 @@
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
+  },
+  "src/quarry/repair_session.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.4,
+    "avg_lcom": 0.4
   },
   "src/quarry/reported_error.py": {
     "efferent_coupling": 0.0,
