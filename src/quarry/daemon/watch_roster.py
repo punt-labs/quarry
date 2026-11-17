@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.route_key import RouteKey
+from quarry.database_roster import DatabaseRoster
 from quarry.db import Database
 from quarry.db.pages_migration import PagesMigration
 from quarry.sync_registry import SyncRegistry
@@ -99,12 +100,7 @@ class WatchRoster:
         names = {self._active_db}
         root = self._base_settings.quarry_root
         try:
-            if root.exists():
-                names.update(
-                    entry.name
-                    for entry in root.iterdir()
-                    if entry.is_dir() and (entry / "registry.db").exists()
-                )
+            names.update(DatabaseRoster(root).members())
         except OSError as exc:
             # An unreadable/racing root must never crash daemon boot — the active
             # database is always watchable; siblings reconcile on the next scan.
