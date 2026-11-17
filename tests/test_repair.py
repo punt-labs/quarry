@@ -539,20 +539,49 @@ class TestSiblingDatabases:
         finally:
             os.close(fd)
 
-    def test_a_directory_without_a_registry_is_not_a_roster_member(
-        self, tmp_path: Path
+    def test_an_unreadable_root_refuses_instead_of_guessing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         root, work = self._roster(tmp_path)
-        (root / "scratch").mkdir()
-        fd = _hold(root / "scratch")
-        try:
-            assert not DaemonGuard.roster(work.parent, root).is_running()
-        finally:
-            os.close(fd)
+        real = Path.iterdir
+
+        def boom(self: Path) -> object:
+            if self == root:
+                raise PermissionError("denied")
+            return real(self)
+
+        monkeypatch.setattr(Path, "iterdir", boom)
+        with pytest.raises(OSError, match="denied"):
+            DaemonGuard.roster(work.parent, root)
 
     def test_no_daemon_anywhere_means_stopped(self, tmp_path: Path) -> None:
         root, work = self._roster(tmp_path)
         assert not DaemonGuard.roster(work.parent, root).is_running()
+
+    def test_a_daemon_on_a_database_with_no_registry_yet_blocks_the_guard(
+        self, tmp_path: Path
+    ) -> None:
+        root, work = self._roster(tmp_path)
+        (root / "fresh").mkdir()  # a freshly booted daemon: lock, no registry
+        fd = _hold(root / "fresh")
+        try:
+            assert DaemonGuard.roster(work.parent, root).is_running()
+        finally:
+            os.close(fd)
+
+    def test_repair_refuses_while_a_registryless_daemon_runs_beside_it(
+        self, tmp_path: Path
+    ) -> None:
+        root, work = self._roster(tmp_path)
+        (root / "fresh").mkdir()
+        before = _tree(work)
+        fd = _hold(root / "fresh")
+        try:
+            with pytest.raises(ValueError, match="daemon"):
+                TableRepair(work, root).session().__enter__()
+        finally:
+            os.close(fd)
+        assert _tree(work) == before
 
     def test_repair_of_one_database_refuses_while_a_sibling_has_a_daemon(
         self, tmp_path: Path

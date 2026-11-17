@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import importlib
 import os
-from contextlib import ExitStack, contextmanager, suppress
+from contextlib import ExitStack, contextmanager
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon_ca_error import DaemonCaError
 from quarry.daemon_unready_error import DaemonUnreadyError
+from quarry.database_roster import DatabaseRoster
 from quarry.doctor_health_probe import HealthProbe
 from quarry.run_dir import RunDir
 
@@ -45,15 +46,13 @@ class DaemonGuard:
 
     @classmethod
     def roster(cls, target: Path, quarry_root: Path) -> Self:
-        """Return the guard over *target* and every roster database under the root."""
-        dirs = {target}
-        # No root yet means only the target can have a daemon.
-        with suppress(FileNotFoundError):
-            dirs.update(
-                entry
-                for entry in quarry_root.iterdir()
-                if entry.is_dir() and (entry / "registry.db").exists()
-            )
+        """Return the guard over *target* and every database a daemon could hold.
+
+        That is every roster member plus any directory with a daemon's lock or
+        port file, so a daemon booted on a database with no registry yet is seen.
+        """
+        names = DatabaseRoster(quarry_root).with_daemon_traces()
+        dirs = {target, *(quarry_root / name for name in names)}
         return cls(tuple(RunDir(d) for d in sorted(dirs)))
 
     def is_running(self) -> bool:
