@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Scan the quarry daemon log directory for error/failure signals.
 #
-# The daemon writes to ~/.punt-labs/quarry/logs (quarry-stderr.log, quarry.log,
-# quarry-stdout.log). Nothing surfaces the errors accumulating there — `quarry
+# Quarry processes share ~/.punt-labs/quarry/logs/quarry.log.
+# The scan can also read historical logs left by older installations. Nothing surfaces the errors accumulating there — `quarry
 # doctor` does not read the log and no one greps it — so a broken watch/sync
 # feature logged 100+ "Watch index failed" lines that sat unnoticed for weeks
 # (alongside historical "LanceError(IO): Too many open files"). This target

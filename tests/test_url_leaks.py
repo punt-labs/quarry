@@ -20,9 +20,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
+from punt_observe.logging import configure_logging
 from starlette.testclient import TestClient
 
-from quarry.logging_config import LoggingConfig
 from quarry.url_safety import UrlSafetyCheck
 from quarry.web_fetch_name import WebFetchName
 from tests.inproc_daemon import InProcessDaemon
@@ -119,12 +119,11 @@ def origin(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
 @pytest.fixture
 def logfile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
     """Configure production logging for real and yield the file it writes."""
-    monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
     root = logging.getLogger()
     prior = (root.handlers[:], root.level)
-    LoggingConfig.configure(log_file=LoggingConfig.DAEMON_LOG)
-    yield tmp_path / "logs" / LoggingConfig.DAEMON_LOG
+    yield configure_logging("quarry", "daemon")
     for handler in root.handlers:
         handler.close()
     root.handlers[:], root.level = prior

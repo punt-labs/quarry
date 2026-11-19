@@ -7,18 +7,19 @@ the ``TaskRegistry`` for background operations.
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.ingest_queue import IngestQueue
+from quarry.daemon.runtime import DaemonRuntime
 from quarry.daemon.tasks import TaskRegistry
-from quarry.daemon.watch_loop import WatchLoop
 from quarry.http_resources import QuarryResources
 
 if TYPE_CHECKING:
     from quarry.backend_protocols import EmbeddingBackend
     from quarry.config import Settings
+    from quarry.daemon.watch_loop import WatchLoop
     from quarry.db import Database
+    from quarry.recall_telemetry import RecallTelemetry
 
 # CORS origins allowed by default when the caller does not override them.
 DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
@@ -31,11 +32,9 @@ class DaemonContext:
     _resources: QuarryResources
     _api_key: str | None
     _cors_origins: frozenset[str]
-    _start_time: float
     _tasks: TaskRegistry
     _ingest_queue: IngestQueue
-    _watch_loop: WatchLoop
-    _ready: bool
+    _runtime: DaemonRuntime
 
     def __new__(
         cls,
@@ -58,15 +57,13 @@ class DaemonContext:
         self._resources = QuarryResources(settings, embedder=embedder)
         self._api_key = api_key
         self._cors_origins = cors_origins or DEFAULT_CORS_ORIGINS
-        self._start_time = time.monotonic()
         self._tasks = TaskRegistry()
         # Built here (no running loop needed — its workers start lazily on first
         # submit) so every route reaches one resident queue through the context.
         self._ingest_queue = IngestQueue(self)
         # Inert until start() (which needs a running loop + builds the observer),
         # so construction stays loop-free like the queue's.
-        self._watch_loop = WatchLoop(self)
-        self._ready = False
+        self._runtime = DaemonRuntime(self)
         return self
 
     @property
@@ -92,20 +89,25 @@ class DaemonContext:
     @property
     def watch_loop(self) -> WatchLoop:
         """Return the always-on filesystem watch loop."""
-        return self._watch_loop
+        return self._runtime.watch_loop
 
     async def start_watch_loop(self) -> None:
-        """Start watching every roster database (after warm() + queue start)."""
-        await self._watch_loop.start()
+        """Start watching every roster database after daemon warmup."""
+        await self._runtime.watch_loop.start()
 
     async def aclose_watch_loop(self) -> None:
-        """Stop the watch loop BEFORE the queue drains (no new jobs mid-drain)."""
-        await self._watch_loop.stop()
+        """Stop new filesystem jobs before the queue drains."""
+        await self._runtime.watch_loop.stop()
+
+    @property
+    def recall(self) -> RecallTelemetry:
+        """Return the telemetry facade for this daemon lifetime."""
+        return self._runtime.recall
 
     @property
     def uptime_seconds(self) -> float:
         """Return seconds elapsed since the context was created."""
-        return time.monotonic() - self._start_time
+        return self._runtime.uptime_seconds
 
     @property
     def state(self) -> str:
@@ -115,7 +117,7 @@ class DaemonContext:
         ``/health`` reporting ``"starting"`` means a request raced ahead of
         ``warm()`` — the state a client polls on before probing readiness.
         """
-        return "ready" if self._ready else "starting"
+        return self._runtime.state
 
     @property
     def database(self) -> Database:
@@ -152,4 +154,4 @@ class DaemonContext:
     def warm(self) -> None:
         """Build cached resources single-threaded before serving."""
         self._resources.warm()
-        self._ready = True
+        self._runtime.mark_ready()

@@ -91,13 +91,13 @@ class InsightsReport:
             "count",
         ),
         _Breakdown(
-            "Per-collection hits",
+            "Hits by collection",
             lambda info: info.per_collection_hits,
             "collection",
             "hit_count",
         ),
         _Breakdown(
-            "Per-agent recall",
+            "Recall by agent",
             lambda info: info.per_agent_recall,
             "agent_handle",
             "query_count",

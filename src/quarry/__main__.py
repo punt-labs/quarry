@@ -15,6 +15,7 @@ from rich.console import Console
 
 from quarry._cli_entry import CliEntry
 from quarry.cli_captures import CliPlumbing
+from quarry.cli_diagnostics import CliDiagnostics
 from quarry.cli_registry import CliRegistry
 from quarry.client import (
     HttpError,
@@ -25,7 +26,6 @@ from quarry.client import (
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.home_paths import HomeUnresolvedError
-from quarry.logging_config import LoggingConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -161,7 +161,7 @@ def main_callback(
         stderr_level = "CRITICAL"
     else:
         stderr_level = "WARNING"
-    LoggingConfig.configure(stderr_level=stderr_level)
+    CliDiagnostics.configure(ctx.invoked_subcommand, stderr_level=stderr_level)
     if ctx.invoked_subcommand is None:
         print(ctx.get_help())
         raise typer.Exit(code=0)
@@ -293,9 +293,6 @@ def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import McpTools  # noqa: PLC0415
 
-    # stdout is the stdio transport, so the server's log goes to stderr at INFO
-    # regardless of the CLI's --quiet/--verbose default; the launcher owns this.
-    LoggingConfig.configure(stderr_level="INFO")
     McpTools.run_stdio(db_name=_global_db or SELECTION.persisted())
 
 

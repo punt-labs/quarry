@@ -1,6 +1,6 @@
 """Tests for the daemon-log diagnostics under ``scripts/``.
 
-The daemon appends to ``quarry-stderr.log``, ``quarry.log``, and
+Older installations also left ``quarry-stderr.log``, ``quarry.log``, and
 ``quarry-stdout.log``. Drive diagnostics against synthetic logs and assert
 they report errors, always exit 0, handle missing or empty directories, and
 never report a false clean when a log is unreadable.
@@ -237,9 +237,9 @@ def _run_tail(
 
 
 def test_logs_tail_prints_recent_lines(tmp_path: Path) -> None:
-    """logs-tail prints the last LOG_LINES lines of the stderr log."""
+    """logs-tail prints the last LOG_LINES lines of the diagnostic log."""
     logs = tmp_path / "logs"
-    _write_log(logs, "quarry-stderr.log", "line1\nline2\nline3\n")
+    _write_log(logs, "quarry.log", "line1\nline2\nline3\n")
     result = _run_tail(logs, log_lines="2")
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     assert "line2" in result.stdout
@@ -248,20 +248,20 @@ def test_logs_tail_prints_recent_lines(tmp_path: Path) -> None:
 
 
 def test_logs_tail_missing_log_is_graceful(tmp_path: Path) -> None:
-    """An absent stderr log is reported plainly, exit 0 (bug class 2)."""
+    """An absent diagnostic log is reported plainly, exit 0 (bug class 2)."""
     logs = tmp_path / "logs"
     logs.mkdir()
     result = _run_tail(logs)
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
-    assert "no daemon stderr log at" in result.stdout
+    assert "no diagnostic log at" in result.stdout
 
 
 def test_logs_tail_unreadable_log_is_not_reported_absent(tmp_path: Path) -> None:
-    """A present-but-unreadable stderr log must NOT be reported as absent.
+    """A present-but-unreadable diagnostic log must NOT be reported as absent.
 
     ``[ -r ]`` is false for BOTH an absent file and a present-but-unreadable one
     (chmod 000). The old single readability check collapsed the two, printing
-    "no daemon stderr log" for a log that is present — mis-reporting a read
+    "no diagnostic log" for a log that is present — mis-reporting a read
     failure as absence (the misleading-fallback class already closed in
     logs-errors.sh, bug class 2). The three-state check must surface the
     unreadable log distinctly on stderr, never claim it is absent, never print
@@ -270,15 +270,15 @@ def test_logs_tail_unreadable_log_is_not_reported_absent(tmp_path: Path) -> None
     if os.geteuid() == 0:
         pytest.skip("root bypasses chmod 000, so the unreadable path can't be forced")
     logs = tmp_path / "logs"
-    _write_log(logs, "quarry-stderr.log", "secret daemon stderr line\n")
-    target = logs / "quarry-stderr.log"
+    _write_log(logs, "quarry.log", "secret daemon stderr line\n")
+    target = logs / "quarry.log"
     target.chmod(0o000)
     try:
         result = _run_tail(logs)
     finally:
         target.chmod(0o644)  # restore so tmp_path cleanup can remove it
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
-    assert "no daemon stderr log" not in result.stdout, "must not claim absent"
+    assert "no diagnostic log" not in result.stdout, "must not claim absent"
     assert "secret daemon stderr line" not in result.stdout, "unread log not printed"
     assert "present but unreadable" in result.stderr, "the unreadable log is surfaced"
     assert str(target) in result.stderr, "the path of the unreadable log is named"
@@ -290,13 +290,13 @@ def test_logs_tail_non_integer_log_lines_does_not_hide_present_log(
     """A junk LOG_LINES falls back to 40 — a present log is never mis-reported.
 
     Without the guard, ``tail -n junk`` fails and the old ``|| echo`` fallback
-    lied "no daemon stderr log" even though the log existed. The guard must warn
+    lied "no diagnostic log" even though the log existed. The guard must warn
     and still tail the present log.
     """
     logs = tmp_path / "logs"
-    _write_log(logs, "quarry-stderr.log", "hello world\n")
+    _write_log(logs, "quarry.log", "hello world\n")
     result = _run_tail(logs, log_lines="junk")
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     assert "is not a non-negative integer" in result.stderr
     assert "hello world" in result.stdout
-    assert "no daemon stderr log" not in result.stdout
+    assert "no diagnostic log" not in result.stdout

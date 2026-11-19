@@ -146,10 +146,7 @@ class SettingsChecks:
             ),
             CheckEntry(
                 "Recall activity",
-                lambda: RecallDiagnostics.recent_activity(
-                    pre.settings.telemetry_path,
-                    telemetry_enabled=pre.settings.telemetry_enabled,
-                ),
+                lambda: RecallDiagnostics.recent_activity(pre.settings),
                 needs=need,
             ),
         ]

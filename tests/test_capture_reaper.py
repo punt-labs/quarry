@@ -159,13 +159,15 @@ def test_the_leftover_is_opened_for_writing_so_any_lock_can_be_taken(
     real_open = os.open
 
     def spying(path: str, flag: int, *args: int, **kwargs: int) -> int:
-        flags.append(flag)
+        if path == _STALE:
+            flags.append(flag)
         return real_open(path, flag, *args, **kwargs)
 
     with patch("quarry.capture_reaper.os.open", spying):
         assert _reap(tmp_path) == 1
 
-    assert flags[-1] & os.O_RDWR
+    [flag] = flags
+    assert flag & os.O_RDWR
 
 
 def test_a_filesystem_that_cannot_lock_reaps_by_age_alone(tmp_path: Path) -> None:

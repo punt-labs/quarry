@@ -11,6 +11,7 @@ stays byte-for-byte what the Starlette handlers returned (bug-class-3).
 from __future__ import annotations
 
 import logging
+from traceback import format_tb
 from typing import TYPE_CHECKING, Self, final
 
 from fastapi import FastAPI
@@ -33,9 +34,6 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
 
 logger = logging.getLogger(__name__)
-
-# Derived from the one wire version so daemon and clients never disagree on it.
-_API_PREFIX = f"/v{API_VERSION}"
 
 type Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
@@ -135,7 +133,7 @@ class AppBuilder:
         """Register every route table entry, versioning engine routes with /v1."""
         for spec in RouteTable(self._ctx).specs():
             app.add_api_route(
-                spec.full_path(_API_PREFIX),
+                spec.full_path(f"/v{API_VERSION}"),
                 spec.endpoint,
                 methods=list(spec.methods),
                 response_model=spec.response_model,
@@ -157,8 +155,8 @@ class AppBuilder:
         return JSONResponse({"error": detail or "Error"}, status_code=status)
 
     @staticmethod
-    async def _server_error(request: Request, _exc: Exception) -> JSONResponse:
-        logger.exception("Unhandled error on %s", request.url.path)
+    async def _server_error(_request: Request, exc: Exception) -> JSONResponse:
+        logger.error("%s: %s", type(exc).__name__, format_tb(exc.__traceback__))
         return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 

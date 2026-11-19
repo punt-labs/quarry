@@ -31,7 +31,6 @@ class TestSettings:
 
         assert settings.lancedb_path == tmp_path / "default" / "lancedb"
         assert settings.registry_path == tmp_path / "default" / "registry.db"
-        assert settings.telemetry_path == tmp_path / "default" / "telemetry.db"
 
     def test_defaults(self):
         settings = Settings()

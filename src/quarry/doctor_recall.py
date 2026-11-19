@@ -1,61 +1,41 @@
-"""Recall-telemetry doctor check: a one-line summary of recent search activity.
-
-Answers "is the recall loop (DES-055/DES-056) actually being exercised?" without
-requiring a running daemon — the query log is a plain SQLite file, so doctor
-reads it directly the same way :class:`~quarry.doctor_sync.SyncDiagnostics`
-reads the sync registry.
-"""
+"""Summarize local recall activity without starting a telemetry provider."""
 
 from __future__ import annotations
 
+import sqlite3
 from functools import partial
-from pathlib import Path
-from typing import final
+from typing import TYPE_CHECKING, final
 
-from quarry.doctor_failure import CheckFailure
-from quarry.query_log import QueryLog
+from punt_observe.telemetry import TelemetryConfig
+from punt_observe.telemetry.config import resolve
+
+from quarry.home_paths import HomeUnresolvedError
+from quarry.recall_insights import RecallInsights
 from quarry.results import CheckResult
+
+if TYPE_CHECKING:
+    from quarry.config import Settings
 
 
 @final
 class RecallDiagnostics:
-    """Doctor check over the recall-telemetry query log."""
-
-    __slots__ = ()
+    """Read the installation-wide recall summary for doctor."""
 
     @staticmethod
-    def recent_activity(
-        telemetry_path: Path, *, telemetry_enabled: bool
-    ) -> CheckResult:
-        """Summarize total queries and the empty-result rate.
-
-        Informational only (``required=False``): a fresh or disabled telemetry
-        store is a normal, healthy state, not a failure.
-        """
+    def recent_activity(settings: Settings) -> CheckResult:
+        """Return a non-required recall check without starting capture."""
         result = partial(CheckResult, name="Recall telemetry", required=False)
-        if not telemetry_enabled:
+        config = TelemetryConfig(enabled=settings.telemetry_enabled)
+        if not resolve("quarry", config).enabled:
             return result(passed=True, message="disabled")
-        if not telemetry_path.exists():
-            return result(passed=True, message="enabled, no queries recorded yet")
         try:
-            summary = RecallDiagnostics._summarize(telemetry_path)
-        except Exception as exc:  # noqa: BLE001 -- doctor must degrade, never crash
-            return result(
-                passed=False,
-                message=(
-                    f"check failed: {telemetry_path.name}: {CheckFailure.detail(exc)}"
-                ),
-            )
-        return result(passed=True, message=summary)
+            return result(passed=True, message=RecallDiagnostics._summary())
+        except (HomeUnresolvedError, OSError, sqlite3.Error):
+            return result(passed=False, message="local telemetry unavailable")
 
     @staticmethod
-    def _summarize(telemetry_path: Path) -> str:
-        """Return the one-line summary printed as the ``recent_activity`` message."""
-        log = QueryLog(telemetry_path)
-        try:
-            agg = log.insights.aggregate()
-        finally:
-            log.close()
+    def _summary() -> str:
+        agg = RecallInsights.read()
         if agg.total_queries == 0:
             return "enabled, no queries recorded yet"
         return (
