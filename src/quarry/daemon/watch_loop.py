@@ -1,13 +1,10 @@
 """The always-on filesystem watch loop: a producer onto the ingest queue.
 
-One ``WatchLoop`` per daemon watches every registered directory across every
-database in the roster.  It owns the *lifecycle* (start/stop, per-tree
-scheduling, roster startup) and marshals observer-thread events onto the event
-loop; the *producer* half — turning a debounced batch or a scan into IngestUnits
-on the per-``(database, collection)`` queue — lives in
-:class:`~quarry.daemon.watch_submit.WatchSubmitter`.  It writes no LanceDB table
-itself and invents no second queue, inheriting the whole serialization stack
-(the FIFO, the progressive commit, the write-ahead log).
+One WatchLoop per daemon owns registered-directory lifecycles across databases
+and marshals observer events onto the event loop. WatchSubmitter turns scans
+and debounced batches into IngestUnits on the shared (database, collection)
+queue. The loop writes no LanceDB tables and uses the queue's FIFO,
+progressive commit, and write-ahead log rather than a separate write path.
 """
 
 from __future__ import annotations

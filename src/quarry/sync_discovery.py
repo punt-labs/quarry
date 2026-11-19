@@ -52,10 +52,8 @@ class FileDiscovery:
         except (OSError, RuntimeError):
             logger.warning("Cannot resolve registered root: %s", directory)
             self._root_resolved = None
-        # A temp/scratch root (OS temp like ``/private/tmp`` OR a repo's own
-        # ``.tmp``) is never a document tree: watching it OCR-storms everything
-        # dropped there.  Refused up front so both the bulk scan and the live
-        # path treat it as empty.
+        # Refuse OS-temp and repo-scratch roots before bulk or live discovery
+        # can trigger an OCR storm on their transient contents.
         self._excluded = self._root_resolved is not None and self._guard.refuses_root(
             self._root_resolved
         )

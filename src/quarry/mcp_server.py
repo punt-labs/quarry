@@ -87,9 +87,8 @@ class McpTools:
     def register(self, server: MCPServer) -> None:
         """Attach every guarded tool to *server* under its wire name.
 
-        ``list`` and ``use`` keep their short wire names; the rest register under
-        the method name.  Every method is already ``@ToolGuard.wrap``-wrapped, so
-        the registered tool and a direct call share the identical error boundary.
+        Register list/use under short wire names and others under method names.
+        Direct and registered calls share the ToolGuard.wrap error boundary.
         """
         server.add_tool(self.find)
         server.add_tool(self.ingest)
@@ -135,10 +134,8 @@ class McpTools:
             memory_type: Optional memory type filter (fact, observation, lesson, etc.).
 
         Returns:
-            Ranked excerpts with document, page, collection, and relevance metadata;
-            an empty result report means no indexed content matched.
-            Input refusals, daemon errors, and unexpected failures return
-            Error: ... text. Connection failures include recovery guidance.
+            Ranked excerpts and source metadata, or a report of no matches.
+            Errors return Error: ...; connection failures include recovery hints.
         """
         if err := self._reject_blank(query, "query"):
             return err
@@ -167,9 +164,6 @@ class McpTools:
     ) -> str:
         """Use when you have a URL to add to the knowledge base.
 
-        Use when you have a URL to add to the knowledge base — a doc, an article, a
-        spec.
-
         remember = a specific durable fact, ingest = a URL, learn = a distilled
         lesson that gets retrieval preference.
 
@@ -187,8 +181,7 @@ class McpTools:
 
         Returns:
             An accepted ingest task ID, not a completed indexing report.
-            Input refusals, daemon errors, and unexpected failures return
-            Error: ... text. Connection failures include recovery guidance.
+            Errors return Error: ...; connection failures include recovery hints.
         """
         if not source.startswith(("http://", "https://")):
             return (
@@ -247,8 +240,7 @@ class McpTools:
 
         Returns:
             The document name and accepted task ID; indexing runs in the background.
-            Input refusals, daemon errors, and unexpected failures return
-            Error: ... text. Connection failures include recovery guidance.
+            Errors return Error: ...; connection failures include recovery hints.
         """
         if err := self._reject_blank(document_name, "document_name"):
             return err
@@ -275,9 +267,7 @@ class McpTools:
     def learn(self, lesson: str, topic: str = "", name: str = "") -> str:
         """Use learn to save a distilled lesson for preferential retrieval.
 
-        Use learn to save a distilled lesson that should outrank ordinary results
-        for related queries -- a rule, a convention, a "do it this way" insight, not
-        a one-off fact.
+        Save rules, conventions, and "do it this way" insights, not one-off facts.
 
         remember = a specific durable fact, ingest = a URL, learn = a distilled
         lesson that gets retrieval preference.
@@ -293,8 +283,7 @@ class McpTools:
 
         Returns:
             The admission status and task ID; lesson indexing runs in the background.
-            Input refusals, daemon errors, and unexpected failures return
-            Error: ... text. Connection failures include recovery guidance.
+            Errors return Error: ...; connection failures include recovery hints.
         """
         if err := self._reject_blank(lesson, "lesson"):
             return err
@@ -307,8 +296,7 @@ class McpTools:
 
         Returns:
             Formatted counts, storage size, and engine/model status for the target.
-            Input refusals, daemon errors, and unexpected failures return
-            Error: ... text. Connection failures include recovery guidance.
+            Errors return Error: ...; connection failures include recovery hints.
         """
         return StatusReport(self._connect().status().model_dump()).render()
 
@@ -318,8 +306,7 @@ class McpTools:
 
         Returns:
             Formatted query volume, latency, and recall-mix statistics.
-            Input refusals, daemon errors, and unexpected failures return
-            Error: ... text. Connection failures include recovery guidance.
+            Errors return Error: ...; connection failures include recovery hints.
         """
         return InsightsReport(self._connect().insights()).render()
 
@@ -340,15 +327,11 @@ class McpTools:
                   the default database.
 
         Returns:
-            The prior and selected local database and its resolved storage path;
-            the selection affects only this MCP process, not the persisted default.
-            Input refusals, daemon errors, and unexpected failures return
-            Error: ... text. Connection failures include recovery guidance.
+            Prior/selected databases and path; this process only, not the default.
+            Errors return Error: ...; connection failures include recovery hints.
         """
-        # A local db selection only governs the loopback run-dir target. Under a
-        # remote/explicit target it is IGNORED by TargetResolver — so refuse
-        # rather than report a switch that silently doesn't take effect and could
-        # read or destroy data on the wrong (remote) daemon.
+        # Refuse remote targets: a local selection cannot change their database,
+        # and claiming otherwise could direct destructive calls at the wrong one.
         if err := self._reject_blank(name, "name"):
             return err
         if not TargetResolver.selects_local_db():
@@ -359,20 +342,14 @@ class McpTools:
                 "'quarry logout' or unset QUARRY_URL to return to the local daemon."
             )
         previous = SELECTION.active() or "default"
-        # Select the literal named db, "default" included — never fall through to
-        # the persisted default, or use("default") would silently pick
-        # whatever the CLI last persisted and the summary path would lie about the
-        # target subsequent tools connect to. Validate before mutating:
-        # resolve_db_paths raises ValueError on a bad name, leaving the db unchanged.
+        # Validate before selecting literal names; never fall back for "default".
         resolved = Settings.load().resolve_db_paths(name)
         SELECTION.override(name)
         return f"\u25b6  Switched {previous} \u2192 {name} ({resolved.lancedb_path})"
 
     @staticmethod
     def _reject_blank(value: str, label: str) -> str | None:
-        # Returns an Error: string for a blank required arg, else None. None is
-        # the documented "valid" signal (no error) — the caller proceeds on None,
-        # so this is an appropriate Optional, not a give-up value.
+        # Return an Error: string for blank input, else None to continue.
         if value.strip():
             return None
         return f"Error: {label} is required (got an empty value)."
@@ -381,9 +358,7 @@ class McpTools:
     def run_stdio(db_name: str | None = None) -> None:
         """Run the stdio MCP server, targeting *db_name* (the daemon's database).
 
-        Logging is the launcher's job: ``quarry mcp`` (the only entry point)
-        configures the stderr level before calling in, so this stays a pure
-        "select the database and serve" step.
+        The quarry mcp launcher configures stderr logging before this call.
         """
         SELECTION.override(db_name or "")
         logger.info("Starting quarry MCP server (client tier)")

@@ -6,9 +6,8 @@ into the harness-specific locations that pi, opencode, and codex auto-load
 skills from — Claude Code needs no deposit of its own, since it already reads
 the canonical tree directly. Every deposit is version-stamped by content hash
 so a re-run is a no-op unless the source changed. :class:`SkillSource`
-(``skills_source.py``) owns the source-tree and single-deposit mechanics
-(locate, hash, manifest, the atomic copy-and-swap); this module owns only
-harness orchestration — which harness, which root, which skills go where.
+owns locating, hashing, manifests, and atomic copy-and-swap; this module
+orchestrates which harness, root, and skills to use.
 """
 
 from __future__ import annotations

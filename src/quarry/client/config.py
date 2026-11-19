@@ -111,15 +111,10 @@ class ClientConfig:
     def from_login(cls, login: Mapping[str, object]) -> Self:
         """Build a target from a stored login config, resolving the bearer.
 
-        The stored URL is first migrated (:meth:`canonical_url`): a loopback
-        NAME like ``localhost`` becomes the ``127.0.0.1`` literal.  This runs
-        BEFORE both the token gate and the stored URL, so a config written by an
-        older client (``wss://localhost:8420``) resolves the LIVE ``serve.token``
-        AND connects to the un-hijackable literal — never the ambiguous name a
-        resolver could redirect to a co-tenant's ``::1``.  For a migrated literal
-        loopback URL the bearer is read live from ``serve.token`` (it rotates
-        each daemon restart); a genuine remote URL is left intact and keeps its
-        stored bearer verbatim.
+        Canonicalize the URL before token admission and connection: loopback
+        names become literal 127.0.0.1, preventing DNS redirection to a co-tenant.
+        Literal loopback targets read the live, per-restart serve.token; remote
+        targets retain their URL and stored bearer.
         """
         url = cls.canonical_url(str(login["url"]))
         raw_ca = login.get("ca_cert")

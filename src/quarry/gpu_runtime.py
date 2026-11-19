@@ -31,8 +31,7 @@ logger = logging.getLogger(__name__)
 _ORT_CPU_SPEC = "onnxruntime>=1.18.0"
 
 # CUDA major -> onnxruntime-gpu version spec whose wheel links that major's
-# libcudart. Published compatibility facts, verified against the onnxruntime
-# docs' GPU dependency table at implementation time (2026-07):
+# libcudart, per the ONNX Runtime GPU dependency table:
 #   https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
 # - "Starting with version 1.27, GPU packages published to PyPI are built with
 #   CUDA 13.0 by default. Older GPU package versions are built with CUDA 12.8."
