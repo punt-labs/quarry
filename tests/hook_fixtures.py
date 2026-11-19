@@ -111,10 +111,10 @@ def _hf_home() -> str | None:
     return None
 
 
-def _daemon_env(root: Path, log_dir: Path, api_key: str) -> dict[str, str]:
+def _daemon_env(root: Path, api_key: str) -> dict[str, str]:
     """Build the env for the daemon subprocess.
 
-    Quarry paths are isolated to *root* (``QUARRY_ROOT`` + ``QUARRY_LOG_DIR``
+    Quarry paths are isolated to *root* (``QUARRY_ROOT`` and ``HOME``
     override every home-derived path :mod:`quarry.config` resolves). The
     operator's HuggingFace cache is reused via ``HF_HOME`` when it exists —
     otherwise ``quarryd`` would re-download the ~200 MB ONNX embedding model
@@ -126,7 +126,6 @@ def _daemon_env(root: Path, log_dir: Path, api_key: str) -> dict[str, str]:
     env = os.environ.copy()
     env["HOME"] = str(root)
     env["QUARRY_ROOT"] = str(root / "quarry")
-    env["QUARRY_LOG_DIR"] = str(log_dir)
     env["QUARRY_API_KEY"] = api_key
     env["TMPDIR"] = str(root / "tmp")
     if (hf_home := _hf_home()) is not None:
@@ -173,7 +172,7 @@ def ephemeral_daemon(
     log_dir = root / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     api_key = "test-key-" + os.urandom(8).hex()
-    env = _daemon_env(root, log_dir, api_key)
+    env = _daemon_env(root, api_key)
 
     stderr = (log_dir / "quarryd.stderr").open("wb")
     stdout = (log_dir / "quarryd.stdout").open("wb")
@@ -256,9 +255,9 @@ class HookRun:
 class HookInvoker:
     """Run ``quarry-hook <event>`` with a JSON payload piped on stdin.
 
-    Each call resolves its own ``QUARRY_LOG_DIR`` under *tmp_root* and returns
+    Each call resolves its own ``HOME`` under *tmp_root* and returns
     a :class:`HookRun` whose ``log_lines`` are read from
-    ``$QUARRY_LOG_DIR/quarry.log`` post-exit.
+    ``~/.punt-labs/quarry/logs/quarry.log`` post-exit.
     """
 
     _tmp_root: Path
@@ -278,9 +277,8 @@ class HookInvoker:
         timeout_s: float = 20.0,
     ) -> HookRun:
         """Invoke ``quarry-hook <event>`` and return the observed outcome."""
-        log_dir = self._tmp_root / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        env = self._compose_env(log_dir, env_overrides)
+        log_dir = self._tmp_root / ".punt-labs" / "quarry" / "logs"
+        env = self._compose_env(env_overrides)
         cmd = self._resolve_command(event)
         completed = subprocess.run(
             cmd,
@@ -293,14 +291,11 @@ class HookInvoker:
         )
         return HookRun.from_process(completed, log_dir / "quarry.log")
 
-    def _compose_env(
-        self, log_dir: Path, env_overrides: dict[str, str] | None
-    ) -> dict[str, str]:
+    def _compose_env(self, env_overrides: dict[str, str] | None) -> dict[str, str]:
         """Return the child env: base + fixture defaults + per-call overrides."""
         env = os.environ.copy()
         env["HOME"] = str(self._tmp_root)
         env["QUARRY_ROOT"] = str(self._tmp_root / "quarry")
-        env["QUARRY_LOG_DIR"] = str(log_dir)
         env["TMPDIR"] = str(self._tmp_root / "tmp")
         (self._tmp_root / "tmp").mkdir(parents=True, exist_ok=True)
         env.update(self._extra_env)
@@ -327,7 +322,7 @@ def hook_subprocess(tmp_path: Path) -> HookInvoker:
 
     Each call to ``HookInvoker.run(event, payload)`` returns a :class:`HookRun`
     with stdout, stderr, exit code, and every line written to
-    ``$QUARRY_LOG_DIR/quarry.log`` during the subprocess's lifetime.
+    ``~/.punt-labs/quarry/logs/quarry.log`` during the subprocess's lifetime.
     """
     return HookInvoker.build(tmp_path)
 

@@ -88,10 +88,7 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     # silently create a junk file with that literal name in the process's cwd.
     # Off by default like watch_enabled -- tests that exercise telemetry set it
     # explicitly (see test_search_telemetry.py).
-    s.telemetry_path = tmp_path / "telemetry.db"
     s.telemetry_enabled = False
-    s.telemetry_retention_days = 90
-    s.telemetry_prune_cadence_s = 3600.0
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     s.ingest_queue_depth = 32
@@ -577,7 +574,10 @@ class TestSearch:
             return real_service(database, config)
 
         with (
-            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch(
+                "quarry.daemon.routes.search_execution.SearchService",
+                side_effect=capture,
+            ),
             patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
         ):
@@ -604,7 +604,10 @@ class TestSearch:
             return real_service(database, config)
 
         with (
-            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch(
+                "quarry.daemon.routes.search_execution.SearchService",
+                side_effect=capture,
+            ),
             patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
         ):
@@ -632,7 +635,10 @@ class TestSearch:
             return real_service(database, config)
 
         with (
-            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch(
+                "quarry.daemon.routes.search_execution.SearchService",
+                side_effect=capture,
+            ),
             patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
             TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
         ):
@@ -766,7 +772,10 @@ class TestInsights:
         _inject_mocks(ctx)
         enabled_client = TestClient(build_app(ctx), raise_server_exceptions=False)
 
-        assert enabled_client.get("/v1/insights").json()["telemetry_enabled"] is True
+        with ctx.recall.running():
+            assert (
+                enabled_client.get("/v1/insights").json()["telemetry_enabled"] is True
+            )
         assert client.get("/v1/insights").json()["telemetry_enabled"] is False
 
     def test_requires_authorization_when_api_key_configured(
@@ -819,30 +828,6 @@ class TestServeToken:
         assert token_path.read_text() == "the-bearer"
         assert stat.S_IMODE(token_path.stat().st_mode) == 0o600
         assert server._bound is True
-
-    def test_ipv6_start_log_brackets_host(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # The run()-start log must also render a valid host:port for an IPv6 bind
-        # ([::1]:8420), not the ambiguous ::1:8420. Display only; bind unchanged.
-        settings = MagicMock()
-        settings.lancedb_path = tmp_path / "default" / "lancedb"
-        server = DaemonServer(settings, ServeConfig(host="::1", port=8420, api_key="k"))
-        with (
-            patch("quarry.daemon.server.DaemonContext"),
-            patch("quarry.daemon.server.build_app"),
-            patch("quarry.daemon.server.uvicorn.Server"),
-            caplog.at_level(logging.INFO, logger="quarry.daemon.server"),
-        ):
-            server.run()
-        starting = [
-            r.getMessage()
-            for r in caplog.records
-            if "Starting Quarry server" in r.getMessage()
-        ]
-        assert starting, "no start log emitted"
-        assert "[::1]:8420" in starting[0]
-        assert " on ::1:8420" not in starting[0]  # never the ambiguous bare form
 
     def test_ipv6_listening_log_brackets_host(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

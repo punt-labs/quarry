@@ -46,7 +46,7 @@ def test_a_raising_handler_answers_an_empty_object_and_does_not_raise(
     target = _TARGETS[event]
     replacement = staticmethod(_raiser) if ".HookAgent." in target else _raiser
     with (
-        patch("quarry._stdlib.LoggingConfig.configure"),
+        patch("quarry._stdlib.LoggingConfig.hook"),
         patch(target, new=replacement),
     ):
         _hook_entry._HANDLERS[event]()  # pyright: ignore[reportPrivateUsage]

@@ -152,7 +152,6 @@ def _quarryd_exec_args() -> list[str]:
 def _launchd_plist_content() -> str:
     args = _quarryd_exec_args()
     program_args = "\n".join(f"        <string>{_xml_escape(a)}</string>" for a in args)
-    log_dir = QuarryHome.log_root()
     # launchd does not support EnvironmentFile — embed environment variables
     # directly in the plist EnvironmentVariables dict.  The plist is written at
     # install time (0700 LaunchAgents dir, 0600 plist) by the installing user,
@@ -210,9 +209,9 @@ def _launchd_plist_content() -> str:
             <key>ExitTimeOut</key>
             <integer>{policy.stop_timeout_s}</integer>
             <key>StandardOutPath</key>
-            <string>{log_dir}/quarry-stdout.log</string>
+            <string>/dev/null</string>
             <key>StandardErrorPath</key>
-            <string>{log_dir}/quarry-stderr.log</string>
+            <string>/dev/null</string>
         </dict>
         </plist>
     """)

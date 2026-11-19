@@ -225,7 +225,7 @@ class TestFormatInsights:
         text = InsightsReport(_EMPTY_INSIGHTS).render()
         assert "Total queries:    0" in text
         assert "Top empty queries:" not in text
-        assert "Per-collection hits:" not in text
+        assert "Hits by collection:" not in text
 
     def test_telemetry_disabled_renders_as_disabled(self) -> None:
         disabled = _EMPTY_INSIGHTS.model_copy(update={"telemetry_enabled": False})
@@ -236,9 +236,9 @@ class TestFormatInsights:
         text = InsightsReport(_POPULATED_INSIGHTS).render()
         assert "Top empty queries:" in text
         assert "nada: 2" in text
-        assert "Per-collection hits:" in text
+        assert "Hits by collection:" in text
         assert "default: 5" in text
-        assert "Per-agent recall:" in text
+        assert "Recall by agent:" in text
         assert "rmh: 3" in text
         assert "Hit decay bands:" in text
         assert "0-7d: 4" in text

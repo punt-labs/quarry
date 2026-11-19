@@ -226,9 +226,9 @@ def test_a_distillation_that_was_not_attempted_is_a_bare_capture(
 _ADVICE = {
     "refused": "the daemon refused the capture; see quarry.log",
     "unreachable": "quarryd is not reachable",
-    "server-error": "the daemon failed; see quarryd.log or quarry doctor",
+    "server-error": "the daemon failed; see quarry.log or quarry doctor",
     "config-error": "check QUARRY_URL / quarry login",
-    "malformed-reply": "the daemon failed; see quarryd.log or quarry doctor",
+    "malformed-reply": "the daemon failed; see quarry.log or quarry doctor",
 }
 
 

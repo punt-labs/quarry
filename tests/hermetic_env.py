@@ -128,7 +128,6 @@ class HermeticEnv:
         os.environ["HOME"] = str(home)
         quarry_dir = home / ".punt-labs" / "quarry"
         os.environ["QUARRY_ROOT"] = str(quarry_dir / "data")
-        os.environ["QUARRY_LOG_DIR"] = str(quarry_dir / "logs")
         os.environ.update(_THREAD_PINS)
         os.environ.update(_NETWORK_PINS)
         _drop_ambient_git_config()

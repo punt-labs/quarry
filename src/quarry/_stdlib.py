@@ -161,16 +161,10 @@ def read_hook_stdin() -> str:
 def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
     """Read stdin JSON, call *handler*, write stdout JSON.  Fail-open.
 
-    Installs :class:`LoggingConfig` on entry so every handler's INFO-level
-    breadcrumb (``quarry.hooks: <event>: entered ...``) actually lands in
-    ``$QUARRY_LOG_DIR/quarry.log``.  The ``quarry-hook`` entry point never
-    passes through the CLI's ``main`` — without this call the root logger has
-    no file handler and every ``HookTrace`` line is discarded by
-    :data:`logging.lastResort`, leaving the operator unable to answer
-    "did my hook run?" from the file.
+    Hook diagnostics use the shared durable file, never the JSON stdout stream.
     """
     try:
-        LoggingConfig.configure(stderr_level="WARNING")
+        LoggingConfig.hook()
         raw = read_hook_stdin()
         payload: dict[str, object] = json.loads(raw) if raw.strip() else {}
         result = handler(payload)
@@ -179,7 +173,7 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
     except Exception as exc:
         if isinstance(exc, HomeUnresolvedError):
             raise  # one clean line from the entry point, never a traceback
-        logger.exception("Hook %s failed (fail-open)", handler.__name__)
+        logger.error("Hook dispatch failed (fail-open, %s)", type(exc).__name__)
         sys.stdout.write("{}\n")
 
 
