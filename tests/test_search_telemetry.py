@@ -145,6 +145,28 @@ def test_named_database_path_alias_keeps_recall_scope(tmp_path: Path) -> None:
         assert RecallInsights.for_daemon(reopened).total_queries == 1
 
 
+def test_capture_recovers_after_store_returns(
+    observe_home: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Retry on search after the cooldown if initial storage was inaccessible."""
+    clock = [0.0]
+    monkeypatch.setattr("quarry.recall_capture.monotonic", lambda: clock[0])
+    observe_home.parent.mkdir()
+    observe_home.touch()
+    telemetry = RecallTelemetry(Settings())
+    observation = SearchObservation("search", "cli", "", 10, [])
+    with telemetry.running():
+        assert not telemetry.database_hash()
+        observe_home.unlink()
+        telemetry.record(observation)
+        assert not observe_home.exists()
+        clock[0] += 31
+        telemetry.record(observation)
+        assert telemetry.database_hash()
+
+    assert RecallInsights.read().total_queries == 1
+
+
 def test_environment_alone_cannot_enable_network_export(
     observe_home: Path, monkeypatch: MonkeyPatch
 ) -> None:

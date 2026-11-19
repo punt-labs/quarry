@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
@@ -15,23 +13,17 @@ from punt_observe.telemetry import (
     EnumAttr,
     HashAttr,
     LengthAttr,
-    NoopTelemetry,
     SignalSchema,
-    TelemetryConfig,
-    open_telemetry,
 )
 
-from quarry.redacted_failure import RedactedFailure
+from quarry.recall_capture import RecallCapture
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
-
-    from punt_observe.telemetry import IdentifierHash, Telemetry
+    from collections.abc import Sequence
+    from contextlib import AbstractContextManager
 
     from quarry.config import Settings
     from quarry.results import SearchResult
-
-logger = logging.getLogger(__name__)
 
 SEARCH = "quarry.daemon.search"
 HIT = "quarry.daemon.search_hit"
@@ -96,61 +88,42 @@ def _decay_band(timestamp: str, now: datetime) -> str:
 class RecallTelemetry:
     """Own Quarry's daemon-lifetime telemetry facade, not its exporter."""
 
-    __slots__ = ("_scope", "_settings", "_telemetry")
+    __slots__ = ("_capture",)
 
-    _settings: Settings
-    _telemetry: Telemetry | None
-    _scope: IdentifierHash | None
+    _capture: RecallCapture
 
     def __new__(cls, settings: Settings) -> Self:
         """Keep capture dormant until the daemon starts serving."""
         self = super().__new__(cls)
-        self._settings = settings
-        self._telemetry = None
-        self._scope = None
+        self._capture = RecallCapture(settings, SCHEMAS)
         return self
 
-    @contextmanager
-    def running(self) -> Generator[None]:
+    def running(self) -> AbstractContextManager[None]:
         """Start local capture and give queued observations a bounded flush."""
-        config = TelemetryConfig(enabled=self._settings.telemetry_enabled)
-        telemetry = open_telemetry("quarry", SCHEMAS, config)
-        if not isinstance(telemetry, NoopTelemetry):
-            self._telemetry = telemetry
-            self._scope = telemetry.hash_id(
-                f"database:{self._settings.lancedb_path.resolve()}"
-            )
-        try:
-            yield
-        finally:
-            self._telemetry = self._scope = None
-            telemetry.shutdown()
+        return self._capture.running()
 
     @property
     def enabled(self) -> bool:
         """Report whether the daemon has enabled capture."""
-        return self._telemetry is not None
+        return self._capture.enabled
 
     def database_hash(self) -> str:
         """Return the database scope used to filter this daemon's insights."""
-        return self._scope.value if self._scope is not None else ""
+        return self._capture.database_hash()
 
     def record(self, observation: SearchObservation) -> None:
         """Submit one recall span and at most one event per returned result."""
-        try:
+        with self._capture.isolate_failure():
             self._record(observation)
-        except Exception as exc:
-            logger.warning(
-                "Recall telemetry capture failed", exc_info=RedactedFailure.of(exc)
-            )
 
     def _record(self, observation: SearchObservation) -> None:
-        telemetry = self._telemetry
-        if telemetry is None or self._scope is None or not self._scope.value:
+        capture = self._capture.target()
+        if capture is None:
             return
+        telemetry, scope = capture
         surface = observation.surface
         attrs: dict[str, object] = {
-            "database_hash": self._scope,
+            "database_hash": scope,
             "surface": surface if surface in SURFACES else "unknown",
             "query_length": telemetry.length(observation.query),
             "memory_query": bool(observation.agent),
