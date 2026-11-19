@@ -291,8 +291,9 @@ pushed there instead of living in the public repo's history. Set it up with
 statistics to the private local file `~/.punt-labs/quarry/telemetry.db`.
 Search text, result content, and filters are not stored. Insights groups
 empty queries, agents, and collections by per-install salted hashes and shows
-aggregate latency, counts, and hit-age bands. Local retention defaults to
-90 days. Set `PUNT_TELEMETRY=off`, `QUARRY_TELEMETRY=off`, or
+aggregate latency, counts, and hit-age bands. The shared store retains 90 days
+across all Quarry databases; the old per-database retention setting no longer
+applies. Set `PUNT_TELEMETRY=off`, `QUARRY_TELEMETRY=off`, or
 `TELEMETRY_ENABLED=false` in the daemon's environment and restart it to disable
 capture. Quarry does not opt in to network export.
 

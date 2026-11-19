@@ -46,7 +46,6 @@ class Settings(BaseSettings):
     embedding_dimension: int = 768
 
     telemetry_enabled: bool = True
-    telemetry_retention_days: int = Field(default=90, ge=1, le=3650)
 
     chunk_max_chars: int = Field(default=1800, ge=1, le=16_384)  # 4 B/char <= 64 KiB
     chunk_overlap_chars: int = Field(default=200, ge=0)

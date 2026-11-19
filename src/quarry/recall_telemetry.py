@@ -113,10 +113,7 @@ class RecallTelemetry:
     @contextmanager
     def running(self) -> Generator[None]:
         """Start local capture and give queued observations a bounded flush."""
-        config = TelemetryConfig(
-            enabled=self._settings.telemetry_enabled,
-            retention_days=self._settings.telemetry_retention_days,
-        )
+        config = TelemetryConfig(enabled=self._settings.telemetry_enabled)
         telemetry = open_telemetry("quarry", SCHEMAS, config)
         if not isinstance(telemetry, NoopTelemetry):
             self._telemetry = telemetry

@@ -3751,8 +3751,8 @@ The daemon records search usage once at the search boundary. Versioned
 search spans and hit events carry closed enums, counts, age bands, latency,
 query length, and salted hashes of scoped identifiers. They never contain
 raw or scrubbed query text, filter values, document content, or exception
-text. The shared facade owns asynchronous export, local retention, and off
-switches. The daemon has not granted network-export consent.
+text. The shared facade owns asynchronous export, off switches, and a single
+90-day retention policy for the entire installation. The daemon has not granted network-export consent.
 
 Insights reads the local SQLite export without writing. It filters by the
 daemon database's salted scope; doctor reads the installation-wide summary.
