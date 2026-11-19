@@ -27,7 +27,7 @@ def _contract(**fields: object) -> MissionContract:
 
 class TestMissionContract:
     def test_parses_the_real_shape(self) -> None:
-        contract = _contract(repo="/elsewhere/quarry", leader="claude")
+        contract = _contract(repo="/elsewhere/quarry")
         assert contract.mission_id == "m-2026-09-09-001"
         assert contract.worker == "gvr"
         assert contract.evaluator == "rmh"
