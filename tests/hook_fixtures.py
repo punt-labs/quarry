@@ -48,7 +48,7 @@ else:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterable
+    from collections.abc import Generator
 
 
 # ── Ephemeral quarryd ────────────────────────────────────────────────
@@ -351,8 +351,3 @@ def load_payload(relpath: str) -> dict[str, object]:
         msg = f"fixture {relpath} is not a JSON object"
         raise TypeError(msg)
     return data
-
-
-def websearch_payload_ids() -> Iterable[str]:
-    """Return the three websearch fixture stem names for parametrization."""
-    return ("pre_2026_05", "2026_05_markdown", "unknown_shape")

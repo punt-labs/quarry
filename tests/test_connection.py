@@ -32,11 +32,6 @@ class FakeTable:
         """Number of full-text index rebuilds requested."""
         return self._fts
 
-    @property
-    def scalar_rebuilds(self) -> int:
-        """Number of scalar index rebuilds requested."""
-        return self._scalar
-
     def create_index(
         self,
         column: str,
