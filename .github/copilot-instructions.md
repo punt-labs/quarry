@@ -10,7 +10,7 @@
 
 ## What NOT to flag
 
-- OO structure scores (method_ratio, encapsulation, module_size, etc.) — `tools/oo_score.py` enforces these via a ratchet mechanism. Do not duplicate its job.
+- OO structure scores (method_ratio, encapsulation, module_size, etc.) — the pinned `punt-oo-ratchet` dev package enforces these via `oo-ratchet oo`. Do not duplicate its job.
 - New files that don't meet absolute OO thresholds — this is expected. The ratchet applies on subsequent changes.
 - Formatting — `ruff format` handles this. Do not comment on whitespace, line length, quote style, or trailing commas.
 - Import order — `ruff check --select I` handles this.

@@ -204,7 +204,7 @@ was already identified as needing change.
 
 Stop refactoring when any of these hold:
 
-- All OO scores are above their thresholds (see oo_score.py)
+- All OO scores are above their thresholds (see `oo-ratchet oo`)
 - No single transformation improves any score
 - The only remaining fix would break the public API, change invocation
   semantics, or add architectural complexity disproportionate to the metric

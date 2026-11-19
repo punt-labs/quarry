@@ -85,6 +85,7 @@ jobs:
             exit 0
           fi
           ./scripts/check-readme-install-sha.sh
+      # Includes the pinned punt-oo-ratchet gates invoked by Makefile targets.
       - run: uv sync --frozen --extra dev
       - run: make check-comments check-docstrings
       - run: uv run ruff check .
@@ -104,7 +105,7 @@ jobs:
       # Completeness guard: every scored file must be recorded in the committed
       # baseline. Runs on the committed, post-update-oo state where code and
       # baseline are in sync — see the audit-oo comment in the Makefile.
-      - name: OO baseline completeness
+      - name: OO baseline completeness (pinned punt-oo-ratchet)
         run: make audit-oo
       # PR event: score code-at-HEAD against the baseline committed at the
       # merge-base (the whole PR range). --require-base AND the explicit fetch are

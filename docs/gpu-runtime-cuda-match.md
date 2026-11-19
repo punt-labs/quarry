@@ -363,7 +363,7 @@ minimal ratchet-clearing. The concrete debt paydown this change funds:
   preserved. No new public attributes, no `__init__` (the class already uses
   `__new__`, PY-CC-1).
 
-Implementer runs `python tools/oo_score.py src/quarry/gpu_runtime.py` before and
+Implementer runs `uv run --extra dev oo-ratchet oo src/quarry/gpu_runtime.py` before and
 after; `make check` (with the three merge-base ratchets) must pass and at least
 one metric must improve.
 

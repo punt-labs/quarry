@@ -113,6 +113,7 @@ dev = [
     "hypothesis>=6.100",
     # Enforces the DES-031 I1 client/engine package boundary (make check-imports).
     "import-linter>=2.0",
+    "punt-oo-ratchet==0.2.0",
     "pydoclint==0.12.0",
     "docstring-parser-fork==0.0.16",
     "markdown==3.11.3",

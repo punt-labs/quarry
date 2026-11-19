@@ -2138,6 +2138,15 @@ wheels = [
 ]
 
 [[package]]
+name = "punt-oo-ratchet"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/14/f037a423f6e115d7b2f9d68f2666816381d93c69b479fc6554141c3b493f/punt_oo_ratchet-0.2.0.tar.gz", hash = "sha256:48bc5dbdceee7f15d71927e1532f29e92304f416228209230374d76c816c2764", size = 81348, upload-time = "2026-11-19T03:29:56.43Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/bb/4d514aaee212af47a33466719f65b2b778e22e8195217cd29e6664a78fa8/punt_oo_ratchet-0.2.0-py3-none-any.whl", hash = "sha256:69eb3dce94c3cb2462eb8e583a3fb9d41e9d9f30cc574547b24845fb5ae357a4", size = 105220, upload-time = "2026-11-19T03:29:55.011Z" },
+]
+
+[[package]]
 name = "punt-quarry"
 version = "3.8.0"
 source = { editable = "." }
@@ -2183,6 +2192,7 @@ dev = [
     { name = "import-linter" },
     { name = "markdown" },
     { name = "mypy" },
+    { name = "punt-oo-ratchet" },
     { name = "pydoclint" },
     { name = "pyright" },
     { name = "pytest" },
@@ -2224,6 +2234,7 @@ requires-dist = [
     { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pathspec", specifier = ">=0.12.0" },
     { name = "pillow", specifier = ">=10.0.0" },
+    { name = "punt-oo-ratchet", marker = "extra == 'dev'", specifier = "==0.2.0" },
     { name = "pyarrow", specifier = ">=26,<27" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
