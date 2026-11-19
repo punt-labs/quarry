@@ -71,7 +71,7 @@ def test_search_exports_only_typed_metadata(tmp_path: Path, observe_home: Path) 
 
     report = RecallInsights.read(scope)
     assert report.total_queries == report.memory_queries == 1
-    assert report.per_agent_recall[0]["agent_hash"] != "private-agent"
+    assert report.per_agent_recall[0]["agent_handle"] != "private-agent"
     assert report.per_collection_hits[0]["hit_count"] == 1
     assert report.hit_decay_bands == [{"band": "0-7d", "hit_count": 1}]
     assert RecallInsights.read("other-scope").total_queries == 0

@@ -8,23 +8,23 @@ from pydantic import BaseModel
 
 
 class EmptyQueryCount(TypedDict):
-    """One salted query hash that returned zero hits, and how often."""
+    """One salted query hash and count under the legacy v1 key."""
 
-    query_hash: str
+    query_scrubbed: str
     count: int
 
 
 class CollectionHitCount(TypedDict):
-    """One hashed collection's share of recorded hits."""
+    """One collection hash and hit count under the legacy v1 key."""
 
-    collection_hash: str
+    collection: str
     hit_count: int
 
 
 class AgentRecallCount(TypedDict):
-    """One hashed agent handle's query volume."""
+    """One agent hash and count under the legacy v1 key."""
 
-    agent_hash: str
+    agent_handle: str
     query_count: int
 
 

@@ -43,4 +43,4 @@ def test_insights_aggregates_only_current_database(
     assert report.p50_latency_ms == 20
     assert report.p95_latency_ms == 40
     assert report.top_empty_queries[0]["count"] == 2
-    assert report.top_empty_queries[0]["query_hash"] != "empty"
+    assert report.top_empty_queries[0]["query_scrubbed"] != "empty"

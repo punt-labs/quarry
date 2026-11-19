@@ -2,10 +2,10 @@
   "components": {
     "schemas": {
       "AgentRecallCount": {
-        "description": "One hashed agent handle's query volume.",
+        "description": "One agent hash and count under the legacy v1 key.",
         "properties": {
-          "agent_hash": {
-            "title": "Agent Hash",
+          "agent_handle": {
+            "title": "Agent Handle",
             "type": "string"
           },
           "query_count": {
@@ -14,7 +14,7 @@
           }
         },
         "required": [
-          "agent_hash",
+          "agent_handle",
           "query_count"
         ],
         "title": "AgentRecallCount",
@@ -69,10 +69,10 @@
         "type": "object"
       },
       "CollectionHitCount": {
-        "description": "One hashed collection's share of recorded hits.",
+        "description": "One collection hash and hit count under the legacy v1 key.",
         "properties": {
-          "collection_hash": {
-            "title": "Collection Hash",
+          "collection": {
+            "title": "Collection",
             "type": "string"
           },
           "hit_count": {
@@ -81,7 +81,7 @@
           }
         },
         "required": [
-          "collection_hash",
+          "collection",
           "hit_count"
         ],
         "title": "CollectionHitCount",
@@ -310,19 +310,19 @@
         "type": "object"
       },
       "EmptyQueryCount": {
-        "description": "One salted query hash that returned zero hits, and how often.",
+        "description": "One salted query hash and count under the legacy v1 key.",
         "properties": {
           "count": {
             "title": "Count",
             "type": "integer"
           },
-          "query_hash": {
-            "title": "Query Hash",
+          "query_scrubbed": {
+            "title": "Query Scrubbed",
             "type": "string"
           }
         },
         "required": [
-          "query_hash",
+          "query_scrubbed",
           "count"
         ],
         "title": "EmptyQueryCount",

@@ -120,15 +120,15 @@ class RecallInsights:
             p50_latency_ms=self._percentile(total, 0.50),
             p95_latency_ms=self._percentile(total, 0.95),
             top_empty_queries=[
-                EmptyQueryCount(query_hash=key, count=count)
+                EmptyQueryCount(query_scrubbed=key, count=count)
                 for key, count in self._counts("empty_query_hash", limit=10)
             ],
             per_collection_hits=[
-                CollectionHitCount(collection_hash=key, hit_count=count)
+                CollectionHitCount(collection=key, hit_count=count)
                 for key, count in self._counts("collection_hash", hits=True)
             ],
             per_agent_recall=[
-                AgentRecallCount(agent_hash=key, query_count=count)
+                AgentRecallCount(agent_handle=key, query_count=count)
                 for key, count in self._counts("agent_hash")
             ],
             memory_queries=memory,

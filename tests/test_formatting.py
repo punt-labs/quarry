@@ -209,9 +209,9 @@ _POPULATED_INSIGHTS = InsightsResponse(
     empty_result_rate=0.2,
     p50_latency_ms=12.3,
     p95_latency_ms=45.6,
-    top_empty_queries=[{"query_hash": "nada", "count": 2}],
-    per_collection_hits=[{"collection_hash": "default", "hit_count": 5}],
-    per_agent_recall=[{"agent_hash": "rmh", "query_count": 3}],
+    top_empty_queries=[{"query_scrubbed": "nada", "count": 2}],
+    per_collection_hits=[{"collection": "default", "hit_count": 5}],
+    per_agent_recall=[{"agent_handle": "rmh", "query_count": 3}],
     memory_queries=3,
     knowledge_queries=7,
     hit_decay_bands=[{"band": "0-7d", "hit_count": 4}],
@@ -224,8 +224,8 @@ class TestFormatInsights:
     def test_empty_store_renders_without_breakdown_sections(self) -> None:
         text = InsightsReport(_EMPTY_INSIGHTS).render()
         assert "Total queries:    0" in text
-        assert "Top empty query hashes:" not in text
-        assert "Hits by collection hash:" not in text
+        assert "Top empty queries:" not in text
+        assert "Hits by collection:" not in text
 
     def test_telemetry_disabled_renders_as_disabled(self) -> None:
         disabled = _EMPTY_INSIGHTS.model_copy(update={"telemetry_enabled": False})
@@ -234,11 +234,11 @@ class TestFormatInsights:
 
     def test_populated_store_renders_every_breakdown(self) -> None:
         text = InsightsReport(_POPULATED_INSIGHTS).render()
-        assert "Top empty query hashes:" in text
+        assert "Top empty queries:" in text
         assert "nada: 2" in text
-        assert "Hits by collection hash:" in text
+        assert "Hits by collection:" in text
         assert "default: 5" in text
-        assert "Recall by agent hash:" in text
+        assert "Recall by agent:" in text
         assert "rmh: 3" in text
         assert "Hit decay bands:" in text
         assert "0-7d: 4" in text

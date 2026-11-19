@@ -3756,7 +3756,8 @@ switches. The daemon has not granted network-export consent.
 
 Insights reads the local SQLite export without writing. It filters by the
 daemon database's salted scope; doctor reads the installation-wide summary.
-Insights now returns `query_hash`, `collection_hash`, and `agent_hash` in place of
-the old text and plaintext identifier fields. Capture is asynchronous, so the
+The v1 response retains its existing breakdown keys for mixed-version
+clients. New daemons return salted hashes, never plaintext, in those fields.
+Capture is asynchronous, so the
 latest search may not appear immediately. Old per-database stores are not
 read, migrated, or deleted.
