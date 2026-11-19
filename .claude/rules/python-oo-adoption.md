@@ -41,7 +41,7 @@ every file better than you found it.
 
 ## PL-OA-2: The punt-oo-ratchet Package Is Required
 
-**Statement**: Depend on the published PyPI package `punt-oo-ratchet==0.1.0`
+**Statement**: Depend on the published PyPI package `punt-oo-ratchet==0.2.0`
 in the dev extra, locked in `uv.lock`. Its source is
 [`python-oo-ratchet`](https://github.com/punt-labs/python-oo-ratchet).
 Do not embed its implementation under `tools/`. The stdlib-only package

@@ -1,16 +1,18 @@
 {
-  "total": 184,
+  "total": 186,
   "by_category": {
     "noqa": 146,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
+    "file_level": 2,
     "per_file_ignores": 30
   },
   "by_file": {
     "src/quarry/__main__.py": {
       "noqa": 5,
-      "type_ignore": 1
+      "type_ignore": 1,
+      "per_file_ignores": 2
     },
     "src/quarry/_hook_entry.py": {
       "noqa": 8
@@ -28,10 +30,12 @@
       "noqa": 3
     },
     "src/quarry/cli_captures.py": {
-      "noqa": 1
+      "noqa": 1,
+      "per_file_ignores": 1
     },
     "src/quarry/cli_project.py": {
-      "noqa": 4
+      "noqa": 4,
+      "per_file_ignores": 1
     },
     "src/quarry/collections.py": {
       "type_ignore": 1
@@ -113,6 +117,9 @@
     "src/quarry/finalize_steps.py": {
       "noqa": 1
     },
+    "src/quarry/gpu_runtime.py": {
+      "file_level": 1
+    },
     "src/quarry/hooks.py": {
       "noqa": 6
     },
@@ -170,6 +177,9 @@
     "src/quarry/remote.py": {
       "noqa": 2
     },
+    "src/quarry/service.py": {
+      "file_level": 1
+    },
     "src/quarry/session_transcript.py": {
       "noqa": 3
     },
@@ -194,7 +204,43 @@
     },
     "src/quarry/web_fetch_name.py": {
       "noqa": 1
+    },
+    "tools/*": {
+      "per_file_ignores": 3
+    },
+    "tools/eval/**/*.py": {
+      "per_file_ignores": 1
+    },
+    "tests/*": {
+      "per_file_ignores": 9
+    },
+    "benchmarks/*": {
+      "per_file_ignores": 5
+    },
+    "src/quarry/daemon/routes/*.py": {
+      "per_file_ignores": 1
+    },
+    "src/quarry/mcp_server.py": {
+      "per_file_ignores": 1
+    },
+    "src/quarry/mcp_documents.py": {
+      "per_file_ignores": 1
+    },
+    "src/quarry/cli_ingest.py": {
+      "per_file_ignores": 1
+    },
+    "src/quarry/cli_directories.py": {
+      "per_file_ignores": 1
+    },
+    "src/quarry/cli_maintenance.py": {
+      "per_file_ignores": 1
+    },
+    "src/quarry/cli_remote.py": {
+      "per_file_ignores": 1
+    },
+    "src/quarry/daemon/launcher.py": {
+      "per_file_ignores": 1
     }
   },
-  "updated_at": "2026-11-16T23:09:13Z"
+  "updated_at": "2026-11-19T03:32:42Z"
 }

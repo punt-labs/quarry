@@ -113,7 +113,7 @@ dev = [
     "hypothesis>=6.100",
     # Enforces the DES-031 I1 client/engine package boundary (make check-imports).
     "import-linter>=2.0",
-    "punt-oo-ratchet==0.1.0",
+    "punt-oo-ratchet==0.2.0",
 ]
 # Eval-only. NEVER a core dependency, NEVER a dependency of `make check` or any
 # CI job. ranx pulls Numba/llvmlite (a C-JIT stack, not pure Python); it must

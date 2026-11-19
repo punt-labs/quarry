@@ -1,6 +1,6 @@
 # Published OO ratchet gates
 
-Quarry uses the PyPI dev dependency `punt-oo-ratchet==0.1.0`, locked in
+Quarry uses the PyPI dev dependency `punt-oo-ratchet==0.2.0`, locked in
 `uv.lock`. The source is [python-oo-ratchet](https://github.com/punt-labs/python-oo-ratchet).
 `make check` runs `oo-ratchet oo`, `oo-ratchet coupling`, and
 `oo-ratchet suppressions` on `src/quarry/`. Use the existing `make update-*`
@@ -38,8 +38,29 @@ No quarry-only fix was found missing from the package. In particular:
 PR gates still use the merge-base with `--require-base`; push gates still use
 `HEAD~1`. OO and coupling baselines receive a metric-scoped migration from
 main, audited with source `PL-1161`, rather than a full-tree reset.
-Suppression baseline/audit
-files remain unchanged: that gate rescans both sides at 186.
+The suppression snapshot is now 186, recorded through 0.2.0's audited
+`--rebaseline --reason ... --source PL-1175`. The gate still rescans both sides.
+
+## Package 0.2.0 and suppression migration (PL-1175)
+
+Version 0.2.0 adds the audited suppression rebaseline, permitting the scanner-only
+184 → 186 migration without changing source or weakening ordinary `--update`.
+The two additional counts are existing file-level directives in `gpu_runtime.py`
+and `service.py`. The snapshot also now includes per-file-ignore breakdowns;
+their aggregate count remains 30. `make update-suppressions` succeeds at 186
+without changing counts, and `make check-suppressions` passes at 186 → 186.
+An ordinary update still records its own audit entry and snapshot timestamp.
+
+The installed 0.1.0 → 0.2.0 source diff has no OO implementation changes.
+Coupling adds `--rebaseline-files` with `--reason`, repository-specific caps,
+and an opt-in `stateless-values = "any"` mode under
+`[tool.oo-ratchet.coupling]`. Its default stateless-value test no longer descends
+into nested classes; threshold reports now judge max metrics per file, including
+the existing `__main__.py` allowances and any configured caps. Quarry has no
+coupling configuration, so it retains the default `"dataclass"` mode and no
+caps. Comparing both versions on the merged source gives identical per-file
+scores for all 472 OO and all 472 coupling modules, and identical aggregate
+threshold grades. Existing Makefile and CI flags remain supported and unchanged.
 
 ## Audited scorer-only migration (PL-1161)
 
@@ -80,8 +101,9 @@ coupling entries. OO coverage goes from 474 to 472 entries; coupling coverage
 goes from 457 to 472. These coverage corrections do not represent source changes
 in this PR.
 
-Package 0.1.0's OO `--rebaseline-files` replaces whole rows and enforces caps;
-coupling has no equivalent. Neither CLI supports metric-scoped migration.
+At the original migration, package 0.1.0's OO `--rebaseline-files` replaced whole
+rows and enforced caps; coupling had no equivalent. Version 0.2.0 adds coupling's
+equivalent, but neither CLI supports metric-scoped migration.
 The migration therefore uses the package's baseline serializer and audit API,
 recording a `rebaseline` entry with exact metric deltas, removals, coverage
 additions, source `PL-1161`, and the scorer-only selection rule as its reason.

@@ -1884,11 +1884,11 @@ wheels = [
 
 [[package]]
 name = "punt-oo-ratchet"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/49/0a/cc2148b04fde951c0936b6eede2799dae16db7b5800d1b1f9da7a210c42e/punt_oo_ratchet-0.1.0.tar.gz", hash = "sha256:85ce780213eedacc590569fe2026ee9d4cd6952a4e501cc414627679dbf51331", size = 74203, upload-time = "2026-11-19T02:06:35.637Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/14/f037a423f6e115d7b2f9d68f2666816381d93c69b479fc6554141c3b493f/punt_oo_ratchet-0.2.0.tar.gz", hash = "sha256:48bc5dbdceee7f15d71927e1532f29e92304f416228209230374d76c816c2764", size = 81348, upload-time = "2026-11-19T03:29:56.43Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/f7/4d68ce7c24fd01d44efb95450bf0b67c795b255f4858dc83cd61a8d0430d/punt_oo_ratchet-0.1.0-py3-none-any.whl", hash = "sha256:a25cb0008008c2bee014f831a5e67c298f17ae7dcead6149aba88c3734edd72a", size = 97205, upload-time = "2026-11-19T02:06:34.408Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/bb/4d514aaee212af47a33466719f65b2b778e22e8195217cd29e6664a78fa8/punt_oo_ratchet-0.2.0-py3-none-any.whl", hash = "sha256:69eb3dce94c3cb2462eb8e583a3fb9d41e9d9f30cc574547b24845fb5ae357a4", size = 105220, upload-time = "2026-11-19T03:29:55.011Z" },
 ]
 
 [[package]]
@@ -1967,7 +1967,7 @@ requires-dist = [
     { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pathspec", specifier = ">=0.12.0" },
     { name = "pillow", specifier = ">=10.0.0" },
-    { name = "punt-oo-ratchet", marker = "extra == 'dev'", specifier = "==0.1.0" },
+    { name = "punt-oo-ratchet", marker = "extra == 'dev'", specifier = "==0.2.0" },
     { name = "pyarrow", specifier = ">=26,<27" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
