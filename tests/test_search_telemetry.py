@@ -110,6 +110,26 @@ def test_unavailable_export_does_not_break_search(
         assert response.json()["results"] == []
 
 
+def test_capture_failure_cannot_escape_after_a_search(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failing capture produces a safe diagnostic and leaves the search intact."""
+    daemon = InProcessDaemon(tmp_path / "daemon")
+    with (
+        daemon.ctx.recall.running(),
+        TestClient(daemon.app) as client,
+        patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
+        patch.object(
+            RecallTelemetry, "_record", side_effect=RuntimeError("private query")
+        ),
+    ):
+        response = client.get("/v1/search", params={"q": "private query"})
+
+    assert response.status_code == 200
+    assert "Recall telemetry capture failed" in caplog.text
+    assert "private query" not in caplog.text
+
+
 def test_environment_alone_cannot_enable_network_export(
     observe_home: Path, monkeypatch: MonkeyPatch
 ) -> None:
