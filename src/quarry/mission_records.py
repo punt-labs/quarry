@@ -32,7 +32,6 @@ class MissionContract:
     status: str
     created_at: str
     repo: str
-    leader: str
     worker: str
     evaluator: str
     current_round: int
@@ -45,7 +44,6 @@ class MissionContract:
             status=str(mapping.get("status", _OPEN)),
             created_at=str(mapping.get("created_at", "")),
             repo=str(mapping.get("repo") or default_repo),
-            leader=str(mapping.get("leader", "")),
             worker=cls._required(mapping, "worker"),
             evaluator=cls._evaluator(mapping.get("evaluator")),
             current_round=cls._current_round(mapping.get("current_round")),
