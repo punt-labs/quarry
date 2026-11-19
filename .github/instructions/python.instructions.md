@@ -38,4 +38,4 @@ applyTo: "**/*.py"
 
 ## Tools directory
 
-- `tools/oo_score.py` is intentionally complex (subprocess calls to git, large check/update methods). Do not flag C901, S603, or S607 on files in `tools/`.
+- The OO, coupling, and suppression gates come from the pinned `punt-oo-ratchet` dev package, not an embedded implementation in `tools/`.
