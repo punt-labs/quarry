@@ -33,7 +33,7 @@ class OcrJob:
     document_path: str
     suffix: str
 
-    def validate_format(self) -> None:
+    def __post_init__(self) -> None:
         """Reject document formats unsupported by the OCR backend."""
         if self.suffix not in (".tif", ".tiff", ".pdf"):
             msg = f"Unsupported document type for OCR: '{self.suffix}'"
@@ -80,7 +80,6 @@ class LocalOcrBackend:
             document_path=str(document_path.resolve()),
             suffix=document_path.suffix.lower(),
         )
-        job.validate_format()
         try:
             if job.suffix in (".tif", ".tiff"):
                 return self._ocr_tiff(document_path, job)

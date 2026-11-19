@@ -13,7 +13,7 @@ from PIL import Image
 from quarry.config import Settings
 from quarry.ingestion.ocr_availability import OcrUnavailableError
 from quarry.ingestion.ocr_engine import OcrEngine
-from quarry.ingestion.ocr_local import LocalOcrBackend
+from quarry.ingestion.ocr_local import LocalOcrBackend, OcrJob
 from quarry.models import PageType
 
 if TYPE_CHECKING:
@@ -138,6 +138,19 @@ class TestOcrDocumentFormat:
             f"Unsupported document type for OCR: '{path.suffix.lower()}'"
         )
         lookup.assert_not_called()
+
+    @pytest.mark.parametrize("suffix", ["", ".png"])
+    def test_job_with_unsupported_suffix_cannot_be_constructed(
+        self, suffix: str
+    ) -> None:
+        with pytest.raises(ValueError, match="Unsupported document type for OCR"):
+            OcrJob(
+                page_numbers=(),
+                total_pages=0,
+                document_name="scan",
+                document_path="/tmp/scan",
+                suffix=suffix,
+            )
 
 
 class TestLocalOcrBackendPdf:
