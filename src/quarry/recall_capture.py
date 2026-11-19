@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING, Self, final
 
 from punt_observe.telemetry import NoopTelemetry, TelemetryConfig, open_telemetry
+from punt_observe.telemetry.salt import load_salt
 
 from quarry.redacted_failure import RedactedFailure
 
@@ -49,6 +50,7 @@ class RecallCapture:
     @contextmanager
     def running(self) -> Generator[None]:
         """Start capture and give queued observations a bounded flush."""
+        self._retry_at = monotonic() + 30
         self._open()
         try:
             yield
@@ -60,19 +62,16 @@ class RecallCapture:
                 telemetry.shutdown()
 
     def _open(self) -> None:
-        self._retry_at = monotonic() + 30
         config = TelemetryConfig(enabled=self._settings.telemetry_enabled)
         telemetry = open_telemetry("quarry", self._schemas, config)
         if isinstance(telemetry, NoopTelemetry):
             self._telemetry = None
             return
         self._telemetry = telemetry
-        path = self._settings.lancedb_path
-        try:
-            canonical = path.resolve()
-        except OSError:
-            canonical = path.absolute()
-        scope = telemetry.hash_id(f"database:{canonical}")
+        path = self._settings.lancedb_path.absolute()
+        with suppress(OSError):
+            path = path.resolve()
+        scope = telemetry.hash_id(f"database:{path}")
         if scope.value:
             self._target = telemetry, scope
 
@@ -104,14 +103,15 @@ class RecallCapture:
             )
 
     def _retry(self) -> None:
-        if monotonic() < self._retry_at:
-            return
         with self._lock:
             telemetry = self._telemetry
-            if (
-                telemetry is not None
-                and self._target is None
-                and monotonic() >= self._retry_at
-            ):
-                telemetry.shutdown()
-                self._open()
+            if telemetry is None or self._target or monotonic() < self._retry_at:
+                return
+            self._retry_at = monotonic() + 30
+            # Don't rebuild providers for a salt error that reopening can't fix.
+            try:
+                load_salt()
+            except (OSError, RuntimeError, ValueError):
+                return
+            telemetry.shutdown()
+            self._open()

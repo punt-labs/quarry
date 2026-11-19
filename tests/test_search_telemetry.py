@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
+from punt_observe.telemetry import open_telemetry
 from starlette.testclient import TestClient
 
 from quarry.config import Settings
@@ -163,6 +164,37 @@ def test_capture_recovers_after_store_returns(
         clock[0] += 31
         telemetry.record(observation)
         assert telemetry.database_hash()
+
+    assert RecallInsights.read().total_queries == 1
+
+
+def test_capture_does_not_rebuild_provider_while_salt_is_invalid(
+    observe_home: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Open another provider only once the salt is usable again."""
+    clock = [0.0]
+    monkeypatch.setattr("quarry.recall_capture.monotonic", lambda: clock[0])
+    observe_home.parent.mkdir()
+    salt = observe_home.parent / "telemetry.salt"
+    salt.write_bytes(b"invalid")
+    salt.chmod(0o600)
+    telemetry = RecallTelemetry(Settings())
+    observation = SearchObservation("search", "cli", "", 10, [])
+
+    with (
+        patch("quarry.recall_capture.open_telemetry", wraps=open_telemetry) as start,
+        telemetry.running(),
+    ):
+        for _ in range(3):
+            clock[0] += 31
+            telemetry.record(observation)
+            assert not telemetry.database_hash()
+        start.assert_called_once()
+        salt.unlink()
+        clock[0] += 31
+        telemetry.record(observation)
+        assert telemetry.database_hash()
+        assert start.call_count == 2
 
     assert RecallInsights.read().total_queries == 1
 
