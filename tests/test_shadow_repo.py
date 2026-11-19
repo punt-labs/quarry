@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
@@ -18,9 +17,6 @@ from quarry.shadow.repo import PARENT_TRACKED_REMEDIATION, ShadowRepo
 from quarry.shadow.rescrub import CaptureReScrubber
 from quarry.shadow.sync import CaptureSync
 from quarry.shadow.visibility import Visibility
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 _CAPTURES = (".punt-labs", "quarry", "captures")
 
@@ -580,7 +576,3 @@ class TestCreateRemote:
         sep = create_argv.index("--")
         assert create_argv[sep + 1] == "-org/-repo-quarry"
         assert all(arg != "-org/-repo-quarry" for arg in create_argv[:sep])
-
-
-def _unused(_it: Iterator[None]) -> None:  # pragma: no cover - typing anchor
-    pass

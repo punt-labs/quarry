@@ -55,7 +55,6 @@ class WatchRoster:
     """Own per-database connections and the per-``(database, collection)`` watch set."""
 
     __slots__ = (
-        "_active_database",
         "_active_db",
         "_base_settings",
         "_conns",
@@ -66,7 +65,6 @@ class WatchRoster:
 
     _source: FsEventSource
     _active_db: str
-    _active_database: Database
     _base_settings: Settings
     _conns: dict[str, Database]
     _db_settings: dict[str, Settings]
@@ -83,7 +81,6 @@ class WatchRoster:
         self = super().__new__(cls)
         self._source = source
         self._active_db = active_db
-        self._active_database = active_database
         self._base_settings = base_settings
         self._conns = {active_db: active_database}
         self._db_settings = {active_db: base_settings}

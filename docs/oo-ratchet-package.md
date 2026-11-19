@@ -36,28 +36,29 @@ No quarry-only fix was found missing from the package. In particular:
   are retained, with additional coding-cookie and file-level directive support.
 
 PR gates still use the merge-base with `--require-base`; push gates still use
-`HEAD~1`. OO and coupling baselines were regenerated with the package's
-`--rebaseline --source PL-1161`, appending audited resets rather than leaving
-old scorer values as latent false regressions. Suppression baseline/audit
+`HEAD~1`. OO and coupling baselines receive a metric-scoped migration from
+main, audited with source `PL-1161`, rather than a full-tree reset.
+Suppression baseline/audit
 files remain unchanged: that gate rescans both sides at 186.
 
-## Audited baseline reset (PL-1161)
+## Audited scorer-only migration (PL-1161)
 
-Counts below compare entries present in both the committed baseline and the
-regenerated baseline, not old/new scorers run on the same tree.
+Start from main's baselines. For each shared file and metric, use the package
+value only when the embedded and package scorers disagree on identical current
+source. Otherwise retain main's value, even when stale. Counts below compare
+shared entries on main with this scoped result.
 
 | Gate | Metric | Modules up | Modules down |
 |------|--------|-----------:|-------------:|
 | OO | `avg_complexity` | 168 | 7 |
 | OO | `max_complexity` | 81 | 2 |
-| Coupling | `avg_lcom` | 47 | 64 |
-| Coupling | `max_lcom` | 47 | 64 |
-| Coupling | `efferent_coupling` | 5 | 3 |
-| Coupling | `public_names` | 0 | 5 |
+| Coupling | `avg_lcom` | 46 | 63 |
+| Coupling | `max_lcom` | 46 | 63 |
+| Coupling | `efferent_coupling` | 3 | 0 |
 
 Other metrics do not move on shared baseline entries; in particular,
 `circular_imports` is unchanged despite the package's SCC detection fix.
-OO has 175 changed shared entries; coupling has 117.
+OO has 175 changed shared entries; coupling has 111.
 
 - Complexity changes come from counting conditional expressions and match
   arms/guards/or-patterns, and assigning nested function bodies to their own
@@ -65,18 +66,45 @@ OO has 175 changed shared entries; coupling has 117.
 - LCOM now counts public and private data fields, excludes helper call targets,
   and exempts BaseModel/data/value shapes where appropriate. On the same current
   source, old versus published scorers move `avg_lcom` up in 49 modules and down
-  in 67, and `max_lcom` up in 48 and down in 67. Existing baseline drift explains
-  why the reset counts above differ.
+  in 67, and `max_lcom` up in 48 and down in 67. Baseline coverage and values
+  explain why the migration counts above differ.
 - The package's import resolution adds fan-out in three modules
   (`captured_body_ingest`, `ingest_labels`, `backfill_task`), recognizing
-  `from package import module` aliases. The other two fan-out increases and
-  three decreases are existing baseline drift, not a package scoring change.
-- Public-name counting is identical in both implementations; all five
-  decreases repair stale baseline entries rather than reflecting a package
-  change.
+  `from package import module` aliases. Other fan-out values stay unchanged.
+- Public-name counting is identical in both implementations; no shared
+  public-name baseline values change.
 
-The full-tree reset also removes two obsolete entries (`insights_report.py`
+The migration also removes two obsolete entries (`insights_report.py`
 and `status_report.py`) from both baselines and adds 17 previously missing
 coupling entries. OO coverage goes from 474 to 472 entries; coupling coverage
-goes from 457 to 472. These coverage corrections and stale-value repairs do
-not represent source changes in this PR.
+goes from 457 to 472. These coverage corrections do not represent source changes
+in this PR.
+
+Package 0.1.0's OO `--rebaseline-files` replaces whole rows and enforces caps;
+coupling has no equivalent. Neither CLI supports metric-scoped migration.
+The migration therefore uses the package's baseline serializer and audit API,
+recording a `rebaseline` entry with exact metric deltas, removals, coverage
+additions, source `PL-1161`, and the scorer-only selection rule as its reason.
+This supersedes the earlier full-tree reset without granting relaxation waivers.
+
+### Stale values deliberately retained
+
+Both scorers agree on the actual values below. All are coupling metrics;
+paths are relative to `src/quarry/`. OO has no retained stale values.
+
+| File | Metric | Main baseline | Actual |
+|------|--------|--------------:|-------:|
+| `artifacts.py` | `public_names` | 4 | 3 |
+| `daemon/inotify_prune.py` | `efferent_coupling` | 0 | 1 |
+| `daemon/routes/databases.py` | `efferent_coupling` | 2 | 1 |
+| `db/__init__.py` | `public_names` | 10 | 7 |
+| `db/storage.py` | `efferent_coupling` | 2 | 1 |
+| `db/storage.py` | `public_names` | 5 | 2 |
+| `enabled_marker.py` | `efferent_coupling` | 0 | 1 |
+| `ingestion/text_splitter.py` | `public_names` | 9 | 3 |
+| `skills_sync.py` | `efferent_coupling` | 4 | 3 |
+| `skills_sync.py` | `public_names` | 2 | 1 |
+| `skills_sync.py` | `max_lcom` | 0.6 | 0 |
+| `skills_sync.py` | `avg_lcom` | 0.6 | 0 |
+| `sync_registry.py` | `max_lcom` | 0.366 | 0.373 |
+| `sync_registry.py` | `avg_lcom` | 0.366 | 0.373 |

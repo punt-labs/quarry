@@ -48,7 +48,6 @@ def _raise_cleanup_over_root(root_message: str, cleanup_message: str) -> OSError
             raise OSError(errno.EIO, cleanup_message) from root
     except OSError as exc:
         return exc
-    raise AssertionError  # pragma: no cover - the raise above always lands
 
 
 def test_the_root_failure_survives_a_cleanup_that_raised_another() -> None:
