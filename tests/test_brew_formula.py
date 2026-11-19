@@ -126,6 +126,12 @@ def test_every_resource_version_and_hash_equals_the_lock(
     assert blocks
     for name, body in blocks.items():
         package = _locked(lock, name)
+        if git := package.get("source", {}).get("git"):
+            url, revision = git.split("?rev=", 1)
+            revision, resolved = revision.split("#")
+            assert resolved == revision
+            assert body.strip() == f'url "{url}", using: :git, revision: "{revision}"'
+            continue
         urls = re.findall(r'url "([^"]+)"', body)
         hashes = re.findall(r'sha256 "([0-9a-f]{64})"', body)
         assert len(urls) == len(hashes) >= 1

@@ -1,176 +1,72 @@
-"""Logging configuration for punt-quarry, and the level policy that governs it.
-
-THE LEVEL POLICY, which binds every ``logger.*`` call in this codebase:
-
-    INFO is one line per user-visible operation or coarser.
-    Sub-operation detail is DEBUG.
-
-A "user-visible operation" is something the operator asked for or would
-recognise having happened: a document indexed, a collection swept, a database
-optimized, the daemon started. Anything that fires more often than that —
-per flush window, per request, per row — is DEBUG.
-
-A noisy log hides actionable events as effectively as a missing log.
-``ChunkStore`` per-flush inserts and search-route per-request result counts
-therefore belong at DEBUG, not INFO.
-"""
+"""Connect Quarry process entry points to the shared durable diagnostic sink."""
 
 from __future__ import annotations
 
 import logging
-import logging.config
 import os
-from pathlib import Path
-from typing import final
+import sys
+from typing import Self, final
+
+from punt_observe.logging import LoggingSetupError, Role, configure_logging
 
 from quarry.home_paths import HomeUnresolvedError, QuarryHome
-
-logger = logging.getLogger(__name__)
 
 
 @final
 class LoggingConfig:
-    """Configure logging with rotating file and stderr handlers.
+    """Select the process role and stderr threshold without owning any handlers."""
 
-    Two processes configure logging into the same directory under two names.
-    ``quarry.log`` is the client tier: many short-lived CLI and MCP processes.
-    ``quarryd.log`` is the daemon: one long-lived writer.  They are kept apart
-    because interleaving them makes attribution hard exactly when it matters --
-    reading a single file, you cannot tell which of a dozen processes emitted a
-    line, and a daemon incident is diagnosed by reading the daemon's own
-    sequence.  Same directory, same format, same rotation policy; two files.
-    """
+    __slots__ = ("_role", "_stderr_level")
 
-    CLIENT_LOG: str = "quarry.log"
-    DAEMON_LOG: str = "quarryd.log"
+    _role: Role
+    _stderr_level: str
+    _QUIET = (
+        "mcp",
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "asyncio",
+        "lancedb",
+        "onnxruntime",
+    )
 
-    _FORMAT: str = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    _DATE_FORMAT: str = "%Y-%m-%d %H:%M:%S"
-
-    _MAX_BYTES: int = 5_242_880  # 5 MB
-    _BACKUP_COUNT: int = 5
-
-    @classmethod
-    def log_dir(cls) -> Path:
-        """Return the directory the file handler writes to.
-
-        Resolved per call rather than bound as a class constant: an import-time
-        ``Path.home()`` decides the destination before any caller can speak, so
-        no environment a caller sets afterwards can move it. ``QUARRY_LOG_DIR``
-        is read here for the same reason ``QUARRY_LOG_LEVEL`` is read in
-        :meth:`configure` — the log's location is configuration.
-        """
-        override = os.environ.get("QUARRY_LOG_DIR", "")
-        if override:
-            return Path(override)
-        return QuarryHome.log_root()
-
-    @staticmethod
-    def _require_bare_filename(log_file: str) -> None:
-        """Refuse a *log_file* that would write outside the resolved directory.
-
-        Both call sites pass a literal today, so nothing reaches this with a
-        traversal -- which is the argument for the check, not against it: a
-        parameter joined into a path is a boundary whether or not today's
-        callers exercise it, and the cost of being wrong later is writing
-        outside the directory the whole hermeticity contract is stated over.
-
-        ``Path(name).name != name`` catches separators and absolute paths.  It
-        does NOT catch ``..``, whose ``.name`` is ``".."`` -- verified, not
-        assumed -- so the dot directories are named explicitly.
-        """
-        if not log_file or log_file in {".", ".."} or Path(log_file).name != log_file:
-            msg = (
-                f"log_file must be a bare filename, not {log_file!r}: "
-                "the log's directory is chosen by QUARRY_LOG_DIR, not by "
-                "the filename"
-            )
-            raise ValueError(msg)
+    def __new__(cls, role: Role, *, stderr_level: str = "WARNING") -> Self:
+        """Select the process role and its default terminal threshold."""
+        self = super().__new__(cls)
+        self._role = role
+        self._stderr_level = stderr_level
+        return self
 
     @classmethod
-    def configure(
-        cls, *, stderr_level: str = "WARNING", log_file: str = CLIENT_LOG
-    ) -> None:
-        """Configure logging with rotating file and stderr handlers.
+    def daemon(cls) -> None:
+        """Configure diagnostics for the daemon entry point."""
+        cls(Role.DAEMON).configure()
 
-        File handler is always active at INFO level.
-        Stderr handler level is controlled by the caller, unless overridden
-        by the ``QUARRY_LOG_LEVEL`` environment variable.
+    @classmethod
+    def hook(cls) -> None:
+        """Configure diagnostics before a hook dispatches its handler."""
+        cls(Role.HOOK).configure()
 
-        *log_file* selects which file in the resolved directory receives the
-        output -- :attr:`CLIENT_LOG` for CLI and MCP processes,
-        :attr:`DAEMON_LOG` for ``quarryd``.  It must be a bare filename;
-        anything that would leave the resolved directory is refused here
-        (PY-EH-1: validate at the boundary, trust within).
-        """
-        cls._require_bare_filename(log_file)
-        log_dir = cls._resolved_log_dir()
-
-        env_level = os.environ.get("QUARRY_LOG_LEVEL", "").upper()
-        valid_levels = logging.getLevelNamesMapping()
-        if env_level and env_level in valid_levels:
-            effective_level = env_level
-        else:
-            effective_level = stderr_level
-        if log_dir is None and valid_levels.get(effective_level, 0) < logging.WARNING:
-            # The file is where INFO detail (frames, breadcrumbs) goes; with no
-            # file it would flood stderr, so stderr keeps warnings and above.
-            effective_level = "WARNING"
-
-        handlers: dict[str, dict[str, object]] = {
-            "stderr": {
-                "class": "quarry.log_redaction.RedactingStreamHandler",
-                "stream": "ext://sys.stderr",
-                "formatter": "standard",
-                "level": effective_level,
-            },
-        }
-        if log_dir is not None:
-            handlers["file"] = {
-                "class": "quarry.log_redaction.RedactingFileHandler",
-                "filename": str(log_dir / log_file),
-                "maxBytes": cls._MAX_BYTES,
-                "backupCount": cls._BACKUP_COUNT,
-                "encoding": "utf-8",
-                "formatter": "standard",
-                "level": "INFO",
-            }
-        logging.config.dictConfig(
-            {
-                "version": 1,
-                "disable_existing_loggers": False,
-                "formatters": {
-                    "standard": {
-                        "format": cls._FORMAT,
-                        "datefmt": cls._DATE_FORMAT,
-                    },
-                },
-                "handlers": handlers,
-                "loggers": {
-                    "lancedb": {"level": "WARNING"},
-                    "onnxruntime": {"level": "WARNING"},
-                    "httpx": {"level": "WARNING"},
-                },
-                "root": {"level": "DEBUG", "handlers": list(handlers)},
-            }
+    def configure(self) -> None:
+        """Open the shared sink, or report why durable diagnostics are unavailable."""
+        override = os.environ.get("QUARRY_LOG_LEVEL", "").upper()
+        level = (
+            override
+            if override in logging.getLevelNamesMapping()
+            else self._stderr_level
         )
-        if log_dir is None:
-            logger.warning(
-                "no home directory: logging to stderr only "
-                "(set HOME, or QUARRY_LOG_DIR for a log file)"
-            )
-
-    @classmethod
-    def _resolved_log_dir(cls) -> Path | None:
-        """Return the log directory, created; ``None`` when no home resolves.
-
-        ``None`` is the documented contract: a process with no home directory and
-        no ``QUARRY_LOG_DIR`` has nowhere to write a log, and must still run (the
-        doctor has to report the fault), so it logs to stderr only.
-        """
         try:
-            log_dir = cls.log_dir()
+            QuarryHome.home()
+            configure_logging(
+                "quarry",
+                self._role,
+                stderr_level=level,
+                quiet=self._QUIET,
+            )
         except HomeUnresolvedError:
-            return None
-        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        return log_dir
+            sys.stderr.write("quarry: no home directory; durable logs unavailable\n")
+        except LoggingSetupError:
+            sys.stderr.write(
+                "quarry: cannot establish private diagnostics "
+                "in ~/.punt-labs/quarry/logs\n"
+            )

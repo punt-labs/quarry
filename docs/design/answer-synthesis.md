@@ -74,7 +74,7 @@ on explicit request, the daemon writes a short, cited answer from the passages i
 | `src/quarry/cli_answer.py` | new | `AnswerCli` | ~120 |
 | `src/quarry/daemon/routes/search.py` | changed | calls `RouteSearch`; telemetry builders move to a shared `SearchTelemetry` used by both routes (2.5) | 214 → ~150 |
 | `src/quarry/daemon/search_telemetry.py` | new | `SearchTelemetry` (`_SearchOutcome`, `_build_event`, `_build_hits`, `_filter_dict` moved from `search.py`) | ~140 |
-| `src/quarry/query_log_schema.py`, `query_log_types.py`, `query_log.py` | changed | `query_events.kind` column (`search` or `answer`) plus answer fields (2.5) | +30 |
+| `src/quarry/recall_telemetry.py` | changed | Versioned answer span and hit event (2.5) | +30 |
 | `src/quarry/daemon/routes/meta.py`, `api/meta.py` | changed | `StatusResponse.synthesis` | +10 |
 | `src/quarry/daemon/context.py`, `server.py` | changed | own and close `SynthesisRuntime` | +20 |
 | `src/quarry/daemon/route_table.py` | changed | `/answer` spec, `RouteSpec.docs` | +12 |
@@ -188,30 +188,17 @@ Concurrency is not capped here. `/v1/answer` behaves like `/v1/search` (baseline
 and the per-call `timeout_s` bounds a slow model. Read-route overload is G4, an
 observation only (section 14).
 
-### 2.5 Usage logging (baseline 1.6)
+### 2.5 Usage telemetry (baseline 1.6)
 
-`SearchTelemetry` is the existing search telemetry, moved out of `search.py` unchanged
-(`_SearchOutcome`, `_build_event`, `_build_hits`, `_filter_dict`). Both routes record
-through it as a post-response `BackgroundTask` that logs and swallows its own failures.
-The query and every filter are scrubbed by the same `scrub` pass (DES-056 D3). An answer
-writes one `query_events` row plus one `query_hits` row per **sent** passage, with:
+Use a separate, versioned answer span and hit event in the shared punt-observe
+facade (DES-061). Capture the calling surface, retrieval and model latency in
+milliseconds, coverage and model-called booleans, citation counts, and a closed
+outcome enum. Record expected failures as well as success so the model-call
+error rate can distinguish requests that never reached the model.
 
-- `kind = "answer"`: a new column, defaulting to `"search"`, added by the existing
-  idempotent schema path;
-- `surface`: from `?surface=`, coerced exactly as search does;
-- `latency_ms` (retrieval) and a new `model_latency_ms`;
-- new `covered` and `stripped_citations` columns;
-- new `outcome` (`ok`, or the error `code` of an expected failure response from
-  section 3) and `model_called` columns.
-
-The telemetry task is attached to expected error responses as well as to successes,
-so the model-call error rate (metric 5) counts 502 and 504 outcomes, and requests that
-never reached the model (404 setup help, 400 `question_too_long`) are told apart by
-`model_called`.
-
-Answer text, passage text, and the key are never stored. `telemetry_enabled = false`
-turns this off for both routes. `/v1/insights` gains a per-`kind` count. This covers
-PR/FAQ `faq:metrics` 1, 2, 4, and 5 with no new store.
+Send one hit event per **sent** passage with a salted collection hash and an
+age band. Do not capture the question, filters, answer, passages, or credentials.
+Use the same telemetry off switches and local retention as search.
 
 ## 3. OpenAPI contract
 
@@ -765,14 +752,13 @@ body. Unit tests inject a `ChatEndpoint` fake directly. Integration tests point
     the two-sided `prompt_tokens` check.
   - Config validation; `SynthesisRuntime` states.
 - **Integration** (default, fake server):
-  - The route end to end, every status code and body, telemetry rows (including the
-    `kind` migration on an existing `telemetry.db`), `/v1/search` golden bytes, the
+  - The route end to end, every status code and body, typed telemetry spans and hit events, `/v1/search` golden bytes, the
     OpenAPI drift check, disconnect cancellation, and the top-up search.
   - `oversize(5 MiB)` returns 502 `upstream_malformed`, and the bytes read stop at
     `MAX_RESPONSE_BYTES` (asserted with a counting transport, not RSS).
   - `trickle(1)` with `timeout_s = 5` returns 504 at about 5 s.
   - `echo_key()`: neither the key nor the marker appears in the response body or in
-    `quarryd.log` at INFO.
+    `~/.punt-labs/quarry/logs/quarry.log` at INFO.
   - TLS: a fake HTTPS server whose CA is only in a temporary trust file (`SSL_CERT_FILE`)
     is accepted the same way the fetch path accepts it; an untrusted certificate is a
     502.
@@ -823,7 +809,7 @@ must land first. Menu bar units start once D3 has landed the wire contract.
 | D3 Contract | D1 | `api/answer.py`, `route_docs.py`, `RouteSpec.docs`, `/v1/answer` returning 404 with help, `status.synthesis` | `make check-openapi` clean; 401, 404, and status bodies validate against the schema; `route_table.py` under 300 lines |
 | D4a Endpoint + reply parser | D2 | `outbound_http.py` (moving `MAX_RESPONSE_BYTES` and the system TLS context out of `ingestion/`), `endpoint.py`, `reply.py`, `errors.py`, the fake server | integration tests on the fake server: size cap, deadline (`trickle`), `echo_key`, trust store, every error mapping; fetch tests unchanged |
 | D4b Budget, prompt, citations | none | `budget.py`, `prompt.py`, `citations.py` (pure units) | the 10.2 unit list: arithmetic table incl. 16K and 32K, escape property test, one-grammar test, range bound |
-| D4c Service, route wiring, telemetry | D1, D3, D4a, D4b | `service.py`, `routes/answer.py`, `context.py`/`server.py` wiring, `query_events.kind`, `covered`, `model_ms` | route end to end on the fake server; migration test on an existing `telemetry.db`; INFO log line format |
+| D4c Service, route wiring, telemetry | D1, D3, D4a, D4b | `service.py`, `routes/answer.py`, `context.py`/`server.py` wiring, typed answer span and hit schemas | route end to end on the fake server; export test against the shared local store; INFO log line format |
 | D5 CLI + user guide | D4c | `cli_answer.py`, `QuarryClient.answer`, `docs/answer-synthesis.md` (the guide the 404 help links to) | filter-reaches-`SearchFilter` test, local and remote; help on 404; the help URL resolves |
 | D6 Live smoke + spike | D4c | `make test-live-answer`; measure both chars-per-token ratios, latency, Ollama `num_ctx`, reasoning-off fragment | numbers recorded in the PR/FAQ and section 5.2; Q2 and Q4 answered |
 | M1 Models + client | D3 | Swift models, `answer(query:collection:)`, protocol, contract fixtures | decoding tests pass on `docs/openapi.json` fixtures |

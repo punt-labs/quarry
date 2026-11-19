@@ -21,10 +21,11 @@ class TestCreate:
     def test_a_directory_that_cannot_be_made_is_named(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        blocker = tmp_path / "logs"
+        monkeypatch.setenv("HOME", str(tmp_path))
+        blocker = tmp_path / ".punt-labs" / "quarry" / "logs"
+        blocker.parent.mkdir(parents=True)
         blocker.write_text("a file, not a directory")
         monkeypatch.setenv("QUARRY_ROOT", str(tmp_path / "data"))
-        monkeypatch.setenv("QUARRY_LOG_DIR", str(blocker))
 
         assert InstallDirectories.create() is False
 
@@ -36,7 +37,7 @@ class TestCreate:
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
         monkeypatch.setenv("QUARRY_ROOT", str(tmp_path / "data"))
-        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("HOME", str(tmp_path))
 
         assert InstallDirectories.create() is True
 
@@ -48,7 +49,7 @@ class TestCreate:
         blocker = tmp_path / "data"
         blocker.write_text("a file, not a directory")
         monkeypatch.setenv("QUARRY_ROOT", str(blocker))
-        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("HOME", str(tmp_path))
 
         assert InstallDirectories.create() is False
 
@@ -57,7 +58,7 @@ class TestCreate:
             f"Failed to create the data directory {blocker / 'default' / 'lancedb'}:"
             in out
         )
-        assert f"✓ {tmp_path / 'logs'}" in out
+        assert f"✓ {tmp_path / '.punt-labs' / 'quarry' / 'logs'}" in out
 
 
 class TestCheck:

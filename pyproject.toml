@@ -16,6 +16,7 @@ classifiers = [
     "Topic :: Text Processing :: Indexing",
 ]
 dependencies = [
+    "punt-observe @ git+https://github.com/punt-labs/punt-observe.git@a90872cc20cf688dfd41aeb36c7120e63fc69849",
     "pymupdf>=1.25.0",
     # lancedb and pyarrow (below) are the storage stack: they are bounded to the
     # tested minor, not just floored, so pip, uv tool install and Homebrew
@@ -192,6 +193,8 @@ select = [
     "BLE",  # flake8-blind-except
     "T10",  # flake8-debugger
     "T20",  # flake8-print
+    "LOG",  # flake8-logging
+    "G",    # flake8-logging-format
     "A",    # flake8-builtins
     "ERA",  # flake8-eradicate (commented code)
     "PIE",  # flake8-pie
@@ -210,6 +213,11 @@ ignore = [
     "TC001",  # Move import into TYPE_CHECKING - too aggressive
     "TC003",  # Move standard lib import into TYPE_CHECKING
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"logging.basicConfig".msg = "Configure process diagnostics with punt-observe."
+"logging.handlers.RotatingFileHandler".msg = "Use punt-observe's multiprocess-safe rotation."
+"logging.handlers.TimedRotatingFileHandler".msg = "Use punt-observe's multiprocess-safe rotation."
 
 [tool.ruff.lint.per-file-ignores]
 "tools/*" = ["T20", "S603", "S607"]

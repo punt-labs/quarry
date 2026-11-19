@@ -85,21 +85,21 @@ class InsightsReport:
 
     _BREAKDOWNS: ClassVar[tuple[_Breakdown, ...]] = (
         _Breakdown(
-            "Top empty queries",
+            "Top empty query hashes",
             lambda info: info.top_empty_queries,
-            "query_scrubbed",
+            "query_hash",
             "count",
         ),
         _Breakdown(
-            "Per-collection hits",
+            "Hits by collection hash",
             lambda info: info.per_collection_hits,
-            "collection",
+            "collection_hash",
             "hit_count",
         ),
         _Breakdown(
-            "Per-agent recall",
+            "Recall by agent hash",
             lambda info: info.per_agent_recall,
-            "agent_handle",
+            "agent_hash",
             "query_count",
         ),
         _Breakdown(

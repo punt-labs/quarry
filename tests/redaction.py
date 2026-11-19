@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from quarry.log_redactor import LogRedactor
+from punt_observe.logging import LogRedactor
 
 
 def redacted(text: str) -> str:

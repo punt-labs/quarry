@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Iterator, Mapping
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast, final
 
@@ -37,8 +36,6 @@ from quarry.db_pointer import SELECTION
 from quarry.mcp_catalog import ResourceCatalog
 from quarry.mcp_documents import DocumentTools
 from quarry.mcp_server import McpTools, mcp
-from quarry.query_log import QueryLog, get_query_log
-from quarry.query_log_types import QueryEvent, QueryHit
 from quarry.results import SearchResult
 
 # The tools the MCP surface exposes; a rename or removal is a regression.
@@ -67,10 +64,8 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s.registry_path = tmp_path / "registry.db"
     # A real Path, disabled by default -- see the identical note in
     # test_http_server.py's _mock_settings.
-    s.telemetry_path = tmp_path / "telemetry.db"
     s.telemetry_enabled = False
     s.telemetry_retention_days = 90
-    s.telemetry_prune_cadence_s = 3600.0
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     s.ingest_queue_depth = 32
@@ -317,57 +312,6 @@ class TestInsights:
         result = harness.tools.insights()
         assert "Telemetry:        disabled" in result
         assert "Total queries:    0" in result
-
-    def test_seeded_events_render_without_keyerror(self, tmp_path: Path) -> None:
-        """A second, telemetry-enabled daemon seeded with real events -- proves
-        the formatter also handles the enabled, non-zero shape."""
-        get_query_log.cache_clear()
-        settings = _mock_settings(tmp_path)
-        settings.telemetry_enabled = True
-        ctx = DaemonContext(settings)
-        _inject_mocks(ctx)
-        log = QueryLog(settings.telemetry_path)
-        log.record(
-            QueryEvent(
-                ts=datetime.now(UTC).isoformat(),
-                surface="cli",
-                agent_handle="rmh",
-                collection="default",
-                filters_json="{}",
-                limit_n=10,
-                latency_ms=12.0,
-                result_count=1,
-                query_scrubbed="hello",
-                query_len=5,
-            ),
-            [
-                QueryHit(
-                    rank=1,
-                    document_name="doc.pdf",
-                    collection="default",
-                    chunk_index=0,
-                    score=0.9,
-                    hit_agent_handle="",
-                    memory_type="",
-                )
-            ],
-        )
-        log.close()
-
-        with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
-            result = _ToolHarness(tc).tools.insights()
-        get_query_log.cache_clear()
-
-        assert "Telemetry:        enabled" in result
-        assert "Total queries:    1" in result
-        # The MCP tool must expose the same row breakdowns as the CLI and HTTP
-        # surfaces (Bug class 3), not just the scalar summary fields.
-        assert "Per-collection hits:" in result
-        assert "default: 1" in result
-        assert "Per-agent recall:" in result
-        assert "rmh: 1" in result
-        assert "Hit decay bands:" in result
-        assert "unknown: 1" in result
 
 
 class TestListResources:

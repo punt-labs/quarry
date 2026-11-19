@@ -52,7 +52,7 @@ def test_each_failure_is_told_where_to_look() -> None:
         "config-error", **_SAVED
     )
     failed = SendOutcome.advice("daemon-error", **_SAVED)
-    assert "the daemon failed; see quarryd.log or quarry doctor" in failed
+    assert "the daemon failed; see quarry.log or quarry doctor" in failed
     assert "once it recovers" in failed
 
 

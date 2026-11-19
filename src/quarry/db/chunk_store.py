@@ -60,7 +60,7 @@ class ChunkStore:
         if not records:
             return 0
         self._writer.add(records)
-        # DEBUG per the level policy in quarry.logging_config: this fires once
+        # DEBUG per the level policy for operational diagnostics: this fires once
         # per FLUSH WINDOW (progressive commit), so one large document emits it
         # many times.  The per-document totals are logged by the pipeline, which
         # is the user-visible operation.

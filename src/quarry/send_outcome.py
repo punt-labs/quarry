@@ -49,7 +49,7 @@ class SendOutcome:
             _BACKFILL,
         ),
         _ERROR: (
-            "the daemon failed; see quarryd.log or quarry doctor",
+            "the daemon failed; see quarry.log or quarry doctor",
             "",
             f"{_BACKFILL} once it recovers",
         ),

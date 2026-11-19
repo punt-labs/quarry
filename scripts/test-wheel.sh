@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Test the built wheel in an isolated venv on port 8422.
 #
-# Verifies: import, onnxruntime providers, CLI entry point, doctor,
-# daemon boot + search round-trip.  All temp state lives in .tmp/ (gitignored),
-# including the daemon's data root AND its log directory -- these are configured
-# independently, so without both the test daemon builds its database, or appends
-# its log, inside the operator's real tree, which this script claimed not to
-# touch.
+# Verifies import, ONNX Runtime, the CLI, a daemon search, and the shared
+# diagnostics and telemetry output. The sandbox uses its own home and data
+# root under .tmp/ so it does not touch the operator's real Quarry state.
 #
 # Usage: bash scripts/test-wheel.sh   (or: make test-wheel)
 
@@ -18,28 +15,28 @@ cd "$(dirname "$0")/.."
 # the production API key or host binding.
 unset QUARRY_API_KEY 2>/dev/null || true
 unset QUARRY_IP_ADDRESS 2>/dev/null || true
+unset PUNT_TELEMETRY QUARRY_TELEMETRY TELEMETRY_ENABLED 2>/dev/null || true
 
 PORT=8422
 VENV=.tmp/test-venv
 DAEMON_PID=""
 DAEMON_LOG=.tmp/test-wheel-daemon.log
-# The daemon inherits this, so its database lands in scratch rather than in
-# ~/.punt-labs/quarry/data.  HOME is deliberately left alone: the ONNX model
-# cache lives there and re-downloading 410 MB per run is not isolation.
+# Keep the embedding cache while isolating diagnostics and databases.
+export HF_HOME="${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}"
+TEST_HOME=$PWD/.tmp/test-wheel-home
+CACHE_DIR="${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/uv}"
+mkdir -p "$TEST_HOME"
+export UV_CACHE_DIR="$CACHE_DIR"
+export HOME="$TEST_HOME"
 DATA_ROOT=$PWD/.tmp/test-wheel-data
-LOG_ROOT=$PWD/.tmp/test-wheel-logs
 export QUARRY_ROOT="$DATA_ROOT"
-# The log destination is configured separately from the data root, so isolating
-# one does not isolate the other: without this the test daemon appends to the
-# operator's real ~/.punt-labs/quarry/logs/quarry.log.
-export QUARRY_LOG_DIR="$LOG_ROOT"
 
 cleanup() {
     if [ -n "$DAEMON_PID" ]; then
         kill "$DAEMON_PID" 2>/dev/null || true
         wait "$DAEMON_PID" 2>/dev/null || true
     fi
-    rm -rf "$VENV" "$DATA_ROOT" "$LOG_ROOT"
+    rm -rf "$VENV" "$DATA_ROOT" "$TEST_HOME"
     echo "[test-wheel] Cleanup: done"
 }
 trap cleanup EXIT
@@ -132,7 +129,7 @@ TOKEN=$(cat "$TOKEN_FILE")
 # ps by any local user for the lifetime of the request.
 SEARCH_BODY=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
     | curl -s -w "\n%{http_code}" --config - \
-        "http://127.0.0.1:$PORT/v1/search?q=test&limit=1")
+        "http://127.0.0.1:$PORT/v1/search?q=quarry-wheel-smoke-query&limit=1")
 SEARCH_STATUS=$(echo "$SEARCH_BODY" | tail -1)
 SEARCH_RESPONSE=$(echo "$SEARCH_BODY" | sed '$d')  # portable 'all but last'
 if [ "$SEARCH_STATUS" != "200" ]; then
@@ -145,4 +142,24 @@ kill "$DAEMON_PID" 2>/dev/null || true
 wait "$DAEMON_PID" 2>/dev/null || true
 DAEMON_PID=""
 
+OBSERVE_ROOT="$TEST_HOME/.punt-labs/quarry"
+grep -q 'Quarry server listening' "$OBSERVE_ROOT/logs/quarry.log" \
+    || fail "Diagnostic log" "daemon startup record did not reach the shared log"
+grep -q 'Server stopped' "$OBSERVE_ROOT/logs/quarry.log" \
+    || fail "Diagnostic log" "daemon stop record did not reach the shared log"
+"$VENV/bin/python" - "$OBSERVE_ROOT/telemetry.db" <<'CHECK'
+import json
+import sqlite3
+import sys
+
+with sqlite3.connect(sys.argv[1]) as conn:
+    (raw,) = conn.execute(
+        "SELECT attributes FROM spans WHERE name = 'quarry.daemon.search'"
+    ).fetchone()
+    attrs = json.loads(raw)
+    assert attrs["query_length"] == len("quarry-wheel-smoke-query")
+    assert attrs["result_count"] == 0
+    assert "quarry-wheel-smoke-query" not in raw
+CHECK
+echo "[test-wheel] Durable diagnostics and content-free telemetry: PASS"
 echo "[test-wheel] All checks passed."

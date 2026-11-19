@@ -13,7 +13,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
+from punt_observe.logging import Role
+
 from quarry.config import Settings
+from quarry.logging_config import LoggingConfig
 from quarry.retrieval import RetrievalConfig
 from tools.eval.corpus import Corpus
 from tools.eval.metrics import Scorer
@@ -96,7 +99,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the harness and print the report; optionally emit the baseline."""
-    logging.basicConfig(level=logging.WARNING)
+    LoggingConfig(Role.CLI, stderr_level="WARNING").configure()
     # The eval process forces OMP_NUM_THREADS=1 (below ThreadConfig's cap of 2),
     # so apply_env_limits logs a spurious DES-032 oversubscription warning. The
     # single thread is intentional here, not a defeated mitigation — silence it.
