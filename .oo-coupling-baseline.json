@@ -2010,7 +2010,7 @@
   },
   "src/quarry/ingestion/ocr_local.py": {
     "efferent_coupling": 4.0,
-    "public_names": 4.0,
+    "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.667,
     "avg_lcom": 0.667

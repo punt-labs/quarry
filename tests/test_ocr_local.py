@@ -13,7 +13,7 @@ from PIL import Image
 from quarry.config import Settings
 from quarry.ingestion.ocr_availability import OcrUnavailableError
 from quarry.ingestion.ocr_engine import OcrEngine
-from quarry.ingestion.ocr_local import LocalOcrBackend
+from quarry.ingestion.ocr_local import LocalOcrBackend, OcrJob
 from quarry.models import PageType
 
 if TYPE_CHECKING:
@@ -100,6 +100,57 @@ class TestRenderPdfPage:
             img3 = LocalOcrBackend._render_pdf_page(doc, 3)
         assert isinstance(img1, Image.Image)
         assert isinstance(img3, Image.Image)
+
+
+class TestOcrDocumentFormat:
+    @pytest.mark.parametrize(
+        "suffix", [".pdf", ".PDF", ".tif", ".TIF", ".tiff", ".TIFF"]
+    )
+    @pytest.mark.parametrize("page_numbers", [[], [1]])
+    def test_supported_formats(
+        self, tmp_path: Path, suffix: str, page_numbers: list[int]
+    ) -> None:
+        if suffix.lower() == ".pdf":
+            path = _create_pdf(tmp_path, "scan")
+        else:
+            path = _create_tiff(tmp_path)
+        path = path.rename(tmp_path / f"scan{suffix}")
+        engine = MagicMock(return_value=_mock_ocr_result(["text"]))
+
+        with patch.object(OcrEngine, "get", return_value=engine):
+            pages = LocalOcrBackend(_settings()).ocr_document(path, page_numbers, 1)
+
+        assert [page.text for page in pages] == ["text"] * len(page_numbers)
+        assert engine.call_count == len(page_numbers)
+
+    @pytest.mark.parametrize("filename", ["scan", "scan.PNG"])
+    def test_invalid_format_rejected_before_engine_lookup(
+        self, tmp_path: Path, filename: str
+    ) -> None:
+        path = tmp_path / filename
+        with (
+            patch.object(OcrEngine, "get") as lookup,
+            pytest.raises(ValueError) as exc_info,
+        ):
+            LocalOcrBackend(_settings()).ocr_document(path, [], 0)
+
+        assert str(exc_info.value) == (
+            f"Unsupported document type for OCR: '{path.suffix.lower()}'"
+        )
+        lookup.assert_not_called()
+
+    @pytest.mark.parametrize("suffix", ["", ".png"])
+    def test_job_with_unsupported_suffix_cannot_be_constructed(
+        self, suffix: str
+    ) -> None:
+        with pytest.raises(ValueError, match="Unsupported document type for OCR"):
+            OcrJob(
+                page_numbers=(),
+                total_pages=0,
+                document_name="scan",
+                document_path="/tmp/scan",
+                suffix=suffix,
+            )
 
 
 class TestLocalOcrBackendPdf:
