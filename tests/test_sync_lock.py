@@ -75,14 +75,10 @@ class TestSyncLockLaunchBackgroundSync:
     def test_short_write_is_retried_until_the_full_pid_lands(
         self, tmp_path: Path
     ) -> None:
-        """A partial write is retried with the remainder, never dropped.
+        """A partial PID write retries the remainder without unlinking the lock.
 
-        Regression test: an unchecked write return count would let a
-        short write leave a truncated PID observable to a human inspecting
-        the file. The fix must not solve that by unlinking the lockfile
-        either -- Popen already succeeded, so a removed lock would let a
-        concurrent SessionStart launch a duplicate sync. The correct fix is
-        a write-all retry loop.
+        Popen has already succeeded, so removing the lock would let a concurrent
+        SessionStart launch a duplicate sync.
         """
         lockfile = tmp_path / "sync.pid"
         mock_proc = MagicMock()
@@ -295,15 +291,11 @@ class TestAFaultIsNotContention:
 
 
 class TestSyncLockSingleFlight:
-    """Regression coverage for the reclaim race Copilot found in PR #518.
+    """Concurrent lock contenders must yield exactly one winner.
 
-    The old PID/``unlink``-based design let two callers independently decide
-    the same stale PID was reclaimable; each unlinked, each recreated the
-    lock via ``O_CREAT|O_EXCL``, and the second caller's later unlink could
-    delete the first caller's freshly created lock, letting both launch.
-    ``flock`` replaces that whole "decide staleness, then act on it" protocol
-    with a single kernel-arbitrated decision, so there is no window for a
-    second caller to interleave with.
+    Kernel-arbitrated ``flock`` acquisition keeps stale-owner detection and
+    reclamation indivisible. Independent unlink-and-recreate decisions would
+    let one contender delete another's live lock and launch a second sync.
     """
 
     def test_two_concurrent_racers_yield_exactly_one_winner(

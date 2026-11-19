@@ -311,7 +311,7 @@ class TestCheckClaudeCodeMcp:
         sibling -- this must not be mistaken for a global install, or
         :meth:`ClaudeCodeMcp.configure` skips the user-scope add and
         :class:`~quarry.doctor_mcp.UserScopeShadow` deletes the fallback
-        entry a non-plugin user still needs (PL-999).
+        entry a non-plugin user still needs.
         """
         install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
         self._make_plugin_dir(install_path)
@@ -605,7 +605,7 @@ class TestCheckEnvironment:
 
 
 class TestPruneUserScopeShadowCheck:
-    """PL-999: the doctor-side wiring of the opportunistic strip."""
+    """The doctor-side wiring of the opportunistic strip."""
 
     def test_always_passes_and_names_a_prune(self):
         result = ShadowPrune(ShadowPruneKind.REMOVED).as_check_result()
@@ -1011,7 +1011,7 @@ class TestConfigureClaudeCode:
 
 
 class TestConfigurePluginScopeGate:
-    """PL-999: ``configure()`` must not shadow a plugin-declared MCP server.
+    """``configure()`` must not shadow a plugin-declared MCP server.
 
     The quarry Claude Code plugin's own ``plugin.json`` already declares
     ``mcpServers.quarry``; a user-scope ``claude mcp add`` on top of that
@@ -1080,7 +1080,7 @@ class TestConfigurePluginScopeGate:
 
 
 class TestUserScopeShadow:
-    """PL-999 Part 2: opportunistically strip a stray ``~/.claude.json`` entry.
+    """Opportunistically strip a stray ``~/.claude.json`` entry.
 
     The strip is scoped to when the plugin is confirmed registered (the entry
     is genuinely shadow only then); absent plugin, absent file, or an absent
@@ -1506,8 +1506,7 @@ class TestRunInstall:
         callable passed to ``_run_optional_step``, so a failure to import
         ``quarry.service`` (here forced by blocking the module in ``sys.modules``)
         is caught by the step's ``try`` and prints "• Skipped" — the install
-        continues and still returns 0. Before the fix the import ran outside the
-        guard and an ImportError hard-failed ``run_install``.
+        continues and still returns 0.
         """
         import sys
 

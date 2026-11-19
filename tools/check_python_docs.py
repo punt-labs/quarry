@@ -44,6 +44,17 @@ _TRACKER_REFERENCE = re.compile(
     r"|\bgithub\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/\d+\b",
     re.IGNORECASE,
 )
+_QUARRY_NAMES = frozenset(
+    {
+        "quarry-dev",
+        "quarry-hook",
+        "quarry-capture",
+        "quarry-recall",
+        "quarry-skill",
+        "quarry-stderr",
+        "quarry-stdout",
+    }
+)
 _API_SYMBOLS = frozenset(
     {
         "quarry",
@@ -149,6 +160,7 @@ def tracker_references(source: str, filename: str) -> list[str]:
         f"{filename}:{line}: remove tracker reference {match[0]!r} from code prose"
         for line, content in sorted(prose)
         for match in _TRACKER_REFERENCE.finditer(content)
+        if match[0].lower() not in _QUARRY_NAMES
     ]
 
 

@@ -11,9 +11,8 @@ from pathlib import Path
 class Transcript:
     """A Claude Code session transcript file and its derived identifiers.
 
-    Bundles the several identifiers that were previously computed by free
-    functions operating on the same ``Path`` — the session prefix, the mtime
-    timestamp, and the stored document name.
+    Keep the session prefix, mtime timestamp, and stored document name tied
+    to the same ``Path``.
     """
 
     path: Path

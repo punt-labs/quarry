@@ -1048,7 +1048,7 @@ def test_an_xdg_cache_root_lets_the_model_check_run_without_a_home(
 def test_uninstall_prunes_the_user_scope_shadow_before_the_daemon_step(
     monkeypatch: MP,
 ) -> None:
-    """PL-999: ``quarry uninstall`` strips the shadow entry, then the service."""
+    """``quarry uninstall`` strips the shadow entry, then the service."""
     calls: list[str] = []
 
     def fake_prune(_self: UserScopeShadow) -> ShadowPrune:

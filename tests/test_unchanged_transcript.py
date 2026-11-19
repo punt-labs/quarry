@@ -47,14 +47,11 @@ def _store_pages(
 
 
 class TestPartialInsertIsNeverSkipped:
-    """quarry-uq95 finding 1: a version match on a partial document must re-ingest.
+    """A version match on a partial document must re-ingest.
 
-    A windowed insert that failed partway through leaves surviving rows
-    correctly tagged with the version being written, but short of the
-    document's full page count. The unfixed gate (version equality alone)
-    treats that as "already stored" and skips forever -- the missing pages
-    are never repaired because a retry of the unchanged file carries the
-    same version every time.
+    A failed windowed insert can leave surviving rows tagged with the current
+    version but short of the document's full page count. Version equality alone
+    cannot establish completeness: a retry must restore the missing pages.
     """
 
     def test_a_version_match_on_an_incomplete_document_still_reingests(

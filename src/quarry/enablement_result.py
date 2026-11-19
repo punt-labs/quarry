@@ -19,7 +19,7 @@ class EnablementResult:
     enabled_marker_written: bool
     import_registered: bool
     gitignore_ensured: bool
-    # Cross-harness skill deposits (PL-1049): every SkillOutcome from the
+    # Cross-harness skill deposits: every SkillOutcome from the
     # best-effort install_detected() call, or () with no source tree of our own.
     skills_deposited: tuple[SkillOutcome, ...] = ()
 

@@ -1,10 +1,8 @@
 """Atomic directory swap: populate a temp sibling, then rename it into place.
 
-Extracted out of :mod:`quarry.skills_source`, whose ``deposit`` used to own
-this mechanic inline alongside hashing and manifest I/O. Nothing here knows
-about skills, manifests, or content hashes — only that one caller-populated
-temp directory must land atomically at one target path, with the prior
-occupant preserved until the swap is proven to succeed.
+One caller-populated temp directory must land atomically at one target path,
+with the prior occupant preserved until the swap succeeds. This module is
+independent of skills, manifests, and content hashes.
 """
 
 from __future__ import annotations
@@ -86,9 +84,8 @@ class AtomicDirectorySwap:
         """Rename *tmp* into *target*, backing up and restoring on failure.
 
         The backup-rename and the tmp-rename share one ``try`` so a failure
-        at EITHER step cleans up the freshly-populated *tmp* — a failed
-        backup-rename used to happen before any ``try``, leaking *tmp* until
-        the next swap's orphan sweep happened to find it.
+        at EITHER step cleans up the freshly-populated *tmp* rather than
+        leaving it behind until the next swap's orphan sweep.
 
         Raises :class:`AtomicSwapError` — chaining the original failure —
         only in the double-failure case: the swap itself failed AND

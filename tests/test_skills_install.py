@@ -87,7 +87,7 @@ class TestLocateSource:
 
 
 class TestPackagedSource:
-    """§ PL-1049: the deposit source is the INSTALLED binary's own tree, not a
+    """The deposit source is the INSTALLED binary's own tree, not a
     repo-located one -- no ancestor walk, no identity guard, nothing for a
     hostile repo to forge (see ``TestForgeryRegression`` in
     ``test_enablement.py`` for the end-to-end closure of this)."""
@@ -947,12 +947,11 @@ class TestForeignNonDirectoryTargets:
 
 
 class TestRemoveOrphanedDeposits:
-    """§ safety: disable sweeps a quarry-owned deposit under a RETIRED name too.
+    """Removal sweeps owned deposits even under retired skill names.
 
-    :meth:`SkillSource.skill_names` lists only what the source tree ships
-    TODAY, so a rename or removal upstream (like this PR's own
-    ``recall`` → renamed skill) would otherwise leave the old deposit
-    behind forever, invisible to a by-current-name-only removal loop.
+    :meth:`SkillSource.skill_names` lists only the packaged source names.
+    A removal loop limited to that list would miss deposits whose names
+    are absent from the installed package after a rename or deletion.
     """
 
     def test_a_deposit_under_a_retired_skill_name_is_swept_on_remove(

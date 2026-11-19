@@ -52,8 +52,8 @@ class EnableResult:
     deposit, ``enabled`` marker, ``@``-import line, and ``.gitignore`` entry.
     ``ethos`` is the bootstrap's own per-handle outcome, carried whole rather
     than flattened into parallel lists. ``permissions`` is the § 2.8 allow-rule
-    grant in the repo's ``.claude/settings.json`` (#552). ``skills_deposited``
-    is the PL-1049 cross-harness skill-deposit outcome, passed through from
+    grant in the repo's ``.claude/settings.json``. ``skills_deposited``
+    is the cross-harness skill-deposit outcome, passed through from
     ``Enablement.enable()`` unchanged.
     """
 
@@ -171,8 +171,7 @@ def disable_project(
     runs AFTER ``Enablement.disable`` so a deregister failure leaves a
     coherent disabled surface (marker-absent, import-absent) with only a
     runtime registration residue a retry converges — never the § 2.11
-    forbidden marker-present-without-a-collection state that the old order
-    could produce if ``Enablement.disable`` raised.
+    forbidden marker-present-without-a-collection state if disabling raises.
     """
     from quarry.registrations import Registrations  # noqa: PLC0415
 
@@ -277,7 +276,7 @@ class _DisableOrchestrator:
 
         Runs AFTER the § 2.11 commit point so a deregister failure leaves a
         coherent disabled surface — never marker-present + import-present
-        with no functional collection behind them (the old-order defect).
+        with no functional collection behind them.
         """
         if self._covering is None:
             return 0

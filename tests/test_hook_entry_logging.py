@@ -1,25 +1,8 @@
-"""Hook-entry logging regression (quarry-ridg / G6).
+"""Hook-entry logging through the installed console script.
 
-``quarry-hook`` is the console-script entry point that Claude Code invokes
-for every session-start, post-web-fetch, post-web-search, and friends.
-:mod:`quarry._hook_entry` dispatches directly to a handler function — but
-it never calls :meth:`quarry.logging_config.LoggingConfig.configure`.  So
-every ``HookTrace`` breadcrumb the handlers emit (``quarry.hooks: <event>:
-entered ...``) is discarded by ``logging.lastResort`` before it can reach
-``$QUARRY_LOG_DIR/quarry.log``.  The operator's "am I even seeing my hooks
-run?" question is unanswerable at production because the file is empty.
-
-These tests spawn a real ``quarry-hook <event>`` subprocess, pipe the
-canonical payload for that event on stdin, wait for exit, and grep the log
-file for the expected ``entered`` line.  On v3.2.0 every parametrized case
-FAILS with zero matches because the file was never opened for writing.
-The fix (call ``LoggingConfig.configure(log_file=CLIENT_LOG)`` at the top
-of ``_hook_entry.main``) turns every case green.
-
-``caplog`` is deliberately NOT used here: the original G6 tests passed
-because ``caplog`` attaches its own handler ahead of the app config, so
-they saw the record even though the file handler was never installed.
-The regression only shows through the *file*.
+Claude Code invokes ``quarry-hook`` for every handler. Each invocation must
+write an INFO breadcrumb to the isolated log, including config-off and
+invalid-payload paths, without corrupting the hook's JSON stdout.
 """
 
 from __future__ import annotations
@@ -109,12 +92,10 @@ def test_quarry_hook_writes_expected_log_line(
     expected_substr: str,
     expectation_note: str,
 ) -> None:
-    """A ``quarry-hook <event>`` run must leave the expected line in quarry.log.
+    """A hook invocation logs its expected breadcrumb.
 
-    Fails today (v3.2.0) because ``_hook_entry.main`` opens the log file
-    nowhere — the file is not created and the grep returns zero matches.
-    The fix installs :class:`LoggingConfig` at the top of ``main`` so every
-    hook invocation opens ``quarry.log`` and emits its HookTrace line.
+    LoggingConfig initializes the file handler before dispatch so every
+    invocation, including an early skip, emits a HookTrace line.
     """
     payload = load_payload(payload_fixture)
     run = hook_subprocess.run(event, payload)

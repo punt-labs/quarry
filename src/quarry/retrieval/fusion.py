@@ -64,7 +64,7 @@ class RrfFusion:
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]
 
         # Every row carries a real ``_distance``: vector-channel rows from
-        # LanceDB, FTS-only rows from ``HybridRetriever`` annotation (quarry-gcnf).
+        # LanceDB, FTS-only rows from ``HybridRetriever`` annotation.
         results = [SearchResult.from_row(all_rows[key]) for key, _ in ranked]
         logger.debug(
             "RRF fusion: %d vector + %d FTS -> %d results",

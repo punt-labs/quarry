@@ -10,7 +10,7 @@ port:
   client↔daemon TLS contract exercised end-to-end against real code.
 - the startup-timeout resource-hygiene guard: a forced startup timeout must
   still shut the server down and join its thread, leaking no live server or
-  bound socket (quarry-5pg1).
+  bound socket.
 
 Tiering: both use a live server over a real socket, so they carry ``slow`` (the
 fast job runs ``-m 'not slow'`` and never starts a server) and ``integration``
@@ -72,7 +72,7 @@ class _ThreadedTlsServer:
         The readiness wait is INSIDE the try, so a startup timeout still runs
         the finally — signalling the server to exit and joining the thread.
         Otherwise a raised timeout would leave the thread running and its bound
-        socket held, leaking a live server into later tests (quarry-5pg1).
+        socket held, leaking a live server into later tests.
         """
         self._thread.start()
         try:
@@ -171,7 +171,7 @@ def test_tls_server_releases_thread_on_startup_timeout(
     Force the readiness deadline into the past so ``_await_started`` raises on its
     first check (before uvicorn can bind). The raised ``RuntimeError`` must still
     run ``running()``'s finally, which signals ``should_exit`` and joins the
-    thread — so no live server is left holding a socket (quarry-5pg1). A negative
+    thread — so no live server is left holding a socket. A negative
     timeout makes the deadline already-elapsed, killing any start-vs-timeout race.
     """
     monkeypatch.setattr("tests.test_tls_smoke._STARTUP_TIMEOUT_S", -1.0)

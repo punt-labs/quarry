@@ -136,7 +136,7 @@ class QuerySet:
         return [q for q in self._queries if q.bucket == bucket]
 
     def scorable(self) -> list[Query]:
-        """Return queries carrying a known-item answer (the Phase-1 qrels set)."""
+        """Return queries carrying a known-item answer (the qrels set)."""
         return [q for q in self._queries if q.answer is not None]
 
     def to_qrels(self) -> Qrels:

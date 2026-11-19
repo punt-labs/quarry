@@ -11,7 +11,7 @@ def _mock_page(text: str, *, flat: str | None = None) -> MagicMock:
 
     The keyed ``side_effect`` is deliberate — a single ``return_value`` would make
     the flat ``get_text()`` return the dict too, so the flat-fallback path would
-    never be exercised (see PR #326 review B).
+    never be exercised.
     """
     dict_payload = {
         "height": 842.0,

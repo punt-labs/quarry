@@ -387,7 +387,7 @@ def test_watch_session_does_not_leak_descriptors(
 
     This is the proof that per-file indexing (``FileIndexJob`` → ``index_one``)
     with the FTS rebuild coalesced to a post-quiescence ``CollectionFinalizeJob``
-    does not reopen quarry-0dss across the daemon's multiple persistent
+    bounds descriptor growth across the daemon's multiple persistent
     connections. If per-file indexing rebuilt the FTS, or the finalize ran per
     file, the trajectory would ramp; the coalesced design holds it flat.
 
@@ -400,7 +400,7 @@ def test_watch_session_does_not_leak_descriptors(
     trajectory = FdTrajectory()
 
     # Count only replace=True rebuilds — the generation-superseding calls that
-    # leak descriptors (quarry-0dss). The replace=False "ensure index exists"
+    # leak descriptors. The replace=False "ensure index exists"
     # call on every insert is a no-op skip when the index is present and does
     # not leak, so it is not the coalescing the invariant guards.
     fts_rebuilds: list[str] = []
@@ -494,7 +494,7 @@ def _daemon_scale_connect(path: Path) -> Database:
 def _daemon_scale_rebuild(database: Database) -> None:
     """Rebuild the FTS index once and collect, as a daemon sync finalize does."""
     # optimize(force=True) issues create_fts_index(replace=True) — one generation
-    # rebuild, the quarry-0dss reader-leak source the recycler exists to bound.
+    # rebuild, the reader-leak source the recycler exists to bound.
     database.optimizer.optimize(force=True)
     gc.collect()  # model SyncFinalizer's post-sync collection (sync_finalize.py)
 

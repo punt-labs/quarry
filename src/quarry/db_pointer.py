@@ -41,8 +41,8 @@ class DatabaseSelection:
     that directory. Client and daemon therefore agree on which database is in
     play only because both derive it from a matching ``--db``.
 
-    Extracted from ``Settings``, which is a settings container and has no
-    business owning a mutable process-scoped selection or a TOML file format.
+    Keep mutable process-scoped selection and its TOML file format separate
+    from the ``Settings`` configuration container.
     """
 
     __slots__ = ("_override",)

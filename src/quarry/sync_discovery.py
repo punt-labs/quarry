@@ -140,7 +140,7 @@ class FileDiscovery:
         :class:`FileDiscovery` instance, not per call) — a burst-created
         ``x/logs/deep`` must be pruned when ``x/.gitignore`` contains
         ``logs/``, even though only ``x``, not ``x/logs/deep``'s own
-        immediate parent, names the pattern (Copilot finding, PR #503).
+        immediate parent, names the pattern.
         """
         if self._root_resolved is None or self._excluded:
             return False

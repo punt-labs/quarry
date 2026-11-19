@@ -58,7 +58,7 @@ class EphemeralIndex:
     The index is keyed on the embedding strategy, the pinned model revision, and
     the corpus content hash, so configs that do not change embeddings
     (metadata/fusion/reranker knobs) reuse one index — the dominant cost saving.
-    A model-distinct config (Phase 2+) gets a different key and re-indexes.
+    A model-distinct config gets a different key and re-indexes.
     """
 
     __slots__ = ("_corpus", "_key", "_root", "_settings")

@@ -1,6 +1,6 @@
 """The periodic disk-vs-registry reconcile and the durable orphan-purge backstop.
 
-Extracted from :class:`~quarry.daemon.watch_loop.WatchLoop`: the loop owns
+:class:`~quarry.daemon.watch_loop.WatchLoop` owns
 lifecycle, watch scheduling, and observer marshaling; this owns the safety-scan
 reconcile (re-scan registered collections; tear down a vanished watch) and the
 CLOSED-SET purge backstop -- it purges only collections the registry marked in

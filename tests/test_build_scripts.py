@@ -1,15 +1,8 @@
 """Tests for the release/build shell scripts under ``scripts/``.
 
-These guard the Claude Desktop ``.mcpb`` build and the release-verify scripts.
-The ``.mcpb`` distribution broke silently once (quarry-521g): ``build-mcpb.sh``
-read a ``manifest.json`` that had been removed, no CI job built the bundle, and
-no release ever attached the asset — so the README download link 404'd. Shell
-scripts also had no shellcheck coverage beyond ``install.sh``, which is part of
-how the broken ``build-mcpb.sh`` stayed broken.
-
-The checks here are static plus shellcheck (no ``node``/``mcpb`` needed) so they
-run in the same CI as the rest of the suite; the live bundle build is exercised
-locally and in the release workflow, which installs ``mcpb``.
+Guard the Claude Desktop ``.mcpb`` bundle, release verification, and shellcheck
+coverage. A bundle build must consume an existing manifest and produce the
+asset that the release process publishes.
 """
 
 from __future__ import annotations

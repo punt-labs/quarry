@@ -21,20 +21,16 @@ if TYPE_CHECKING:
 class UserScopeShadow:
     """Prune a stray ``mcpServers.quarry`` entry from ``~/.claude.json``.
 
-    ``quarry install`` once wrote a user-scope entry unconditionally
-    (PL-999); the quarry Claude Code plugin now owns the server
-    (tool-enable-disable.md §2.6/§2.8), so that entry is pure shadow once the
-    plugin is confirmed registered *at user scope* -- a project-scope-only
+    The quarry Claude Code plugin owns the server
+    (tool-enable-disable.md §2.6/§2.8), so a user-scope entry shadows it when
+    the plugin is confirmed registered at user scope. A project-scope-only
     plugin install does not own the server for this user, so the fallback
-    stays. A collaborator of :class:`~quarry.doctor_mcp.ClaudeCodeMcp` rather
-    than a method on it: it owns a disjoint piece of state (the
-    ``~/.claude.json`` path) and a disjoint concern (pruning a stray write,
-    not registering or checking the plugin-owned server).
+    stays. This collaborator of :class:`~quarry.doctor_mcp.ClaudeCodeMcp` owns
+    the ``~/.claude.json`` path and pruning, not plugin registration.
 
-    ``~/.claude.json`` is Claude Code's own primary state file and grows
-    unbounded with session history, so it is read with a generous cap rather
-    than :attr:`JsonFile.MAX_BYTES` -- that cap guards untrusted config, and
-    this file is trusted by convention, not hostile.
+    Claude Code's primary state file grows with session history, so it uses a
+    generous cap rather than :attr:`JsonFile.MAX_BYTES`, which guards untrusted
+    configuration.
     """
 
     __slots__ = ("_claude_json_path", "_plugin")

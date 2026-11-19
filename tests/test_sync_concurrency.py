@@ -564,8 +564,8 @@ def _poll_task_done(
     Without draining, the ingest job stays queued past the mock scope and the
     collection worker later runs the REAL ``ingest_auto`` against the source
     host -- a real network call that floods USP 404 logging into a closed
-    capture stream and hangs offline CI (the quarry-ngpm real-network/ordering
-    bug).  Draining here keeps ``ingest_auto`` mocked for the worker's whole run.
+    capture stream and hangs offline CI. Draining here keeps ``ingest_auto``
+    mocked for the worker's whole run.
     """
     for _ in range(max_polls):
         data: dict[str, Any] = tc.get(f"/v1/tasks/{task_id}").json()

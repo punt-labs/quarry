@@ -439,7 +439,7 @@ class TestSearch:
                 "text": "content",
                 "page_type": "text",
                 "source_format": ".md",
-                # no _distance key (quarry-gcnf)
+                # no _distance key
             }
         ]
         with patch(

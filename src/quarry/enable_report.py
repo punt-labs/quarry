@@ -66,7 +66,7 @@ class EnableReport:
         return lines + self._ethos_lines()
 
     def _skills_lines(self) -> list[str]:
-        """Return the cross-harness skill-deposit line (PL-1049), or none.
+        """Return the cross-harness skill-deposit line, or none.
 
         A tuple of :class:`~quarry.skills_install.SkillOutcome` is not a flag
         ``_flagged`` can branch on, so this names the harnesses directly.

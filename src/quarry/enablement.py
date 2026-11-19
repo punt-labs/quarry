@@ -50,7 +50,7 @@ class Enablement:
     for the edit itself share the one hold.
 
     ``enable`` also runs one best-effort cross-harness skill deposit after the
-    lock releases (:class:`~quarry.skills_sync.SkillDeposit`, PL-1049), kept in
+    lock releases (:class:`~quarry.skills_sync.SkillDeposit`), kept in
     its own module rather than as a method here: it operates on the installed
     binary's own packaged skills and the operator's home, never the
     guide/marker/import machinery, so folding it in would pull this class into
@@ -82,7 +82,7 @@ class Enablement:
 
         The ``.gitignore`` ensure runs FIRST — protection lands before any
         step that depends on it, so a re-enable still backfills a missing
-        exclusion on a repo enabled before this step existed. Register,
+        exclusion on an enabled repo. Register,
         marker, and the ensure each report whether they changed anything, so
         an idempotent re-enable returns all three booleans ``False``.
         Register runs before the near-infallible marker write so a register
@@ -129,7 +129,7 @@ class Enablement:
 
         Deregistering the sync collection is the CALLER's responsibility.
         This method owns marker + import atomicity. It does NOT retract the
-        cross-harness skills ``enable`` deposits: since PL-1049 those come from
+        cross-harness skills ``enable`` deposits: those come from
         the installed binary's own packaged tree and are deposited by every repo
         that enables quarry, so they are machine-global, not this repo's to
         remove — retracting them here would delete skills another still-enabled

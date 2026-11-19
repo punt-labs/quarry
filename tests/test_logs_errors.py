@@ -1,18 +1,9 @@
-"""Tests for the daemon-log diagnostics ``scripts/logs-errors.sh`` and
-``scripts/logs-tail.sh``.
+"""Tests for the daemon-log diagnostics under ``scripts/``.
 
-The quarry daemon appends to ``~/.punt-labs/quarry/logs`` (quarry-stderr.log,
-quarry.log, quarry-stdout.log). Nothing surfaced the errors accruing there —
-``quarry doctor`` does not read the log and no one greps it — so a broken
-watch/sync feature logged 100+ ``Watch index failed`` lines that sat unnoticed
-for weeks. ``make logs-errors`` (this script) closes that blind spot.
-
-Per CLAUDE.md Class 5 / testing rule 6, shell logic gets a mock/fixture test,
-not just shellcheck (shellcheck coverage for every ``scripts/*.sh`` lives in
-``test_build_scripts.py``). These drive the scripts against a synthetic fixture
-log dir and assert they (a) report the known errors, (b) always exit 0 — a
-diagnostic, not a gate — (c) handle a missing or empty log dir gracefully, and
-(d) never report a false clean when a log is unreadable (bug class 2).
+The daemon appends to ``quarry-stderr.log``, ``quarry.log``, and
+``quarry-stdout.log``. Drive diagnostics against synthetic logs and assert
+they report errors, always exit 0, handle missing or empty directories, and
+never report a false clean when a log is unreadable.
 """
 
 from __future__ import annotations

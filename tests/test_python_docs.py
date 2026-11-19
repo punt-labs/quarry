@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
+import tomllib
 import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -403,6 +405,30 @@ async def f() -> str:
         ["example.py", "5"],
         ["example.py", "6"],
     ]
+
+
+def test_tracker_gate_preserves_quarry_names_and_design_references() -> None:
+    project = tomllib.loads((_ROOT / "pyproject.toml").read_text())["project"]
+    scripts = project["scripts"]
+    plugin = json.loads(
+        (_ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text()
+    )["name"]
+    names = {
+        *scripts,
+        plugin,
+        *(path.name for path in (_ROOT / "plugin" / "skills").iterdir()),
+        *(path.stem for path in (_ROOT / "plugin" / "commands").glob("*.md")),
+        ".quarry-skill.json",
+        "quarry-stderr.log",
+        "quarry-stdout.log",
+        "DES-031",
+    }
+    source = "\n".join(f"# {name}" for name in sorted(names))
+    assert tracker_references(source, "names.py") == []
+    assert tracker_references(source.upper(), "names.py") == []
+    assert tracker_references("", "empty.py") == []
+    references = "# quarry-5pg1 quarry-ydym QUARRY-5PG1 PL-123 PR #42"
+    assert len(tracker_references(references, "ids.py")) == 5
 
 
 def test_missing_api_directive_is_detected() -> None:

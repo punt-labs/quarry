@@ -1,7 +1,7 @@
 """Turn watch batches and scans into IngestUnits on the DES-042 queue.
 
-Extracted from :class:`~quarry.daemon.watch_loop.WatchLoop` so the loop owns
-lifecycle + event marshaling while this owns the producer half: building
+:class:`~quarry.daemon.watch_loop.WatchLoop` owns lifecycle and event
+marshaling; this module owns the producer half: building
 per-file / delete / bulk-scan / finalize jobs, submitting them on the
 per-``(database, collection)`` queue, and re-arming a shed (503) live submit
 through the debouncer with capped exponential backoff — a full queue is
@@ -45,11 +45,8 @@ logger = logging.getLogger(__name__)
 class WatchSubmitter:
     """Submit watch-derived IngestUnits to the queue, re-arming shed live events.
 
-    Carries known cohesion debt: LCOM 0.78 against a 0.5 target, because the
-    batch path and the scan path reach different collaborators.  Three classes
-    have already moved out (the finalize throttle, the scan sweep, the shed
-    re-arm), and the rule for whoever comes next is that the remainder gets
-    split further rather than relaxed again.
+    Batch and scan paths use separate collaborators for finalize throttling,
+    scan sweeping, and re-arming shed events.
     """
 
     __slots__ = ("_ctx", "_rearm", "_roster", "_throttle")

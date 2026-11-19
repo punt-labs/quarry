@@ -209,12 +209,10 @@ class TestCaptureSkipVersusEmpty:
 
 
 def test_html_refetch_fetches_the_source_url_exactly_once() -> None:
-    """The HTML re-fetch branch must not fetch the same URL twice.
+    """The HTML re-fetch branch fetches the source URL exactly once.
 
-    ``fetch_body`` (used to decide HTML vs. text routing) and ``ingest_url``'s
-    own internal fetch used to run back to back — doubling the network I/O for
-    every empty-chunk HTML re-fetch. ``ingest_url`` now takes the already-
-    fetched body via ``prefetched_html`` and skips its own fetch.
+    Pass ``fetch_body``'s result to ``ingest_url(prefetched_html=...)``
+    so media-type routing and HTML extraction share one network response.
     """
     inline = _remember("", collection="repo-captures")
     job = CaptureIngestJob(inline=inline, source_url=HttpUrl("https://x.test/page"))

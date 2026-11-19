@@ -1,9 +1,4 @@
-"""Tests for quarry.backfill_mapping — ProjectMappingResolver's set arithmetic.
-
-These give ``count_unmapped`` and ``filter_by_project`` direct unit coverage,
-closing the gap where they were previously only reached transitively through
-``Backfill.sessions`` in ``tests/test_backfill.py``.
-"""
+"""Exercise ProjectMappingResolver's unmapped counts and project filtering."""
 
 from __future__ import annotations
 

@@ -31,7 +31,7 @@ class AdminCli:
         app.command(name="uninstall")(self._p.cli_errors(self._uninstall))
 
     def _prune_mcp_shadow(self) -> None:
-        """Strip a stray user-scope ``mcpServers.quarry`` shadow entry (PL-999).
+        """Strip a stray user-scope ``mcpServers.quarry`` shadow entry.
 
         install.sh's own tail, run right after the plugin install step so a
         fresh machine never carries the shadow even one `quarry doctor` run --
@@ -48,7 +48,7 @@ class AdminCli:
         Stops the daemon and removes the launchd plist (macOS) or systemd unit
         (Linux).  Clean inverse of the daemon step in ``quarry install``.  Also
         opportunistically prunes a stray user-scope ``mcpServers.quarry`` entry
-        from ``~/.claude.json`` (PL-999) -- harmless when the plugin is absent
+        from ``~/.claude.json`` -- harmless when the plugin is absent
         or the entry is already gone.
         """
         from quarry.service import uninstall as svc_uninstall  # noqa: PLC0415

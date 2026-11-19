@@ -48,7 +48,7 @@ class QueryLog:
         # daemon's one connection with the request-handling thread, matching
         # SyncRegistry's rationale. The connection itself serializes nothing --
         # ``_lock`` is what makes concurrent record()/prune()/insights reads
-        # from the threadpool safe against interleaving (DES-056 round 2).
+        # from the threadpool safe against interleaving (DES-056).
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._lock = threading.Lock()
         try:

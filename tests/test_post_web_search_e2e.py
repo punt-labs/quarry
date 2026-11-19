@@ -1,22 +1,8 @@
-"""End-to-end post-web-search capture regression (quarry-871u / G5).
+"""End-to-end post-web-search capture through the installed hook and daemon.
 
-The daemon's post-release smoke test showed WebSearch captures never
-landing in ``<repo>-captures`` on the live v3.2.0 daemon, even though the
-unit tests for :class:`quarry.web_search_capture.WebSearchPayload` all
-pass.  The unit suite stubs the payload class directly and never runs the
-handler through the ``quarry-hook`` binary against a real daemon, so a
-regression at the entry point (missing logging config → skip-with-no-
-breadcrumb, or a shape drift the fallback branch does not cover) is
-invisible.
-
-These tests spawn a real ``quarryd`` and drive ``quarry-hook
-post-web-search`` with each of the three canonical payload shapes.  After
-the hook exits, the test polls the daemon's HTTP API for a captured
-document named ``search: <query>``.  On v3.2.0 the poll times out with
-zero matches for every parametrized shape — every case FAILS.  The
-``unknown_shape`` case additionally asserts that the WARN-with-shape-
-metadata line fires (blocked today by quarry-ridg's logging gap; that
-case double-fails until BOTH beads land).
+Feed supported WebSearch payload shapes to ``quarry-hook``, then poll the
+daemon for the captured document named ``search: <query>``.
+Unknown shapes must emit a warning with shape metadata and fail open.
 """
 
 from __future__ import annotations
@@ -183,14 +169,11 @@ def test_unknown_shape_logs_warn_with_metadata(
     ephemeral_daemon: EphemeralDaemon,
     hook_subprocess: HookInvoker,
 ) -> None:
-    """An unknown ``tool_response`` shape must WARN with query_present/query_len.
+    """An unknown tool_response shape logs metadata without search content.
 
-    The shape-metadata WARN in ``WebSearchPayload.warn_no_digest`` is the
-    only signal an operator has that a WebSearch payload arrived but was
-    rejected as unparseable.  Its persistence to quarry.log requires the
-    hook entry point to have configured logging (quarry-ridg), so this
-    case DOUBLE-FAILS today: the capture doesn't land (871u), and the
-    WARN is silently dropped (ridg).
+    WebSearchPayload.warn_no_digest reports query presence and length so an
+    operator can diagnose unparseable payloads. The entry point must configure
+    logging before dispatch for that WARN to reach quarry.log.
     """
     payload = load_payload("websearch/unknown_shape.json")
     run = hook_subprocess.run(

@@ -54,8 +54,8 @@ logger = logging.getLogger(__name__)
 # is itself a plateau), not an unbounded climb. That aggregate is what a
 # ~21-collection roster pushes above launchd's 256 soft limit, so DES-046 raises
 # RLIMIT_NOFILE to 8192 at daemon start: the ceiling must fit under the raised
-# limit, not the inherited 256. The recycler is unchanged — the roster-scale
-# aggregate plateau is proven, so the fix is the higher limit, not a new mechanism.
+# limit, not the inherited 256. The recycler bounds each connection's growth;
+# the process limit must also accommodate the aggregate roster.
 _DEFAULT_RECYCLE_AFTER = 20
 
 

@@ -1,9 +1,4 @@
-"""Tests for quarry.ingestion.chunk_store_funnel — the DES-036 convergence point.
-
-These exercise ``_chunk_embed_store`` directly, closing the coverage gap where
-it was previously only reached transitively through ``ingest_document`` /
-``ingest_content`` in ``test_pipeline.py``.
-"""
+"""Exercise the chunk-and-store convergence point directly (DES-036)."""
 
 from __future__ import annotations
 

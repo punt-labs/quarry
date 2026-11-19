@@ -1,48 +1,10 @@
-"""Reproduce quarry-uq95: repeated capture of an UNCHANGED transcript re-embeds
-every chunk and grows the LanceDB table without bound.
+"""Bound repeated capture of unchanged transcripts and characterize forced re-ingest.
 
-PROVEN, not assumed (bead quarry-uq95 is explicit that the mechanism was only
-observed, never proven): the capture ingest path (``session_transcript.py`` ->
-``api/capture_ingest.py`` -> ``daemon/routes/captures.py`` ->
-``ScrubbedIngestJob.scrub_and_ingest`` -> ``ingest_content`` ->
-``ChunkStoreFunnel``) has no content-hash or chunk-identity gate before the
-delete+re-add: ``overwrite=True`` (the capture default, ``captures.py``
-``_require_options``) makes ``_chunk_embed_store`` run
-``LegacyUrlNames.replace_prior`` -> ``ChunkStore.delete_document`` followed by
-a full embed-and-insert, EVERY time, whether or not the transcript text
-changed since the last capture. The only existing "unchanged content" gate in
-this codebase, :class:`quarry.ingestion.settled_file.SettledFile`, guards the
-directory-*sync* watch path (``sync_change.py`` / ``sync_planner.py`` /
-``file_indexer.py``) and is never consulted by the capture-ingest path at all
-(``grep -rn "SettledFile\\|StoredSessions" session_transcript.py
-pre_compact_hook.py hooks_agent.py daemon/content_jobs.py
-daemon/routes/captures.py`` returns nothing). ``StoredSessions`` /
-``TranscriptSnapshot`` (``stored_sessions.py``) is the ONE place a
-"skip unchanged" decision already exists for transcripts -- but it is wired
-only into ``backfill_filing.py`` / ``backfill_project.py``, never into the
-live-session hook path (``session_transcript.py``'s
-``SessionTranscriptCapture.capture()`` calls ``_archive`` /
-``_write_local_capture`` / ``_send`` unconditionally; no snapshot-vs-stored
-comparison anywhere in that file, ``pre_compact_hook.py``, or
-``hooks_agent.py``).
-
-Each pass of this re-ingest ALSO leaves the LanceDB table one more commit
-version and one more data fragment behind it (DES-034's single-writer
-contract runs delete-then-add as two separate commits), which is the second,
-independently proven axis: the same defect that re-embeds every chunk is
-ALSO what drives #622's disk-growth report (quarry-b9c4) -- see
-``TestVersionChurnGrowsWithRepeatedReingest`` below, which measures table
-version count, fragment count, and on-disk byte size growing linearly with N
-re-ingests of byte-IDENTICAL content, with no change to the document at all.
-
-The planned fix adds a ``source_version`` change-detection gate ABOVE
-``ingest_content``/``ChunkStoreFunnel`` -- in the capture route and the
-session-transcript hook, not inside the funnel itself (the funnel's
-delete-then-reembed under ``overwrite=True`` is its documented, correct
-contract). ``TestUnchangedTranscriptReembedsEveryChunk`` therefore drives the
-real ``POST /v1/capture`` route end-to-end, not ``ingest_content`` directly,
-so it exercises the layer the fix actually touches and will flip from red to
-green once that gate lands.
+The capture route's ``source_version`` gate must skip complete, unchanged
+transcripts before embedding. A direct ``ingest_content(overwrite=True)``
+instead intentionally deletes and re-adds the document. These tests separate
+capture deduplication from that lower-level contract, measuring embedding work,
+LanceDB commit versions, fragments, and disk growth without compaction (DES-034).
 """
 
 from __future__ import annotations
@@ -91,21 +53,10 @@ def _ingest_capture_once(db: Database, settings: Settings) -> IngestResult:
 
 
 class TestUnchangedTranscriptReembedsEveryChunk:
-    """Deliverable 1: the embed count must stay flat across N unchanged re-captures.
+    """The embed count stays flat across repeated unchanged captures.
 
-    Drives the real ``POST /v1/capture`` route end-to-end (``InProcessDaemon``
-    + ``TestClient``, the harness already established in
-    ``test_content_routes.py::TestCaptureRoute``) -- the layer the fix
-    (quarry-uq95 findings §3: a ``source_version`` gate ahead of
-    ``ingest_content``) actually touches. A test that instead called
-    ``ingest_content``/``ChunkStoreFunnel`` directly would exercise a layer
-    the fix never changes -- those are correctly doing what they are told;
-    they are just told to do it every time -- and would still fail after the
-    fix landed, which is a false finish line for the next mission.
-
-    FAILS on current main: nothing short-circuits an identical capture, so
-    the fake backend embeds the SAME chunks on every POST and the cumulative
-    embedded-text count scales linearly with N.
+    Drive ``POST /v1/capture`` through ``InProcessDaemon`` and ``TestClient``
+    to exercise the source-version gate above ``ingest_content``.
     """
 
     def test_embed_call_count_stays_flat_across_repeated_unchanged_captures(
@@ -305,19 +256,11 @@ class TestIsolateWhichStepHoldsTheWork:
 
 
 class TestVersionChurnGrowsWithRepeatedReingest:
-    """Deliverable (operator extension, bead quarry-b9c4 / GitHub #622):
-    does the capture re-ingest defect drive #622's disk-growth report?
+    """Forced re-ingest grows commit versions, fragments, and disk use.
 
-    PROVEN: re-ingesting byte-IDENTICAL content N times grows the LanceDB
-    table's commit-version count, on-disk data-fragment count, and total byte
-    size LINEARLY with N -- not because of real data growth (the document
-    never changes), but because ``ChunkStoreFunnel._embed_and_store`` issues
-    one ``delete()`` commit plus one ``add()`` commit per pass (DES-034's
-    single-writer contract), and neither commit is ever superseded without an
-    explicit ``optimize(cleanup_older_than=...)`` call with a short-enough
-    window. #622 observed 10.8k table versions / 8.2k data files for only
-    33.5k rows -- consistent with exactly this churn, independent of the
-    oversized-binary-row / optimize-overflow issue b9c4 tracks separately.
+    Each byte-identical overwrite issues a delete commit and an add commit
+    (DES-034). Without explicit compaction and cleanup, repeated overwrites
+    accumulate storage even though the logical document does not change.
     """
 
     def test_version_and_fragment_count_grow_linearly_with_repeated_reingest(

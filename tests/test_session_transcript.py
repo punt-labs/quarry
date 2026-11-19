@@ -164,22 +164,12 @@ class TestAnOversizedMessageIsNeverEmptyText:
 
 
 class TestSnapshotOrderingAgainstAGrowingFile:
-    """quarry-uq95 round 3: the version must be taken BEFORE the file is read.
+    """Take the version snapshot before reading a growing transcript.
 
-    ``TranscriptReader.__new__`` reads the file synchronously at construction.
-    A snapshot taken any later than that read can describe a file a writer
-    already grew past the content this capture actually sends — the stored
-    row is then tagged with a version the NEXT, now-quiescent capture already
-    matches, so that capture is skipped and the growth it would have ingested
-    is silently lost forever.
-
-    Reproduces the race by making the file grow the instant
-    ``TranscriptSnapshot.taken`` is invoked: the unfixed code calls it
-    AFTER building the reader (so the growth already landed by the time the
-    snapshot is taken, and the stale, pre-growth text ends up tagged with the
-    post-growth version); the fixed code calls it BEFORE building the reader
-    (so the snapshot describes the pre-growth file, and the reader's own read
-    -- whatever it sees -- is tagged honestly).
+    ``TranscriptReader.__new__`` reads synchronously. A later snapshot could tag
+    stale content with the version of appended content, causing the next capture
+    to skip that growth. Grow the file when ``TranscriptSnapshot.taken`` runs
+    to check that the reader always follows the snapshot.
     """
 
     @staticmethod

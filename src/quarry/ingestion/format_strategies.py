@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
-# quarry-w1jr: quarry.extractors' package init eagerly imports code_extractor,
+# quarry.extractors' package init eagerly imports code_extractor,
 # which imports quarry.ingestion.text_splitter, which forces quarry.ingestion's
 # own __init__ to run (Python always initializes a package's __init__ before any
 # submodule) -- which reaches this module via pipeline.py.  If quarry.extractors
@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING, final
 # extractors imports textually before the text_format import -- swapping the
 # order reproduces "ImportError: cannot import name 'SUPPORTED_CODE_EXTENSIONS'
 # from partially initialized module" whenever quarry.extractors is the first
-# quarry package touched in the process (see the pipeline-decomposition design,
-# quarry-hb9u §d, for the full import-graph proof).
+# quarry package touched in the process.
 from quarry.extractors.image_extractor import SUPPORTED_IMAGE_EXTENSIONS, ImageExtractor
 from quarry.extractors.pdf_extractor import PdfExtractor
 from quarry.ingestion.backends import get_ocr_backend

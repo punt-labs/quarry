@@ -7,7 +7,7 @@ test: ## Run tests (excludes slow integration tests)
 	uv run --extra dev pytest
 
 # The slow tier the fast CI job never runs (-m 'not slow'): live-server / real-TLS
-# smokes that can hang a shared runner. Run here or in the wheel gate (quarry-5pg1).
+# smokes that can hang a shared runner. Run here or in the wheel gate.
 test-slow: ## Run the slow tier (real-TLS/live-server smokes)
 	uv run --extra dev pytest -m slow
 
@@ -15,11 +15,8 @@ test-slow: ## Run the slow tier (real-TLS/live-server smokes)
 # load-bearing rather than tidy.  ruff, pytest, mypy, pyright and import-linter
 # all live in the dev extra; `uv run` syncs only the DEFAULT set, so none of them
 # is in a fresh .venv/bin and uv silently falls back to whatever is on PATH.  On
-# one machine that was a system Python's ruff 0.13.0 and pytest — versions nobody
-# pinned — which is how a red gate reproduced for a reviewer and not for the
-# author, on a file neither had touched.  Same failure the PYRIGHT_VERSION pin
-# below already guards against: a gate is worthless if it reports on a toolchain
-# the lock does not name.
+# a machine with system tools installed, this can select unpinned versions.
+# The PYRIGHT_VERSION pin below guards the same reproducibility requirement.
 #
 # The `uv run python tools/...` lines are deliberately NOT flagged and are not an
 # oversight: `python` always comes from the project venv uv creates, so there is
@@ -52,8 +49,8 @@ lint-docs: ## Lint markdown files (matches CI docs job)
 
 # Guards against the disconnected proxy namespace re-appearing in slash-command
 # instructions. The native quarry MCP server exposes tools as `mcp__quarry__*`
-# (and `mcp__quarry-dev__*` for the dev twin); the old `plugin_quarry` proxy
-# names no longer resolve. See quarry-ydym.
+# (and `mcp__quarry-dev__*` for the dev twin); `plugin_quarry` proxy names
+# do not resolve.
 lint-slash-mcp: ## Fail if slash commands name the disconnected plugin_quarry namespace
 	@if grep -rE 'mcp__plugin_quarry(-dev)?_quarry__' plugin/commands/ >/dev/null 2>&1; then \
 		echo "plugin/commands/ references disconnected plugin_quarry namespace; use mcp__quarry__* / mcp__quarry-dev__*" >&2; \
@@ -67,18 +64,15 @@ lint-slash-mcp: ## Fail if slash commands name the disconnected plugin_quarry na
 # would silently skip suppress-output.sh for every native tool call. The
 # guard parses hooks.json, compiles the matcher regex, and asserts it
 # admits concrete sample tool names — a substring lint could not tell an
-# augmented matcher from one that requires the retired prefix. See
-# quarry-ydym.
+# augmented matcher from one that requires the disconnected proxy prefix.
 lint-hook-mcp-matcher: ## Fail if hooks.json's PostToolUse matcher drops mcp__quarry(-dev)?__ coverage
 	@uv run python tools/lint_hook_matcher.py
 
 # Pin the node-pyright binary to the uv.lock-pinned wrapper version so `make
 # type` catches exactly what CI catches. The pyright-python wrapper can reuse a
 # stale locally-cached node-pyright that is older — and laxer — than CI's pinned
-# one, so `make check` could PASS code that CI's pyright then REJECTS. That is
-# this PR's own incident: a cached 1.1.408 hid three reportDeprecated errors that
-# CI's 1.1.411 flagged.  Forcing the version keeps the local and CI checkers
-# identical.
+# one, so `make check` could pass code that CI's pyright rejects. Forcing the
+# version keeps the local and CI checkers identical.
 PYRIGHT_VERSION = $(shell uv run --extra dev python -c "import importlib.metadata as m; print(m.version('pyright'))")
 
 type: ## Type check with mypy and pyright
@@ -260,11 +254,11 @@ logs-tail: ## Tail the most recent lines of the daemon stderr log
 	@LOG_DIR="$(LOG_DIR)" LOG_LINES="$(LOG_LINES)" bash scripts/logs-tail.sh
 
 # Sync eval alongside dev so running the harness never uninstalls the toolchain.
-eval: ## Phase-1 retrieval eval harness — per-bucket MRR/success + pollution
+eval: ## Retrieval eval harness — per-bucket MRR/success + pollution
 	uv sync --extra dev --extra eval
 	uv run --extra eval python -m tools.eval
 
-eval-baseline: ## Regenerate the committed Phase-1 baseline (run + qrels + JSON)
+eval-baseline: ## Regenerate the committed retrieval baseline (run + qrels + JSON)
 	uv sync --extra dev --extra eval
 	uv run --extra eval python -m tools.eval \
 		--emit-baseline tools/eval/baselines/baseline.json

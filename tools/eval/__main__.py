@@ -1,4 +1,4 @@
-"""``python -m tools.eval`` — run the Phase-1 harness and print per-bucket metrics.
+"""``python -m tools.eval`` — run the retrieval harness and print per-bucket metrics.
 
 Wires the fixture corpus, the query set, the frozen retrieval seam, and the
 scorer into one report. ``--emit-baseline`` additionally writes the committed

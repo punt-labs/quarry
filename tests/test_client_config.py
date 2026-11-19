@@ -80,7 +80,7 @@ class TestFromLoginLoopback:
     def test_corrupt_default_db_config_fails_closed(self, tmp_path: Path) -> None:
         # Exception-boundary breadth: resolve_db_paths() raises ValueError on a
         # default-db name with a path separator (e.g. a corrupt
-        # default.database="../evil").  That resolution now runs INSIDE the try,
+        # default.database="../evil").  That resolution belongs inside the try,
         # so from_login fails closed with ClientConfigError, not a raw ValueError.
         with (
             patch("quarry.client.config.Settings") as mock_settings,
@@ -105,7 +105,7 @@ class TestFromLoginLoopback:
             ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
     def test_stored_localhost_auto_migrates_to_literal(self, tmp_path: Path) -> None:
-        # A config stored before the literal-IP flip holds the NAME ``localhost``.
+        # A stored config can hold the NAME ``localhost``.
         # On READ it must auto-migrate to 127.0.0.1 so the operator is not locked
         # out — the live serve.token resolves AND the resolved target is the
         # literal, never the ambiguous name.

@@ -229,13 +229,11 @@ def test_disable_is_idempotent(tmp_path: Path) -> None:
 
 
 class TestDisableDoesNotTouchHarnessSkills:
-    """§ cross-harness skills (PL-1049): ``disable`` must NOT retract them.
+    """Disabling a repo must not retract machine-global harness skills.
 
-    Since the redesign, every repo that enables quarry deposits the binary's
-    own packaged skills into the machine's harnesses. Those deposits are
-    therefore machine-global and shared across every enabled repo -- so
-    disabling one repo must not delete skills another still-enabled repo
-    depends on. ``disable`` touches only this repo's marker/import/guide.
+    Every enabled repo deposits the binary's packaged skills. Other repos can
+    depend on those shared deposits; ``quarry skills uninstall`` manages their
+    removal explicitly.
     """
 
     def test_ordinary_repo_disable_never_touches_the_home_directory(
@@ -252,9 +250,11 @@ class TestDisableDoesNotTouchHarnessSkills:
     def test_disabling_one_repo_leaves_another_repos_skills_in_place(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Regression (PL-1049 #6): enable in repo A deposits the global
-        skills; enabling repo B and then disabling A must leave the harness
-        deposits intact, because they belong to the machine, not to A."""
+        """Disabling one repo leaves machine-global skills available to another.
+
+        Enable in repo A, enable in B, then disable A: deposits belong to the
+        machine, not to A.
+        """
         home = tmp_path / "home"
         (home / ".codex").mkdir(parents=True)  # codex installed on this machine
         monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
@@ -274,15 +274,11 @@ class TestDisableDoesNotTouchHarnessSkills:
 
 
 class TestEnableDepositsOwnSkills:
-    """§ cross-harness skills (PL-1049 redesign): enable deposits the INSTALLED
-    BINARY's own packaged skills, ungated by the enabled repo.
+    """Enable deposits the installed binary's packaged skills in any repo.
 
-    This is the redesign's core property: a normal user's project -- no
-    ``plugin/skills/`` of its own, no ``punt-quarry`` pyproject -- still gets
-    ``quarry-recall``/``quarry-capture`` deposited, because the source is the
-    package the binary ships with, never anything the enabled repo supplies.
-    ``TestForgeryRegression`` below closes the companion safety property: a
-    hostile repo's OWN ``plugin/skills/`` tree is never the source either.
+    A project without ``plugin/skills/`` or a ``punt-quarry`` identity still
+    receives ``quarry-recall`` and ``quarry-capture``. Repository content
+    cannot redirect the trusted deposit source.
     """
 
     @staticmethod
@@ -314,12 +310,10 @@ class TestEnableDepositsOwnSkills:
     def test_enable_in_a_non_quarry_repo_with_a_detected_harness_deposits_the_skills(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """THE GOAL TEST (PL-1049): ``quarry enable`` in any repo -- a totally
-        ordinary user project, no ``plugin/skills/``, no ``punt-quarry``
-        pyproject -- is the whole setup for a non-Claude harness. This failed
-        on the parked branch's repo-gated approach (it no-ops outside
-        quarry's own checkout) and passes once deposit reads the packaged
-        tree instead."""
+        """Enable in an ordinary project deposits skills for a detected harness.
+
+        No ``plugin/skills/`` or Quarry project identity is required.
+        """
         home = tmp_path / "home"
         (home / ".codex").mkdir(parents=True)  # codex "installed" on this machine
         monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
@@ -411,10 +405,11 @@ class TestEnableDepositsOwnSkills:
 
 
 class TestForgeryRegression:
-    """§ djb's finding, closed by the redesign: a hostile repo's OWN
-    ``plugin/skills/`` tree -- even one naming the real ``punt-quarry``
-    package -- is NEVER the deposit source. The source is the installed
-    binary's packaged tree; nothing about the enabled repo is read."""
+    """A hostile repo's skill tree is never the trusted deposit source.
+
+    Even a repo naming the real ``punt-quarry`` package cannot redirect skill
+    deposits away from the installed binary's packaged tree.
+    """
 
     def test_a_repo_named_punt_quarry_shipping_evil_skills_deposits_nothing_from_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

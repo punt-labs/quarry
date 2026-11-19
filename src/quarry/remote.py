@@ -195,7 +195,7 @@ def validate_connection(
             # A LOOPBACK target authenticates with the daemon's live serve.token,
             # NOT --api-key (loopback ignores it), so point a 401 at the real
             # cause — the serve.token — not the operator's key. quarry doctor
-            # now checks quarryd reachability + serve.token, so it is actionable.
+            # checks quarryd reachability + serve.token, so it is actionable.
             if LoopbackPolicy(host).is_literal_loopback:
                 return False, (
                     "Loopback authentication failed — the daemon's serve.token "

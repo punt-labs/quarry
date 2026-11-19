@@ -1,9 +1,4 @@
-"""Tests for quarry.ingestion.bulk_ingest — SafeEntrySelector and BulkIngestRunner.
-
-These give SafeEntrySelector/BulkIngestRunner direct unit coverage, closing the
-gap where they were previously only reached transitively through
-``ingest_sitemap``/``ingest_auto`` in ``tests/test_sitemap.py``.
-"""
+"""Exercise SafeEntrySelector and BulkIngestRunner directly."""
 
 from __future__ import annotations
 

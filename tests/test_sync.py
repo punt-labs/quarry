@@ -602,12 +602,10 @@ class TestIsWatchableDir:
     def test_descendant_of_a_nested_gitignore_match_is_not_watchable(
         self, tmp_path: Path
     ):
-        """Copilot finding, PR #503: a burst-created grandchild of a
-        NESTED-gitignore-matched directory must stay unwatched too --
-        checking only the immediate parent's local spec (project/logs's
-        own local_spec(project) covers "logs", but project/logs/deep's
-        own immediate parent is project/logs, which has no .gitignore of
-        its own) let a directory two levels below the match through.
+        """A burst-created directory beneath a nested gitignore match stays unwatched.
+
+        The ancestor's ``logs/`` rule must cover ``project/logs/deep`` even
+        when the immediate parent has no ``.gitignore`` of its own.
         """
         root = tmp_path / "root"
         parent = root / "project"

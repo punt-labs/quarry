@@ -166,7 +166,7 @@ def _hold_write_lock(path: Path, barrier: threading.Barrier, hold_s: float) -> N
 
 
 class TestDeregisterConcurrency:
-    """busy_timeout makes a contended deregister wait, not fail (quarry-xsz3)."""
+    """busy_timeout makes a contended deregister wait, not fail."""
 
     def test_deregister_waits_for_contended_write_lock(self, tmp_path: Path):
         path = tmp_path / "r.db"
@@ -310,7 +310,7 @@ class TestFileRecordOperations:
 
 
 class TestContentHashColumn:
-    """Coverage for the ``content_hash`` column added in quarry-272m."""
+    """Coverage for the ``content_hash`` column."""
 
     def test_files_table_schema_has_content_hash_column(self, tmp_path: Path):
         conn = SyncRegistry(tmp_path / "r.db")

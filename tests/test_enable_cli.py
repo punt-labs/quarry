@@ -190,7 +190,7 @@ class TestSkillsDepositedJsonSerializable:
     ) -> None:
         """A SkillOutcome.path is a Path; --json must still emit valid JSON.
 
-        PL-1049 follow-up: EnableResult.skills_deposited nests SkillOutcome,
+        EnableResult.skills_deposited nests SkillOutcome,
         whose path field is a pathlib.Path -- the bare dataclasses.asdict()
         default factory leaves it un-serializable and json.dump raises at the
         CLI's --json boundary (TypeError: Object of type PosixPath is not

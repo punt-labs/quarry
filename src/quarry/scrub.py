@@ -238,8 +238,8 @@ class Scrubber:
         """Apply one whole-document substitution, counting hits by the rule's category.
 
         Shared by every pass above — block secrets, line secrets, and every
-        PII/profanity rule in :attr:`_pii_rules` — each previously
-        duplicated this subn+count+return shape on its own compiled pattern.
+        PII/profanity rule in :attr:`_pii_rules` — to keep category counts
+        consistent across compiled patterns.
         """
         new_text, n = rule.pattern.subn(rule.replacement(), text)
         if n:

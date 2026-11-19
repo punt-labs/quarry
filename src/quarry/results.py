@@ -9,7 +9,7 @@ from typing import ClassVar, NotRequired, Self, TypedDict
 from quarry._sql import escape_sql
 
 # Cosine distance for a missing/uncomputable vector -> similarity -1, sinks to
-# the bottom. Single source of truth for the worst-case sentinel (quarry-gcnf).
+# the bottom. Single source of truth for the worst-case sentinel.
 WORST_CASE_DISTANCE: float = 2.0
 
 
@@ -77,7 +77,7 @@ class SearchResult:
         """Return cosine similarity in ``[-1, 1]``: ``1 - distance``, rounded.
 
         A row with the worst-case distance sinks to ``-1`` rather than
-        surfacing as a fake perfect ``1.0`` (quarry-gcnf).
+        surfacing as a fake perfect ``1.0``.
         """
         return round(1.0 - self.distance, 4)
 

@@ -416,7 +416,7 @@ class TestScorerRepoRelativeKeys:
         assert "No Python files touched" in outcome.lines[0]
 
 
-# --- extraction provenance: honest extraction vs. new debt (quarry-p50s) ---
+# --- extraction provenance: honest extraction vs. new debt ---
 
 # A baselined "god module" of free functions -- already tracked, so its own
 # method_ratio/class_to_func_ratio only ever have to not regress vs base.

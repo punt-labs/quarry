@@ -18,7 +18,7 @@ class TestSearchResultSimilarity:
 
     def test_missing_distance_sinks_to_worst_case(self):
         # A row lacking _distance defaults to distance 2.0 => similarity -1,
-        # never a fake perfect 1.0 (quarry-gcnf).
+        # never a fake perfect 1.0.
         assert SearchResult.from_row({}).similarity == -1.0
 
     def test_rounding_to_four_places(self):
