@@ -29,7 +29,7 @@ A module in layer N may import from layers 1..N-1, never from N+1.
 
 **Tooling**:
 
-- `tools/oo_coupling.py` — inspect efferent coupling targets
+- `oo-ratchet coupling` — inspect efferent coupling targets
 - Grep: `grep -rn "from.*cli import\|from.*server import\|from.*hooks import" src/*/core*`
 - LLM review: audit import headers of core modules
 
@@ -49,7 +49,7 @@ package is a tangle that should be decomposed.
 
 **Tooling**:
 
-- `tools/oo_coupling.py` — `pkg_cohesion` and `pkg_intra_density` metrics
+- `oo-ratchet coupling` — `pkg_cohesion` and `pkg_intra_density` metrics
 - LLM review: packages with zero cohesion that have 3+ modules
 
 ## PL-MD-3: Package Interface Width
@@ -68,7 +68,7 @@ specific internals.
 
 **Tooling**:
 
-- `tools/oo_coupling.py` — `pkg_interface_width` metric
+- `oo-ratchet coupling` — `pkg_interface_width` metric
 - LLM review: `__init__.py` files with large re-export lists
 
 ## PL-MD-4: Package External Dependencies
@@ -84,7 +84,7 @@ tested, or extracted without its siblings.
 
 **Tooling**:
 
-- `tools/oo_coupling.py` — `pkg_efferent_coupling` metric
+- `oo-ratchet coupling` — `pkg_efferent_coupling` metric
 
 ## PL-MD-5: No Orphan Modules
 
@@ -102,6 +102,6 @@ exists in a package but is never imported by any sibling or the
 
 **Tooling**:
 
-- LLM review: cross-reference `oo_coupling.py --threshold` output with
+- LLM review: cross-reference `oo-ratchet coupling --threshold` output with
   the package module list
-- Future: orphan detection in `oo_coupling.py`
+- Future: orphan detection in `oo-ratchet coupling`

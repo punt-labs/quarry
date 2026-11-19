@@ -25,7 +25,7 @@ LCOM = (pairs with empty intersection) / (total pairs). Range 0.0
 
 **Tooling**:
 
-- `tools/oo_coupling.py` — `max_lcom` and `avg_lcom` metrics
+- `oo-ratchet coupling` — `max_lcom` and `avg_lcom` metrics
 - LLM review: classes with LCOM > 0.5 are candidates for splitting even
   if they pass the threshold
 
@@ -50,7 +50,7 @@ class has multiple responsibilities and should be decomposed.
 **Tooling**:
 
 - LLM review: examine LCOM > 0.5 classes and identify disjoint clusters
-- Future: automated cluster detection in `oo_coupling.py`
+- Future: automated cluster detection in `oo-ratchet coupling`
 
 ## PL-CO-3: Module Cohesion
 
@@ -68,5 +68,5 @@ not a cohesive unit.
 
 **Tooling**:
 
-- `tools/oo_coupling.py` — `pkg_cohesion` metric at the package level
+- `oo-ratchet coupling` — `pkg_cohesion` metric at the package level
 - LLM review: modules with 3+ classes that don't reference each other

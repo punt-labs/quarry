@@ -121,7 +121,7 @@ brew-formula: ## Render Formula/quarry.rb from uv.lock (FORMULA_OUT=<path>, defa
 	uv run python scripts/brew_formula.py --overrides install-overrides.txt $(if $(FORMULA_OUT),--output $(FORMULA_OUT))
 
 check-oo: ## OO ratchet — touched files must not regress vs the merge-base baseline
-	uv run python tools/oo_score.py src/quarry/ --check $(OO_BASE)
+	uv run --extra dev oo-ratchet oo src/quarry/ --check $(OO_BASE)
 
 # CI-only completeness guard: every scored file must be recorded in the committed
 # baseline. Runs in CI on the post-update-oo state (code and baseline in sync);
@@ -129,19 +129,19 @@ check-oo: ## OO ratchet — touched files must not regress vs the merge-base bas
 # metric so the improved value diverges from the baseline until update-oo runs.
 # See .github/workflows/lint.yml.
 audit-oo: ## CI completeness guard — every scored file must be in the baseline
-	uv run python tools/oo_score.py src/quarry/ --audit-completeness
+	uv run --extra dev oo-ratchet oo src/quarry/ --audit-completeness
 
 update-oo: ## Update OO baseline after improvements (stage .oo-baseline.json and .oo-audit.jsonl)
-	uv run python tools/oo_score.py src/quarry/ --update $(OO_BASE)
+	uv run --extra dev oo-ratchet oo src/quarry/ --update $(OO_BASE)
 
 check-coupling: ## Coupling ratchet — merge-base scoped, touched files must not regress
-	uv run python tools/oo_coupling.py src/quarry/ --check $(COUPLING_BASE)
+	uv run --extra dev oo-ratchet coupling src/quarry/ --check $(COUPLING_BASE)
 
 update-coupling: ## Update coupling baseline (stage .oo-coupling-baseline.json and .oo-coupling-audit.jsonl)
-	uv run python tools/oo_coupling.py src/quarry/ --update $(COUPLING_BASE)
+	uv run --extra dev oo-ratchet coupling src/quarry/ --update $(COUPLING_BASE)
 
 check-suppressions: ## Suppression ratchet — base-commit scoped, count must not increase
-	uv run python tools/suppression_ratchet.py src/quarry/ --check $(SUPPRESSION_BASE)
+	uv run --extra dev oo-ratchet suppressions src/quarry/ --check $(SUPPRESSION_BASE)
 
 # DES-031 I1 client/engine boundary. A static contract over the import graph:
 # no client process (quarry.__main__/hooks/mcp_server) or client library
@@ -151,10 +151,10 @@ check-imports: ## Import-linter — enforce the DES-031 client/engine package bo
 	uv run --extra dev lint-imports --config .importlinter
 
 update-suppressions: ## Update suppression baseline after justified additions
-	uv run python tools/suppression_ratchet.py src/quarry/ --update
+	uv run --extra dev oo-ratchet suppressions src/quarry/ --update
 
 report: ## Full diagnostics (OO score + all checks, no fail-fast)
-	-uv run python tools/oo_score.py src/quarry/ --threshold
+	-uv run --extra dev oo-ratchet oo src/quarry/ --threshold
 	-uv run --extra dev mypy src/ tests/
 	-uv run --extra dev ruff format --check .
 	-uv run --extra dev ruff check --preview --select PLR6301,PLR0913,UP035,UP040,UP007,N,I,SIM,C1901,S101 .

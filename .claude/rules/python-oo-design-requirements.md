@@ -171,7 +171,7 @@ shares vocabulary or parameters with the class — operates on its types, builds
 its instances, formats its errors — it is almost certainly a missing method on
 the class.
 
-**The smell**: `oo_score.py` flags it numerically as `method_ratio < 0.8` and
+**The smell**: `oo-ratchet oo` flags it numerically as `method_ratio < 0.8` and
 `class_to_func_ratio < 0.5`. This rule names the design pattern those metrics
 detect so an author can recognize and prevent it instead of catching it after
 the fact.
@@ -262,7 +262,7 @@ class WireContext:
 
 **Tooling**:
 
-- Primary numeric: `oo_score.py` — `method_ratio >= 0.8` and
+- Primary numeric: `oo-ratchet oo` — `method_ratio >= 0.8` and
   `class_to_func_ratio >= 0.5` per file.
 - AST recipe: in any module where `count(ClassDef) >= 1`, list every
   `FunctionDef` at module scope; for each, check whether its parameter or
