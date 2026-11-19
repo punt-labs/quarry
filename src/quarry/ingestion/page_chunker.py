@@ -77,6 +77,15 @@ class PageChunker:
     ) -> Self:
         # A chunk takes up to four bytes a character.  The overlap a chunk opens
         # with is counted inside max_chars, so max_chars alone must fit the cap.
+        """Configure sentence packing within page, chunk, and label byte budgets.
+
+        Args:
+            max_chars: Maximum characters per chunk, including overlap.
+            overlap_chars: Trailing characters carried into the next chunk.
+
+        Raises:
+            ValueError: Chunk size, overlap, or labels violate the row budget.
+        """
         if max_chars > budget.max_chunk_chars:
             msg = (
                 f"chunk size {max_chars} characters can exceed the "

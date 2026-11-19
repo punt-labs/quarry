@@ -39,7 +39,6 @@ class MetaRoutes(RouteGroup):
         Auth-exempt so the client can fetch it before login.
         Returns 404 with JSON error if no cert file exists.
         """
-
         ca_path = QuarryHome.daemon_ca()
         if not ca_path.exists():
             return JSONResponse(
@@ -52,6 +51,7 @@ class MetaRoutes(RouteGroup):
         )
 
     def status(self, request: Request) -> JSONResponse:
+        """Authenticate and report the daemon's live storage and engine status."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

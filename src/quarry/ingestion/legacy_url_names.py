@@ -53,6 +53,7 @@ class LegacyUrlNames:
     _lock: threading.Lock
 
     def __new__(cls, database: Database) -> Self:
+        """Start an empty, lock-protected cache of stored URL names."""
         self = super().__new__(cls)
         self._database = database
         self._listed = {}

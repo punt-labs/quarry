@@ -172,6 +172,7 @@ class CaptureRoutes(ContentRouteGroup):
         )
 
     async def push(self, request: Request) -> JSONResponse:
+        """Authenticate and push capture shadows with per-repo outcomes."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

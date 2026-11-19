@@ -49,6 +49,11 @@ class BoundedScan:
     _stop: StopSignal
 
     def __new__(cls, stop: StopSignal, bound_s: float) -> Self:
+        """Bind cooperative scan cancellation to a bounded shutdown wait.
+
+        Args:
+            bound_s: Maximum seconds to wait after signalling the scan to stop.
+        """
         self = super().__new__(cls)
         self._stop = stop
         self._bound_s = bound_s

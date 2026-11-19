@@ -31,6 +31,7 @@ class ChunkStore:
     _writer: ChunkWriter
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Share a database connection with the chunk-and-page writer."""
         self = super().__new__(cls)
         self._db = db
         self._writer = ChunkWriter(db)

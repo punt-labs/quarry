@@ -39,6 +39,11 @@ class DaemonLauncher:
     _options: BindOptions
 
     def __new__(cls, options: BindOptions) -> Self:
+        """Normalize bind options before constructing or starting a server.
+
+        Raises:
+            ValueError: The requested bind options are invalid.
+        """
         self = super().__new__(cls)
         self._options = options.normalized()
         return self

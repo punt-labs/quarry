@@ -163,8 +163,7 @@ class ScrubbedIngestJob:
         return self._stored_name()
 
     def _stored_name(self) -> str:
-        """Return the one derivation the store uses, so a refusal, a re-fetch and a
-        skip all name the same document."""
+        """Derive the same stored document name for refusals, re-fetches, and skips."""
         return self.labels.stored_name(
             self.name, self._scrubbed, url_sourced=self.url_sourced
         )

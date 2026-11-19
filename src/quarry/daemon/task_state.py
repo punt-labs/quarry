@@ -85,6 +85,15 @@ class TaskState:
         created_at: float | None = None,  # None: the task is created now
         claim: Claim | None = None,  # None: the task owns a fresh lock
     ) -> Self:
+        """Start a nonterminal task with empty results and optional ownership.
+
+        Args:
+            created_at: Monotonic creation time; None samples the clock.
+            claim: Shared owner lock; None creates an independent lock.
+
+        Raises:
+            ValueError: The initial status is already terminal.
+        """
         if status in TERMINAL_STATUSES:
             msg = f"task {task_id} cannot begin {status}: use complete() or fail()"
             raise ValueError(msg)

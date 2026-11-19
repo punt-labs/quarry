@@ -26,6 +26,7 @@ class PlainFlushTarget:
     _store: ChunkStore
 
     def __new__(cls, store: ChunkStore) -> Self:
+        """Bind progressive chunk writes to a store without registry checkpoints."""
         self = super().__new__(cls)
         self._store = store
         return self
@@ -33,9 +34,11 @@ class PlainFlushTarget:
     def build_records(
         self, chunks: list[Chunk], vectors: NDArray[np.float32]
     ) -> list[dict[str, object]]:
+        """Serialize chunks with their aligned embedding rows."""
         return ChunkTable.build_records(chunks, vectors)
 
     def insert_records(self, records: list[dict[str, object]]) -> int:
+        """Persist prepared chunk records and report the inserted count."""
         return self._store.insert_records(records)
 
     def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None:

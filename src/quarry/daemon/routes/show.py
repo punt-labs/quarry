@@ -15,6 +15,7 @@ class ShowRoutes(RouteGroup):
     """Serve document show — page text when ``page >= 1``, else metadata."""
 
     def show(self, request: Request) -> JSONResponse:
+        """Authenticate and return document metadata or one stored page."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

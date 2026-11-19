@@ -61,6 +61,7 @@ class QueuedJob:
     _state: TaskState
 
     def __new__(cls, call: ThreadCall, queued: QueuedIngest) -> Self:
+        """Allocate a task state for a transcript before submitting its work."""
         self = super().__new__(cls)
         self._call = call
         self._queued = queued

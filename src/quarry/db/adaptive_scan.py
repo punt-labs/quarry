@@ -31,6 +31,14 @@ class AdaptiveScan:
     _start: int
 
     def __new__(cls, table: LanceTable, columns: list[str], *, start: int) -> Self:
+        """Select scan columns and a positive initial batch size.
+
+        Args:
+            start: Initial rows per read; failed reads halve this batch size.
+
+        Raises:
+            ValueError: The initial batch size is less than one.
+        """
         if start < 1:
             msg = f"start must be >= 1, got {start}"
             raise ValueError(msg)

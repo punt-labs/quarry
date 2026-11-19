@@ -78,6 +78,7 @@ class WatchRoster:
         active_database: Database,
         base_settings: Settings,
     ) -> Self:
+        """Seed the watch roster with a borrowed active database connection."""
         self = super().__new__(cls)
         self._source = source
         self._active_db = active_db

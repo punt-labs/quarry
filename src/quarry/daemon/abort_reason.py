@@ -63,6 +63,7 @@ class AbortReason:
     _spool: JobSpool
 
     def __new__(cls, spool: JobSpool) -> Self:
+        """Bind recovery explanations to the spool that preserves aborted work."""
         self = super().__new__(cls)
         self._spool = spool
         return self

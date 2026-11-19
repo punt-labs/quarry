@@ -50,6 +50,7 @@ class SingleFileFlushTarget:
         registry: SyncRegistry,
         meta: FileMeta,
     ) -> Self:
+        """Bind flushed rows and resume checkpoints to one file's metadata."""
         self = super().__new__(cls)
         self._indexer = indexer
         self._store = store

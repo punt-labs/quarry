@@ -16,6 +16,7 @@ class DocumentRoutes(RouteGroup):
     """Serve document listing and async deletion."""
 
     def documents(self, request: Request) -> JSONResponse:
+        """Authenticate and list documents, optionally scoped by collection."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

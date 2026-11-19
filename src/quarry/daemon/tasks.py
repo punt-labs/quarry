@@ -35,6 +35,7 @@ class TaskRegistry:
     _refs: dict[str, asyncio.Task[None]]
 
     def __new__(cls) -> Self:
+        """Start an empty registry of task states and live task references."""
         self = super().__new__(cls)
         self._states = {}
         self._refs = {}

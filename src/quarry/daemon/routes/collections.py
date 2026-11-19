@@ -16,6 +16,7 @@ class CollectionRoutes(RouteGroup):
     """Serve collection listing and async deletion."""
 
     def collections(self, request: Request) -> JSONResponse:
+        """Authenticate and list stored collections with their aggregate count."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

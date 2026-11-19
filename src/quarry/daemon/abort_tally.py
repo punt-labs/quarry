@@ -51,6 +51,7 @@ class AbortTally:
     _ledger: dict[int, tuple[object, AbortTerm]]
 
     def __new__(cls) -> Self:
+        """Start an empty ledger with no jobs assigned to terminal outcomes."""
         self = super().__new__(cls)
         self._ledger = {}
         return self

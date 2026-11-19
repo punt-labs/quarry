@@ -67,6 +67,11 @@ class StoreRun:
         state: TaskState,
         call: Callable[[], Settlement],
     ) -> Self:
+        """Schedule a store call and track its eventual settlement on the event loop.
+
+        Raises:
+            RuntimeError: No usable event loop is available for scheduling the store.
+        """
         self = super().__new__(cls)
         self._detached = False
         self._label = (

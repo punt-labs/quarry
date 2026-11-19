@@ -74,10 +74,12 @@ class ServeConfig:
 
     @property
     def tls_enabled(self) -> bool:
+        """Indicate whether both certificate and private-key paths are configured."""
         return self.ssl_certfile is not None and self.ssl_keyfile is not None
 
     @property
     def scheme(self) -> str:
+        """Choose https for a TLS bind and http otherwise."""
         return "https" if self.tls_enabled else "http"
 
 
@@ -92,6 +94,11 @@ class DaemonServer:
     _lock_fd: int
 
     def __new__(cls, settings: Settings, config: ServeConfig) -> Self:
+        """Validate authentication and prepare an unbound server.
+
+        Raises:
+            ValueError: A non-loopback bind lacks a required API key.
+        """
         config = cls._authenticated(config)
         self = super().__new__(cls)
         self._settings = settings

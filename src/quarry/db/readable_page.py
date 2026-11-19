@@ -30,6 +30,7 @@ class ReadablePage:
     _pages: PageStore
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Pair page storage with chunk checks that control page visibility."""
         self = super().__new__(cls)
         self._db = db
         self._pages = PageStore(db)

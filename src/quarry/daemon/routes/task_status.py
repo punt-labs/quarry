@@ -15,6 +15,7 @@ class TaskStatusRoutes(RouteGroup):
     """Serve task status — running, completed (+results), or failed."""
 
     def status(self, request: Request) -> JSONResponse:
+        """Authenticate and report task state, or 404 for an unknown ID."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

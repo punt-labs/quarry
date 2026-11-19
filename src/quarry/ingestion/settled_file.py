@@ -32,6 +32,7 @@ class SettledFile:
     _registry: SyncRegistry
 
     def __new__(cls, registry: SyncRegistry) -> Self:
+        """Bind unchanged-file decisions to the registry used for re-stamping."""
         self = super().__new__(cls)
         self._registry = registry
         return self

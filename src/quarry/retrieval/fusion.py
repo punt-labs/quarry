@@ -36,6 +36,7 @@ class RrfFusion:
     _lesson_boost: float
 
     def __new__(cls, rrf_k: int, decay_rate: float, lesson_boost: float = 1.0) -> Self:
+        """Configure rank smoothing, recency decay, and lesson weighting for fusion."""
         self = super().__new__(cls)
         self._rrf_k = rrf_k
         self._decay_rate = decay_rate

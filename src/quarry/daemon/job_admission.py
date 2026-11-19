@@ -33,6 +33,12 @@ class JobAdmission:
     _timeout_s: float
 
     def __new__(cls, ctx: DaemonContext, timeout_s: float, reserve: int) -> Self:
+        """Configure a producer's admission deadline and reserved queue capacity.
+
+        Args:
+            timeout_s: Maximum seconds to wait for room.
+            reserve: Queue slots to leave free for other producers.
+        """
         self = super().__new__(cls)
         self._ctx = ctx
         self._timeout_s = timeout_s

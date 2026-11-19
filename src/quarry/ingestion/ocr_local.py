@@ -55,6 +55,7 @@ class LocalOcrBackend:
     _warned_unavailable: ClassVar[bool] = False
 
     def __new__(cls, settings: Settings) -> Self:
+        """Bind OCR execution to settings without loading a model."""
         self = super().__new__(cls)
         self._settings = settings
         return self

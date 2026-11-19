@@ -36,6 +36,7 @@ class RouteGroup:
     _ctx: DaemonContext
 
     def __new__(cls, ctx: DaemonContext) -> Self:
+        """Share the daemon context across handlers in one route group."""
         self = super().__new__(cls)
         self._ctx = ctx
         return self

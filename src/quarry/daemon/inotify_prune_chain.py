@@ -106,6 +106,11 @@ class PrunedInotifyEmitter(InotifyEmitter):
     """An ``InotifyEmitter`` whose thread builds a :class:`PrunedInotifyBuffer`."""
 
     def on_thread_start(self) -> None:
+        """Initialize the ignore-pruned buffer before the emitter starts reading.
+
+        Raises:
+            OSError: The kernel cannot allocate an inotify instance or its watches.
+        """
         path = os.fsencode(self.watch.path)
         event_mask = self.get_event_mask_from_filter()
         self._inotify = PrunedInotifyBuffer.create(

@@ -37,6 +37,7 @@ class DocumentStreamer:
     _settings: Settings
 
     def __new__(cls, settings: Settings) -> Self:
+        """Bind bounded embedding windows to the ingest settings."""
         self = super().__new__(cls)
         self._settings = settings
         return self

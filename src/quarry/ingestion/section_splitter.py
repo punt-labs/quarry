@@ -31,6 +31,7 @@ class SectionSplitter:
     _comments_are_content: bool
 
     def __new__(cls, boundary: re.Pattern[str], *, comments_are_content: bool) -> Self:
+        """Choose section boundaries and whether comment-only parts count as content."""
         self = super().__new__(cls)
         self._boundary = boundary
         self._comments_are_content = comments_are_content

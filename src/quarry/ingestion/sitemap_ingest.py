@@ -48,9 +48,7 @@ class SitemapResult(TypedDict):
 
 @final
 class SitemapIngest:
-    """Sitemap-driven and auto-discovered bulk URL ingestion, funneled through
-    :class:`BulkIngestRunner`.
-    """
+    """Coordinate sitemap discovery and URL ingestion through BulkIngestRunner."""
 
     @staticmethod
     def _bulk_ingest_entries(

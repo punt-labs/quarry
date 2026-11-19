@@ -116,6 +116,7 @@ class SingleFileIndexer:
         collection: str,
         resolved: Path,
     ) -> Self:
+        """Bind one-file indexing to shared stores, settings, and a registered root."""
         self = super().__new__(cls)
         self._store = store
         self._registry = registry

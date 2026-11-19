@@ -29,6 +29,7 @@ class SpreadsheetExtractor:
     _max_chars: int
 
     def __new__(cls, *, max_chars: int = 1800) -> Self:
+        """Choose the character budget for grouping spreadsheet content."""
         self = super().__new__(cls)
         self._max_chars = max_chars
         return self

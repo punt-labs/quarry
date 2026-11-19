@@ -30,6 +30,11 @@ INGEST_DRAIN_MAX_S: Final[float] = 300.0
 
 
 class Settings(BaseSettings):
+    """Configure storage, embedding, queue, and watch policies from environment sources.
+
+    Invalid constrained values raise pydantic.ValidationError at construction.
+    """
+
     quarry_root: Path = Field(default_factory=QuarryHome.data_root)
     lancedb_path: Path = Field(
         default_factory=QuarryHome.under_root("default", "lancedb")

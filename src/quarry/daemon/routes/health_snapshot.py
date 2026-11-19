@@ -24,6 +24,7 @@ class HealthSnapshot:
     _state: str
 
     def __new__(cls, *, uptime_seconds: float, state: str) -> Self:
+        """Freeze uptime and readiness for one health response."""
         self = super().__new__(cls)
         self._uptime_seconds = uptime_seconds
         self._state = state

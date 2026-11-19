@@ -39,6 +39,7 @@ class TaskDrain:
     _tasks: list[asyncio.Task[None]]
 
     def __new__(cls, tasks: list[asyncio.Task[None]]) -> Self:
+        """Retain the tasks to drain without waiting for or cancelling them."""
         self = super().__new__(cls)
         self._tasks = tasks
         return self

@@ -98,6 +98,7 @@ class JobLifecycle:
     _state: TaskState
 
     def __new__(cls, state: TaskState) -> Self:
+        """Bind all queued-job transitions to one mutable task state."""
         self = super().__new__(cls)
         self._state = state
         return self

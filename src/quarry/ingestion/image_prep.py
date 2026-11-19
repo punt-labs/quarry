@@ -33,6 +33,11 @@ class ImagePreparer:
     def __new__(
         cls, image_path: Path, *, needs_conversion: bool, max_bytes: int = 0
     ) -> Self:
+        """Bind an image path to its conversion policy and optional byte cap.
+
+        Args:
+            max_bytes: Encoded byte limit; zero disables downscaling to a size limit.
+        """
         self = super().__new__(cls)
         self._image_path = image_path
         self._needs_conversion = needs_conversion

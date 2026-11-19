@@ -48,6 +48,7 @@ class OcrAvailability:
     def __new__(
         cls, *, available: bool, reason: str, cause: BaseException | None = None
     ) -> Self:
+        """Freeze an OCR probe outcome and its optional underlying failure."""
         self = super().__new__(cls)
         self._available = available
         self._reason = reason

@@ -57,6 +57,7 @@ class InsightsBuilder:
     _query_log: QueryLog
 
     def __new__(cls, database: Database, query_log: QueryLog) -> Self:
+        """Bind recall telemetry to the query log and searchable database."""
         self = super().__new__(cls)
         self._database = database
         self._query_log = query_log

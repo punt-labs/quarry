@@ -66,7 +66,9 @@ _PRUNED_WD = -2
 
 
 class PrunedDirectoryError(OSError):
-    """Raised by :meth:`PrunedInotify._add_watch` for a directory the shared
+    """Signal that a directory is excluded by the shared ignore rules.
+
+    Raised by :meth:`PrunedInotify._add_watch` for a directory the shared
     ignore spec prunes -- a plain ``OSError`` subclass so every existing
     watchdog call site that already tolerates a per-directory ``OSError``
     (the auto-add path's ``except OSError: continue``, ``_recursive_simulate``'s
@@ -107,6 +109,7 @@ class PrunedInotify(Inotify):
         # recursive/event_mask are unused here but MUST stay in the signature:
         # type.__call__ passes the constructor's args to both __new__ and the
         # automatically-invoked inherited __init__ (see the class docstring).
+        """Prepare root-specific ignores before watchdog initializes watches."""
         del recursive, event_mask
         self = super().__new__(cls)
         self._root = Path(os.fsdecode(path))

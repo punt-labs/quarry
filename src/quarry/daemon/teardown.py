@@ -55,6 +55,7 @@ class Teardown:
     _ctx: DaemonContext
 
     def __new__(cls, ctx: DaemonContext) -> Self:
+        """Bind ordered shutdown steps to one daemon context."""
         self = super().__new__(cls)
         self._ctx = ctx
         return self

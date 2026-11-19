@@ -33,6 +33,7 @@ class ChunkTable:
     _db: LanceDB
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Bind lazy chunk-table creation and migration to an open database."""
         self = super().__new__(cls)
         self._db = db
         return self

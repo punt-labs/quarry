@@ -74,6 +74,7 @@ class RecyclingTable:
     _conn: LanceConnection
 
     def __new__(cls, table: LanceTable, conn: LanceConnection) -> Self:
+        """Wrap a table so index rebuilds count toward connection recycling."""
         self = super().__new__(cls)
         self._table = table
         self._conn = conn
@@ -168,6 +169,15 @@ class LanceConnection:
         *,
         recycle_after: int = _DEFAULT_RECYCLE_AFTER,
     ) -> Self:
+        """Open a database connection and initialize its rebuild recycle gate.
+
+        Args:
+            connect: Factory used both for the initial connection and later reopenings.
+            recycle_after: Index rebuild count that arms connection recycling.
+
+        Raises:
+            OSError: The database connection factory cannot access its storage.
+        """
         self = super().__new__(cls)
         self._connect = connect
         self._inner = connect()

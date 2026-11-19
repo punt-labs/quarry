@@ -133,6 +133,7 @@ class RouteTable:
     _ctx: DaemonContext
 
     def __new__(cls, ctx: DaemonContext) -> Self:
+        """Bind REST route assembly to the daemon context."""
         self = super().__new__(cls)
         self._ctx = ctx
         return self

@@ -32,6 +32,7 @@ class LegacyTwins:
     _database: Database
 
     def __new__(cls, names: LegacyUrlNames, database: Database) -> Self:
+        """Pair canonical-name tracking with the database used to delete twins."""
         self = super().__new__(cls)
         self._names = names
         self._database = database

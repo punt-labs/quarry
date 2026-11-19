@@ -143,7 +143,10 @@ class WebIngest:
         progress: Progress,
         context: IngestContext,
     ) -> IngestResult:
-        """Fetch a URL, extract text from HTML, chunk, embed, store.
+        """Fetch a URL, extract its text, and store searchable chunks.
+
+        The declared fetch, media-type, and row-budget failures all derive from
+        UnindexableContentError.
 
         Args:
             request: The URL, fetch overrides, scrub hook, and prefetch reuse.
@@ -151,13 +154,12 @@ class WebIngest:
             context: Shared database/settings/collection/memory-tag knobs.
 
         Returns:
-            Dict with ingestion results.
+            Ingest counts and document identity for the completed store or skip.
 
         Raises:
             FetchRefusedError: The fetch failed or was refused.
             UnsupportedContentError: The media type is not text.
             RowBudgetError: A row exceeds the budget.
-            (All three are ``UnindexableContentError``.)
         """
         meta_url = WebIngest._meta_url(request)
         document_name = request.document_name or meta_url

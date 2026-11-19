@@ -37,6 +37,7 @@ class HybridRetriever:
     _fusion: RrfFusion
 
     def __new__(cls, database: Database, config: RetrievalConfig) -> Self:
+        """Bind vector and full-text retrieval to one database and fusion policy."""
         self = super().__new__(cls)
         self._database = database
         self._config = config

@@ -37,6 +37,7 @@ class PageReport:
     _url: str
 
     def __new__(cls, page_url: HttpUrl) -> Self:
+        """Retain the crawled URL for redacted names and safe failure reporting."""
         self = super().__new__(cls)
         self._url = str(page_url)
         return self

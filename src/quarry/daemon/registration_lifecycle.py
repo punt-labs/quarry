@@ -36,6 +36,7 @@ class RegistrationLifecycle:
     _ctx: DaemonContext
 
     def __new__(cls, ctx: DaemonContext) -> Self:
+        """Share registry, watch, and purge operations through one daemon context."""
         self = super().__new__(cls)
         self._ctx = ctx
         return self

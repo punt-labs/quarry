@@ -111,6 +111,7 @@ class CodeExtractor:
     """
 
     def __new__(cls) -> Self:
+        """Create a stateless source extractor; load parsers only when extracting."""
         return super().__new__(cls)
 
     def extract_pages(

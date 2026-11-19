@@ -51,6 +51,12 @@ class PdfFormatStrategy:
         document_name: str,
         progress: Progress,
     ) -> ExtractedDocument:
+        """Analyze and extract PDF pages, including OCR, and tally text/image pages.
+
+        Raises:
+            OSError: The PDF cannot be opened or read.
+            ValueError: The document cannot be interpreted as a supported PDF.
+        """
         progress("Analyzing: %s", document_name)
         extractor = PdfExtractor(settings, self._ocr)
         all_pages = extractor.extract_pages(file_path, document_name=document_name)
@@ -87,6 +93,12 @@ class ImageFormatStrategy:
         document_name: str,
         progress: Progress,
     ) -> ExtractedDocument:
+        """Analyze an image and OCR its pages with format and page-count statistics.
+
+        Raises:
+            OSError: The image cannot be opened or decoded.
+            ValueError: Its format is unsupported by the selected OCR backend.
+        """
         progress("Analyzing image: %s", document_name)
         analysis = ImageExtractor.analyze(file_path)
         progress(
@@ -145,6 +157,12 @@ class TextLikeStrategy:
         document_name: str,
         progress: Progress,
     ) -> ExtractedDocument:
+        """Extract logical text units and attach suffix-specific ingest statistics.
+
+        Raises:
+            OSError: The source cannot be opened or read.
+            ValueError: The selected format loader rejects the source.
+        """
         progress("%s: %s", self._fmt.read_verb, document_name)
         pages = self._fmt.extract(settings, file_path, document_name)
         progress("%s: %d", self._fmt.unit_label, len(pages))

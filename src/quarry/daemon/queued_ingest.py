@@ -73,6 +73,7 @@ class QueuedIngest:
         kind: str,
         policy: QueuePolicy = DEFAULT_QUEUE_POLICY,
     ) -> Self:
+        """Bind submission and admission waits to one job kind and queue policy."""
         self = super().__new__(cls)
         self._ctx = ctx
         self._kind = kind

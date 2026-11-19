@@ -86,7 +86,7 @@ class PageSplitter:
     def _renumbered(
         self, pages: list[PageContent], flat: list[tuple[PageContent, str]]
     ) -> list[PageContent]:
-        """Number the section parts in order, leaving paginated pages as they are."""
+        """Renumber section parts in order without changing physical page numbers."""
         claimed = self._claimed(pages)
         free = (n for n in count(1) if n not in claimed)
         return [

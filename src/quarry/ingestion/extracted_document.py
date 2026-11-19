@@ -33,4 +33,11 @@ class FormatStrategy(Protocol):
         document_name: str,
         progress: Progress,
         /,
-    ) -> ExtractedDocument: ...
+    ) -> ExtractedDocument:
+        """Extract logical pages and ingest statistics for a supported source.
+
+        Raises:
+            OSError: The source cannot be opened or decoded.
+            ValueError: The selected format loader rejects the source.
+        """
+        ...

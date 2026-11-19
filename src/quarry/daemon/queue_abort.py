@@ -31,6 +31,11 @@ class QueueAbort:
     _workers: list[CollectionWorker]
 
     def __new__(cls, workers: list[CollectionWorker], wait_s: float) -> Self:
+        """Select workers and a bounded abort wait without cancelling them.
+
+        Args:
+            wait_s: Maximum seconds to wait for workers during the abort.
+        """
         self = super().__new__(cls)
         self._workers = workers
         self._wait_s = wait_s

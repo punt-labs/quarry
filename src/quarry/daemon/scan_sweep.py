@@ -44,6 +44,7 @@ class ScanSweep:
     _collections: int
 
     def __new__(cls, submitter: WatchSubmitter) -> Self:
+        """Start an empty scan batch with no databases awaiting finalization."""
         self = super().__new__(cls)
         self._submitter = submitter
         self._states = []

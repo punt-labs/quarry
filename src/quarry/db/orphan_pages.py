@@ -38,6 +38,7 @@ class OrphanPageSweep:
     _pages: PageStore
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Share a database connection with the orphaned-page store."""
         self = super().__new__(cls)
         self._db = db
         self._pages = PageStore(db)

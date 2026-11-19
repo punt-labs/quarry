@@ -47,6 +47,13 @@ class DaemonContext:
         # Threaded into QuarryResources so warm() and queries both honor it.
         embedder: EmbeddingBackend | None = None,
     ) -> Self:
+        """Assemble lazy resources and loop-free queue and watch state.
+
+        Args:
+            api_key: Remote bearer credential; None leaves it unset.
+            cors_origins: Allowed origins; an empty set uses the built-in defaults.
+            embedder: Optional backend shared by warmup and queries instead of ONNX.
+        """
         self = super().__new__(cls)
         self._resources = QuarryResources(settings, embedder=embedder)
         self._api_key = api_key
@@ -64,14 +71,17 @@ class DaemonContext:
 
     @property
     def api_key(self) -> str | None:
+        """Expose the configured remote bearer credential, if any."""
         return self._api_key
 
     @property
     def cors_origins(self) -> frozenset[str]:
+        """Expose the origins admitted by the daemon's CORS policy."""
         return self._cors_origins
 
     @property
     def tasks(self) -> TaskRegistry:
+        """Expose the resident registry of background-task states."""
         return self._tasks
 
     @property
@@ -109,18 +119,22 @@ class DaemonContext:
 
     @property
     def database(self) -> Database:
+        """Open the daemon's write connection lazily on first access."""
         return self._resources.database
 
     @property
     def query_database(self) -> Database:
+        """Open a separate query connection lazily on first access."""
         return self._resources.query_database
 
     @property
     def embedder(self) -> EmbeddingBackend:
+        """Load the shared embedding backend lazily on first access."""
         return self._resources.embedder
 
     @property
     def settings(self) -> Settings:
+        """Expose the settings shared by routes and background workers."""
         return self._resources.settings
 
     @property

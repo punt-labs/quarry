@@ -161,6 +161,16 @@ class WatchdogSource:
     def __new__(
         cls, *, use_polling: bool = False, poll_interval_s: float = 2.0
     ) -> Self:
+        """Build and start a filesystem observer immediately.
+
+        Args:
+            use_polling: Use polling instead of the platform's native observer.
+            poll_interval_s: Seconds between scans when polling is selected.
+
+        Raises:
+            OSError: The observer cannot allocate its thread or filesystem resources.
+            RuntimeError: The observer thread cannot be started.
+        """
         self = super().__new__(cls)
         observer = cls._build_observer(
             use_polling=use_polling, poll_interval_s=poll_interval_s

@@ -59,6 +59,7 @@ class WatchSubmitter:
     def __new__(
         cls, ctx: DaemonContext, roster: WatchRoster, loop: asyncio.AbstractEventLoop
     ) -> Self:
+        """Bind watch submissions to the roster, retry timers, and finalize throttle."""
         self = super().__new__(cls)
         self._ctx = ctx
         self._roster = roster
