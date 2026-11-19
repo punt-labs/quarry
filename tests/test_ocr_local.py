@@ -102,6 +102,44 @@ class TestRenderPdfPage:
         assert isinstance(img3, Image.Image)
 
 
+class TestOcrDocumentFormat:
+    @pytest.mark.parametrize(
+        "suffix", [".pdf", ".PDF", ".tif", ".TIF", ".tiff", ".TIFF"]
+    )
+    @pytest.mark.parametrize("page_numbers", [[], [1]])
+    def test_supported_formats(
+        self, tmp_path: Path, suffix: str, page_numbers: list[int]
+    ) -> None:
+        if suffix.lower() == ".pdf":
+            path = _create_pdf(tmp_path, "scan")
+        else:
+            path = _create_tiff(tmp_path)
+        path = path.rename(tmp_path / f"scan{suffix}")
+        engine = MagicMock(return_value=_mock_ocr_result(["text"]))
+
+        with patch.object(OcrEngine, "get", return_value=engine):
+            pages = LocalOcrBackend(_settings()).ocr_document(path, page_numbers, 1)
+
+        assert [page.text for page in pages] == ["text"] * len(page_numbers)
+        assert engine.call_count == len(page_numbers)
+
+    @pytest.mark.parametrize("filename", ["scan", "scan.PNG"])
+    def test_invalid_format_rejected_before_engine_lookup(
+        self, tmp_path: Path, filename: str
+    ) -> None:
+        path = tmp_path / filename
+        with (
+            patch.object(OcrEngine, "get") as lookup,
+            pytest.raises(ValueError) as exc_info,
+        ):
+            LocalOcrBackend(_settings()).ocr_document(path, [], 0)
+
+        assert str(exc_info.value) == (
+            f"Unsupported document type for OCR: '{path.suffix.lower()}'"
+        )
+        lookup.assert_not_called()
+
+
 class TestLocalOcrBackendPdf:
     def test_returns_page_content_per_page(self, tmp_path: Path) -> None:
         pdf_path = _create_pdf(tmp_path, "hello", num_pages=3)

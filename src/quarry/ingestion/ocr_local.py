@@ -16,7 +16,6 @@ from quarry.config import Settings
 from quarry.ingestion.ocr_engine import (
     OCR_UNAVAILABLE,
     OcrEngine,
-    OcrEngineProtocol,
     OcrResult,
 )
 from quarry.models import PageContent, PageType
@@ -32,11 +31,13 @@ class OcrJob:
     total_pages: int
     document_name: str
     document_path: str
+    suffix: str
 
-
-def get_engine() -> OcrEngineProtocol:
-    """Return the process-wide cached RapidOCR engine (see :class:`OcrEngine`)."""
-    return OcrEngine.get()
+    def validate_format(self) -> None:
+        """Reject document formats unsupported by the OCR backend."""
+        if self.suffix not in (".tif", ".tiff", ".pdf"):
+            msg = f"Unsupported document type for OCR: '{self.suffix}'"
+            raise ValueError(msg)
 
 
 class LocalOcrBackend:
@@ -77,13 +78,11 @@ class LocalOcrBackend:
             total_pages=total_pages,
             document_name=document_name or document_path.name,
             document_path=str(document_path.resolve()),
+            suffix=document_path.suffix.lower(),
         )
-        suffix = document_path.suffix.lower()
-        if suffix not in (".tif", ".tiff", ".pdf"):
-            msg = f"Unsupported document type for OCR: '{suffix}'"
-            raise ValueError(msg)
+        job.validate_format()
         try:
-            if suffix in (".tif", ".tiff"):
+            if job.suffix in (".tif", ".tiff"):
                 return self._ocr_tiff(document_path, job)
             return self._ocr_pdf(document_path, job)
         except OCR_UNAVAILABLE as exc:
