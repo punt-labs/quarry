@@ -61,9 +61,9 @@ class MissionTools:
             force: Re-file rounds the daemon already holds (matching key only).
 
         Returns:
-            A report of filed/skipped rounds and per-round daemon failures. Dry-run
-            reports proposed writes only. Failures outside round processing return
-            Error: ... text; connection failures there include recovery guidance.
+            A report of filed/skipped rounds, scan errors (including missing missions),
+            and per-round daemon failures; dry-run reports proposed writes only.
+            Uncaught errors return Error: ...; connection errors add recovery guidance.
         """
         outcome = MissionMemorySync.for_repo(
             Path.cwd(),
