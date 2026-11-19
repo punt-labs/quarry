@@ -29,9 +29,23 @@ test-slow: ## Run the slow tier (real-TLS/live-server smokes)
 #
 # When adding a target, the test is not "is this a gate" but "does this command
 # name a binary from the dev extra".  If it does, it takes the flag.
-lint: lint-docs lint-slash-mcp lint-hook-mcp-matcher ## Lint and format check
+lint: lint-docs lint-slash-mcp lint-hook-mcp-matcher check-comments check-docstrings ## Lint and format check
 	uv run --extra dev ruff check .
 	uv run --extra dev ruff format --check .
+
+.PHONY: check-comments check-docstrings build-api-docs
+
+check-comments: ## Reject commented-out code and tracker references in Python prose
+	uv run --extra dev ruff check --select ERA001 .
+	uv run --extra dev python tools/check_python_docs.py comments src tests tools
+
+check-docstrings: ## Check public Python docstrings and documented argument names
+	uv run --extra dev ruff check --select D,D401 --ignore D105,D107,D417 src/
+	uv run --extra dev python tools/check_python_docs.py docstrings src/
+
+build-api-docs: ## Build and verify the generated Python API reference
+	uv run --extra dev --extra docs mkdocs build --strict
+	uv run --extra dev python tools/check_python_docs.py api .tmp/api-site/objects.inv
 
 lint-docs: ## Lint markdown files (matches CI docs job)
 	npx markdownlint-cli2 "**/*.md"

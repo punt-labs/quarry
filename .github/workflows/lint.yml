@@ -86,6 +86,7 @@ jobs:
           fi
           ./scripts/check-readme-install-sha.sh
       - run: uv sync --frozen --extra dev
+      - run: make check-comments check-docstrings
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/ tests/
