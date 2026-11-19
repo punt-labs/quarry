@@ -10,8 +10,10 @@ raises so the re-scrub gate aborts rather than committing a blob it never
 verified.  ``parent_tracked_captures``: a failed ``git ls-files`` raises so
 bootstrap refuses and doctor flags an unverifiable state rather than reading a
 blind enumeration as "the parent tracks nothing".  The
-allowlist .gitignore, parent-tracking/ignore checks, and visibility enforcement
-live here; CaptureSync sequences them around the commit-time re-scrub gate.
+security-load-bearing choices — the
+allowlist ``.gitignore``, the refusal of a parent-tracked or non-ignored captures
+dir, and visibility enforcement — live here; ``CaptureSync`` sequences them
+around the commit-time re-scrub gate.
 """
 
 from __future__ import annotations

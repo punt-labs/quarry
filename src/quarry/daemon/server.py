@@ -1,9 +1,12 @@
 """The daemon process: warm the engine, then serve over uvicorn.
 
-The quarryd launcher supplies ServeConfig to DaemonServer, which warms the
-engine single-threaded before accepting traffic. After binding successfully it
-writes serve.port (including the chosen ephemeral port) and serve.token (the
-loopback bearer) beside the data directory.
+The daemon is started via the ``quarryd`` entry point / :class:`DaemonLauncher`,
+which bundles the bind options into a :class:`ServeConfig` and drives a
+:class:`DaemonServer`.  The server warms the engine single-threaded
+before accepting traffic, then --- only after a successful bind --- writes both
+sidecars beside the data dir: ``serve.port`` (so ephemeral-port ``port=0``
+callers can discover the bound port) and ``serve.token`` (the loopback bearer
+clients present to authenticate).
 """
 
 from __future__ import annotations
@@ -41,8 +44,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Import without fcntl on non-POSIX platforms, but refuse daemon startup there:
-# exclusive run-directory ownership requires its filesystem lock.
+# ``fcntl`` is POSIX-only and absent on non-POSIX platforms (e.g. Windows).
+# Import it optionally so ``import quarry.daemon.server`` (and the ``quarryd``
+# console script) never crashes at import there for callers that never start the
+# daemon.  ``None`` = platform without fcntl; a daemon start on such a platform
+# fails closed with a clear message because the run-dir lock — the daemon's
+# exclusive-ownership guarantee — cannot be provided without it.
 fcntl: ModuleType | None
 try:
     fcntl = importlib.import_module("fcntl")
