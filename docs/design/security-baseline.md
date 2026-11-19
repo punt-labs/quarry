@@ -53,7 +53,7 @@ says nothing about it, and the gaps section says "not in code".
 | Fact | Source | What `/v1/answer` must do to equal it |
 |---|---|---|
 | The uvicorn access log is off. The search route logs only a result count, at DEBUG. | DES-008; `server.py` (`access_log=False`); `daemon/routes/search.py:111` | Log no query, passage, answer, or key text. |
-| quarryd writes `quarryd.log` (rotating; `QUARRY_LOG_DIR`, falling back to `~/.punt-labs/quarry/logs`). Volume rule: INFO is at most one line per user-visible operation; finer detail goes to DEBUG. The `httpx` logger is at WARNING. | DES-048; `logging_config.py:61-87`, `:149` | One INFO line per answer (host, model, status, latency, counts). Everything else at DEBUG. |
+| CLI, MCP, hooks, daemon, and workers write one private rotating diagnostic log through punt-observe. INFO is at most one line per user-visible operation; detail goes to DEBUG. | DES-061; Quarry logging adapter | One INFO line per answer (host, model, status, latency, counts). Everything else at DEBUG. |
 | An unhandled exception is logged with its traceback, and the client gets a generic `{"error": "Internal server error"}`. | `daemon/app.py:158-160` | Let unexpected errors fall through to this handler. Map expected errors to explicit bodies. |
 | Content refusals return `{"error": str(exc)}` with 400: the exception text goes to the client. | `daemon/routes/content_group.py:~68`, `:~89` | Error bodies carry quarry's own messages. Never forward raw upstream text without scrubbing (gap G2). |
 | Captures, `remember`, and `learn` are scrubbed before storage: secrets, home paths, emails (replaced with a placeholder), the local hostname, and profanity, in one choke point. Deliberately ingested documents are not scrubbed. | DES-036, DES-041; `scrub.py`, `capture.py` | Passages sent to the model are the stored text. Captures are already scrubbed; user-ingested documents are not (stated in PR/FAQ `faq:privacy`). |
@@ -63,8 +63,8 @@ says nothing about it, and the gaps section says "not in code".
 
 | Fact | Source | What `/v1/answer` must do to equal it |
 |---|---|---|
-| Each search writes one `query_events` row (time, surface, agent handle, collection, scrubbed filters, limit, latency, result count, scrubbed query, query length) and one `query_hits` row per hit to `telemetry.db`. The write runs as a post-response `BackgroundTask`; failures are logged and swallowed. | DES-056; `daemon/routes/search.py:66-140`; `query_log.py:94-130` | Record each answer the same way, using the same scrubbing and the same post-response background write. Answers add `kind`, `covered`, and model latency (schema change, Phase 2). |
-| `telemetry_enabled` defaults to on. Retention is 90 days with periodic pruning. The telemetry directory is 0700 and the database 0600 (`O_EXCL`, `O_NOFOLLOW`; a looser existing file is tightened). Reads go through `/v1/insights`. | DES-056; `config.py:45-53`; `telemetry_perms.py:30-68`; `daemon/routes/meta.py` `insights` | Same switch, same retention, same file. |
+| Search records a typed span and bounded per-hit events after the response. The shared facade receives counts, timings, closed enums, query length, and salted identifier hashes, never text or filters. | DES-061; recall telemetry facade | Use the shared facade and declare schema-safe answer fields before capture. |
+| Recall capture defaults to on, with 90-day local retention and no network export. The shared exporter owns private storage and off switches. Reads go through the database-scoped insights route. | DES-061 | Use the same off switches, retention, and local export. |
 
 ### 1.7 Install, configuration, and secrets
 
@@ -135,8 +135,8 @@ the right mode, but the mode is never checked when a file is read. **Fix for all
 channels:** one secure-read helper (owner is the user, not group- or world-writable,
 not group- or world-readable when it holds a secret), used for `quarry.env`,
 `serve.token`, the mcp-proxy config, and `synthesis.toml`, and reported by `quarry
-doctor`. In-tree precedent: `telemetry_perms.py:47-68` already tightens a looser
-telemetry dir and database when it opens them.
+doctor`. The shared punt-observe package owns private storage for diagnostics
+and telemetry.
 
 G5. **Outbound HTTP follows two different policies (its own issue).** In plain terms:
 when quarry fetches a URL a caller gave it (ingest, sitemap), it ignores
@@ -190,4 +190,4 @@ Not gaps (checked):
   routes (F2); row 1.1 states that fetch uses the system trust store and httpx defaults
   to certifi (F3); citations corrected: `remote.py:273` is the TOFU fetch,
   `search.py:111`, `retrieval/hybrid.py:112`, the 1.9 ingest row, and the
-  `telemetry_perms.py:47-68` precedent in G3 (F10).
+  former telemetry permissions precedent in G3 (F10).

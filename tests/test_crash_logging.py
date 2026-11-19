@@ -1,9 +1,4 @@
-"""Tests for routing uncaught exceptions into the log file.
-
-The defect these guard against is not "no traceback" — the supervisor's stderr
-file always had one. It is that the traceback arrived with no timestamp, so a
-dead error from the morning read as a live outage in the afternoon.
-"""
+"""Check safe diagnostics for uncaught main, thread and event-loop failures."""
 
 from __future__ import annotations
 
@@ -45,10 +40,12 @@ class TestMainThread:
             with caplog.at_level(logging.CRITICAL):
                 sys.excepthook(type(exc), exc, exc.__traceback__)
         assert "uncaught exception" in caplog.text
-        assert "RuntimeError: boom" in caplog.text, "the traceback must be attached"
+        assert "raise RuntimeError(msg)" in caplog.text
+        assert "RuntimeError)" in caplog.text
+        assert "RuntimeError: boom" not in caplog.text
 
     def test_the_prior_hook_still_runs(self) -> None:
-        """stderr keeps its copy — the supervisor's file stays a backstop."""
+        """A non-default system hook still receives the original exception."""
         seen: list[str] = []
         sys.excepthook = lambda *args: seen.append(args[0].__name__)
         UncaughtExceptionLog.install()
@@ -90,7 +87,8 @@ class TestWorkerThread:
             worker.start()
             worker.join()
         assert "uncaught exception in thread ingest-worker" in caplog.text
-        assert "RuntimeError: worker died" in caplog.text
+        assert "RuntimeError)" in caplog.text
+        assert "RuntimeError: worker died" not in caplog.text
 
 
 class TestEventLoop:
@@ -121,19 +119,14 @@ class TestEventLoop:
 
         with caplog.at_level(logging.ERROR):
             asyncio.run(main())
-        assert "Task exception was never retrieved" in caplog.text
-        assert "RuntimeError: task died" in caplog.text
+        assert "Unhandled event-loop error" in caplog.text
+        assert "RuntimeError)" in caplog.text
+        assert "RuntimeError: task died" not in caplog.text
 
     def test_the_task_name_survives_into_the_log(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The name is the forensic detail; the message alone does not carry it.
-
-        Scoped to OUR record on purpose.  Chaining to asyncio's default handler
-        means its copy also names the task, so asserting against the whole of
-        ``caplog.text`` passes even with our insertion stripped out — the test
-        would be measuring asyncio rather than this module.
-        """
+        """Record the task name without using the task representation."""
 
         async def main() -> None:
             loop = asyncio.get_running_loop()
@@ -200,4 +193,5 @@ class TestEventLoop:
 
         with caplog.at_level(logging.ERROR):
             asyncio.run(main())
-        assert "socket leaked" in caplog.text
+        assert "Unhandled event-loop error" in caplog.text
+        assert "socket leaked" not in caplog.text

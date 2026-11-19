@@ -109,7 +109,8 @@ check-skills-sync: ## Fail if src/quarry/_skills/ has drifted from plugin/skills
 # does not change the file; `--no-header` keeps the output free of the command
 # line, so the check and the regenerate target produce identical bytes.
 INSTALL_CONSTRAINTS ?= install-constraints.txt
-INSTALL_CONSTRAINTS_EXPORT = uv export --frozen --no-hashes --no-dev --no-emit-project --no-annotate --no-header
+# The wheel metadata pins punt-observe by commit; the installer accepts only registry pins.
+INSTALL_CONSTRAINTS_EXPORT = uv export --frozen --no-hashes --no-dev --no-emit-project --no-emit-package punt-observe --no-annotate --no-header
 
 install-constraints: ## Regenerate install-constraints.txt from uv.lock (run after any uv lock)
 	$(INSTALL_CONSTRAINTS_EXPORT) --output-file $(INSTALL_CONSTRAINTS)
@@ -250,7 +251,7 @@ LOG_LINES ?= 40
 logs-errors: ## Scan daemon logs for errors/failures (diagnostic, always exits 0)
 	@LOG_DIR="$(LOG_DIR)" LOG_LINES="$(LOG_LINES)" bash scripts/logs-errors.sh
 
-logs-tail: ## Tail the most recent lines of the daemon stderr log
+logs-tail: ## Tail the most recent lines of the shared Quarry diagnostic log
 	@LOG_DIR="$(LOG_DIR)" LOG_LINES="$(LOG_LINES)" bash scripts/logs-tail.sh
 
 # Sync eval alongside dev so running the harness never uninstalls the toolchain.

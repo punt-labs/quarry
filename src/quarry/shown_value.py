@@ -6,7 +6,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Self, final
 
-from quarry.log_redactor import LogRedactor
+from punt_observe.logging import LogRedactor
 
 
 @final

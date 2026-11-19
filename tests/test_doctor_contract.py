@@ -143,7 +143,7 @@ class TestInstallAlwaysCompletes:
         # A context, so the home is back before the autouse fixtures tear down.
         with monkeypatch.context() as scoped:
             scoped.setattr(Path, "home", no_home)
-            for name in ("QUARRY_ROOT", "QUARRY_LOG_DIR", "LANCEDB_PATH"):
+            for name in ("QUARRY_ROOT", "LANCEDB_PATH"):
                 scoped.delenv(name, raising=False)
             with patch(self._DL) as download:
                 download.return_value = ("/m.onnx", "/t.json")
@@ -432,6 +432,9 @@ class TestMessagesNameTheirFile:
         def deep(*_a: object, **_k: object) -> str:
             raise RecursionError
 
+        monkeypatch.setattr(
+            "quarry.claude_desktop_mcp.shutil.which", lambda *_: "/usr/bin/quarry"
+        )
         monkeypatch.setattr("quarry.claude_desktop_mcp.json.dumps", deep)
 
         result = ClaudeDesktopMcp(config).configure()
@@ -601,7 +604,7 @@ def _run_without_a_home(
 ) -> subprocess.CompletedProcess[str]:
     """Run *body* in a fresh interpreter with no HOME and no passwd entry.
 
-    With *roots*, ``QUARRY_ROOT`` and ``QUARRY_LOG_DIR`` point under it: the
+    With *roots*, ``QUARRY_ROOT`` points under it: the
     data and log directories then resolve without a home directory, and the
     home directory is still what is missing.
     """
@@ -614,7 +617,6 @@ def _run_without_a_home(
     }
     if roots is not None:
         env["QUARRY_ROOT"] = str(roots / "data")
-        env["QUARRY_LOG_DIR"] = str(roots / "logs")
     env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, "-c", _NO_HOME_PRELUDE + textwrap.dedent(body)],
@@ -638,7 +640,7 @@ _NO_HOME_LINE = (
 def _lines_but_the_log_warning(stderr: str) -> list[str]:
     """Return stderr's lines, minus the one warning that logging has no file."""
     return [
-        line for line in stderr.splitlines() if "logging to stderr only" not in line
+        line for line in stderr.splitlines() if "durable logs unavailable" not in line
     ]
 
 
@@ -718,7 +720,7 @@ def test_a_hook_without_a_home_fails_open_and_never_prints_a_traceback() -> None
     assert done.stdout.strip() == "{}"
     assert "Traceback" not in done.stderr
     [line] = done.stderr.splitlines()  # exactly one line, and it names the cause
-    assert "no home directory: logging to stderr only" in line
+    assert "no home directory; durable logs unavailable" in line
 
 
 @pytest.mark.parametrize(
@@ -965,7 +967,6 @@ def test_a_broken_root_is_reported_even_with_no_home(tmp_path: Path) -> None:
         _ENTRY_POINTS["quarry doctor"],
         env_extra={
             "QUARRY_ROOT": "/nonexistent/qroot",
-            "QUARRY_LOG_DIR": str(tmp_path / "logs"),
             "HF_HOME": "/nonexistent/hf",
         },
     )

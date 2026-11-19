@@ -56,6 +56,7 @@ class SearchResult:
     memory_type: str
     summary: str
     distance: float
+    ingestion_timestamp: str = ""
 
     # Slack on the cosine-distance bounds: float error lets a unit-vector cosine
     # overshoot to ~-1.0000001, i.e. distance ~2.0000001; WORST_CASE_DISTANCE
@@ -91,15 +92,16 @@ class SearchResult:
         return cls(
             document_name=cls._as_text(row, "document_name"),
             collection=cls._as_text(row, "collection"),
-            page_number=cls._as_count(row, "page_number"),
-            chunk_index=cls._as_count(row, "chunk_index"),
+            page_number=int(cls._as_number(row.get("page_number"), 0)),
+            chunk_index=int(cls._as_number(row.get("chunk_index"), 0)),
             text=cls._as_text(row, "text"),
             page_type=cls._as_text(row, "page_type"),
             source_format=cls._as_text(row, "source_format"),
             agent_handle=cls._as_text(row, "agent_handle"),
             memory_type=cls._as_text(row, "memory_type"),
             summary=cls._as_text(row, "summary"),
-            distance=cls._as_distance(row),
+            distance=cls._as_number(row.get("_distance"), WORST_CASE_DISTANCE),
+            ingestion_timestamp=cls._as_text(row, "ingestion_timestamp"),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -130,15 +132,8 @@ class SearchResult:
         return "" if value is None else str(value)
 
     @staticmethod
-    def _as_count(row: Mapping[str, object], key: str) -> int:
-        value = row.get(key)
-        # via float() to tolerate float-like values ("3.0", 3.0) as well as ints.
-        return 0 if value is None else int(float(str(value)))
-
-    @staticmethod
-    def _as_distance(row: Mapping[str, object]) -> float:
-        value = row.get("_distance")
-        return WORST_CASE_DISTANCE if value is None else float(str(value))
+    def _as_number(value: object, default: float) -> float:
+        return default if value is None else float(str(value))
 
 
 class DocumentSummary(TypedDict):

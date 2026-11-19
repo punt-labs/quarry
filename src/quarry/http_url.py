@@ -8,8 +8,9 @@ import re
 from typing import ClassVar, Self, final
 from urllib.parse import quote, urlsplit, urlunsplit
 
+from punt_observe.logging.log_form import LogForm
+
 from quarry.capture_url import CaptureUrl
-from quarry.log_form import LogForm
 from quarry.remote import to_netloc
 from quarry.url_syntax import UrlSyntax
 

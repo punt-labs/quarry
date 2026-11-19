@@ -287,15 +287,32 @@ pushed there instead of living in the public repo's history. Set it up with
 `quarry captures init`. See [DES-039 in DESIGN.md](DESIGN.md) and
 [AGENTS.md](AGENTS.md).
 
-**Search telemetry.** Every search records a scrubbed copy of the
-query text and its ranked hits to a local SQLite file
-(`~/.punt-labs/quarry/data/<db>/telemetry.db`) — nothing leaves the machine.
-Query text goes through the same scrub as captures before it is written. To
-turn recording off, set `TELEMETRY_ENABLED=false` in the environment of the
-`quarryd` process and restart the daemon; `quarry insights` then reports
-telemetry as disabled. See [DES-056 in DESIGN.md](DESIGN.md).
+**Search telemetry.** The daemon uses punt-observe to record typed search
+statistics to the private local file `~/.punt-labs/quarry/telemetry.db`.
+Search text, result content, and filters are not stored. Insights groups
+empty queries, agents, and collections by per-install salted hashes and shows
+aggregate latency, counts, and hit-age bands. The shared store retains 90 days
+across all Quarry databases; the old per-database retention setting no longer
+applies. Set `PUNT_TELEMETRY=off`, `QUARRY_TELEMETRY=off`, or
+`TELEMETRY_ENABLED=false` in the daemon's environment and restart it to disable
+capture. Quarry does not opt in to network export.
+
+Upgrading starts a fresh recall history. Quarry never reads or migrates
+the old per-database `telemetry.db` under the data root. Old files may contain
+scrubbed query text and are not automatically deleted. To discard them, stop
+any older Quarry daemons, then delete only the old per-database
+`data/<db>/telemetry.db` and its `-wal` and `-shm` sidecars for each affected
+database. If you set a custom data root, look there instead. The new
+installation-wide `~/.punt-labs/quarry/telemetry.db` is separate.
 
 ## Managing the Daemon
+
+The CLI, MCP server, hooks, daemon, and detached sync dispatcher write diagnostics
+to `~/.punt-labs/quarry/logs/quarry.log`. The shared sink redacts and rotates that
+private file. `QUARRY_LOG_LEVEL` adjusts terminal verbosity, not the file threshold.
+If the daemon cannot open its private log and you are using launchd or
+Homebrew services, stop the service and run `quarryd` in a terminal to see
+the startup diagnostic.
 
 `quarry install` registers `quarryd` as a per-user service that starts at login and restarts if it crashes (launchd on macOS, systemd on Linux).
 

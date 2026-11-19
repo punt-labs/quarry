@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AgentRecallCount": {
-        "description": "One agent handle's query volume.",
+        "description": "One agent hash and count under the legacy v1 key.",
         "properties": {
           "agent_handle": {
             "title": "Agent Handle",
@@ -69,7 +69,7 @@
         "type": "object"
       },
       "CollectionHitCount": {
-        "description": "One collection's share of recorded hits.",
+        "description": "One collection hash and hit count under the legacy v1 key.",
         "properties": {
           "collection": {
             "title": "Collection",
@@ -310,7 +310,7 @@
         "type": "object"
       },
       "EmptyQueryCount": {
-        "description": "One scrubbed query text that returned zero hits, and how often.",
+        "description": "One salted query hash and count under the legacy v1 key.",
         "properties": {
           "count": {
             "title": "Count",
@@ -470,10 +470,12 @@
         "description": "The aggregate recall-telemetry snapshot behind ``quarry insights``.",
         "properties": {
           "empty_result_rate": {
+            "default": 0.0,
             "title": "Empty Result Rate",
             "type": "number"
           },
           "hit_decay_bands": {
+            "default": [],
             "items": {
               "$ref": "#/components/schemas/DecayBandCount"
             },
@@ -481,22 +483,27 @@
             "type": "array"
           },
           "knowledge_queries": {
+            "default": 0,
             "title": "Knowledge Queries",
             "type": "integer"
           },
           "memory_queries": {
+            "default": 0,
             "title": "Memory Queries",
             "type": "integer"
           },
           "p50_latency_ms": {
+            "default": 0.0,
             "title": "P50 Latency Ms",
             "type": "number"
           },
           "p95_latency_ms": {
+            "default": 0.0,
             "title": "P95 Latency Ms",
             "type": "number"
           },
           "per_agent_recall": {
+            "default": [],
             "items": {
               "$ref": "#/components/schemas/AgentRecallCount"
             },
@@ -504,6 +511,7 @@
             "type": "array"
           },
           "per_collection_hits": {
+            "default": [],
             "items": {
               "$ref": "#/components/schemas/CollectionHitCount"
             },
@@ -511,10 +519,12 @@
             "type": "array"
           },
           "telemetry_enabled": {
+            "default": true,
             "title": "Telemetry Enabled",
             "type": "boolean"
           },
           "top_empty_queries": {
+            "default": [],
             "items": {
               "$ref": "#/components/schemas/EmptyQueryCount"
             },
@@ -522,23 +532,11 @@
             "type": "array"
           },
           "total_queries": {
+            "default": 0,
             "title": "Total Queries",
             "type": "integer"
           }
         },
-        "required": [
-          "telemetry_enabled",
-          "total_queries",
-          "empty_result_rate",
-          "p50_latency_ms",
-          "p95_latency_ms",
-          "top_empty_queries",
-          "per_collection_hits",
-          "per_agent_recall",
-          "memory_queries",
-          "knowledge_queries",
-          "hit_decay_bands"
-        ],
         "title": "InsightsResponse",
         "type": "object"
       },
@@ -1347,7 +1345,7 @@
     },
     "/v1/insights": {
       "get": {
-        "description": "Return the recall-telemetry snapshot behind ``quarry insights``.\n\nA disabled toggle short-circuits before ``get_query_log`` -- opening\n(and so creating) the telemetry database file for a store the operator\nturned off would surprise a \"disabled means untouched\" reading of the\nsetting.",
+        "description": "Read this daemon's recall snapshot without opening a disabled store.",
         "operationId": "insights_v1_insights_get",
         "responses": {
           "200": {

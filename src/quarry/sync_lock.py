@@ -126,7 +126,7 @@ class SyncLock:
     def launch_background_sync(self) -> str:
         """Fire-and-forget sync via detached subprocess.
 
-        Uses ``sys.executable -m quarry`` to avoid PATH trust issues (the
+        Uses ``sys.executable -m quarry.sync_worker`` to avoid PATH trust issues (the
         hook runs automatically on SessionStart with no user confirmation).
         Redirects all stdio to DEVNULL — especially stdin, to prevent the
         child from holding Claude Code's stdin pipe open after the parent
@@ -167,7 +167,7 @@ class SyncLock:
             # closes that window.
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, "-m", "quarry", "sync"],
+                    [sys.executable, "-m", "quarry.sync_worker"],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
