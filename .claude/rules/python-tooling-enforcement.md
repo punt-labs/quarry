@@ -45,8 +45,8 @@ analysis. No external dependencies. Exits 1 if any metric fails.
 | avg_params | <= 4.0 | Parameter bloat (should be an object) |
 | max_complexity | <= 10 | God functions (worst single function) |
 | avg_complexity | <= 5.0 | Sustained complexity (many moderately-complex functions) |
-| module_size | <= 300 | God modules |
-| classes_per_module | <= 3 | Unfocused modules |
+| module_size | <= 300 code-bearing lines | God modules; excludes comments/docstrings/blanks |
+| classes_per_module | <= 3 | Excludes exceptions, enums, dataclasses, Protocols and TypedDicts |
 | class_to_func_ratio | >= 0.5 | Procedural code disguised as a module |
 | init_violations | == 0 | **init** used instead of **new** |
 | public_attr_violations | == 0 | self.name without underscore |

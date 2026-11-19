@@ -41,7 +41,7 @@ every file better than you found it.
 
 ## PL-OA-2: The punt-oo-ratchet Package Is Required
 
-**Statement**: Depend on the published PyPI package `punt-oo-ratchet==0.2.0`
+**Statement**: Depend on the published PyPI package `punt-oo-ratchet==0.3.0`
 in the dev extra, locked in `uv.lock`. Its source is
 [`python-oo-ratchet`](https://github.com/punt-labs/python-oo-ratchet).
 Do not embed its implementation under `tools/`. The stdlib-only package
@@ -57,8 +57,8 @@ Existing baseline and audit filenames remain compatible.
 | avg_params | <= 4.0 | Parameter bloat (should be an object) |
 | max_complexity | <= 10 | God functions (worst single function) |
 | avg_complexity | <= 5.0 | Sustained complexity (many moderately-complex functions) |
-| module_size | <= 300 | God modules |
-| classes_per_module | <= 3 | Unfocused modules |
+| module_size | <= 300 code-bearing lines | God modules; excludes comments/docstrings/blanks |
+| classes_per_module | <= 3 | Excludes exceptions, enums, dataclasses, Protocols and TypedDicts |
 | class_to_func_ratio | >= 0.5 | Procedural code disguised as a module |
 | init_violations | == 0 | **init** used instead of **new** |
 | public_attr_violations | == 0 | self.name without underscore |

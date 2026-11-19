@@ -1,11 +1,40 @@
 # Published OO ratchet gates
 
-Quarry uses the PyPI dev dependency `punt-oo-ratchet==0.2.0`, locked in
+Quarry uses the PyPI dev dependency `punt-oo-ratchet==0.3.0`, locked in
 `uv.lock`. The source is [python-oo-ratchet](https://github.com/punt-labs/python-oo-ratchet).
 `make check` runs `oo-ratchet oo`, `oo-ratchet coupling`, and
 `oo-ratchet suppressions` on `src/quarry/`. Use the existing `make update-*`
 targets to update baselines; the six root baseline/audit paths are unchanged.
 The implementation and its tests now belong to the package repository.
+
+## Package 0.3.0 counting migration (PL-1141)
+
+The OO baseline adopts 0.3.0 through one CLI invocation over all 472 stored
+paths: `--rebaseline-files "PATH1,PATH2,..." --reason "adopt 0.3.0 counting"
+--source PL-1141`. Exactly one `rebaseline-files` audit record records the
+improvements; no regressed-metric waivers are added.
+
+| OO metric | Files up | Files down | New counting |
+|-----------|---------:|-----------:|--------------|
+| `module_size` | 0 | 472 | Code-bearing lines only; no blanks, comments or docstrings |
+| `classes_per_module` | 0 | 162 | Excludes exceptions, enums, dataclasses, Protocols and TypedDicts |
+
+All other OO metrics stay unchanged. Coupling scores do not change between
+0.2.0 and 0.3.0 on the same source. Its default efferent-coupling threshold is
+now 10 rather than 7 (`__main__.py` remains 15). Coupling state-write detection
+is more conservative, including in-place mutations; Quarry's default-mode
+scores are unaffected. The coupling baseline and audit are not rewritten:
+five pre-existing drift cells (two efferent coupling and three public-name
+counts) are deliberately retained, not repaired as part of this migration.
+The suppression baseline and audit are also unchanged, at 186.
+
+Suppression waivers identical to entries already in the comparison base's
+ledger now retire. They cannot provide reusable headroom after a cleanup;
+a later increase requires a fresh audited relaxation. Quarry has no suppression
+waiver ledger at this migration. Existing Makefile and CI flags are unchanged.
+
+The following sections record the earlier 0.1.0/0.2.0 migrations, not a new
+rebaseline of coupling or suppressions for 0.3.0.
 
 ## Cutover comparison
 
