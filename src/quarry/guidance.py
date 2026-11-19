@@ -42,6 +42,7 @@ class Guidance:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Anchor vendored user guidance at the supplied repository root."""
         self = super().__new__(cls)
         self._root = root
         return self

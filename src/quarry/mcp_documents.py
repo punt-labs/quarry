@@ -55,6 +55,7 @@ class DocumentTools:
     def __new__(
         cls, connect: Callable[[], QuarryClient] = TargetResolver.connect
     ) -> Self:
+        """Select the daemon connector used by document lifecycle tools."""
         self = super().__new__(cls)
         self._connect = connect
         return self
@@ -74,9 +75,10 @@ class DocumentTools:
         page_number: int = 0,
         collection: str = "",
     ) -> str:
-        (
-            """Use to read a specific page, or to check whether a document is """
-            """already indexed.
+        """Use to read a specific page, or to check whether a document is indexed.
+
+        Use to read a specific page, or to check whether a document is already
+        indexed.
 
         Without page_number: shows document metadata (pages, chunks, collection).
         With page_number: shows the full text for that page.
@@ -85,8 +87,13 @@ class DocumentTools:
             document_name: Document filename (e.g., 'report.pdf').
             page_number: Page number (1-indexed). 0 means show metadata only.
             collection: Optional collection scope.
+
+        Returns:
+            Document metadata when page_number is zero, otherwise the selected page's
+            full stored text. A missing document or page is an error.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
-        )
         if err := self._reject_blank(document_name, "document_name"):
             return err
         client = self._connect()
@@ -129,6 +136,11 @@ class DocumentTools:
             name: Document filename or collection name to delete.
             kind: What to delete — "document" or "collection".
             collection: Optional collection scope (only for kind="document").
+
+        Returns:
+            A deletion task identifier, not confirmation that the data is gone.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
         # Validate the input before reaching for the daemon: a blank name or bad
         # kind is a caller error, answerable without a connection.
@@ -154,6 +166,12 @@ class DocumentTools:
         Args:
             directory: Absolute path to the directory.
             collection: Collection name. Uses the directory name, sanitized, if empty.
+
+        Returns:
+            The resolved registration directory, collection, and accepted task ID;
+            indexing continues in the background.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
         # An empty directory would resolve to the cwd and silently register it.
         if err := self._reject_blank(directory, "directory"):
@@ -166,19 +184,25 @@ class DocumentTools:
 
     @ToolGuard.wrap
     def deregister_directory(self, collection: str, keep_data: bool = False) -> str:
-        (
-            """Use to stop tracking a directory — keep its indexed data with """
-            """``keep_data=True``, or purge it.
+        """Use to stop tracking a directory and optionally retain indexed data.
+
+        Use to stop tracking a directory — keep its indexed data with
+        ``keep_data=True``, or purge it.
 
         Returns the removed-file count synchronously; the chunk purge runs as a
-        background task. An unknown collection surfaces as an error, not a
-        removal confirmation.
+        background task. An unknown collection surfaces as an error, not a removal
+        confirmation.
 
         Args:
             collection: Collection name to deregister.
             keep_data: If true, keep indexed data in LanceDB.
+
+        Returns:
+            The removed registry-file count and the accepted chunk-purge task ID;
+            the purge may still be running.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
-        )
         if err := self._reject_blank(collection, "collection"):
             return err
         accepted = self._connect().deregister(
@@ -191,13 +215,18 @@ class DocumentTools:
 
     @ToolGuard.wrap
     def sync_all_registrations(self) -> str:
-        (
-            """Use after registering a new directory, or when tracked files """
-            """changed outside quarry's own writes.
+        """Use after registering a new directory or changing tracked files.
+
+        Use after registering a new directory, or when tracked files changed outside
+        quarry's own writes.
 
         Returns immediately — the daemon runs the sync in the background.
+
+        Returns:
+            An accepted sync task ID, not a completed synchronization report.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
-        )
         accepted = self._connect().sync()
         return f"▶  Syncing all registrations (task {accepted.task_id})"
 

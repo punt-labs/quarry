@@ -27,12 +27,14 @@ class CapturesCollection:
     _name: str
 
     def __new__(cls, name: str) -> Self:
+        """Retain a base collection name for deriving its capture collection."""
         self = super().__new__(cls)
         self._name = name
         return self
 
     @property
     def name(self) -> str:
+        """Expose the derived capture collection name."""
         return self._name
 
     @classmethod

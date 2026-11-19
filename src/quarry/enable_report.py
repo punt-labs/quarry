@@ -28,6 +28,7 @@ class EnableReport:
     _r: EnableResult
 
     def __new__(cls, result: EnableResult) -> Self:
+        """Retain one enable outcome for consistent human-readable reporting."""
         self = super().__new__(cls)
         self._r = result
         return self
@@ -127,6 +128,7 @@ class DisableReport:
     _keep_data: bool
 
     def __new__(cls, result: DisableResult, *, keep_data: bool) -> Self:
+        """Pair a disable outcome with the caller's keep-data reporting policy."""
         self = super().__new__(cls)
         self._r = result
         self._keep_data = keep_data

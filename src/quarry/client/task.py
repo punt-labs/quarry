@@ -29,20 +29,24 @@ class TaskOutcome:
 
     @property
     def task_id(self) -> str:
+        """Identify the background task whose polling has ended."""
         return self._task_id
 
     @property
     def status(self) -> TerminalStatus:
+        """Expose the terminal state observed by the task poller."""
         return self._status
 
     @property
     def results(self) -> Mapping[str, object]:
         # Empty unless the task completed; the caller reads its operation's keys.
+        """Expose completed results, or an empty mapping without completion."""
         return self._results
 
     @property
     def error(self) -> str:
         # Empty unless the task failed or the server became unreachable.
+        """Explain failure or lost connectivity; use an empty string on success."""
         return self._error
 
     def result_int(self, key: str) -> int:
@@ -52,10 +56,12 @@ class TaskOutcome:
 
     @property
     def is_completed(self) -> bool:
+        """Indicate successful completion of the polled background task."""
         return self._status == "completed"
 
     @property
     def is_failed(self) -> bool:
+        """Indicate a terminal failure of the polled background task."""
         return self._status == "failed"
 
     @classmethod

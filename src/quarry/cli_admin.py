@@ -21,6 +21,7 @@ class AdminCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Share CLI output and connection plumbing across installer admin commands."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

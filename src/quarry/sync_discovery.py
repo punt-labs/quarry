@@ -42,6 +42,7 @@ class FileDiscovery:
     _walk_complete: bool
 
     def __new__(cls, directory: Path) -> Self:
+        """Load ignores and resolve the root, recording resolution failures."""
         self = super().__new__(cls)
         self._directory = directory
         self._guard = ScratchGuard()

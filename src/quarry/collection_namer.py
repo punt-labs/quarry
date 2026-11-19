@@ -31,6 +31,7 @@ class CollectionNamer:
     _taken: AbstractSet[str]
 
     def __new__(cls, directory: Path, taken: AbstractSet[str]) -> Self:
+        """Choose names relative to a directory and a snapshot of occupied names."""
         self = super().__new__(cls)
         self._directory = directory
         self._taken = taken

@@ -106,6 +106,7 @@ class CaptureSync:
         repo: ShadowRepo,
         rescrubber: CaptureReScrubber,
     ) -> Self:
+        """Bind shadow configuration, git operations, and capture re-scrubbing."""
         self = super().__new__(cls)
         self._directory = directory
         self._config = config
@@ -148,6 +149,7 @@ class CaptureSync:
 
     @property
     def enabled(self) -> bool:
+        """Indicate whether the configuration enables capture-shadow sync."""
         return self._config.enabled
 
     def bootstrap(self, *, create: bool = False) -> bool:

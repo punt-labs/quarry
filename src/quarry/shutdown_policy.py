@@ -76,6 +76,7 @@ class ShutdownPolicy:
     _total_s: float
 
     def __new__(cls, total_s: float) -> Self:
+        """Retain the total seconds used to derive teardown step budgets."""
         self = super().__new__(cls)
         self._total_s = total_s
         return self

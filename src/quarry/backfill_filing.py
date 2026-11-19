@@ -43,6 +43,7 @@ class TranscriptFiler:
         collection: str,
         stored: StoredSessions,
     ) -> Self:
+        """Start project filing with shared stored versions and no skips."""
         self = super().__new__(cls)
         self._run = run
         self._stored = stored

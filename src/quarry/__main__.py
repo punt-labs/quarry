@@ -1,3 +1,5 @@
+"""Expose Quarry commands through the Typer command-line application."""
+
 from __future__ import annotations
 
 import functools

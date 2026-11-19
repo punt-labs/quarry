@@ -40,6 +40,8 @@ class SyncContext:
 
 @dataclass(frozen=True, slots=True)
 class SyncResult:
+    """Summarize a collection's ingest, refresh, delete, skip, and failure counts."""
+
     collection: str
     ingested: int
     refreshed: int

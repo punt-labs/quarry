@@ -58,6 +58,7 @@ class UncaughtExceptionLog:
     _prior_thread: Callable[[threading.ExceptHookArgs], object]
 
     def __new__(cls) -> Self:
+        """Snapshot the installed system and thread exception hooks for delegation."""
         self = super().__new__(cls)
         self._prior_system = sys.excepthook
         self._prior_thread = threading.excepthook

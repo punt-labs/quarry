@@ -38,10 +38,21 @@ class RegistryClient(Protocol):
     stand-in.
     """
 
-    def list_registrations(self) -> RegistrationList: ...
-    def register(self, req: RegisterRequest) -> TaskAccepted: ...
-    def deregister(self, req: DeregisterRequest) -> DeregisterAccepted: ...
-    def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted: ...
+    def list_registrations(self) -> RegistrationList:
+        """Read the daemon's active directory registrations and retained markers."""
+        ...
+
+    def register(self, req: RegisterRequest) -> TaskAccepted:
+        """Queue a directory registration and return its accepted task identifier."""
+        ...
+
+    def deregister(self, req: DeregisterRequest) -> DeregisterAccepted:
+        """Queue removal of a directory registration under its keep-data policy."""
+        ...
+
+    def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted:
+        """Queue deletion of a collection's stored content."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +84,9 @@ class EnableResult:
 
 @dataclass(frozen=True, slots=True)
 class DisableResult:
-    """Result of disabling quarry.  ``removed`` is the registry file count the
+    """Describe registry removal and the asynchronous purge after disabling Quarry.
+
+    Result of disabling quarry.  ``removed`` is the registry file count the
     daemon reported synchronously; the chunk purge runs as a background task.
 
     ``disable`` is non-destructive of the vendored guide (§ 2.9): it prunes the

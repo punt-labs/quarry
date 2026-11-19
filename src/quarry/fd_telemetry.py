@@ -32,6 +32,7 @@ class FdTelemetry:
     _interval: float
 
     def __new__(cls, interval: float) -> Self:
+        """Set the interval between process descriptor-count samples."""
         self = super().__new__(cls)
         self._interval = interval
         return self

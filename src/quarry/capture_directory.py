@@ -37,6 +37,7 @@ class CaptureDirectory:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Anchor capture-directory traversal at the supplied project root."""
         self = super().__new__(cls)
         self._root = root
         return self

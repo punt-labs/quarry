@@ -29,6 +29,7 @@ class DatabaseRoster:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Anchor named-database enumeration at the supplied database root."""
         self = super().__new__(cls)
         self._root = root
         return self

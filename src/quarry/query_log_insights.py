@@ -39,6 +39,7 @@ class QueryLogInsights:
     _lock: threading.Lock
 
     def __new__(cls, conn: sqlite3.Connection, lock: threading.Lock) -> Self:
+        """Share the query log's SQLite connection and synchronization lock."""
         self = super().__new__(cls)
         self._conn = conn
         self._lock = lock

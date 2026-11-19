@@ -28,6 +28,7 @@ class ProjectProcessor:
     _run: BackfillRun
 
     def __new__(cls, mapping: ProjectMapping, run: BackfillRun) -> Self:
+        """Choose the project's capture collection, honoring the run's override."""
         self = super().__new__(cls)
         self._mapping = mapping
         self._run = run

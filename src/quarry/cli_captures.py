@@ -45,6 +45,7 @@ class CapturesCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Share CLI plumbing across capture inspection and shadow commands."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

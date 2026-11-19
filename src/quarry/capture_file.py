@@ -38,6 +38,7 @@ class CaptureFile:
     _unlocked: bool
 
     def __new__(cls, request: CaptureRequest) -> Self:
+        """Retain the capture request without writing or acquiring its lock."""
         self = super().__new__(cls)
         self._request = request
         self._unlocked = False

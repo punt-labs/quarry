@@ -28,6 +28,7 @@ class StampedEntries:
     _kept: dict[str, FileStamp]
 
     def __new__(cls, raw: object, source: Path) -> Self:
+        """Keep valid absolute-path stamps and mark malformed cache entries dirty."""
         self = super().__new__(cls)
         self._kept = {}
         self._dirty = False

@@ -29,6 +29,7 @@ class RunProgress:
     _tally: BackfillTally | None  # None until the scan thread has attached its own
 
     def __new__(cls, stop: StopSignal) -> Self:
+        """Start progress reporting before a run tally has been attached."""
         self = super().__new__(cls)
         self._stop = stop
         self._tally = None

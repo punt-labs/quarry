@@ -37,6 +37,7 @@ class EnvFile:
     _path: Path
 
     def __new__(cls, path: Path) -> Self:
+        """Select the private environment-file path without opening or creating it."""
         self = super().__new__(cls)
         self._path = path
         return self

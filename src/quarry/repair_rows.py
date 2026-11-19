@@ -51,6 +51,7 @@ class RowJudge:
     _verdicts: dict[tuple[str, str], bool] | None
 
     def __new__(cls, columns: Collection[str]) -> Self:
+        """Choose present label columns and start empty row-rejection accounting."""
         self = super().__new__(cls)
         self._budget = RowBudget()
         self._binary = BinaryContent()

@@ -39,6 +39,7 @@ class AtomicSwapError(OSError):
 
     @property
     def backup(self) -> Path:
+        """Expose the backup directory that must be preserved for recovery."""
         return self._backup
 
     def __str__(self) -> str:
@@ -64,6 +65,7 @@ class AtomicDirectorySwap:
     _target: Path
 
     def __new__(cls, name: str, target: Path) -> Self:
+        """Select the target for a staged atomic directory replacement."""
         self = super().__new__(cls)
         self._name = name
         self._target = target

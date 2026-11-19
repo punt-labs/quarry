@@ -31,6 +31,7 @@ class SearchCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind hybrid-search commands to shared CLI connection and output handling."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

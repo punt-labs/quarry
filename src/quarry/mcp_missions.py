@@ -33,6 +33,7 @@ class MissionTools:
     def __new__(
         cls, connect: Callable[[], QuarryClient] = TargetResolver.connect
     ) -> Self:
+        """Select the daemon connector used for mission-memory synchronization."""
         self = super().__new__(cls)
         self._connect = connect
         return self
@@ -45,17 +46,25 @@ class MissionTools:
     def missions_sync(
         self, *, mission: str = "", dry_run: bool = False, force: bool = False
     ) -> str:
-        """Use after ``ethos mission close`` to file each frozen round into the
+        """Use after ``ethos mission close`` to file frozen rounds as memory.
+
+        Use after ``ethos mission close`` to file each frozen round into the
         worker's memory (``memory-<worker>``, type observation).
 
-        Reads this repo's ``.punt-labs/ethos/missions/`` tree; safe to re-run —
-        a round already filed is skipped, and a name held by another checkout
-        is reported as an error, never overwritten.
+        Reads this repo's ``.punt-labs/ethos/missions/`` tree; safe to re-run — a
+        round already filed is skipped, and a name held by another checkout is
+        reported as an error, never overwritten.
 
         Args:
             mission: Sync one mission id only; empty means every mission.
             dry_run: List what would be filed and post nothing.
             force: Re-file rounds the daemon already holds (matching key only).
+
+        Returns:
+            A report of filed and skipped rounds and per-round errors; dry-run
+            reports proposed writes without filing them.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
         outcome = MissionMemorySync.for_repo(
             Path.cwd(),

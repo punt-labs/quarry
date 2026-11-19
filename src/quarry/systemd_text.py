@@ -106,9 +106,9 @@ class SystemdText:
 
     @staticmethod
     def _logical_lines(text: str) -> Iterator[str]:
-        """Yield the logical lines of a unit or env file, as systemd reads them.
+        r"""Yield the logical lines of a unit or env file, as systemd reads them.
 
-        Split on ``\\n`` only (a carriage return or a form feed is not a line
+        Split on ``\n`` only (a carriage return or a form feed is not a line
         break), a line ending in a backslash joined with the next, blank lines and
         ``#`` or ``;`` comments skipped.  One pass with no backtracking.
         """

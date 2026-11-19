@@ -26,6 +26,7 @@ class FenceScanner:
     _length: int
 
     def __new__(cls) -> Self:
+        """Start outside any Markdown fence with no opening delimiter recorded."""
         self = super().__new__(cls)
         self._char = ""
         self._length = 0

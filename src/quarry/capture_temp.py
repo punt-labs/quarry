@@ -44,6 +44,12 @@ class CaptureTemp:
     _target: str
 
     def __new__(cls, directory: int, target: str, location: str) -> Self:
+        """Choose a random temporary capture name relative to an open directory.
+
+        Args:
+            directory: Open directory descriptor that anchors later file operations.
+            location: Human-readable directory label for failure reporting.
+        """
         self = super().__new__(cls)
         self._directory = directory
         self._location = location

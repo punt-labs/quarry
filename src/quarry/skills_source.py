@@ -44,12 +44,14 @@ class SkillSource:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Select the skill-source tree without reading or depositing its contents."""
         self = super().__new__(cls)
         self._root = root
         return self
 
     @property
     def root(self) -> Path:
+        """Expose the tree from which packaged skills are read."""
         return self._root
 
     @staticmethod

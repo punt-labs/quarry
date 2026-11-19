@@ -32,6 +32,7 @@ class StampCheck:
     _stamp: FileStamp
 
     def __new__(cls, stamp: FileStamp) -> Self:
+        """Retain the read-time file stamp for subsequent consistency checks."""
         self = super().__new__(cls)
         self._stamp = stamp
         return self

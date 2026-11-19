@@ -39,6 +39,7 @@ class UnindexableFile:
     _path: Path
 
     def __new__(cls, path: Path) -> Self:
+        """Select the stamp-cache path without reading or creating the file."""
         self = super().__new__(cls)
         self._path = path
         self._on_disk = None

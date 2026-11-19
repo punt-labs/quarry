@@ -22,6 +22,7 @@ class ReadFault:
     _exc: Exception
 
     def __new__(cls, exc: Exception) -> Self:
+        """Retain a transcript-read failure for run-specific outcome classification."""
         self = super().__new__(cls)
         self._exc = exc
         return self

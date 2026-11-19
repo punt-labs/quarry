@@ -71,6 +71,7 @@ class FileChangeDetector:
     __slots__ = ()
 
     def __new__(cls) -> Self:
+        """Create a stateless registry-versus-filesystem change classifier."""
         return super().__new__(cls)
 
     def classify(

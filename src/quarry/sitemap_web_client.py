@@ -81,6 +81,7 @@ class GatedSitemapWebClient(AbstractWebClient):
     _bugs: FetchBugRecord
 
     def __new__(cls, timeout: int = 30) -> Self:
+        """Set a fetch timeout and start with no response-byte cap or recorded bug."""
         self = super().__new__(cls)
         self._timeout = timeout
         self._max_bytes = None
@@ -94,6 +95,7 @@ class GatedSitemapWebClient(AbstractWebClient):
     def set_max_response_data_length(
         self, max_response_data_length: int | None
     ) -> None:
+        """Set the response-body byte cap; None disables this size cap."""
         self._max_bytes = max_response_data_length
 
     def get(self, url: str) -> AbstractWebClientResponse:

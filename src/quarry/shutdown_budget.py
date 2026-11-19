@@ -19,6 +19,11 @@ class ShutdownBudget:
     _deadline: float
 
     def __new__(cls, total_s: float) -> Self:
+        """Start an absolute monotonic teardown deadline.
+
+        Args:
+            total_s: Total seconds available from construction onward.
+        """
         self = super().__new__(cls)
         self._deadline = time.monotonic() + total_s
         return self

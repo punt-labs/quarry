@@ -22,6 +22,7 @@ class StatusReport:
     _info: Mapping[str, Any]
 
     def __new__(cls, info: Mapping[str, Any]) -> Self:
+        """Retain one daemon status response for CLI rendering."""
         self = super().__new__(cls)
         self._info = info
         return self
@@ -78,8 +79,7 @@ class _Breakdown:
 
 @final
 class InsightsReport:
-    """Render a recall-telemetry snapshot; shared by the CLI and the MCP tool so
-    the two surfaces expose the same aggregations."""
+    """Render the same recall-telemetry aggregations for CLI and MCP callers."""
 
     __slots__ = ("_info",)
 
@@ -110,6 +110,7 @@ class InsightsReport:
     _info: InsightsResponse
 
     def __new__(cls, info: InsightsResponse) -> Self:
+        """Retain one recall-telemetry response for shared CLI and MCP rendering."""
         self = super().__new__(cls)
         self._info = info
         return self

@@ -33,6 +33,7 @@ class SkillsCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind cross-harness skill commands to shared CLI plumbing."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

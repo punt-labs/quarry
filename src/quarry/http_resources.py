@@ -41,6 +41,7 @@ class QuarryResources:
     def __new__(
         cls, settings: Settings, *, embedder: EmbeddingBackend | None = None
     ) -> Self:
+        """Retain settings and an optional embedder without opening engine resources."""
         self = super().__new__(cls)
         self._settings = settings
         self._embedder_override = embedder
@@ -63,7 +64,9 @@ class QuarryResources:
 
     @cached_property
     def embedder(self) -> EmbeddingBackend:
-        """The query embedding backend: the isolated ONNX session (DES-032) by
+        """Load the query backend lazily, preferring the injected backend override.
+
+        The query embedding backend: the isolated ONNX session (DES-032) by
         default, or the injected override when one was supplied (the test seam).
 
         The override is THE embedder on every path — the query path and

@@ -1133,6 +1133,7 @@
     },
     "/v1/captures/push": {
       "post": {
+        "description": "Authenticate and push capture shadows with per-repo outcomes.",
         "operationId": "push_v1_captures_push_post",
         "requestBody": {
           "content": {
@@ -1178,6 +1179,7 @@
         "summary": "Delete"
       },
       "get": {
+        "description": "Authenticate and list stored collections with their aggregate count.",
         "operationId": "collections_v1_collections_get",
         "responses": {
           "200": {
@@ -1251,6 +1253,7 @@
         "summary": "Delete"
       },
       "get": {
+        "description": "Authenticate and list documents, optionally scoped by collection.",
         "operationId": "documents_v1_documents_get",
         "responses": {
           "200": {
@@ -1610,6 +1613,7 @@
     },
     "/v1/search": {
       "get": {
+        "description": "Authenticate, validate a query, and return ranked hybrid-search results.\n\nMissing q returns HTTP 400; unauthorized requests return HTTP 401.\nTelemetry is recorded after the response when enabled.",
         "operationId": "search_v1_search_get",
         "responses": {
           "200": {
@@ -1628,6 +1632,7 @@
     },
     "/v1/show": {
       "get": {
+        "description": "Authenticate and return document metadata or one stored page.",
         "operationId": "show_v1_show_get",
         "responses": {
           "200": {
@@ -1654,6 +1659,7 @@
     },
     "/v1/status": {
       "get": {
+        "description": "Authenticate and report the daemon's live storage and engine status.",
         "operationId": "status_v1_status_get",
         "responses": {
           "200": {
@@ -1701,6 +1707,7 @@
     },
     "/v1/tasks/{task_id}": {
       "get": {
+        "description": "Authenticate and report task state, or 404 for an unknown ID.",
         "operationId": "status_v1_tasks__task_id__get",
         "responses": {
           "200": {

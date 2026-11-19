@@ -59,6 +59,7 @@ class EthosMemoryBootstrap:
     ) -> Self:
         # None means "use the global identities dir", resolved here at call time
         # (not bound as a default) so it follows the home directory then.
+        """Select identity roots for memory-guide installation and reconciliation."""
         self = super().__new__(cls)
         self._identities = (
             identities if identities is not None else QuarryHome.ethos_identities()

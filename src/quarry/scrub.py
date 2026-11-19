@@ -166,6 +166,7 @@ class Scrubber:
     _profanity_re: Pattern[str] | None
 
     def __new__(cls, config: ScrubConfig | None = None) -> Self:
+        """Compile redaction rules for the supplied or default scrub configuration."""
         self = super().__new__(cls)
         self._config = config if config is not None else ScrubConfig()
         self._block_rules = BLOCK_RULES
@@ -176,6 +177,7 @@ class Scrubber:
 
     @property
     def config(self) -> ScrubConfig:
+        """Expose the effective policy used to compile this scrubber's rules."""
         return self._config
 
     def scrub(self, text: str) -> tuple[str, dict[str, int]]:
@@ -259,10 +261,10 @@ class Scrubber:
         return tuple(rules)
 
     def _build_profanity_re(self) -> Pattern[str] | None:
-        """Compile a whole-word regex over the config's words and their inflections.
+        r"""Compile a whole-word regex over the config's words and their inflections.
 
         ``None`` if the list is empty. :class:`ProfanityInflector` expands
-        each base word first, so the ``\\b...\\b`` regex still matches
+        each base word first, so the ``\b...\b`` regex still matches
         exactly, not via an over-matching optional suffix.
         """
         words = self._config.profanity_words

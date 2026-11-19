@@ -22,6 +22,7 @@ class LockPidFile:
     _fd: int
 
     def __new__(cls, fd: int) -> Self:
+        """Bind PID serialization to an already-open lockfile descriptor."""
         self = super().__new__(cls)
         self._fd = fd
         return self

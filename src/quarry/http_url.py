@@ -73,6 +73,12 @@ class HttpUrl:
     _DIGEST: ClassVar[re.Pattern[str]] = re.compile(r"q\[sha256\]=[0-9a-f]{16}")
 
     def __new__(cls, raw: str) -> Self:
+        """Validate and canonicalize a URL while retaining its fetch and redacted forms.
+
+        Raises:
+            ValueError: The URL is malformed, lacks a host, or has an unsupported
+                scheme.
+        """
         parts = UrlSyntax.parse(raw)
         host = (parts.hostname or "").translate(cls._STOPS).rstrip(".")
         if parts.scheme not in cls._DEFAULT_PORTS or not host:

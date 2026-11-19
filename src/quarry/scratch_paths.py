@@ -102,6 +102,7 @@ class ScratchGuard:
     _temp_roots: tuple[Path, ...]
 
     def __new__(cls) -> Self:
+        """Use the built-in scratch names, suffixes, and system-temp roots."""
         self = super().__new__(cls)
         self._skip_names = _ALWAYS_SKIP_NAMES
         self._skip_suffixes = _ALWAYS_SKIP_SUFFIXES

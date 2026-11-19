@@ -55,6 +55,7 @@ class SafeRepoPath:
     _NEW_FILE_MODE: Final = 0o644
 
     def __new__(cls, root: Path, relative: Sequence[str]) -> Self:
+        """Freeze a relative component sequence under a repository root."""
         self = super().__new__(cls)
         self._root = root
         self._relative = tuple(relative)

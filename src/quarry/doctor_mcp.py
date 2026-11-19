@@ -44,6 +44,7 @@ class ClaudeCodeMcp:
     _plugins_path: Path
 
     def __new__(cls, plugins_path: Path | None = None) -> Self:
+        """Select an explicit plugin-registry path or Claude Code's user registry."""
         self = super().__new__(cls)
         self._plugins_path = plugins_path or (
             QuarryHome.home() / ".claude" / "plugins" / "installed_plugins.json"

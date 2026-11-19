@@ -95,6 +95,7 @@ class SessionTranscriptCapture:
         # fires for this capture (UnchangedTranscript.look_for's own contract).
         source_version: str = "",
     ) -> Self:
+        """Bind transcript content to its archive source and attribution labels."""
         self = super().__new__(cls)
         self._source = source
         # The reader is injected so a caller that already read the transcript

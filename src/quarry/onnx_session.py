@@ -61,6 +61,7 @@ class OnnxSessionBuilder:
         force_cuda: bool,
         load_cpu_model: Callable[[str], str],
     ) -> Self:
+        """Bind session creation to provider, thread limits, and CPU fallback."""
         self = super().__new__(cls)
         self._selection = selection
         self._threads = threads

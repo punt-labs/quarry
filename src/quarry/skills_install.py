@@ -137,6 +137,7 @@ class SkillsInstaller:
     _home: Path
 
     def __new__(cls, source_dir: Path, home: Path) -> Self:
+        """Bind packaged skill copying to a source tree and target home directory."""
         self = super().__new__(cls)
         self._source = SkillSource(source_dir)
         self._home = home

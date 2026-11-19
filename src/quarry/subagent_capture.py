@@ -48,6 +48,7 @@ class SubagentCapture:
     def __new__(
         cls, source: TranscriptSource, *, agent_type: str, parent_session_id: str
     ) -> Self:
+        """Bind a subagent transcript to agent type and parent attribution."""
         self = super().__new__(cls)
         self._source = source
         self._agent_type = agent_type

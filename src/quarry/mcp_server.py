@@ -79,6 +79,7 @@ class McpTools:
     def __new__(
         cls, connect: Callable[[], QuarryClient] = TargetResolver.connect
     ) -> Self:
+        """Share a daemon connector across the core registered MCP tools."""
         self = super().__new__(cls)
         self._connect = connect
         return self
@@ -113,13 +114,14 @@ class McpTools:
         agent_handle: str = "",
         memory_type: str = "",
     ) -> str:
-        (
-            """Use find before WebSearch or WebFetch for research, or before """
-            """answering a why/how/what-did-we-decide question. """
-            """Prefer grep for symbol and value lookups; prefer find for meaning.
+        """Use find before web research or answering rationale questions.
 
-        Combines vector similarity and BM25 full-text search via Reciprocal
-        Rank Fusion (RRF) for better recall on both meaning and exact terms.
+        Use find before WebSearch or WebFetch for research, or before answering a
+        why/how/what-did-we-decide question. Prefer grep for symbol and value
+        lookups; prefer find for meaning.
+
+        Combines vector similarity and BM25 full-text search via Reciprocal Rank
+        Fusion (RRF) for better recall on both meaning and exact terms.
 
         Args:
             query: Natural language search query.
@@ -131,8 +133,13 @@ class McpTools:
             agent_handle: Your own handle to recall only your memories (e.g.
                 "rmh"); leave empty to search everything.
             memory_type: Optional memory type filter (fact, observation, lesson, etc.).
+
+        Returns:
+            Ranked excerpts with document, page, collection, and relevance metadata;
+            an empty result report means no indexed content matched.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
-        )
         if err := self._reject_blank(query, "query"):
             return err
         if limit <= 0:
@@ -158,18 +165,18 @@ class McpTools:
         overwrite: bool = False,
         collection: str = "",
     ) -> str:
-        (
-            """Use when you have a URL to add to the knowledge base — a doc, """
-            """an article, a spec.
+        """Use when you have a URL to add to the knowledge base.
 
-        """
-            """remember = a specific durable fact, ingest = a URL, learn = a """
-            """distilled lesson that gets retrieval preference.
+        Use when you have a URL to add to the knowledge base — a doc, an article, a
+        spec.
 
-        Fetches a URL with smart sitemap discovery and single-page fallback.
-        For local files and directories, use ``register_directory`` +
-        ``sync_all_registrations`` — the daemon owns the filesystem, so there is
-        no in-process file loader here.
+        remember = a specific durable fact, ingest = a URL, learn = a distilled
+        lesson that gets retrieval preference.
+
+        Fetches a URL with smart sitemap discovery and single-page fallback. For
+        local files and directories, use ``register_directory`` +
+        ``sync_all_registrations`` — the daemon owns the filesystem, so there is no
+        in-process file loader here.
 
         Returns immediately — the daemon indexes in the background.
 
@@ -177,8 +184,12 @@ class McpTools:
             source: HTTP(S) URL to ingest.
             overwrite: If true, replace a stored URL; if false, skip it.
             collection: Collection name. Auto-derived if empty.
+
+        Returns:
+            An accepted ingest task ID, not a completed indexing report.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
-        )
         if not source.startswith(("http://", "https://")):
             return (
                 f"Error: {source!r} is not a URL. Use "
@@ -202,25 +213,23 @@ class McpTools:
         memory_type: str = "",
         summary: str = "",
     ) -> str:
-        (
-            """Use remember when you learn something durable — a decision, """
-            """a gotcha, a non-obvious fact, a procedure — so it survives """
-            """context compaction.
+        """Use remember to save durable facts and observations across sessions.
 
-        """
-            """remember = a specific durable fact, ingest = a URL, learn = a """
-            """distilled lesson that gets retrieval preference.
+        Use remember when you learn something durable — a decision, a gotcha,
+        a non-obvious fact, a procedure — so it survives context compaction.
 
-        Call it at these five moments, not at the end and not never: a
-        non-obvious root cause or gotcha (fact); a ratified design decision with
-        its reason (fact); a repeatable how-to (procedure); a judgement you will
-        revisit (opinion); and once before submitting a mission result
-        (observation). Always pass your own agent_handle — the daemon cannot
-        infer it, and a subagent's working directory resolves to the repo's
-        leader, not to you.
+        remember = a specific durable fact, ingest = a URL, learn = a distilled
+        lesson that gets retrieval preference.
 
-        The daemon scrubs secrets/PII before indexing. Returns immediately —
-        the daemon indexes in the background.
+        Call it at these five moments, not at the end and not never: a non-obvious
+        root cause or gotcha (fact); a ratified design decision with its reason
+        (fact); a repeatable how-to (procedure); a judgement you will revisit
+        (opinion); and once before submitting a mission result (observation). Always
+        pass your own agent_handle — the daemon cannot infer it, and a subagent's
+        working directory resolves to the repo's leader, not to you.
+
+        The daemon scrubs secrets/PII before indexing. Returns immediately — the
+        daemon indexes in the background.
 
         Args:
             content: The text content to remember.
@@ -235,8 +244,12 @@ class McpTools:
             memory_type: Memory classification: fact, observation, opinion,
                 procedure. ``'lesson'`` is reserved for the ``learn`` tool.
             summary: One-line summary of the content.
+
+        Returns:
+            The document name and accepted task ID; indexing runs in the background.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
-        )
         if err := self._reject_blank(document_name, "document_name"):
             return err
         if err := self._reject_blank(content, "content"):
@@ -260,25 +273,29 @@ class McpTools:
 
     @ToolGuard.wrap
     def learn(self, lesson: str, topic: str = "", name: str = "") -> str:
-        (
-            """Use learn to save a distilled lesson that should outrank """
-            """ordinary results for related queries -- a rule, a convention, """
-            """a "do it this way" insight, not a one-off fact.
+        """Use learn to save a distilled lesson for preferential retrieval.
 
-        """
-            """remember = a specific durable fact, ingest = a URL, learn = a """
-            """distilled lesson that gets retrieval preference.
+        Use learn to save a distilled lesson that should outrank ordinary results
+        for related queries -- a rule, a convention, a "do it this way" insight, not
+        a one-off fact.
 
-        The daemon scrubs secrets/PII before indexing, same as remember.
-        Lessons are capped at 500 characters -- use remember for anything
-        longer. Returns immediately -- the daemon indexes in the background.
+        remember = a specific durable fact, ingest = a URL, learn = a distilled
+        lesson that gets retrieval preference.
+
+        The daemon scrubs secrets/PII before indexing, same as remember. Lessons are
+        capped at 500 characters -- use remember for anything longer. Returns
+        immediately -- the daemon indexes in the background.
 
         Args:
             lesson: The distilled lesson text (<= 500 chars).
             topic: Optional domain tag (e.g. "testing", "release-process").
             name: Optional user-visible slug for later reference.
+
+        Returns:
+            The admission status and task ID; lesson indexing runs in the background.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
-        )
         if err := self._reject_blank(lesson, "lesson"):
             return err
         accepted = self._connect().learn(lesson, topic=topic, name=name)
@@ -286,12 +303,24 @@ class McpTools:
 
     @ToolGuard.wrap
     def status(self) -> str:
-        """Use to check how much is indexed before you search or ingest."""
+        """Use to check how much is indexed before you search or ingest.
+
+        Returns:
+            Formatted counts, storage size, and engine/model status for the target.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
+        """
         return StatusReport(self._connect().status().model_dump()).render()
 
     @ToolGuard.wrap
     def insights(self) -> str:
-        """Use to read your own recall stats: query volume, latency, recall mix."""
+        """Use to read your own recall stats: query volume, latency, recall mix.
+
+        Returns:
+            Formatted query volume, latency, and recall-mix statistics.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
+        """
         return InsightsReport(self._connect().insights()).render()
 
     @ToolGuard.wrap
@@ -299,16 +328,22 @@ class McpTools:
         """Use to point every other tool at a different named database.
 
         All tools (find, ingest, sync, etc.) will target the selected database's
-        daemon until changed again. Use list(kind="databases") to see the
-        database the daemon is fixed to.
+        daemon until changed again. Use list(kind="databases") to see the database
+        the daemon is fixed to.
 
-        Only selects among LOCAL databases: while a remote target (QUARRY_URL or
-        a 'quarry login') is active, the remote daemon is fixed to its own
-        database and this has no effect.
+        Only selects among LOCAL databases: while a remote target (QUARRY_URL or a
+        'quarry login') is active, the remote daemon is fixed to its own database
+        and this has no effect.
 
         Args:
             name: Database name (e.g., 'coding', 'work'). Use 'default' for
                   the default database.
+
+        Returns:
+            The prior and selected local database and its resolved storage path;
+            the selection affects only this MCP process, not the persisted default.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
         # A local db selection only governs the loopback run-dir target. Under a
         # remote/explicit target it is IGNORED by TargetResolver — so refuse

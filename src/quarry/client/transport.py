@@ -38,10 +38,12 @@ class Response:
 
     @property
     def status(self) -> int:
+        """Expose the response's HTTP status before domain-error translation."""
         return self._status
 
     @property
     def json_body(self) -> object:
+        """Expose the decoded JSON payload without imposing an operation schema."""
         return self._json
 
 
@@ -56,7 +58,21 @@ class Transport(Protocol):
         params: Mapping[str, str] | None = None,
         json_body: Mapping[str, object] | None = None,
         timeout: float | None = None,
-    ) -> Response: ...
+    ) -> Response:
+        """Send a daemon-relative request using the configured target and credentials.
+
+        Args:
+            path: API path relative to the configured daemon base URL.
+            timeout: Per-request seconds; None uses the transport's default timeout.
+
+        Returns:
+            HTTP status and decoded JSON, including non-success HTTP responses.
+
+        Raises:
+            QuarryConnectionError: The daemon cannot be reached.
+            QuarryError: The response body is not valid JSON.
+        """
+        ...
 
 
 @final
@@ -66,6 +82,7 @@ class HttpxTransport:
     _client: httpx.Client
 
     def __new__(cls, client: httpx.Client) -> Self:
+        """Use an existing HTTP client for pooled, authenticated daemon requests."""
         self = super().__new__(cls)
         self._client = client
         return self

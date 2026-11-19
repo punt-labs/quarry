@@ -88,6 +88,12 @@ class OnnxEmbeddingBackend:
         return model_path, tokenizer_path
 
     def __new__(cls) -> Self:
+        """Load the tokenizer and selected ONNX model with provider-specific limits.
+
+        Raises:
+            OSError: Model or tokenizer files cannot be fetched or read.
+            RuntimeError: A pinned CUDA provider or model session cannot initialize.
+        """
         self = super().__new__(cls)
         self._dimension = 768
 
@@ -134,10 +140,12 @@ class OnnxEmbeddingBackend:
 
     @property
     def dimension(self) -> int:
+        """Expose the model's 768-component embedding width."""
         return self._dimension
 
     @property
     def model_name(self) -> str:
+        """Expose the model repository identifier used for embedding attribution."""
         return ONNX_MODEL_REPO
 
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:

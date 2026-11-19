@@ -156,6 +156,7 @@ class ProjectPermissions:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Anchor permission edits at the repo's symlink-guarded settings path."""
         self = super().__new__(cls)
         self._root = root
         self._file = SafeRepoPath(root, _SETTINGS)

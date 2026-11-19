@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 @final
 class SyncLock:
-    """Own the sync lockfile and arbitrate single-flight DISPATCH of ``quarry sync``.
+    r"""Own the sync lockfile and arbitrate single-flight DISPATCH of ``quarry sync``.
 
     Scope, precisely: ``quarry sync`` is dispatch-only — it POSTs a sync
     request to the daemon and exits after the daemon's 202 acceptance, well
@@ -50,7 +50,7 @@ class SyncLock:
     The lockfile is never deleted BY THIS CLASS, but ``flock`` is bound to
     the inode, not the path: if the file is deleted EXTERNALLY while a
     dispatch holds it (an operator ``rm``, a future cleanup/doctor script), a
-    subsequent :meth:`acquire` happily ``O_CREAT``\\ s a fresh inode at the
+    subsequent :meth:`acquire` happily ``O_CREAT``\ s a fresh inode at the
     same path, unrelated to the still-locked old one — silently defeating
     single-flight.  Do not "fix" a lockfile that looks stuck by removing it
     while a dispatch might be active; the flock, not the path, is the source
@@ -62,6 +62,7 @@ class SyncLock:
     _path: Path
 
     def __new__(cls, path: Path | None = None) -> Self:
+        """Choose an explicit lockfile or the current daemon run directory's lock."""
         self = super().__new__(cls)
         self._path = path if path is not None else cls._default_path()
         return self

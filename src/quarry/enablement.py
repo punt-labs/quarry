@@ -69,6 +69,7 @@ class Enablement:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Bind guidance, marker, import, and gitignore updates to one repo root."""
         self = super().__new__(cls)
         self._guidance = Guidance(root)
         self._marker = EnabledMarker(root)

@@ -51,6 +51,7 @@ class ThreadConfig:
     _lance_threads: int
 
     def __new__(cls, *, is_gpu: bool) -> Self:
+        """Derive CPU and inference thread budgets from hardware and GPU selection."""
         self = super().__new__(cls)
         if (detected := os.cpu_count()) is None:
             logger.warning("os.cpu_count() returned None; assuming %d CPUs", _NCPU_NONE)

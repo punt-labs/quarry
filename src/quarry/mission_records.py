@@ -56,6 +56,7 @@ class MissionContract:
 
     @property
     def is_open(self) -> bool:
+        """Indicate whether the mission contract still permits new work."""
         return self.status == _OPEN
 
     @staticmethod
@@ -99,10 +100,12 @@ class MissionRound:
 
     @property
     def has_result(self) -> bool:
+        """Indicate whether this round carries a recorded result."""
         return self.result is not None
 
     @property
     def has_reflection(self) -> bool:
+        """Indicate whether this round carries a recorded reflection."""
         return self.reflection is not None
 
     @property

@@ -26,6 +26,7 @@ class DeleteReconciler:
     _collection: str
 
     def __new__(cls, db: LanceDB, collection: str) -> Self:
+        """Bind document-deletion decisions to a database and collection."""
         self = super().__new__(cls)
         self._db = db
         self._collection = collection

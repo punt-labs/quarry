@@ -40,6 +40,7 @@ class CaptureReScrubber:
     _scrubber: Scrubber
 
     def __new__(cls, captures_dir: Path) -> Self:
+        """Prepare the shared scrubber for one capture directory."""
         self = super().__new__(cls)
         self._captures_dir = captures_dir
         self._scrubber = Scrubber()

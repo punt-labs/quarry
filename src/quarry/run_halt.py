@@ -31,6 +31,7 @@ class RunHalt:
     _stop: StopSignal
 
     def __new__(cls, stop: StopSignal) -> Self:
+        """Track stop requests with no abort reason or full-queue streak initially."""
         self = super().__new__(cls)
         self._stop = stop
         self._reason = ""

@@ -35,6 +35,7 @@ class TranscriptReader:
     _path: Path
 
     def __new__(cls, path: Path) -> Self:
+        """Read and parse JSONL transcript records, logging truncation if detected."""
         self = super().__new__(cls)
         self._path = path
         self._parsed = TranscriptRecords.parse(cls._read_leniently(path))

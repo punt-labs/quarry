@@ -50,6 +50,7 @@ class TranscriptStore:
         collection: str,
         stored: StoredSessions,
     ) -> Self:
+        """Bind capture writes to a project, collection, and stored-version snapshot."""
         self = super().__new__(cls)
         self._run = run
         self._project_path = project_path

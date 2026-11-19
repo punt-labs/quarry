@@ -47,6 +47,7 @@ class AtomicFile:
     _NEW_FILE_MODE = 0o644
 
     def __new__(cls, path: Path) -> Self:
+        """Bind byte-preserving atomic text operations to a path without opening it."""
         self = super().__new__(cls)
         self._path = path
         return self
@@ -57,10 +58,10 @@ class AtomicFile:
         return self._path
 
     def read(self) -> str:
-        """Return the file's text verbatim, or ``""`` when it does not exist.
+        r"""Return the file's text verbatim, or ``""`` when it does not exist.
 
         ``newline=""`` disables universal-newline translation; without it
-        ``read_text`` would rewrite every ``\\r\\n`` and lone ``\\r`` to ``\\n``,
+        ``read_text`` would rewrite every ``\r\n`` and lone ``\r`` to ``\n``,
         silently normalizing a CRLF or old-Mac file to LF before the caller has
         even parsed it. Reading bytes as-is keeps a write-then-read round-trip
         byte-identical for LF, CRLF, and lone-CR alike.

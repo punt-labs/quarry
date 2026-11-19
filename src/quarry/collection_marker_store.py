@@ -36,6 +36,7 @@ class CollectionMarkerStore:
     _conn: sqlite3.Connection
 
     def __new__(cls, conn: sqlite3.Connection) -> Self:
+        """Share the registry connection for retained and pending-purge markers."""
         self = super().__new__(cls)
         self._conn = conn
         return self

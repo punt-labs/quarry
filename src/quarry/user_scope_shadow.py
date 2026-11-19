@@ -46,6 +46,7 @@ class UserScopeShadow:
     def __new__(
         cls, plugin: ClaudeCodeMcp, claude_json_path: Path | None = None
     ) -> Self:
+        """Select Claude Code's state file and plugin-scope check for safe pruning."""
         self = super().__new__(cls)
         self._plugin = plugin
         self._claude_json_path = claude_json_path or (

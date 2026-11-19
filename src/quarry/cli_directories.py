@@ -24,6 +24,7 @@ class DirectoryCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind directory registration commands to shared CLI plumbing."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

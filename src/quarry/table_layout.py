@@ -26,11 +26,11 @@ class ColumnSpec:
 
 @final
 class TableLayout:
-    """Render rows under a header, fitting :data:`TABLE_WIDTH` columns.
+    r"""Render rows under a header, fitting :data:`TABLE_WIDTH` columns.
 
     Fixed columns grow to content width.  The single variable column
     (``fixed=False``) gets the remaining budget and wraps on overflow.
-    Output is ``▶  HEADER\\n   row\\n   row...``.
+    Output is ``▶  HEADER\n   row\n   row...``.
     """
 
     __slots__ = ("_specs", "_variable")
@@ -44,6 +44,11 @@ class TableLayout:
     _variable: int | None
 
     def __new__(cls, specs: list[ColumnSpec]) -> Self:
+        """Choose table columns and locate the optional variable-width column.
+
+        Raises:
+            ValueError: More than one column has variable width.
+        """
         variable = [i for i, spec in enumerate(specs) if not spec.fixed]
         if len(variable) > 1:
             msg = "TableLayout: at most one variable column allowed"

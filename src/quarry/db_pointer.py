@@ -50,6 +50,7 @@ class DatabaseSelection:
     _override: str
 
     def __new__(cls) -> Self:
+        """Start with no process override so the persisted default governs selection."""
         self = super().__new__(cls)
         self._override = ""
         return self

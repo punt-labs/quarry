@@ -97,6 +97,7 @@ class SealedTree:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Anchor no-symlink path checks at the supplied tree root."""
         self = super().__new__(cls)
         self._root = root
         return self

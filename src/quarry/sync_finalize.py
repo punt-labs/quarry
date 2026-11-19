@@ -28,6 +28,7 @@ class SyncFinalizer:
     _settings: Settings
 
     def __new__(cls, db: LanceDB, settings: Settings) -> Self:
+        """Bind index maintenance and shadow pushes to a database and settings."""
         self = super().__new__(cls)
         self._db = db
         self._settings = settings

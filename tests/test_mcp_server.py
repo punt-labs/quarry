@@ -225,6 +225,8 @@ class TestSurfaceComplete:
     def test_every_tool_has_a_description(self) -> None:
         for tool in asyncio.run(mcp.list_tools()):
             assert tool.description, f"{tool.name} has no description"
+            assert "Returns:" in tool.description, tool.name
+            assert "Error:" in tool.description, tool.name
 
     def test_ingest_says_a_stored_url_is_skipped_without_overwrite(self) -> None:
         [ingest] = [t for t in asyncio.run(mcp.list_tools()) if t.name == "ingest"]
@@ -940,13 +942,13 @@ class TestToolDocstringOpeners:
         assert self._R2 in mcp.instructions
 
     def test_find_docstring_carries_r1_and_r2(self) -> None:
-        doc = McpTools.find.__doc__
+        doc = " ".join((McpTools.find.__doc__ or "").split())
         assert doc is not None
         assert self._R1 in doc
         assert self._R2 in doc
 
     def test_remember_docstring_carries_r3(self) -> None:
-        doc = McpTools.remember.__doc__
+        doc = " ".join((McpTools.remember.__doc__ or "").split())
         assert doc is not None
         assert self._R3 in doc
 
@@ -982,7 +984,7 @@ class TestToolDocstringOpeners:
         whichever verb is missing it.
         """
         for tool in (McpTools.remember, McpTools.ingest, McpTools.learn):
-            doc = tool.__doc__ or ""
+            doc = " ".join((tool.__doc__ or "").split())
             assert self._BOUNDARY in doc, tool.__name__
 
     def test_other_tools_open_with_non_mechanism_sentence(self) -> None:

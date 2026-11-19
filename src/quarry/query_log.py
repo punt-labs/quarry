@@ -42,6 +42,12 @@ class QueryLog:
     _prune_schedule: PruneSchedule
 
     def __new__(cls, path: Path) -> Self:
+        """Secure the telemetry path and open its SQLite schema and shared lock.
+
+        Raises:
+            OSError: Private telemetry permissions cannot be established.
+            sqlite3.Error: The log cannot be opened or its schema initialized.
+        """
         self = super().__new__(cls)
         TelemetryPathGuard(path).secure()
         # check_same_thread=False: background ingest/task threads share the

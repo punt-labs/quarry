@@ -43,6 +43,12 @@ class EthosTree:
     _start: Path
 
     def __new__(cls, cwd: str | Path) -> Self:
+        """Resolve the starting directory for upward ethos-artifact discovery.
+
+        Raises:
+            OSError: The starting path cannot be resolved.
+            RuntimeError: Resolution encounters a symlink loop.
+        """
         self = super().__new__(cls)
         self._start = Path(cwd).resolve()
         return self

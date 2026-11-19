@@ -51,6 +51,7 @@ class ExtScanOutcome:
 
     @property
     def failed_handles(self) -> tuple[str, ...]:
+        """Identify identities whose extension scan reported a failure."""
         return tuple(failure.handle for failure in self.failed)
 
     def message(self) -> str:
