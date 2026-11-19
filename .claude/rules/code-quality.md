@@ -17,7 +17,13 @@ paths:
 
 **Known pyright debt:** 6 `reportUnknown*` checks are suppressed project-wide because lancedb, rapidocr, onnxruntime, pymupdf, and pyarrow ship no type stubs. This means pyright cannot catch unknown-type bugs in modules that don't import these libraries either. The suppressions should be narrowed as these libraries add stubs. Pyright's `executionEnvironments` scopes by directory, not by import, so the only current alternative is 591 inline `# pyright: ignore` comments.
 
-**OO ratchet (merge-base scored — DES-040):** `make check-oo` (part of `make check`) scores the touched files in the working tree against the OO baseline **committed at the merge-base** (`git show <base>:.oo-baseline.json`), where `base` defaults to `git merge-base origin/main HEAD`. It passes only if no metric regressed on touched files and at least one metric improved; it fails otherwise. Because the comparison floor is the immutable base-commit blob, a regression cannot be laundered by hand-editing the in-tree baseline within a PR. The tooling comes from the pinned PyPI dev dependency `punt-oo-ratchet==0.2.0`, imported as `oo_ratchet`; there are no embedded copies or shims. `make check` runs **three** merge-base ratchets — `check-oo`, `check-coupling`, `check-suppressions`.
+**OO ratchet (merge-base scored — DES-040):** `make check-oo` (part of `make check`) scores the touched files in the working tree against the OO baseline **committed at the merge-base** (`git show <base>:.oo-baseline.json`), where `base` defaults to `git merge-base origin/main HEAD`. It passes only if no metric regressed on touched files and at least one metric improved; it fails otherwise. Because the comparison floor is the immutable base-commit blob, a regression cannot be laundered by hand-editing the in-tree baseline within a PR. The tooling comes from the pinned PyPI dev dependency `punt-oo-ratchet==0.3.0`, imported as `oo_ratchet`; there are no embedded copies or shims. `make check` runs **three** merge-base ratchets — `check-oo`, `check-coupling`, `check-suppressions`.
+
+`module_size` counts code-bearing lines, excluding blanks, comments and docstrings.
+`classes_per_module` excludes exceptions, enums, dataclasses, Protocols and
+TypedDicts. Coupling's default efferent cap is 10 (15 for `__main__.py`).
+Suppression waivers already present unchanged in the comparison base's ledger
+are retired: a later increase needs a fresh audited relaxation.
 
 Workflow:
 
