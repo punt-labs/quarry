@@ -20,13 +20,40 @@ improvements; no regressed-metric waivers are added.
 | `classes_per_module` | 0 | 162 | Excludes exceptions, enums, dataclasses, Protocols and TypedDicts |
 
 All other OO metrics stay unchanged. Coupling scores do not change between
-0.2.0 and 0.3.0 on the same source. Its default efferent-coupling threshold is
-now 10 rather than 7 (`__main__.py` remains 15). Coupling state-write detection
+0.2.0 and 0.3.0 on the same source. The efferent-coupling cap of 10 rather than
+7 is the 0.3.0 package default, adopted per PL-1188 as Jim's package policy
+(`__main__.py` remains 15). Coupling state-write detection
 is more conservative, including in-place mutations; Quarry's default-mode
 scores are unaffected. The coupling baseline and audit are not rewritten:
 five pre-existing drift cells (two efferent coupling and three public-name
 counts) are deliberately retained, not repaired as part of this migration.
 The suppression baseline and audit are also unchanged, at 186.
+
+The 0.3.0 `CouplingScorer` reports these current modules at 8, 9 or 10 internal
+imports (paths relative to `src/quarry/`). These exceed the old default of 7;
+`__main__.py` is listed for completeness but retains its separate cap of 15,
+so it would not fail under the old policy. No configuration or waivers are added.
+
+| Module | `efferent_coupling` |
+|--------|-------------------:|
+| `__main__.py` | 8 |
+| `daemon/backfill_task.py` | 8 |
+| `daemon/captured_body_ingest.py` | 8 |
+| `daemon/launcher.py` | 10 |
+| `daemon/routes/captures.py` | 8 |
+| `daemon/routes/content_group.py` | 9 |
+| `daemon/watch_submit.py` | 10 |
+| `db/facade.py` | 9 |
+| `doctor_daemon.py` | 8 |
+| `doctor_runner.py` | 9 |
+| `extractors/__init__.py` | 8 |
+| `ingestion/__init__.py` | 10 |
+| `ingestion/file_indexer.py` | 10 |
+| `ingestion/format_strategies.py` | 8 |
+| `mcp_server.py` | 10 |
+| `repair.py` | 9 |
+| `service.py` | 9 |
+| `sync.py` | 9 |
 
 Suppression waivers identical to entries already in the comparison base's
 ledger now retire. They cannot provide reusable headroom after a cleanup;
