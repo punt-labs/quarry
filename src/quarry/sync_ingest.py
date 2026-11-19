@@ -86,6 +86,7 @@ class CollectionIngestor:
         max_workers: int,
         progress: Callable[[str], None],
     ) -> Self:
+        """Prepare bounded file-indexing workers and shared progressive checkpoints."""
         self = super().__new__(cls)
         self._store = store
         self._registry = registry
@@ -107,9 +108,11 @@ class CollectionIngestor:
     def build_records(
         self, chunks: list[Chunk], vectors: NDArray[np.float32]
     ) -> list[dict[str, object]]:
+        """Serialize chunks and aligned vectors for a progressive collection flush."""
         return ChunkTable.build_records(chunks, vectors)
 
     def insert_records(self, records: list[dict[str, object]]) -> int:
+        """Persist one buffered chunk batch and report the number of inserted rows."""
         return self._store.insert_records(records)
 
     def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None:

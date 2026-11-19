@@ -90,11 +90,11 @@ class _PendingDir:
             self._timer = None
 
     def modified(self) -> tuple[Path, ...]:
-        """The paths whose last event was a create/modify."""
+        """Select paths whose most recent event created or modified them."""
         return tuple(p for p, deleted in self._paths.items() if not deleted)
 
     def deleted(self) -> tuple[Path, ...]:
-        """The paths whose last event was a deletion."""
+        """Select paths whose most recent event deleted them."""
         return tuple(p for p, deleted in self._paths.items() if deleted)
 
 
@@ -129,6 +129,14 @@ class DebouncedDispatcher:
         bulk_threshold: int,
         sink: Callable[[FlushBatch], None],
     ) -> Self:
+        """Start with no pending paths or timers on the supplied loop.
+
+        Args:
+            debounce_s: Quiet-window duration in seconds.
+            max_delay_s: Maximum seconds to defer a continuously changing path.
+            bulk_threshold: Path count at which a batch becomes a bulk scan.
+            sink: Callback receiving each coalesced batch.
+        """
         self = super().__new__(cls)
         self._loop = loop
         self._debounce = debounce_s

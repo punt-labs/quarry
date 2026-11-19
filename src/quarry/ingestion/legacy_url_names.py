@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 class LegacyUrlNames:
     """Treat a document stored under an old URL spelling as the same document.
 
-    Earlier builds stored a URL under names this one no longer produces: with its
-    raw query or fragment, its default port, or its path unencoded.  Re-ingesting the
+    Noncanonical URL names can contain a raw query or fragment, a default port,
+    or an unencoded path. Re-ingesting the
     URL must replace that document, not leave it orphaned beside the new one, and
     a dedup or lookup must see it as existing.  A stored name is *legacy* when it
     differs from the canonical name but reads as it, either
@@ -53,6 +53,7 @@ class LegacyUrlNames:
     _lock: threading.Lock
 
     def __new__(cls, database: Database) -> Self:
+        """Start an empty, lock-protected cache of stored URL names."""
         self = super().__new__(cls)
         self._database = database
         self._listed = {}
@@ -159,7 +160,7 @@ class LegacyUrlNames:
 
         A legacy spelling of a URL is replaced whenever the page being stored was
         fetched from a URL (``context.url_sourced``), overwriting or not: it is the same
-        page under a name this build no longer writes, and the new document must
+        page under a noncanonical name, and the canonical document must
         not sit beside it.  The twins are only returned here; the caller drops
         them with :meth:`drop_legacy` once *name* is stored, so a store that
         fails leaves the old copy in place.  A document that someone named with a

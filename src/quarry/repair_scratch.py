@@ -28,6 +28,7 @@ class RepairScratch:
     _parent: Path
 
     def __new__(cls, parent: Path) -> Self:
+        """Choose the parent directory for a process-specific repair workspace."""
         self = super().__new__(cls)
         self._parent = parent
         return self

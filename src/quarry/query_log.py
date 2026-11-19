@@ -42,13 +42,19 @@ class QueryLog:
     _prune_schedule: PruneSchedule
 
     def __new__(cls, path: Path) -> Self:
+        """Secure the telemetry path and open its SQLite schema and shared lock.
+
+        Raises:
+            OSError: Private telemetry permissions cannot be established.
+            sqlite3.Error: The log cannot be opened or its schema initialized.
+        """
         self = super().__new__(cls)
         TelemetryPathGuard(path).secure()
         # check_same_thread=False: background ingest/task threads share the
         # daemon's one connection with the request-handling thread, matching
         # SyncRegistry's rationale. The connection itself serializes nothing --
         # ``_lock`` is what makes concurrent record()/prune()/insights reads
-        # from the threadpool safe against interleaving (DES-056 round 2).
+        # from the threadpool safe against interleaving (DES-056).
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._lock = threading.Lock()
         try:

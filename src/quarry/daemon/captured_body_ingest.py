@@ -52,6 +52,7 @@ class CapturedBodyIngest:
         labels: IngestLabels,
         fetcher: WebFetcher = _DEFAULT_FETCHER,
     ) -> Self:
+        """Bind a captured URL to its labels and media-type-aware fetcher."""
         self = super().__new__(cls)
         self._source = source
         self._labels = labels

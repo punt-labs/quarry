@@ -21,6 +21,7 @@ class PluginRegistryEntries:
     _entries: tuple[object, ...]
 
     def __new__(cls, raw: list[object]) -> Self:
+        """Freeze the raw scope-aware registry entries for one plugin."""
         self = super().__new__(cls)
         self._entries = tuple(raw)
         return self

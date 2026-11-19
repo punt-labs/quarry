@@ -55,6 +55,7 @@ class AbortRecord:
         discard: SpoolDiscard,
         respool: Callable[[QueuedUnit], None],
     ) -> Self:
+        """Start an empty abort record with shared tally and spool callbacks."""
         self = super().__new__(cls)
         self._discard = discard
         self._reason = reason

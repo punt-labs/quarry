@@ -8,7 +8,7 @@ from typing import ClassVar, final
 
 @final
 class AuthorityMask:
-    """Replace ``scheme://userinfo@`` with ``scheme://[userinfo]@``, line by line.
+    r"""Replace ``scheme://userinfo@`` with ``scheme://[userinfo]@``, line by line.
 
     The contract, which ``tests/test_log_redactor_oracle.py`` checks against a
     generated grammar:
@@ -22,8 +22,8 @@ class AuthorityMask:
        between its letters and before the colon; any other scheme is read
        unbroken, because joining arbitrary letters would eat the last word of the
        previous line.
-    2. **Authority.**  The text after the slashes up to the next ``/``, ``\\``,
-       ``?`` or ``#``, and never across a line break (``\\n`` or ``\\r``).
+    2. **Authority.**  The text after the slashes up to the next ``/``, ``\``,
+       ``?`` or ``#``, and never across a line break (``\n`` or ``\r``).
     3. **Mask.**  When the authority holds an ``@``, everything from the scheme
        up to the last ``@`` of the authority is replaced.  The host, path and
        the rest of the line are not touched here.
@@ -45,7 +45,7 @@ class AuthorityMask:
        line's first token is not an address (or is digits and ``@`` after
        ``name:12``).  A gap the contract does not cross is a limit: a user with no
        ``:`` cut by a gap, a credential cut by two line breaks, and a ``?``,
-       ``#`` or ``\\`` in a URL's password (each ends the authority).
+       ``#`` or ``\`` in a URL's password (each ends the authority).
     6. **Preservation.**  Every character outside a masked span is kept exactly.
        No line is deleted or merged, and no host is re-attributed.
 

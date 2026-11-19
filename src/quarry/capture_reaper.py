@@ -40,6 +40,7 @@ class CaptureReaper:
     _directory: CaptureDirectory
 
     def __new__(cls, directory: CaptureDirectory) -> Self:
+        """Bind stale-temp cleanup to one project's capture directory."""
         self = super().__new__(cls)
         self._directory = directory
         return self

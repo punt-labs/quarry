@@ -1,8 +1,8 @@
-"""Phase-1 scoring: ranx MRR + success@k per bucket, plus pollution diagnostic.
+"""Retrieval scoring: ranx MRR + success@k per bucket, plus pollution diagnostic.
 
 nDCG is deliberately absent: under a single binary-relevant known-item it
-degenerates to MRR, so a Phase-1 nDCG would be a misleading second axis (design
-section 2). metadata-pollution@10 is a reported-only diagnostic, never gated.
+degenerates to MRR, so nDCG would be a misleading second axis.
+metadata-pollution@10 is a reported-only diagnostic, never gated.
 Metrics are computed and reported per bucket (natural / known-item / regression)
 and never blended into a single headline number.
 
@@ -32,7 +32,7 @@ _POLLUTION_K = 10
 
 
 class Scorer:
-    """Compute per-bucket Phase-1 scores from a run, qrels, and retrieved chunks."""
+    """Compute per-bucket retrieval scores from a run, qrels, and retrieved chunks."""
 
     __slots__ = ("_classifier", "_queryset")
 

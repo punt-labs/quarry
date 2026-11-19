@@ -43,6 +43,7 @@ class Registrations:
         retained: Sequence[RetainedCollection] = (),
         chunk_collections: Sequence[str] = (),
     ) -> Self:
+        """Snapshot active coverage, retained origins, and occupied collection names."""
         self = super().__new__(cls)
         self._by_dir = {r.directory: r for r in registrations}
         self._taken = (

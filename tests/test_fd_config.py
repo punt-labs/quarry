@@ -153,7 +153,7 @@ class TestFdServiceLimits:
 
     The service manager bakes these limits BEFORE spawning quarryd because it can
     raise the hard limit above the 256 a fresh launchd bootstrap inherits — the
-    root cause of ``FD headroom: 9/256`` (quarry-fnzh).  FdEnvelope (DES-046) then
+    root cause of ``FD headroom: 9/256``.  FdEnvelope (DES-046) then
     lifts the soft limit off this ceiling at runtime instead of clamping to 256.
     """
 

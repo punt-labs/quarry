@@ -40,6 +40,7 @@ class DaemonGuard:
     _run_dirs: tuple[RunDir, ...]
 
     def __new__(cls, run_dirs: tuple[RunDir, ...]) -> Self:
+        """Select daemon run directories whose ownership locks must be checked."""
         self = super().__new__(cls)
         self._run_dirs = run_dirs
         return self

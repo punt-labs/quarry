@@ -32,6 +32,7 @@ class SchemaManager:
     _db: LanceDB
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Bind chunk schema creation and migration to an open database."""
         self = super().__new__(cls)
         self._db = db
         return self

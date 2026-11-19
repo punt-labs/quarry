@@ -55,6 +55,7 @@ class GpuRuntime:
     _python: str
 
     def __new__(cls, uv_path: str) -> Self:
+        """Select uv and the running Python for compatible wheel installs."""
         self = super().__new__(cls)
         self._uv_path = uv_path
         self._python = sys.executable

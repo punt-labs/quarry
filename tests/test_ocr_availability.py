@@ -84,7 +84,7 @@ def test_require_raises_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_require_chains_the_cv2_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The discarded cv2 exception was the finding: chain it so the operator
+    # Chain the cv2 exception so the operator
     # keeps the real cause in the traceback.
     _break_cv2_import(monkeypatch)
     availability = OcrAvailability.probe()

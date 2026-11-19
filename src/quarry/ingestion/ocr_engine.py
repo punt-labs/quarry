@@ -25,13 +25,17 @@ class OcrResult(Protocol):
     """Structural type for RapidOCR v3 output."""
 
     @property
-    def txts(self) -> tuple[str, ...] | None: ...
+    def txts(self) -> tuple[str, ...] | None:
+        """Expose recognized text lines, or None when OCR finds no text."""
+        ...
 
 
 class OcrEngineProtocol(Protocol):
     """Structural type for a callable RapidOCR engine."""
 
-    def __call__(self, img: Image.Image) -> OcrResult: ...
+    def __call__(self, img: Image.Image) -> OcrResult:
+        """Recognize text from a Pillow image using the configured local engine."""
+        ...
 
 
 @final

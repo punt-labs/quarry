@@ -47,6 +47,7 @@ class TranscriptOutcomes:
         *,
         dry_run: bool,
     ) -> Self:
+        """Share the tally and unindexable cache under the run's dry-run policy."""
         self = super().__new__(cls)
         self._tally = tally
         self._unindexable = unindexable

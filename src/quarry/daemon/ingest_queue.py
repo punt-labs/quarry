@@ -72,6 +72,7 @@ class IngestQueue:
     _pool: WorkerPool
 
     def __new__(cls, ctx: DaemonContext) -> Self:
+        """Create admission limits and a worker pool without starting consumers."""
         self = super().__new__(cls)
         embed_gate = asyncio.Semaphore(cls._embed_concurrency(ctx))
         self._gate = QueueGate(ctx.settings.ingest_queue_depth)
@@ -157,7 +158,7 @@ class IngestQueue:
         await LoopClose(workers).run(started + self.ABORT_WAIT_S)
 
     def cancel_workers(self) -> None:
-        """Synchronously stop every worker (test-harness teardown, no await).
+        """Stop every worker synchronously without awaiting teardown.
 
         The async counterpart of ``aclose`` for callers that cannot await — it
         aborts each worker so no queued job runs into a later test's mock window.

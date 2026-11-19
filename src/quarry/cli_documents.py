@@ -37,6 +37,7 @@ class DocumentsCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind document inspection and deletion commands to shared CLI plumbing."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

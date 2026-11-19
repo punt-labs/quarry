@@ -43,6 +43,7 @@ class LateOutcome:
     _stopped: str
 
     def __new__(cls, state: TaskState, record: RunRecord) -> Self:
+        """Track a scan's eventual outcome against its shared task and run record."""
         self = super().__new__(cls)
         self._state = state
         self._record = record

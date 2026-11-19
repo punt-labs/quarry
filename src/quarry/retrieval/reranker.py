@@ -22,6 +22,7 @@ class NullReranker:
     __slots__ = ()
 
     def __new__(cls) -> Self:
+        """Create a stateless reranker that preserves candidate ordering and scores."""
         return super().__new__(cls)
 
     def rerank(

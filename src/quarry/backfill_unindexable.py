@@ -34,6 +34,7 @@ class UnindexableTranscripts:
     _known: dict[str, FileStamp]
 
     def __new__(cls, store: Path) -> Self:
+        """Load cached file stamps for transcripts that produced no indexable chunks."""
         self = super().__new__(cls)
         self._file = UnindexableFile(store)
         self._known = dict(self._file.load())

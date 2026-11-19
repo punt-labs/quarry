@@ -61,6 +61,7 @@ class FdEnvelope:
     _target: int
 
     def __new__(cls, *, target: int) -> Self:
+        """Select the desired soft descriptor limit without changing process limits."""
         self = super().__new__(cls)
         self._target = target
         return self
@@ -145,6 +146,11 @@ class FdServiceLimits:
     _hard: int
 
     def __new__(cls, *, soft: int, hard: int) -> Self:
+        """Clamp a service soft limit within the safe floor and requested ceiling.
+
+        Raises:
+            ValueError: The hard ceiling is below Quarry's safe default.
+        """
         if hard < DEFAULT_FD_LIMIT:
             msg = (
                 f"hard fd ceiling {hard} is below the safe default "

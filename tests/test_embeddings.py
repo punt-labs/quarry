@@ -123,7 +123,7 @@ class TestEmbedTexts:
 
 
 class TestNormalization:
-    """Every embedded row is L2-normalized to unit length (quarry-3a7f)."""
+    """Every embedded row is L2-normalized to unit length."""
 
     def test_rows_are_unit_length(self):
         session = _mock_session()

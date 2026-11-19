@@ -30,6 +30,7 @@ class BackfillTally:
     _halt: RunHalt
 
     def __new__(cls, stop: StopSignal) -> Self:
+        """Start an empty run tally governed by the supplied stop signal."""
         self = super().__new__(cls)
         self._halt = RunHalt(stop)
         self._errors = []

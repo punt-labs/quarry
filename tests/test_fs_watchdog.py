@@ -184,7 +184,7 @@ def test_schedule_survives_a_malformed_gitignore_at_the_registered_root(
     tmp_path: Path,
 ) -> None:
     """A malformed .gitignore in a tree being registered must not crash
-    daemon startup / the register route (djb/rev-silent finding) -- the
+    daemon startup / the register route -- the
     tree is still watched, not degraded, since ignore_spec.IgnoreRules now
     compiles line-tolerantly rather than raising.
     """
@@ -204,7 +204,7 @@ def test_schedule_returns_none_when_file_discovery_construction_raises(
     contract is "never crash the caller, return None instead" -- if
     building a FileDiscovery ever raises for a reason that layer's own
     contract does not cover, this boundary must still return None rather
-    than propagate (djb/rev-silent finding).
+    than propagate.
     """
     from quarry.sync_discovery import FileDiscovery
 
@@ -277,7 +277,7 @@ def test_module_load_logs_an_error_when_the_linux_import_fails(
 ) -> None:
     """A Linux host whose pruned-observer import fails logs loudly and falls
     back, rather than silently reverting to unpruned recursive watching --
-    djb's major finding: an `except (ImportError, UnsupportedLibcError)`
+    an `except (ImportError, UnsupportedLibcError)`
     with no platform check would make "watchdog upgrade broke us" on Linux
     indistinguishable from the expected, silent macOS fallback.
 

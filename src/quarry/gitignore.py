@@ -44,6 +44,7 @@ class QuarryGitignore:
     _file: AtomicFile
 
     def __new__(cls, root: Path) -> Self:
+        """Bind managed exclusion lines to the repo's atomic .gitignore file."""
         self = super().__new__(cls)
         self._file = AtomicFile(root / ".gitignore")
         return self
@@ -78,10 +79,10 @@ class QuarryGitignore:
 
     @staticmethod
     def _host_eol(content: str) -> str:
-        """Return the host's line ending from its FIRST newline: CRLF, lone CR, or LF.
+        r"""Return the host's line ending from its FIRST newline: CRLF, lone CR, or LF.
 
         Mirrors :meth:`ClaudeMdImport._host_eol` — detecting the first
-        terminator, not "contains anywhere", keeps a stray ``\\r`` later in the
+        terminator, not "contains anywhere", keeps a stray ``\r`` later in the
         file from overriding a mostly-LF file's true ending.
         """
         cr = content.find("\r")

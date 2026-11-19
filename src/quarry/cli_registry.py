@@ -32,6 +32,7 @@ class CliRegistry:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Share one plumbing bundle across all command groups registered later."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

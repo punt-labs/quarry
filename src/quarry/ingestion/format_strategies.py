@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
-# quarry-w1jr: quarry.extractors' package init eagerly imports code_extractor,
+# quarry.extractors' package init eagerly imports code_extractor,
 # which imports quarry.ingestion.text_splitter, which forces quarry.ingestion's
 # own __init__ to run (Python always initializes a package's __init__ before any
 # submodule) -- which reaches this module via pipeline.py.  If quarry.extractors
@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING, final
 # extractors imports textually before the text_format import -- swapping the
 # order reproduces "ImportError: cannot import name 'SUPPORTED_CODE_EXTENSIONS'
 # from partially initialized module" whenever quarry.extractors is the first
-# quarry package touched in the process (see the pipeline-decomposition design,
-# quarry-hb9u §d, for the full import-graph proof).
+# quarry package touched in the process.
 from quarry.extractors.image_extractor import SUPPORTED_IMAGE_EXTENSIONS, ImageExtractor
 from quarry.extractors.pdf_extractor import PdfExtractor
 from quarry.ingestion.backends import get_ocr_backend
@@ -52,6 +51,12 @@ class PdfFormatStrategy:
         document_name: str,
         progress: Progress,
     ) -> ExtractedDocument:
+        """Analyze and extract PDF pages, including OCR, and tally text/image pages.
+
+        Raises:
+            OSError: The PDF cannot be opened or read.
+            ValueError: The document cannot be interpreted as a supported PDF.
+        """
         progress("Analyzing: %s", document_name)
         extractor = PdfExtractor(settings, self._ocr)
         all_pages = extractor.extract_pages(file_path, document_name=document_name)
@@ -88,6 +93,12 @@ class ImageFormatStrategy:
         document_name: str,
         progress: Progress,
     ) -> ExtractedDocument:
+        """Analyze an image and OCR its pages with format and page-count statistics.
+
+        Raises:
+            OSError: The image cannot be opened or decoded.
+            ValueError: Its format is unsupported by the selected OCR backend.
+        """
         progress("Analyzing image: %s", document_name)
         analysis = ImageExtractor.analyze(file_path)
         progress(
@@ -146,6 +157,12 @@ class TextLikeStrategy:
         document_name: str,
         progress: Progress,
     ) -> ExtractedDocument:
+        """Extract logical text units and attach suffix-specific ingest statistics.
+
+        Raises:
+            OSError: The source cannot be opened or read.
+            ValueError: The selected format loader rejects the source.
+        """
         progress("%s: %s", self._fmt.read_verb, document_name)
         pages = self._fmt.extract(settings, file_path, document_name)
         progress("%s: %d", self._fmt.unit_label, len(pages))

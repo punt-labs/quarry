@@ -36,6 +36,7 @@ class OptimizeStep:
     _ledger: FinalizeLedger
 
     def __new__(cls, db: LanceDB, settings: Settings) -> Self:
+        """Bind optimization to a database and its shared failure-backoff ledger."""
         self = super().__new__(cls)
         self._db = db
         self._ledger = FinalizeLedgers.for_database(
@@ -86,6 +87,7 @@ class ShadowPushStep:
     _settings: Settings
 
     def __new__(cls, settings: Settings) -> Self:
+        """Retain settings for discovering and pushing enabled capture shadows."""
         self = super().__new__(cls)
         self._settings = settings
         return self
@@ -136,6 +138,7 @@ class ManualOptimize:
     _ledger: FinalizeLedger
 
     def __new__(cls, opt: TableOptimizer, settings: Settings) -> Self:
+        """Pair explicit optimization with the database's shared failure ledger."""
         self = super().__new__(cls)
         self._opt = opt
         self._ledger = FinalizeLedgers.for_database(

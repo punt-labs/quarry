@@ -1,10 +1,10 @@
-"""Expand a base profanity word list into its common English inflections.
+r"""Expand a base profanity word list into its common English inflections.
 
 A real capture leaked "fucking" and "fucked" unredacted because
 :mod:`quarry.scrub` matched only the base forms in ``DEFAULT_PROFANITY``.
 :class:`ProfanityInflector` expands each base word into its plural,
 past-tense, gerund, and agent-noun forms *before* the whole-word regex is
-built, so \\b...\\b boundary matching — which already keeps a safe substring
+built, so \b...\b boundary matching — which already keeps a safe substring
 like "class" or "embassy" from matching (neither has a word boundary before
 its embedded "ass") — protects the inflected forms too.
 """
@@ -40,6 +40,7 @@ class ProfanityInflector:
     __slots__ = ()
 
     def __new__(cls) -> Self:
+        """Create a stateless whole-word inflection expander."""
         return super().__new__(cls)
 
     def expand(self, bases: list[str]) -> frozenset[str]:

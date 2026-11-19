@@ -52,6 +52,7 @@ class Preconditions:
         settings: Settings | None,
         invalid: Exception | None,
     ) -> Self:
+        """Retain resolved install prerequisites and their failures."""
         self = super().__new__(cls)
         self._home_error = home_error
         self._settings = settings

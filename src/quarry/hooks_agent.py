@@ -1,5 +1,4 @@
-"""Handlers for the four new agent-lifecycle hooks: SessionEnd,
-PostToolUse:WebSearch, PostToolUse:Read, SubagentStop.
+"""Handle session-end, web-search, read, and subagent-stop lifecycle hooks.
 
 Each is a ``HookAgent`` staticmethod with the ``run_hook`` shape — a
 ``Callable[[dict[str, object]], dict[str, object]]`` — matching every existing
@@ -152,8 +151,7 @@ class HookAgent:
 
     @staticmethod
     def post_read(payload: dict[str, object]) -> dict[str, object]:
-        """Handle PostToolUse on Read: file the text under captures if it passes
-        the filter.
+        """Capture eligible Read text after applying the configured admission filter.
 
         Config-gated (default OFF via ``HookConfig.read``) because ``Read``
         fires on every file the agent opens.  The four admission checks — in-

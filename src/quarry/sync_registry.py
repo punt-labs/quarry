@@ -16,6 +16,8 @@ from quarry.sync_schema import SyncSchema
 
 @dataclass(frozen=True, slots=True)
 class DirectoryRegistration:
+    """Record a directory-to-collection binding and its registration timestamp."""
+
     directory: str
     collection: str
     registered_at: str
@@ -38,6 +40,12 @@ class SyncRegistry:
     _markers: CollectionMarkerStore
 
     def __new__(cls, path: Path) -> Self:
+        """Create the registry directory, open SQLite, and initialize its schema.
+
+        Raises:
+            OSError: The registry directory cannot be created.
+            sqlite3.Error: Opening or initializing the registry fails.
+        """
         self = super().__new__(cls)
         path.parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False: the connection is written only from the calling

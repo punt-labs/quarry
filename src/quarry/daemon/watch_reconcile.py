@@ -1,6 +1,6 @@
 """The periodic disk-vs-registry reconcile and the durable orphan-purge backstop.
 
-Extracted from :class:`~quarry.daemon.watch_loop.WatchLoop`: the loop owns
+:class:`~quarry.daemon.watch_loop.WatchLoop` owns
 lifecycle, watch scheduling, and observer marshaling; this owns the safety-scan
 reconcile (re-scan registered collections; tear down a vanished watch) and the
 CLOSED-SET purge backstop -- it purges only collections the registry marked in
@@ -60,6 +60,7 @@ class WatchReconciler:
     _guard: ScratchGuard
 
     def __new__(cls, deps: ReconcilerDeps) -> Self:
+        """Start reconciliation with no deferred purges and a shared scratch guard."""
         self = super().__new__(cls)
         self._deps = deps
         self._pending_purges = set()
@@ -95,7 +96,7 @@ class WatchReconciler:
             return
 
     async def run_once(self) -> None:
-        """A full disk-vs-registry pass: rescan, tear down removed, purge orphans.
+        """Rescan registrations, tear down removed watches, and purge orphaned data.
 
         Removals require a COMPLETE enumeration: a partial ``current`` (a registry
         read raised partway) would make a live collection look absent, so tearing

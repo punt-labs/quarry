@@ -439,7 +439,7 @@ class TestSearch:
                 "text": "content",
                 "page_type": "text",
                 "source_format": ".md",
-                # no _distance key (quarry-gcnf)
+                # no _distance key
             }
         ]
         with patch(
@@ -2987,7 +2987,7 @@ class TestMemoryTypeVocabulary:
 
 
 class TestLearn:
-    """Tests for POST /learn endpoint (quarry-b6p)."""
+    """Tests for the POST /learn endpoint."""
 
     def test_success_returns_202_with_learn_prefixed_task_id(
         self, tmp_path: Path

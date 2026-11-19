@@ -46,11 +46,17 @@ class FlushTarget(Protocol):
 
     def build_records(
         self, chunks: list[Chunk], vectors: NDArray[np.float32]
-    ) -> list[dict[str, object]]: ...
+    ) -> list[dict[str, object]]:
+        """Serialize chunks and their aligned embeddings for a buffered flush."""
+        ...
 
-    def insert_records(self, records: list[dict[str, object]]) -> int: ...
+    def insert_records(self, records: list[dict[str, object]]) -> int:
+        """Persist a buffered batch and report the number of rows inserted."""
+        ...
 
-    def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None: ...
+    def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None:
+        """Persist resume checkpoints only after their buffered rows are stored."""
+        ...
 
 
 class ProgressiveIndexer:
@@ -90,6 +96,11 @@ class ProgressiveIndexer:
     _completed: set[str]
 
     def __new__(cls, target: FlushTarget, *, flush_bytes: int) -> Self:
+        """Start an empty progressive write buffer under a positive byte cap.
+
+        Raises:
+            ValueError: The flush byte limit is not positive.
+        """
         if flush_bytes <= 0:
             msg = f"flush_bytes must be positive, got {flush_bytes}"
             raise ValueError(msg)

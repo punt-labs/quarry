@@ -26,6 +26,7 @@ class Registrar:
     _client: RegistryClient
 
     def __new__(cls, client: RegistryClient) -> Self:
+        """Bind directory registration dispatch to a registry-capable client."""
         self = super().__new__(cls)
         self._client = client
         return self

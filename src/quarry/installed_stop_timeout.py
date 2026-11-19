@@ -79,6 +79,7 @@ class InstalledStopTimeout:
     _path: Path
 
     def __new__(cls, path: Path, env_file: Path | None = None) -> Self:
+        """Select the installed service and optional environment-file path."""
         self = super().__new__(cls)
         self._path = path
         self._env_file = env_file

@@ -1,14 +1,9 @@
 """Tests for the `quarry skills` command group (SkillsCli).
 
-Exercised in isolation with a stub CliPlumbing (no daemon client -- deposit is
-pure filesystem), the same pattern as ``test_cli_sync.py``/
-``test_cli_captures.py``. ``Path.home`` is monkeypatched process-wide for the
-duration of each test so the installer targets a throwaway directory instead
-of the real machine. The CLI deposits from quarry's OWN packaged tree
-(PL-1049), so these tests no longer build a fake ``plugin/skills/`` fixture --
-they assert on the real ``quarry-recall``/``quarry-capture`` skills and run
-from an arbitrary (not even quarry-shaped) CWD, proving the command works
-anywhere.
+Use a stub CliPlumbing because deposits are pure filesystem operations.
+Monkeypatch ``Path.home`` so installs target a throwaway directory. Assert on
+the real packaged ``quarry-recall`` and ``quarry-capture`` skills from an
+arbitrary working directory, independent of an enclosing Quarry checkout.
 """
 
 from __future__ import annotations

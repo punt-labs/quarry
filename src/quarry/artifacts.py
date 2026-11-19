@@ -19,9 +19,9 @@ _SHA_PATTERNS: tuple[re.Pattern[str], ...] = (
 # -- PR numbers: #N in pull-request context -------------------------------
 
 _PR_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # "PR #123", "pr #123"
+    # Abbreviated pull-request labels, case-insensitive.
     re.compile(r"\bPR\s*#(\d{1,5})\b", re.IGNORECASE),
-    # "pull request #123", "pull #123"
+    # Full pull-request labels and their short form.
     re.compile(r"\bpull\s+(?:request\s+)?#(\d{1,5})\b", re.IGNORECASE),
     # "merged #123"
     re.compile(r"\bmerged\s+#(\d{1,5})\b", re.IGNORECASE),
@@ -49,13 +49,13 @@ _BRANCH_PATTERNS: tuple[re.Pattern[str], ...] = (
 # -- Bead IDs: word-alphanum{2,6} in bead context ------------------------
 
 _BEAD_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # "bd close quarry-vdh6", "bd update quarry-vdh6", etc.
+    # Tracker CLI commands followed by an identifier.
     re.compile(r"\bbd\s+\w+\s+([a-z]+-[a-z0-9]{2,6})\b"),
-    # "bead quarry-vdh6" or "beads quarry-vdh6"
+    # Singular or plural bead labels.
     re.compile(r"\bbeads?\s+([a-z]+-[a-z0-9]{2,6})\b"),
-    # "Closes quarry-vdh6"
+    # Closing keywords followed by an identifier.
     re.compile(r"\bCloses\s+([a-z]+-[a-z0-9]{2,6})\b"),
-    # "beads-quarry-vdh6" compound form
+    # Compound bead labels joined to the identifier by a hyphen.
     re.compile(r"\bbeads?-([a-z]+-[a-z0-9]{2,6})\b"),
 )
 

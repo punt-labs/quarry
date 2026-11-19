@@ -32,6 +32,7 @@ class PrivateWrite:
     _label: str
 
     def __new__(cls, label: str) -> Self:
+        """Choose a diagnostic label for private-file writes and failures."""
         self = super().__new__(cls)
         self._label = label
         return self

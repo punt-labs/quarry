@@ -31,7 +31,7 @@ class SubagentCapture:
     """Capture a subagent's transcript and file its final report as a memory.
 
     Two rows from one event: the raw transcript lands in ``<repo>-captures``
-    exactly as before (now with a summary), and — only when the subagent is a
+    with a summary, and — only when the subagent is a
     registered identity with something to report — its final assistant turn
     lands in ``memory-<handle>`` as an ``observation`` through the daemon's
     scrub-before-store ``remember`` route. No engine runs in the hook; the
@@ -48,6 +48,7 @@ class SubagentCapture:
     def __new__(
         cls, source: TranscriptSource, *, agent_type: str, parent_session_id: str
     ) -> Self:
+        """Bind a subagent transcript to agent type and parent attribution."""
         self = super().__new__(cls)
         self._source = source
         self._agent_type = agent_type

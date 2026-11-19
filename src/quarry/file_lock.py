@@ -62,6 +62,7 @@ class FileLock:
     _depth_by_path: ClassVar[dict[str, int]] = {}
 
     def __new__(cls, target: Path) -> Self:
+        """Choose a sibling lock path without acquiring the filesystem lock."""
         self = super().__new__(cls)
         self._lock_path = target.parent / f".{target.name}.lock"
         return self

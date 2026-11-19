@@ -17,10 +17,8 @@ if TYPE_CHECKING:
 class SyncDiagnostics:
     """Doctor checks over the sync registry: directory health, enable state.
 
-    Each check reads the registry, tolerates a missing or broken one with a
-    fail-closed ``CheckResult`` rather than an exception, and never leaks a
-    connection.  These moved out of ``doctor.py`` so the diagnostics god module
-    no longer owns registry access directly.
+    Each check reads the registry, returns a fail-closed ``CheckResult`` for a
+    missing or broken registry, and closes its connection.
     """
 
     __slots__ = ()

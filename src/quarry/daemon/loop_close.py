@@ -36,6 +36,7 @@ class LoopClose:
     _workers: list[CollectionWorker]
 
     def __new__(cls, workers: list[CollectionWorker]) -> Self:
+        """Retain workers whose late stores and spool removals need settlement."""
         self = super().__new__(cls)
         self._workers = workers
         return self

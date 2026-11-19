@@ -465,7 +465,7 @@ def test_default_mode_prunes_mcp_shadow_after_plugin_install(
     env: dict[str, str],
 ) -> None:
     """The plugin owns the MCP server, so the installer strips any user-scope
-    shadow entry (PL-999) — and only after the plugin install has succeeded,
+    shadow entry — and only after the plugin install has succeeded,
     or a freshly installed plugin would still be masked by the shadow."""
     result = _run_script(INSTALL_SH, env)
     assert result.returncode == 0, (

@@ -109,10 +109,9 @@ class TestCorpus:
         assert "check failed" in result.message
 
     def test_lessons_counted_despite_empty_agent_handle(self, tmp_path: Path) -> None:
-        """A quarry-learn lesson row (empty agent_handle by design) still counts.
+        """A lesson row with an empty agent_handle still counts.
 
-        Without D9's handle-independent path, a lesson row is invisible to
-        both the handle and type tallies -- this is the gap D9 closes.
+        Lesson tallies are independent of agent handles.
         """
         db_path = tmp_path / "lancedb"
         db_path.mkdir()

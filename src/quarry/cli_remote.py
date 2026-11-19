@@ -49,25 +49,30 @@ class LoginTarget:
 
     @property
     def host(self) -> str:
+        """Expose the validated host used to contact the daemon."""
         return self._host
 
     @property
     def port(self) -> int:
+        """Expose the validated TCP port used to contact the daemon."""
         return self._port
 
     @property
     def api_key(self) -> str | None:
         # None = an unauthenticated remote server (no --api-key supplied).
+        """Expose the supplied remote bearer key, or None for keyless login."""
         return self._api_key
 
     @property
     def is_loopback(self) -> bool:
+        """Indicate whether the target is admitted as a loopback address."""
         return self._is_loopback
 
     @property
     def stored_key(self) -> str | None:
         # A loopback bearer is the LIVE serve.token, resolved fresh each call —
         # never persisted; only a remote login stores its operator key.
+        """Exclude ephemeral loopback bearers from persisted login credentials."""
         return None if self._is_loopback else self._api_key
 
     @property
@@ -90,6 +95,7 @@ class RemoteCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind remote-target and credential commands to shared CLI plumbing."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

@@ -72,6 +72,12 @@ class WatchStop:
         grace_s: float,
         queued: Mapping[str, Callable[[], str | None]] = _NO_QUEUE,
     ) -> Self:
+        """Freeze ordered cleanup steps and their stop budget.
+
+        Args:
+            grace_s: Seconds allowed for graceful cleanup before reporting a timeout.
+            queued: Optional queued-step outcome readers, keyed by step name.
+        """
         self = super().__new__(cls)
         self._steps = tuple(steps)
         self._grace_s = grace_s

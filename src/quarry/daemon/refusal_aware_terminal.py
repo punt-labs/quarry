@@ -51,6 +51,7 @@ class RefusalAwareTerminal:
     _terminal: Terminal
 
     def __new__(cls, terminal: Terminal, subject: Callable[[], str]) -> Self:
+        """Bind terminal transitions to a lazily rendered subject description."""
         self = super().__new__(cls)
         self._subject = subject
         self._terminal = terminal

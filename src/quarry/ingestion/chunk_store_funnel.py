@@ -44,6 +44,7 @@ class ChunkStoreFunnel:
     def __new__(
         cls, document_name: str, progress: Progress, context: IngestContext
     ) -> Self:
+        """Bind one document's chunk/embed/store pass to progress and ingest context."""
         self = super().__new__(cls)
         self._name = document_name
         self._progress = progress

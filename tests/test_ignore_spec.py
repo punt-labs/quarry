@@ -49,7 +49,7 @@ class TestRootSpec:
         """A bare '!' is an invalid gitignore pattern (pathspec's
         GitIgnorePatternError, a ValueError) -- construction must not
         crash the daemon over one bad line, and every OTHER pattern in the
-        same file must still compile and match (djb/rev-silent finding).
+        same file must still compile and match.
         """
         (tmp_path / ".gitignore").write_text("*.log\n!\ndata/\n")
         spec = IgnoreRules(tmp_path, ScratchGuard()).root_spec()  # must not raise
@@ -118,7 +118,7 @@ class TestLocalSpec:
         """A bad line in a NESTED .gitignore, compiled lazily by
         ``local_spec`` on whatever thread first asks for it (the watchdog
         buffer thread, via ``PrunedInotify._add_watch``), must not raise --
-        that thread has no reader to recover it (djb/rev-silent finding).
+        that thread has no reader to recover it.
         """
         sub = tmp_path / "sub"
         sub.mkdir()

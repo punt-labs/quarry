@@ -1,6 +1,6 @@
 """Linux-only: prune watchdog's recursive inotify watches per the shared ignore spec.
 
-DES-045e (supersedes DES-045d's per-directory scheduling — operator-ratified).
+DES-045e specifies recursive scheduling with directory pruning.
 Per-directory ``observer.schedule(..., recursive=False)`` (DES-045d) is
 structurally wrong on Linux: watchdog gives every ``ObservedWatch`` its OWN
 emitter, and each :class:`~watchdog.observers.inotify.InotifyEmitter`
@@ -11,7 +11,7 @@ shared with IDEs/editors), so per-directory scheduling exhausts it at ~120
 directories and silently degrades the whole tree to scan-only — the operator
 will not raise this sysctl.
 
-The fix returns to ONE recursive watch per root — one emitter, one kernel
+Use one recursive watch per root — one emitter, one kernel
 instance, one thread-pair, regardless of tree size — and instead prunes the
 much larger `fs.inotify.max_user_watches` budget (65,536, per-descriptor, no
 per-user cap) by teaching the underlying ``Inotify`` wrapper (this module) to
@@ -39,7 +39,7 @@ Platform scope: this module is imported ONLY on Linux
 ``platform.system()``). macOS's FSEvents is one stream per root with NO
 per-directory kernel cost, so it keeps watchdog's standard recursive
 scheduling — pruning happens only at the post-debounce event filter
-(:class:`~quarry.daemon.watch_submit.WatchSubmitter`), same as before DES-045d.
+(:class:`~quarry.daemon.watch_submit.WatchSubmitter`).
 """
 
 from __future__ import annotations
@@ -66,7 +66,9 @@ _PRUNED_WD = -2
 
 
 class PrunedDirectoryError(OSError):
-    """Raised by :meth:`PrunedInotify._add_watch` for a directory the shared
+    """Signal that a directory is excluded by the shared ignore rules.
+
+    Raised by :meth:`PrunedInotify._add_watch` for a directory the shared
     ignore spec prunes -- a plain ``OSError`` subclass so every existing
     watchdog call site that already tolerates a per-directory ``OSError``
     (the auto-add path's ``except OSError: continue``, ``_recursive_simulate``'s
@@ -107,6 +109,7 @@ class PrunedInotify(Inotify):
         # recursive/event_mask are unused here but MUST stay in the signature:
         # type.__call__ passes the constructor's args to both __new__ and the
         # automatically-invoked inherited __init__ (see the class docstring).
+        """Prepare root-specific ignores before watchdog initializes watches."""
         del recursive, event_mask
         self = super().__new__(cls)
         self._root = Path(os.fsdecode(path))
@@ -151,13 +154,9 @@ class PrunedInotify(Inotify):
             self._add_watch(full_path, mask)
         except OSError as exc:
             if exc.errno in {errno.ENOSPC, errno.EMFILE}:
-                # Release every fd/watch this partially-constructed instance
-                # holds before aborting (Copilot, PR #503 round 2 -- the
-                # earlier "documented 3-fd bound" undercounted: every REAL
-                # watch descriptor already acquired by this walk lives until
-                # the inotify fd closes, so a failed schedule was permanently
-                # consuming watch budget and starving other registrations,
-                # the quarry-ndrj leak shape relocated here).
+                # Every acquired watch survives until the inotify fd closes.
+                # Release the partial walk before aborting so a failed schedule
+                # cannot consume the budget needed by other registrations.
                 self._release_on_abort()
                 raise
             logger.warning("watch: skipping %s during initial walk: %s", full_path, exc)
@@ -232,7 +231,7 @@ class PrunedInotify(Inotify):
         This method runs on the watchdog buffer thread, which has no reader
         to recover it: an unhandled exception here kills the thread
         PERMANENTLY while :meth:`~quarry.daemon.watch_loop.WatchLoop.
-        watch_state` keeps reporting "watched" (djb/rev-silent finding). The
+        watch_state` keeps reporting "watched". The
         ignore-spec layer is written to never raise for malformed ignore
         FILES (:meth:`~quarry.ignore_spec.IgnoreRules._compile_lines`
         already skips invalid lines), so this is defense-in-depth against

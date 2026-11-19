@@ -27,8 +27,7 @@ class HybridRetriever:
 
     Constructed over a :class:`Database` facade and a :class:`RetrievalConfig`.
     The same object serves the shipped CLI/HTTP/MCP paths and the eval runner,
-    so the committed baseline and production output cannot drift. With the
-    default config the behavior is bit-for-bit the legacy ``hybrid_search``.
+    so the committed baseline and production output cannot drift.
     """
 
     __slots__ = ("_config", "_database", "_fusion")
@@ -38,6 +37,7 @@ class HybridRetriever:
     _fusion: RrfFusion
 
     def __new__(cls, database: Database, config: RetrievalConfig) -> Self:
+        """Bind vector and full-text retrieval to one database and fusion policy."""
         self = super().__new__(cls)
         self._database = database
         self._config = config
@@ -79,7 +79,7 @@ class HybridRetriever:
         """Run the vector-similarity channel under the configured metric.
 
         Cosine on unit-length vectors makes ``_distance = 1 - cos(theta)`` so
-        ``similarity = 1 - _distance`` is true cosine (quarry-3a7f). When
+        ``similarity = 1 - _distance`` is true cosine. When
         ``exact_search`` is set the ANN index is bypassed for a deterministic
         flat scan -- the determinism contract's flat-vs-ANN lever.
         """
@@ -124,8 +124,8 @@ class HybridRetriever:
         without one. Under the cosine metric ``_distance = 1 - cos(theta)``, so a
         row's displayed ``similarity = 1 - _distance`` is its real cosine. A row
         whose stored vector is missing or zero-length gets the worst-case
-        distance ``WORST_CASE_DISTANCE`` (similarity -1), never the fake 0.0 that
-        made irrelevant keyword hits display as 1.00 (quarry-gcnf).
+        distance ``WORST_CASE_DISTANCE`` (similarity -1), not 0.0, which would
+        display irrelevant keyword hits as perfect matches.
         """
         query = np.asarray(query_vector, dtype=np.float32).ravel()
         q_norm = float(np.linalg.norm(query))

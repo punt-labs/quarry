@@ -8,6 +8,8 @@ from datetime import datetime
 
 
 class PageType(enum.Enum):
+    """Classify extracted units while preserving their stored retrieval category."""
+
     TEXT = "text"
     IMAGE = "image"
     SECTION = "section"
@@ -28,6 +30,8 @@ class PageType(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class PageAnalysis:
+    """Describe one page's extraction category and available text length."""
+
     page_number: int
     page_type: PageType
     text_length: int
@@ -53,6 +57,8 @@ class PageContent:
 
 @dataclass(frozen=True, slots=True)
 class Chunk:
+    """Carry one searchable text segment with page context and attribution."""
+
     document_name: str
     document_path: str
     collection: str

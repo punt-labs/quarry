@@ -77,6 +77,7 @@ class WatchLoop:
     def __new__(
         cls, ctx: DaemonContext, *, source: FsEventSource | None = None
     ) -> Self:
+        """Prepare inert watch state; allocate timers and observers only at start."""
         self = super().__new__(cls)
         self._ctx = ctx
         self._guard = ScratchGuard()

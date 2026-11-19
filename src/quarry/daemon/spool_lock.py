@@ -45,6 +45,7 @@ class SpoolLock:
     _path: Path
 
     def __new__(cls, directory: Path) -> Self:
+        """Choose the spool lock path without acquiring or creating the lock."""
         self = super().__new__(cls)
         self._path = directory / cls.NAME
         return self

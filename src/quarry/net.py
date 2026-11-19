@@ -35,6 +35,7 @@ class LoopbackPolicy:
     _host: str
 
     def __new__(cls, host: str) -> Self:
+        """Retain the host to classify without performing DNS resolution."""
         self = super().__new__(cls)
         self._host = host
         return self

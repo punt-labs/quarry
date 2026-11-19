@@ -33,6 +33,7 @@ class SkillsCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind cross-harness skill commands to shared CLI plumbing."""
         self = super().__new__(cls)
         self._p = plumbing
         return self
@@ -83,7 +84,7 @@ class SkillsCli:
         self._p.emit([self._row(o) for o in outcomes], self._render(outcomes))
 
     def _installer(self) -> SkillsInstaller:
-        """Build the installer from quarry's OWN packaged skill tree (PL-1049).
+        """Build the installer from quarry's OWN packaged skill tree.
 
         Not :meth:`SkillsInstaller.locate_source` — that walks up from the
         CWD and requires an enclosing checkout provably named

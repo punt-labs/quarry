@@ -42,6 +42,11 @@ class BackfillTask:
         ctx: DaemonContext,
         bound_s: float | None = None,  # None: derived from the teardown budget
     ) -> Self:
+        """Choose a scan-stop bound from the shutdown budget unless overridden.
+
+        Args:
+            bound_s: Seconds to wait for a stopped scan; None uses the shutdown policy.
+        """
         self = super().__new__(cls)
         self._ctx = ctx
         # How long to wait for the scan thread after a stop: it can still be busy

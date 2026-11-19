@@ -30,6 +30,10 @@ in one command (`make lint` + `make type` + `make test` + `make check-oo` +
 | `make docs` | Build the LaTeX documents |
 | `make eval` | Retrieval-quality eval harness (MRR/success@k) |
 
+`make lint` checks Python comments and public Google-style docstrings as well as
+formatting. Build the generated [Python API reference](docs/api-reference/index.md)
+with `make build-api-docs`; open `.tmp/api-site/index.html` to read it.
+
 ## Branch Discipline
 
 All changes go on feature branches off `main`:

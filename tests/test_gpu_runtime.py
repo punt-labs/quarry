@@ -207,11 +207,9 @@ class TestGpuRuntimeEnsure:
     def test_cuda12_host_selects_cuda12_wheel(self) -> None:
         """A CUDA-12 host installs the CUDA-12-matched onnxruntime-gpu spec.
 
-        Regression for quarry-ubj1: today's swap installs a bare
-        ``onnxruntime-gpu>=1.18.0``, which the resolver pins to the newest
-        published wheel (1.27.0, CUDA 13 / ``libcudart.so.13``) — unimportable
-        on a CUDA-12 host. The fix must detect ``libcudart.so.12`` and install
-        the CUDA-12 line ``onnxruntime-gpu>=1.19.0,<1.27.0``, never 1.27.0.
+        An unconstrained GPU wheel can require CUDA 13's ``libcudart.so.13``,
+        which is unimportable on a CUDA-12 host. Detect ``libcudart.so.12`` and
+        select a compatible wheel.
         """
         which = _which(["uv", "nvidia-smi", "ldconfig"])
         state = _RunState()

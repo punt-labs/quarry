@@ -73,12 +73,14 @@ class LessonsCollection:
     _name: str
 
     def __new__(cls, name: str) -> Self:
+        """Retain a base name for deriving the project's lesson collection."""
         self = super().__new__(cls)
         self._name = name
         return self
 
     @property
     def name(self) -> str:
+        """Expose the collection name retained for lesson filing."""
         return self._name
 
     @classmethod

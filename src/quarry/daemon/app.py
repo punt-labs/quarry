@@ -62,6 +62,7 @@ class JsonContentTypeGuard:
     _app: ASGIApp
 
     def __new__(cls, app: ASGIApp) -> Self:
+        """Wrap an ASGI application with POST content-type validation."""
         self = super().__new__(cls)
         self._app = app
         return self
@@ -87,6 +88,7 @@ class AppBuilder:
     _ctx: DaemonContext
 
     def __new__(cls, ctx: DaemonContext) -> Self:
+        """Bind application assembly to the daemon's shared context."""
         self = super().__new__(cls)
         self._ctx = ctx
         return self

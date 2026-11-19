@@ -35,7 +35,7 @@ class _Listing:
     _specs: list[ColumnSpec]
 
     def render(self, rows: list[list[str]]) -> str:
-        """Return ``▶  N noun(s)\\n<table>`` for *rows*."""
+        r"""Return ``▶  N noun(s)\n<table>`` for *rows*."""
         n = len(rows)
         plural = self._noun if n == 1 else self._noun + "s"
         return f"▶  {n} {plural}\n{TableLayout(self._specs).render(rows)}"

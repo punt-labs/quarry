@@ -85,6 +85,7 @@ class NullFsEventSource:
     __slots__ = ()
 
     def __new__(cls) -> Self:
+        """Create a sync-only source without allocating watcher resources."""
         return super().__new__(cls)
 
     def schedule(
@@ -99,7 +100,7 @@ class NullFsEventSource:
         del handle
 
     def is_alive(self, handle: object | None) -> bool:
-        """``False``: nothing is ever watched in sync-only mode."""
+        """Report False because sync-only mode never watches the filesystem."""
         del handle
         return False
 

@@ -53,6 +53,7 @@ class TableRepair:
     _root: Path
 
     def __new__(cls, db_path: Path, quarry_root: Path) -> Self:
+        """Select the damaged database and Quarry root without beginning repair."""
         self = super().__new__(cls)
         self._path = db_path
         self._root = quarry_root

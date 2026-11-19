@@ -31,6 +31,7 @@ class MissionSyncOutcome:
 
     @property
     def has_errors(self) -> bool:
+        """Indicate whether any scan or filing errors were collected."""
         return bool(self.errors)
 
     def to_dict(self) -> dict[str, object]:
@@ -73,6 +74,7 @@ class SyncTally:
     _errors: list[str]
 
     def __new__(cls, errors: Iterable[str] = ()) -> Self:
+        """Start with no filed or skipped rounds and retain initial scan errors."""
         self = super().__new__(cls)
         self._filed = []
         self._skipped = []
@@ -80,12 +82,15 @@ class SyncTally:
         return self
 
     def record_filed(self, name: str) -> None:
+        """Append a document name to the successfully filed round list."""
         self._filed.append(name)
 
     def record_skipped(self, name: str) -> None:
+        """Append a document name to the unchanged or ineligible round list."""
         self._skipped.append(name)
 
     def record_error(self, message: str) -> None:
+        """Retain a scan or filing error in encounter order."""
         self._errors.append(message)
 
     def outcome(self, *, dry_run: bool) -> MissionSyncOutcome:

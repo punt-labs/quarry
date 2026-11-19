@@ -47,6 +47,7 @@ class FinalizeLedger:
     def __new__(
         cls, database: str, clock: Callable[[], float] = time.monotonic
     ) -> Self:
+        """Start a lock-protected optimize ledger with no failures or retry delay."""
         self = super().__new__(cls)
         self._database = database
         self._clock = clock

@@ -40,6 +40,7 @@ class MissionDirectory:
     _guard: PathGuard
 
     def __new__(cls, path: Path, *, guard: PathGuard = FOLLOW_SYMLINKS) -> Self:
+        """Bind sidecar reads to a mission path and filesystem guard."""
         self = super().__new__(cls)
         self._path = path
         self._guard = guard
@@ -47,6 +48,7 @@ class MissionDirectory:
 
     @property
     def path(self) -> Path:
+        """Expose the mission directory anchoring its guarded sidecar reads."""
         return self._path
 
     def has_contract(self) -> bool:

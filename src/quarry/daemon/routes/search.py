@@ -64,6 +64,11 @@ class SearchRoutes(RouteGroup):
     """Serve search — clamp the limit, build the filter, rank hits, log telemetry."""
 
     def search(self, request: Request) -> JSONResponse:
+        """Authenticate, validate a query, and return ranked hybrid-search results.
+
+        Missing q returns HTTP 400; unauthorized requests return HTTP 401.
+        Telemetry is recorded after the response when enabled.
+        """
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp

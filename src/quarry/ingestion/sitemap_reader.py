@@ -67,6 +67,7 @@ class SitemapReader:
     _client: GatedSitemapWebClient
 
     def __new__(cls, client: GatedSitemapWebClient | None = None) -> Self:
+        """Use the supplied gated client or create the default SSRF-gated client."""
         self = super().__new__(cls)
         self._client = client or GatedSitemapWebClient()
         return self

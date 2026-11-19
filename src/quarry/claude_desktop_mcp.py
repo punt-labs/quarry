@@ -26,6 +26,7 @@ class ClaudeDesktopMcp:
     _config_path: Path
 
     def __new__(cls, config_path: Path | None = None) -> Self:
+        """Select an explicit Desktop config path or the user's standard config."""
         self = super().__new__(cls)
         self._config_path = config_path or (
             QuarryHome.home()

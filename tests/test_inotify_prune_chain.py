@@ -163,8 +163,7 @@ def test_pruned_observer_end_to_end_prunes_and_handles_deep_create(
 ) -> None:
     """Real kernel, no fakes: prune correctness plus the deep-create crash guard.
 
-    Drives the actual scenario the round-2 review demanded proof of: a
-    single ``mkdir -p`` burst that creates a subtree containing BOTH
+    Exercise a single ``mkdir -p`` burst that creates a subtree containing BOTH
     watchable and ignored directories, with pre-existing files inside each
     (watchdog's own ``_recursive_simulate`` backfills synthetic create
     events for content that arrived before any watch could see it form).

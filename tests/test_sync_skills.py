@@ -68,8 +68,8 @@ class TestSkillsSync:
         assert sync.is_current() is True
 
     def test_a_source_symlink_round_trips_sync_then_check(self, tmp_path: Path) -> None:
-        """A skill containing a symlink syncs and then passes --check (PL-1049
-        #1): the copy preserves the link so it matches the hash, instead of
+        """A skill containing a symlink syncs and then passes --check:
+        the copy preserves the link so it matches the hash, instead of
         materializing the target and failing the check right after a sync."""
         source = tmp_path / "plugin" / "skills"
         _write_skill(source, "demo-a")

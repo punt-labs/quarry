@@ -27,6 +27,7 @@ class PresentationExtractor:
     """
 
     def __new__(cls) -> Self:
+        """Create a stateless slide extractor without opening a presentation."""
         return super().__new__(cls)
 
     def extract_pages(

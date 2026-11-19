@@ -35,6 +35,7 @@ class HeadlessOpenCv:
     _python: str
 
     def __new__(cls, python: str) -> Self:
+        """Choose the Python environment whose cv2 wheel ownership will be repaired."""
         self = super().__new__(cls)
         self._python = python
         return self

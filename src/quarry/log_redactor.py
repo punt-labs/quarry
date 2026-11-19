@@ -11,7 +11,7 @@ from quarry.log_form import LogForm
 
 @final
 class LogRedactor:
-    """Strip what a URL or a control character can smuggle into a log line.
+    r"""Strip what a URL or a control character can smuggle into a log line.
 
     The last line of defence, applied to the finished text (message, arguments and
     traceback alike) at the one place every record is written.  The types that
@@ -23,7 +23,7 @@ class LogRedactor:
     The contract, in the order it is applied:
 
     1. The record is cut at :attr:`MAX_RECORD` bytes of text, with a visible marker.
-    2. Control characters are escaped (``\\x1b``), so every later step reads the
+    2. Control characters are escaped (``\x1b``), so every later step reads the
        text that is written.  Newlines are kept; :meth:`one_line` escapes them.
     3. The userinfo of every ``scheme://`` authority is masked as
        :class:`~quarry.authority_mask.AuthorityMask` specifies: to the last ``@``,

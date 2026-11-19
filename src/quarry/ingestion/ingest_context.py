@@ -34,6 +34,7 @@ class Progress:
     def __new__(
         cls, callback: Callable[[str], None] | None, *, log: bool = True
     ) -> Self:
+        """Configure optional callback delivery and independent INFO logging."""
         self = super().__new__(cls)
         self._callback = callback
         self._log = log
@@ -50,6 +51,11 @@ class Progress:
         return cls(None, log=False)
 
     def __call__(self, fmt: str, *args: object) -> None:
+        """Format a progress message for the logger and optional callback.
+
+        Raises:
+            Exception: The caller-supplied callback fails; its error is not swallowed.
+        """
         if self._log:
             logger.info(fmt, *args)
         if self._callback is not None:

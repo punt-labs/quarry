@@ -37,6 +37,7 @@ class CollectionPurger:
     _ctx: DaemonContext
 
     def __new__(cls, ctx: DaemonContext) -> Self:
+        """Bind ordered collection deletion to the daemon's shared queue."""
         self = super().__new__(cls)
         self._ctx = ctx
         return self

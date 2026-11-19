@@ -37,6 +37,7 @@ class EthosExtDiagnostics:
     _guard: PathGuard
 
     def __new__(cls, guard: PathGuard = FOLLOW_SYMLINKS) -> Self:
+        """Choose the path policy for reading and updating identity memory guides."""
         self = super().__new__(cls)
         self._guard = guard
         return self

@@ -25,7 +25,7 @@ def test_empty_collection_resolves_to_url_host() -> None:
 def test_explicit_host_and_empty_resolve_to_the_same_key() -> None:
     """collection=host and omitted-collection for that host share one queue key.
 
-    This is the single-writer invariant (quarry-ickn): both requests must route
+    This is the single-writer invariant: both requests must route
     to one FIFO worker for table ``example.com``.
     """
     explicit = IngestCollection.resolve(

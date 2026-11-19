@@ -144,6 +144,7 @@ class ReadCaptureFilter:
     _resolver: CollectionResolver | None
 
     def __new__(cls, resolver: CollectionResolver | None = None) -> Self:
+        """Use an optional directory resolver for capture admission checks."""
         self = super().__new__(cls)
         self._resolver = resolver
         return self

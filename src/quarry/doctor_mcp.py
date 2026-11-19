@@ -44,6 +44,7 @@ class ClaudeCodeMcp:
     _plugins_path: Path
 
     def __new__(cls, plugins_path: Path | None = None) -> Self:
+        """Select an explicit plugin-registry path or Claude Code's user registry."""
         self = super().__new__(cls)
         self._plugins_path = plugins_path or (
             QuarryHome.home() / ".claude" / "plugins" / "installed_plugins.json"
@@ -94,12 +95,10 @@ class ClaudeCodeMcp:
     def check(self) -> CheckResult:
         """Check whether quarry MCP is configured in Claude Code (read-only).
 
-        Reads the plugin registry JSON directly instead of shelling out to
-        ``claude mcp list``, which spawns every configured MCP server and
-        exceeds the timeout when many plugins are installed. :meth:`configure`
-        calls this first, so the two-store split the old NOTE here used to
-        warn about no longer applies: only the ``--no-plugin`` path still
-        writes through ``claude mcp add``, a store this check never reads.
+        Read the plugin registry directly: ``claude mcp list`` spawns every
+        configured MCP server and can exceed the timeout with many plugins.
+        ``configure`` checks this registry first. Only the ``--no-plugin``
+        fallback writes through ``claude mcp add``, whose store is not read here.
         """
         try:
             if not self._plugins_path.exists():

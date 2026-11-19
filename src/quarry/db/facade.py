@@ -30,6 +30,7 @@ class Database:
     _optimizer: TableOptimizer
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Share an open connection across storage, search, schema, and maintenance."""
         self = super().__new__(cls)
         self._db = db
         self._store = ChunkStore(db)

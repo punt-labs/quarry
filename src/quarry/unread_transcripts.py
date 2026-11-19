@@ -32,6 +32,7 @@ class UnreadTranscripts:
     _run: BackfillRun
 
     def __new__(cls, run: BackfillRun) -> Self:
+        """Bind unread-transcript accounting to the current backfill run."""
         self = super().__new__(cls)
         self._run = run
         return self

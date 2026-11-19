@@ -32,6 +32,7 @@ class OpenedResponse:
     _deadline: float
 
     def __new__(cls, resp: HTTPResponse, deadline: float) -> Self:
+        """Bind an open response to an absolute monotonic fetch deadline."""
         self = super().__new__(cls)
         self._resp = resp
         self._deadline = deadline

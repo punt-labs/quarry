@@ -39,6 +39,7 @@ class EnabledMarker:
     _RELATIVE = (".punt-labs", "quarry", "enabled")
 
     def __new__(cls, root: Path) -> Self:
+        """Anchor the presence marker under the repo's guarded tool-state tree."""
         self = super().__new__(cls)
         self._file = SafeRepoPath(root, cls._RELATIVE)
         return self

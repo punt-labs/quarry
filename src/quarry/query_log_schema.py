@@ -51,6 +51,7 @@ class QueryLogSchema:
     _conn: sqlite3.Connection
 
     def __new__(cls, conn: sqlite3.Connection) -> Self:
+        """Bind telemetry schema initialization to an open SQLite connection."""
         self = super().__new__(cls)
         self._conn = conn
         return self

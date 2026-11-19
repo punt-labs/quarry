@@ -44,9 +44,7 @@ class Dehyphenator:
 
     @staticmethod
     def _dehyphenate(accumulated: str, addition: str) -> str:
-        """Merge a word-hyphen tail with ``addition``, keeping the hyphen only
-        for compound prefixes or known compounds.
-        """
+        """Join wrapped words while preserving known compound hyphens."""
         before, left = Dehyphenator._split_left(accumulated[:-1])
         right, after = Dehyphenator._split_right(addition)
         keep = Dehyphenator._keep(left, right)

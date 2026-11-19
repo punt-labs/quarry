@@ -30,6 +30,7 @@ class BackfillSession:
     _transcript: Path
 
     def __new__(cls, transcript: Path, project_path: str, text: str) -> Self:
+        """Extract artifact references from the supplied conversation text."""
         self = super().__new__(cls)
         self._transcript = transcript
         self._project_path = project_path

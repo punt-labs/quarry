@@ -47,6 +47,7 @@ class RepairCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind table-repair commands to shared CLI output and failure handling."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

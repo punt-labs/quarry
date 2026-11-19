@@ -21,6 +21,7 @@ class StatusSnapshot:
     _ctx: DaemonContext
 
     def __new__(cls, ctx: DaemonContext) -> Self:
+        """Bind status readings to the daemon's live context."""
         self = super().__new__(cls)
         self._ctx = ctx
         return self

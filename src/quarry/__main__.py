@@ -1,3 +1,5 @@
+"""Expose Quarry commands through the Typer command-line application."""
+
 from __future__ import annotations
 
 import functools
@@ -305,7 +307,7 @@ def version() -> None:
 
 
 # ``uninstall`` lives on ``AdminCli`` beside ``prune-mcp-shadow`` — both own the
-# same user-scope MCP-shadow cleanup (PL-999), registered above.
+# same user-scope MCP-shadow cleanup, registered above.
 
 
 # ---------------------------------------------------------------------------

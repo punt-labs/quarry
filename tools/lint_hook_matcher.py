@@ -19,7 +19,7 @@ from typing import Self, final
 _HOOKS_JSON = Path(__file__).resolve().parent.parent / "plugin" / "hooks" / "hooks.json"
 
 # Native namespaces the matcher MUST admit — otherwise every native quarry tool
-# call skips suppress-output.sh, which is the failure quarry-ydym exists to stop.
+# call skips suppress-output.sh.
 _REQUIRED: tuple[str, ...] = (
     "mcp__quarry__status",
     "mcp__quarry__find",

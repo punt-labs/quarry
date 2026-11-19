@@ -60,6 +60,7 @@ class SyncSchema:
     _conn: sqlite3.Connection
 
     def __new__(cls, conn: sqlite3.Connection) -> Self:
+        """Bind registry DDL and migrations to an open SQLite connection."""
         self = super().__new__(cls)
         self._conn = conn
         return self

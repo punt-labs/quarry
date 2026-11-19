@@ -53,14 +53,10 @@ def test_enable_report_omits_absent_steps() -> None:
 
 
 def test_enable_report_gitignore_message_states_postcondition_not_delta() -> None:
-    """The .gitignore line must not name one entry when only the other was added.
+    """Report the .gitignore postcondition rather than a per-entry delta.
 
-    Regression for a Bugbot LOW finding: gitignore_ensured is a single bool
-    covering two possible entries (captures path, FileLock's lock-artifact
-    glob). The message states the guaranteed postcondition (both entries are
-    now present) rather than which specific entry this run backfilled, so it
-    stays accurate whether this run added the captures line, the lock glob,
-    or both.
+    gitignore_ensured covers both captures and FileLock artifacts. The message
+    must be accurate whether this run adds one exclusion or both.
     """
     result = EnableResult(
         directory="/p",

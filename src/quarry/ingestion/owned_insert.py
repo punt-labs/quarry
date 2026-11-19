@@ -33,6 +33,7 @@ class OwnedInsert:
     _context: IngestContext
 
     def __new__(cls, document_name: str, context: IngestContext) -> Self:
+        """Bind a document write to the context that owns failure cleanup."""
         self = super().__new__(cls)
         self._name = document_name
         self._context = context

@@ -1,14 +1,8 @@
-"""Regression tests: list-command header counts match printed row counts.
+"""List-command header counts match printed row counts.
 
-The panel summary that consumers see ("N documents", "N registrations") must
-equal the number of items the formatter actually rendered, even when a row
-wraps across multiple lines because a variable-width column overflowed.
-
-Before the fix the plugin's PostToolUse hook derived the count by
-``tail -n +2 | wc -l``, which counts continuation lines as extra rows: a
-two-row table with one wrapped row was summarised as "3 documents". The fix
-puts an authoritative count on the first line of the formatter output; the
-hook just echoes that line as the panel summary.
+The panel summary must count items, not display lines: a variable-width column
+can wrap one item over multiple lines. The formatter emits the authoritative
+count on its first line, which the PostToolUse hook echoes as the summary.
 """
 
 from __future__ import annotations

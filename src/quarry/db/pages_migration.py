@@ -89,6 +89,7 @@ class PagesMigration:
     _pages: PageStore
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Prepare page backfill and verification over an open database."""
         self = super().__new__(cls)
         self._budget = RowBudget()
         self._db = db

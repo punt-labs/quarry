@@ -338,7 +338,7 @@ def _no_remote_config() -> Generator[None]:
 
 @pytest.fixture(autouse=True)
 def _isolate_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip quarry-related env vars so tests get deterministic Settings defaults.
+    """Strip related to Quarry env vars so tests get deterministic Settings defaults.
 
     Without this, .envrc exports leak into every Settings() call, causing
     spurious failures when the test assumes the code-level default.

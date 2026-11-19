@@ -125,6 +125,7 @@ class ReflowBlock:
 
     @classmethod
     def from_block_dict(cls, block: Any) -> Self:  # pymupdf block dict; no stubs
+        """Keep nonempty text lines from a PyMuPDF block dictionary."""
         lines = tuple(
             line
             for raw in block.get("lines", [])
@@ -248,6 +249,7 @@ class PdfReflow:
 
     @classmethod
     def from_page_dict(cls, page: Any) -> Self:  # pymupdf get_text("dict"); no stubs
+        """Build reflowable text blocks and height from a PyMuPDF page dictionary."""
         blocks: list[ReflowBlock] = []
         for raw in page.get("blocks", []):
             if raw.get("type") != 0 or not raw.get("lines"):

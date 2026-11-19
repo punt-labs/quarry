@@ -36,7 +36,7 @@ class LogForm:
 
     @staticmethod
     def _escaped(ch: str) -> str:
-        """Return *ch*, or its ``\\xNN`` / ``\\uNNNN`` escape when it is unsafe."""
+        r"""Return *ch*, or its ``\xNN`` / ``\uNNNN`` escape when it is unsafe."""
         if unicodedata.category(ch) not in _UNSAFE:
             return ch
         return f"\\x{ord(ch):02x}" if ord(ch) <= 0xFF else f"\\u{ord(ch):04x}"

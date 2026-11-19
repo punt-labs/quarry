@@ -53,6 +53,11 @@ class FinalizeThrottle:
     _timers: dict[str, asyncio.TimerHandle]
 
     def __new__(cls, loop: asyncio.AbstractEventLoop, interval_s: float) -> Self:
+        """Start an empty per-database finalize schedule.
+
+        Args:
+            interval_s: Minimum seconds between finalizes for one database.
+        """
         self = super().__new__(cls)
         self._loop = loop
         self._interval = interval_s
@@ -89,8 +94,7 @@ class FinalizeThrottle:
         self._timers.clear()
 
     def mark_admitted(self, database: str) -> None:
-        """Record an ADMITTED out-of-band finalize: cancel any pending trailing
-        timer and stamp the interval clock.
+        """Record an admitted finalize and cancel any pending trailing timer.
 
         Callers that finalize a database OUTSIDE this throttle — the reconcile and
         explicit-sync scans, which run an immediate finalize directly — call this

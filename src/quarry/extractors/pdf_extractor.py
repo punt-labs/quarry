@@ -32,6 +32,7 @@ class PdfExtractor:
     _ocr: OcrBackend
 
     def __new__(cls, settings: Settings, ocr: OcrBackend) -> Self:
+        """Bind PDF page analysis to settings and an injected OCR backend."""
         self = super().__new__(cls)
         self._settings = settings
         self._ocr = ocr

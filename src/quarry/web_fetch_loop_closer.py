@@ -27,6 +27,7 @@ class WebFetchLoopCloser:
     _cwd: str
 
     def __new__(cls, url: str, cwd: str) -> Self:
+        """Retain a fetched URL and cwd for duplicate-capture feedback."""
         self = super().__new__(cls)
         self._url = url
         self._cwd = cwd

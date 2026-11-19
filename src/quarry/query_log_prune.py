@@ -31,6 +31,7 @@ class PruneSchedule:
     _last_monotonic: float
 
     def __new__(cls) -> Self:
+        """Start with no retention policy or prior prune timestamp."""
         self = super().__new__(cls)
         self._retention_days = None
         self._cadence_s = 0.0

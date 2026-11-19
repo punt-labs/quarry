@@ -132,7 +132,7 @@ class DaemonDiagnostics:
 
     @staticmethod
     def _run_dir(settings: Settings) -> RunDir:
-        """The active database's run dir — the SAME one ClientConfig reads.
+        """Resolve the active database's run directory exactly as ClientConfig does.
 
         Mirrors the client's resolution (the CLI's ``--db`` override, else the
         persistent default) so doctor inspects the run dir the loopback client

@@ -116,7 +116,7 @@ class TestRetrieve:
 
 
 class TestAnnotateFtsDistances:
-    """FTS-only rows report their true cosine, never a fake 1.00 (quarry-gcnf)."""
+    """FTS-only rows report their true cosine, never a fake 1.00."""
 
     def _annotate(
         self,

@@ -7,7 +7,7 @@ before a single line of handler code runs.
 This module is the entry point for ``quarry-hook``, which dispatches
 directly to handler functions via ``sys.argv``.  Each handler lazily
 imports only what it needs, avoiding the full dependency tree — and, since
-the capture hook now posts to the running daemon, no handler imports the
+the capture hook posts to the running daemon, no handler imports the
 engine at all.
 
 Import cost: ~0.1s (stdlib only) vs ~1.5s+ (full CLI).

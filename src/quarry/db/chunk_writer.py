@@ -41,6 +41,7 @@ class ChunkWriter:
     _table: ChunkTable
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Share a database across chunk writes and page visibility checks."""
         self = super().__new__(cls)
         self._table = ChunkTable(db)
         self._pages = PageStore(db)

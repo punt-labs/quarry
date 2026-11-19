@@ -38,10 +38,21 @@ class RegistryClient(Protocol):
     stand-in.
     """
 
-    def list_registrations(self) -> RegistrationList: ...
-    def register(self, req: RegisterRequest) -> TaskAccepted: ...
-    def deregister(self, req: DeregisterRequest) -> DeregisterAccepted: ...
-    def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted: ...
+    def list_registrations(self) -> RegistrationList:
+        """Read the daemon's active directory registrations and retained markers."""
+        ...
+
+    def register(self, req: RegisterRequest) -> TaskAccepted:
+        """Queue a directory registration and return its accepted task identifier."""
+        ...
+
+    def deregister(self, req: DeregisterRequest) -> DeregisterAccepted:
+        """Queue removal of a directory registration under its keep-data policy."""
+        ...
+
+    def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted:
+        """Queue deletion of a collection's stored content."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,8 +63,8 @@ class EnableResult:
     deposit, ``enabled`` marker, ``@``-import line, and ``.gitignore`` entry.
     ``ethos`` is the bootstrap's own per-handle outcome, carried whole rather
     than flattened into parallel lists. ``permissions`` is the § 2.8 allow-rule
-    grant in the repo's ``.claude/settings.json`` (#552). ``skills_deposited``
-    is the PL-1049 cross-harness skill-deposit outcome, passed through from
+    grant in the repo's ``.claude/settings.json``. ``skills_deposited``
+    is the cross-harness skill-deposit outcome, passed through from
     ``Enablement.enable()`` unchanged.
     """
 
@@ -73,7 +84,9 @@ class EnableResult:
 
 @dataclass(frozen=True, slots=True)
 class DisableResult:
-    """Result of disabling quarry.  ``removed`` is the registry file count the
+    """Describe registry removal and the asynchronous purge after disabling Quarry.
+
+    Result of disabling quarry.  ``removed`` is the registry file count the
     daemon reported synchronously; the chunk purge runs as a background task.
 
     ``disable`` is non-destructive of the vendored guide (§ 2.9): it prunes the
@@ -171,8 +184,7 @@ def disable_project(
     runs AFTER ``Enablement.disable`` so a deregister failure leaves a
     coherent disabled surface (marker-absent, import-absent) with only a
     runtime registration residue a retry converges — never the § 2.11
-    forbidden marker-present-without-a-collection state that the old order
-    could produce if ``Enablement.disable`` raised.
+    forbidden marker-present-without-a-collection state if disabling raises.
     """
     from quarry.registrations import Registrations  # noqa: PLC0415
 
@@ -277,7 +289,7 @@ class _DisableOrchestrator:
 
         Runs AFTER the § 2.11 commit point so a deregister failure leaves a
         coherent disabled surface — never marker-present + import-present
-        with no functional collection behind them (the old-order defect).
+        with no functional collection behind them.
         """
         if self._covering is None:
             return 0

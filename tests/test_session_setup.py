@@ -1,21 +1,8 @@
-"""Session-setup regression tests (quarry-ridg round-2 Copilot findings).
+"""Session-setup contracts.
 
-Separately failing behaviors:
-
-* Session setup used to add quarry's MCP and ``Skill()`` allow rules to the
-  user-global ``~/.claude/settings.json`` without asking (#552).  It now only
-  deploys commands; ``quarry enable`` grants the rules, per project.
-* ``_read_plugin_name`` used ``data["name"]`` on a JSON document that may be
-  a list or map an unexpected type for ``name``.  A ``TypeError`` or
-  ``AttributeError`` slipped past ``open``'s ``(OSError, KeyError, ValueError)``
-  catcher and broke the fail-open contract.
-* ``handle_session_setup`` deferred ``mark_config`` / ``mark_payload`` until
-  after the ``CLAUDE_PLUGIN_ROOT`` and ``open`` checks, so early-skip
-  breadcrumbs rendered ``config=?, payload_ok=?`` instead of the honest
-  ``config=on, payload_ok=Y`` those paths deserve.
-* ``_read_plugin_name`` accepted any plugin name verbatim.  A hostile
-  ``plugin.json`` carrying ``*``, whitespace, ``/``, or ``.`` in the name is
-  now refused, and setup fails open.
+Setup deploys commands without adding user-global permissions; ``quarry enable``
+grants permissions per project. Invalid plugin JSON and unsafe plugin names
+must fail open. Early skips must report config and payload status accurately.
 """
 
 from __future__ import annotations

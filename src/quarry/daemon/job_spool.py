@@ -93,6 +93,7 @@ class JobSpool:
     _dir: Path
 
     def __new__(cls, spool_dir: Path) -> Self:
+        """Select the directory for durable aborted-job records without creating it."""
         self = super().__new__(cls)
         self._dir = spool_dir
         return self

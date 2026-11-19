@@ -1,18 +1,10 @@
 """Shared infrastructure for every ``quarry-hook`` handler.
 
-Three responsibilities, all about making the handlers thin:
-
-* :class:`HookTrace` emits one INFO breadcrumb per invocation so a
-  silent-skip is visible in ``quarry.log`` — without it, a config-off or
-  unparseable-payload skip returns ``{}`` and leaves no trace, and
-  diagnosis becomes an inference chain (B-hooks integration report,
-  gap G6).
-* :class:`HookPayload` parses untrusted payload fields defensively —
-  extracted from hooks_agent so the handler class stops accreting static
-  helpers that don't share vocabulary with its own methods (PY-OO-7).
-* :class:`ReadAdmission` groups the Read-specific admission pieces
-  (settings + resolver lookup + client-side secret pre-scan) that
-  ``HookAgent.post_read`` used to carry as static helpers.
+:class:`HookTrace` emits one INFO breadcrumb per invocation so config-off and
+unparseable-payload skips remain visible in ``quarry.log``.
+:class:`HookPayload` parses untrusted payload fields defensively.
+:class:`ReadAdmission` groups settings, resolver lookup, and client-side
+secret pre-scanning for ``HookAgent.post_read``.
 """
 
 from __future__ import annotations
@@ -163,10 +155,8 @@ class HookPayload:
 class ReadAdmission:
     """Read-hook admission helpers grouped by shared vocabulary.
 
-    Three concerns the post-Read handler used to hold as static methods
-    on ``HookAgent`` — settings load, resolver build, and client-side
-    secret pre-scan — collect here so the handler class stays focused
-    on orchestration only (PY-OO-7).
+    Settings load, resolver build, and client-side secret pre-scanning live
+    here so the post-Read handler stays focused on orchestration.
     """
 
     __slots__ = ()

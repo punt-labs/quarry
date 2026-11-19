@@ -27,6 +27,11 @@ class SentenceChunker:
     _overlap_chars: int
 
     def __new__(cls, max_chars: int, overlap_chars: int) -> Self:
+        """Configure greedy sentence packing and trailing character overlap.
+
+        Raises:
+            ValueError: The chunk limit is nonpositive or overlap is negative.
+        """
         if max_chars < 1:
             msg = f"max_chars must be >= 1, got {max_chars}"
             raise ValueError(msg)

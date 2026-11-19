@@ -254,19 +254,13 @@ def test_add_dir_watch_aborts_on_budget_exhaustion(
 def test_add_dir_watch_releases_resources_on_budget_exhaustion(
     tmp_path: Path, bad_errno: int
 ) -> None:
-    """A budget-exhaustion abort must not leak the inotify fd or the kill
-    pipe (Copilot, PR #503 round 2). Closing the inotify fd is the real
-    budget relief: on Linux, closing an inotify instance's fd releases
-    every watch descriptor already acquired on it -- the earlier
-    "documented 3-fd bound" undercounted the cost, since a failed
-    schedule was leaving every watch this walk had ALREADY acquired
-    permanently consuming budget (the quarry-ndrj leak shape relocated).
+    """A budget-exhaustion abort releases the inotify fd and kill pipe.
 
-    Constructs via ``__new__`` + a direct ``Inotify.__init__`` call
-    (rather than ``PrunedInotify(...)``) so the partially-constructed
-    instance is still reachable after the raise -- ``PrunedInotify(...)``
-    itself would lose the only reference to it the moment the exception
-    propagates out of construction.
+    Closing the inotify fd releases every acquired watch descriptor, preventing
+    a failed schedule from exhausting the budget for other registrations.
+
+    Construct via ``__new__`` and ``Inotify.__init__`` so the partially built
+    instance remains accessible when the walk raises.
     """
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
@@ -385,7 +379,7 @@ def test_read_events_survives_a_deep_create_burst_under_a_pruned_directory(
 def test_read_events_survives_a_deep_create_burst_under_a_nested_gitignore(
     tmp_path: Path, fake_kernel: _FakeKernel
 ) -> None:
-    """Copilot finding, PR #503: a burst-created directory two levels below
+    """A burst-created directory two levels below
     a NESTED (not root) ``.gitignore`` match must not get a real watch.
 
     ``x/.gitignore`` names ``logs/``; a burst creates ``x/logs/deep``
@@ -495,10 +489,10 @@ def test_read_events_renaming_a_pruned_directory_does_not_corrupt_state(
 def test_construction_survives_a_malformed_root_gitignore(
     tmp_path: Path, fake_kernel: _FakeKernel
 ) -> None:
-    """A malformed root .gitignore must not crash PrunedInotify construction
-    (djb/rev-silent finding, daemon-start path) -- ignore_spec.IgnoreRules
-    now compiles line-tolerantly, so this closes at the source rather than
-    needing a try/except wrapper at every construction site.
+    """A malformed root .gitignore must not crash PrunedInotify construction.
+
+    IgnoreRules compiles valid lines independently so one malformed rule
+    cannot prevent watch setup for the remaining tree.
     """
     del fake_kernel
     (tmp_path / ".gitignore").write_text("*.log\n!\ndata/\n")
@@ -533,7 +527,7 @@ def test_initial_walk_survives_a_malformed_nested_gitignore(
 def test_read_events_survives_a_malformed_nested_gitignore_written_mid_session(
     tmp_path: Path, fake_kernel: _FakeKernel
 ) -> None:
-    """The exact mid-session crash site (djb/rev-silent finding): a nested
+    """A nested
     .gitignore written AFTER construction, compiled lazily by
     ``_add_watch``'s live auto-add path when a new child directory arrives
     -- NOT the initial-walk path :func:`test_initial_walk_survives_a_

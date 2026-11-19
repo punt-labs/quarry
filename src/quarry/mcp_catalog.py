@@ -44,6 +44,7 @@ class ResourceCatalog:
     def __new__(
         cls, connect: Callable[[], QuarryClient] = TargetResolver.connect
     ) -> Self:
+        """Select the daemon connector used by catalog tools."""
         self = super().__new__(cls)
         self._connect = connect
         return self
@@ -60,6 +61,11 @@ class ResourceCatalog:
             kind: What to list — "documents", "collections", "databases",
                   or "registrations".
             collection: Optional collection filter (only for kind="documents").
+
+        Returns:
+            A formatted catalog of the selected kind, optionally collection-filtered.
+            Input refusals, daemon errors, and unexpected failures return
+            Error: ... text. Connection failures include recovery guidance.
         """
         handler = {
             "documents": self._list_documents,

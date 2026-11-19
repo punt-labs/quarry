@@ -1,21 +1,7 @@
-"""Non-HTML capture regression (quarry-jzqw / G4).
+"""Non-HTML capture through the daemon's content-routing boundary.
 
-The capture route re-fetches when the client-side payload is empty by
-building an ``IngestJob(scrub=True)`` and running :meth:`IngestJob._ingest`.
-That path today calls :func:`quarry.ingestion.web_ingest.ingest_url`, which
-delegates to :meth:`quarry.ingestion.web_fetch.WebFetcher.fetch` — and
-``fetch`` raises ``ValueError: URL returned non-HTML content`` for any
-non-HTML media type.  So a JSON/plain-text/XML URL captured via the
-empty-payload fallback loses its content and dumps a traceback into the
-daemon log instead of storing the body as text.
-
-The G4 fix on the :class:`CaptureIngestJob._refetch` branch handled
-non-HTML correctly by routing through :meth:`WebFetcher.fetch_body` and
-:func:`ingest_content` with a ``<!-- media_type: X -->`` marker.  The same
-routing is missing on :class:`IngestJob._ingest`.  These tests assert the
-same non-HTML contract at that entry point — they FAIL on v3.2.0 because
-``ingest_url`` still raises, and they pass once ``_ingest`` grows the same
-media-type branch its sibling already has.
+An empty capture payload triggers a re-fetch. The fetched Content-Type must
+choose the matching loader so binary documents are not treated as HTML.
 """
 
 from __future__ import annotations
@@ -77,14 +63,10 @@ def _job(url: str) -> IngestJob:
     ids=["json", "text", "xml"],
 )
 def test_ingest_captures_non_html_as_text(media_type: str, body_text: str) -> None:
-    """A non-HTML URL routes through ingest_content with a mime marker (no ValueError).
+    """A non-HTML URL routes through ingest_content with a MIME marker.
 
-    Today ``IngestJob._ingest`` calls ``ingest_url``, whose internal
-    :meth:`WebFetcher.fetch` raises ``ValueError`` for anything that is not
-    HTML.  The fix teaches ``_ingest`` to switch on :meth:`fetch_body`'s
-    ``media_type`` — HTML through the extractor, everything else through
-    :func:`ingest_content` with a leading ``<!-- media_type: X -->`` marker,
-    mirroring :meth:`CaptureIngestJob._refetch`.
+    HTML uses the extractor; other media types use ``ingest_content`` with a
+    leading ``<!-- media_type: X -->`` marker, matching capture re-fetches.
     """
     url = "https://example.test/data"
     body = FetchedBody(text=body_text, media_type=media_type)

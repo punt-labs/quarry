@@ -3,7 +3,7 @@
 ``tests/test_enablement.py`` already exercises this through
 :class:`~quarry.enablement.Enablement`'s public ``enable`` surface (the
 real-world entry point); these tests pin :class:`SkillDeposit`'s own
-behavior -- its packaged source (PL-1049) and the best-effort failure
+behavior -- its packaged source and the best-effort failure
 discipline -- at the unit level, independent of ``Enablement``'s
 CLAUDE.md/marker/import machinery.
 """
@@ -43,7 +43,7 @@ class TestSkillDeposit:
     def test_fires_in_an_ordinary_repo_with_no_plugin_skills_of_its_own(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The goal of PL-1049: a normal user's project, with no
+        """A normal user's project, with no
         ``plugin/skills/`` and no ``punt-quarry`` pyproject of its own,
         still gets the skills deposited."""
         home = tmp_path / "home"
@@ -97,7 +97,7 @@ class TestSkillDeposit:
 
 
 class TestInstallDetectedResilience:
-    """A failure on one detected harness must not lose the others (PL-1049 #4)."""
+    """A failure on one detected harness must not lose the others."""
 
     def test_one_harness_failure_keeps_the_others(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

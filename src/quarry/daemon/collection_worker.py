@@ -70,6 +70,11 @@ class CollectionWorker:
         embed_gate: asyncio.Semaphore,
         release_admit: Callable[[], None],
     ) -> Self:
+        """Start an empty collection FIFO consumer on the running event loop.
+
+        Raises:
+            RuntimeError: No asyncio event loop is running in the current thread.
+        """
         self = super().__new__(cls)
         self._ctx = ctx
         self._current = None

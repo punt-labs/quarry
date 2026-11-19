@@ -14,9 +14,7 @@ if TYPE_CHECKING:
 class DocumentSummaryBuilder:
     """Build one document's :class:`~quarry.results.DocumentSummary` from its rows.
 
-    Column selection and row grouping were previously free functions in
-    :class:`~quarry.db.chunk_catalog.ChunkCatalog` that took no catalog state
-    — they belong here, next to the summary shape they build.
+    Own column selection and row grouping independently of catalog state.
     """
 
     _BASE_COLUMNS = (

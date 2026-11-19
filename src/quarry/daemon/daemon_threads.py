@@ -54,6 +54,7 @@ class DaemonThreads:
     _work: queue.SimpleQueue[_Work]
 
     def __new__(cls, max_threads: int = SHARED_THREADS, name: str = "quarry") -> Self:
+        """Prepare a bounded work queue without starting any threads."""
         self = super().__new__(cls)
         self._idle = self._started = 0
         self._lock = threading.Lock()

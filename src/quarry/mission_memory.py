@@ -160,6 +160,7 @@ class MissionMemorySync:
     _options: SyncOptions
 
     def __new__(cls, client: QuarryClient, options: SyncOptions) -> Self:
+        """Bind frozen-round filing to the client and synchronization options."""
         self = super().__new__(cls)
         self._client = client
         self._options = options

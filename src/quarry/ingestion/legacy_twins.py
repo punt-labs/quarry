@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 class LegacyTwins:
     """Drop the legacy spellings of a stored page, so a re-ingest leaves one.
 
-    A legacy spelling is the same page under a name this build no longer writes,
-    and the new document must not sit beside it.  The page is already stored when
+    A legacy spelling is a noncanonical name for the same page,
+    and the canonical document must not sit beside it.  The page is already stored when
     this runs, so no fault in a delete, whatever its class, may fail the ingest: a
     twin that stays is a duplicate, not a loss.  Each fault is
     logged as its class and frames, never its message, which can quote a name.
@@ -32,6 +32,7 @@ class LegacyTwins:
     _database: Database
 
     def __new__(cls, names: LegacyUrlNames, database: Database) -> Self:
+        """Pair canonical-name tracking with the database used to delete twins."""
         self = super().__new__(cls)
         self._names = names
         self._database = database

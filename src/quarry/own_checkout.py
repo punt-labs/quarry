@@ -34,6 +34,7 @@ class OwnCheckout:
     _root: Path
 
     def __new__(cls, root: Path) -> Self:
+        """Select the repository root whose Quarry project identity will be checked."""
         self = super().__new__(cls)
         self._root = root
         return self

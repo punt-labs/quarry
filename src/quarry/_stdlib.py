@@ -1,9 +1,7 @@
 """Stdlib-only helpers for lightweight hook execution.
 
-This module contains functions extracted from heavier modules
-(``hooks``, ``__main__``) that only need stdlib imports.  Hook entry
-points import from here to avoid pulling in pydantic, lancedb,
-onnxruntime, and the full pipeline dependency tree.
+Hook entry points import these stdlib-only helpers to avoid pulling in
+pydantic, lancedb, onnxruntime, and the full pipeline dependency tree.
 
 Every function in this module MUST use only stdlib imports.
 Adding a third-party import here defeats the entire purpose.

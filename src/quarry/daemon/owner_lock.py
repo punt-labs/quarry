@@ -43,6 +43,7 @@ class OwnerLock:
     _owner: int
 
     def __new__(cls) -> Self:
+        """Create an unlocked mutex with no recorded owner."""
         self = super().__new__(cls)
         self._lock = threading.Lock()
         self._owner = 0

@@ -1,4 +1,4 @@
-"""Phase-1 report value objects: per-bucket scores, bucket reports, full report.
+"""Retrieval report value objects: per-bucket scores, bucket reports, full report.
 
 These carry the numbers ``Scorer`` computes and own their own serialization and
 rendering — the JSON shape a committed baseline records and the text table the
@@ -16,18 +16,17 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class MetricScores:
-    """One bucket's (or the overall) Phase-1 numbers.
+    """One bucket's (or the overall) retrieval metrics.
 
     The rank metrics are ``None`` exactly when the bucket carries no known-item
-    answer (natural queries pre-Phase-2): absence of a qrel is a documented
+    answer: absence of a qrel is a documented
     state, not a failure to compute. Pollution is always defined — it needs no
     qrel, only the retrieved chunks.
     """
 
     n_queries: int
     n_scorable: int
-    # None == "no qrels for this bucket yet" (natural bucket, Phase 1). PY-TS-14:
-    # the absence is the documented Phase-1 contract, not a giving-up.
+    # None denotes an unscorable bucket without qrels (PY-TS-14).
     mrr: float | None
     success_at_5: float | None
     success_at_10: float | None
@@ -87,7 +86,7 @@ class BucketReport:
 
 @dataclass(frozen=True, slots=True)
 class EvalReport:
-    """A full Phase-1 report for one config: per-bucket scores plus provenance."""
+    """A full retrieval report for one config: per-bucket scores plus provenance."""
 
     config_tag: str
     phase: str

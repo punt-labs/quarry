@@ -37,6 +37,7 @@ class Terminal:
     _lifecycle: Lifecycle
 
     def __new__(cls, lifecycle: Lifecycle) -> Self:
+        """Bind a context-managed task body to its lifecycle transitions."""
         self = super().__new__(cls)
         self._lifecycle = lifecycle
         return self

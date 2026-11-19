@@ -70,6 +70,7 @@ class IgnoreRules:
     _local_spec_cache: dict[Path, IgnoreSpec | None]
 
     def __new__(cls, directory: Path, guard: ScratchGuard) -> Self:
+        """Compile root ignore rules and start an empty per-directory rule cache."""
         self = super().__new__(cls)
         self._directory = directory
         self._guard = guard
@@ -162,10 +163,10 @@ class IgnoreRules:
 
     @staticmethod
     def _compile_lines(lines: list[str]) -> IgnoreSpec:
-        """Compile *lines* into a PathSpec, skipping any invalid pattern.
+        r"""Compile *lines* into a PathSpec, skipping any invalid pattern.
 
         A malformed gitignore line (a bare ``!``, a trailing unescaped
-        ``\\``) raises ``pathspec``'s ``GitIgnorePatternError`` — a
+        ``\``) raises ``pathspec``'s ``GitIgnorePatternError`` — a
         ``ValueError``, not an ``OSError`` — from the pattern factory
         itself, not from any file I/O :meth:`_read_ignore_lines` already
         guards.  Left to propagate, this crashes ``IgnoreRules``

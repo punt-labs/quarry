@@ -234,7 +234,7 @@ class TestIngestUrl:
         The daemon's capture re-fetch (``CaptureIngestJob._refetch``) calls
         ``WebFetcher.fetch_body`` itself to decide HTML vs. text routing;
         ``prefetched_html`` lets ``ingest_url`` reuse that body instead of
-        fetching the URL again (Copilot round-4, PR #496).
+        fetching the URL again.
         """
         from quarry.ingestion.ingest_context import IngestContext, Progress
         from quarry.ingestion.web_ingest import UrlIngest, ingest_url
@@ -340,11 +340,9 @@ class TestRememberCollectionRouting:
 class TestIngestRouteKeying:
     """The route keys the queue on the resolved table, not the body collection.
 
-    quarry-ickn: a plain ingest with an omitted collection derives the URL host
-    INSIDE the job, so keying the queue on the empty body collection would route
-    it to a different worker than an explicit ``collection=<host>`` request for
-    the same host — two writers on one table. The route now resolves the table
-    before building the job, so the key always equals the table it writes.
+    An omitted collection derives the URL host. Resolve it before building the
+    job so both omitted and explicit host collections share one FIFO worker,
+    preserving the single-writer invariant for that table.
     """
 
     def test_explicit_host_and_empty_key_the_same_collection(self) -> None:

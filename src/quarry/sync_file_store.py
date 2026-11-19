@@ -9,6 +9,12 @@ from typing import Self, cast, final
 
 @dataclass(frozen=True, slots=True)
 class FileRecord:
+    """Track a file's stored version and optional partial-ingest resume watermark.
+
+    A partial row requires a positive chunks_committed value; invalid watermarks
+    raise ValueError during construction.
+    """
+
     path: str
     collection: str
     document_name: str
@@ -53,6 +59,7 @@ class FileStore:
     _conn: sqlite3.Connection
 
     def __new__(cls, conn: sqlite3.Connection) -> Self:
+        """Share the registry's SQLite connection for file-watermark operations."""
         self = super().__new__(cls)
         self._conn = conn
         return self

@@ -14,6 +14,11 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- infra: Python comment and public-docstring checks in lint and CI, plus a
+  generated Python API reference (`make build-api-docs`).
+
 ## [3.8.0] - 2026-11-16
 
 ### Added

@@ -36,6 +36,7 @@ class RrfFusion:
     _lesson_boost: float
 
     def __new__(cls, rrf_k: int, decay_rate: float, lesson_boost: float = 1.0) -> Self:
+        """Configure rank smoothing, recency decay, and lesson weighting for fusion."""
         self = super().__new__(cls)
         self._rrf_k = rrf_k
         self._decay_rate = decay_rate
@@ -64,7 +65,7 @@ class RrfFusion:
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]
 
         # Every row carries a real ``_distance``: vector-channel rows from
-        # LanceDB, FTS-only rows from ``HybridRetriever`` annotation (quarry-gcnf).
+        # LanceDB, FTS-only rows from ``HybridRetriever`` annotation.
         results = [SearchResult.from_row(all_rows[key]) for key, _ in ranked]
         logger.debug(
             "RRF fusion: %d vector + %d FTS -> %d results",

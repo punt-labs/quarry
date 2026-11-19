@@ -32,6 +32,7 @@ class StatusStorage:
     _db: LanceDB
 
     def __new__(cls, db_path: Path, db: LanceDB) -> Self:
+        """Pair an open database with its directory for disk-usage readings."""
         self = super().__new__(cls)
         self._db_path = db_path
         self._db = db

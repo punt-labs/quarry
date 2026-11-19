@@ -47,6 +47,7 @@ class WebFetchHook:
     _trace: HookTrace
 
     def __new__(cls, payload: dict[str, object]) -> Self:
+        """Parse fetch capture inputs and start a trace for the hook invocation."""
         self = super().__new__(cls)
         self._cwd = HookPayload.as_dir(payload.get("cwd"))
         self._parsed = WebFetchPayload(payload)

@@ -43,6 +43,7 @@ class QueuedTranscriptWriter:
         call: ThreadCall,
         policy: QueuePolicy = DEFAULT_QUEUE_POLICY,
     ) -> Self:
+        """Bind transcript writes to the daemon FIFO and worker-thread bridge."""
         self = super().__new__(cls)
         self._call = call
         self._ctx = ctx

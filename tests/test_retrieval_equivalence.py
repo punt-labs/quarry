@@ -1,16 +1,8 @@
-"""Characterization guard: HybridRetriever's output is frozen to the shipped path.
+"""Freeze HybridRetriever's default output as a golden snapshot.
 
-The Phase-0 equivalence gate proved (in the commit that introduced this file)
-that ``HybridRetriever`` with the default ``RetrievalConfig`` returns
-byte-identical results to the legacy ``ChunkSearch.hybrid_search`` — same
-ordering AND same similarity scores — across FTS-only, vector+FTS-overlap, and
-filtered scenarios, including both-filters-set (proving the SearchFilter
-predicate order is result-neutral under AND-commutativity).
-
-The legacy code is now deleted, so this guard freezes that proven output as a
-golden snapshot. ``GOLDEN`` was captured from the retriever at the moment it was
-verified equal to the legacy path; a drift here means the shipped retriever
-changed and the eval baseline would no longer measure what ships.
+Cover FTS-only, vector/FTS overlap, and filtered queries, including combined
+filters. The CLI, HTTP, MCP, and eval paths share this retriever, so drift in
+ordering or cosine similarity affects both evaluation and production.
 """
 
 from __future__ import annotations
@@ -37,13 +29,9 @@ if TYPE_CHECKING:
 # beta", limit 8, no filter over the fixed corpus below. RRF-ordered rows with
 # cosine-valued similarity -- the documented "RRF order, cosine score" shape.
 #
-# Re-baselined for lancedb's native FTS tokenizer (replaced the legacy tantivy
-# backend). The new tokenizer's BM25 ranking of the FTS channel differs from
-# tantivy's, which shifts RRF fusion order -- the exact-text match ("alpha
-# rare beta", b.md idx 2) now fuses to rank 3 instead of rank 1, even though
-# its FTS relevance is unchanged, because the vector channel's near-exact
-# cosine matches (a.md) now out-rank it in the fused order. Cosine similarity
-# values (the vector channel) are unaffected -- only fusion order moved.
+# LanceDB's native FTS tokenizer supplies the BM25 channel. RRF places
+# the vector channel's near-exact cosine matches (a.md) above the exact-text
+# match (b.md idx 2); similarity values remain cosine scores, not RRF scores.
 GOLDEN: list[tuple[str, int, int, float]] = [
     ("a.md", 1, 2, 0.9988),
     ("a.md", 0, 1, 0.9998),
@@ -157,13 +145,9 @@ class TestShippedRetrieverIsFrozen:
     def test_fts_only_row_reports_true_cosine(self, tmp_path: Path) -> None:
         """The FTS-only 'zorpzorp' row reports its real cosine on the golden corpus.
 
-        limit=2 -> fetch_limit=6, so the six alpha rows saturate the vector
-        channel and push the orthogonal 'zorpzorp' row OUT of the vector
-        top-N. Its distance can then come only from the annotate path
-        (quarry-gcnf), not the vector channel -- so this assertion is
-        load-bearing on ``_annotate_fts_distances``. With limit=3 (fetch=9 >
-        8-row corpus) the vector channel returned the whole corpus and the
-        annotate path was never exercised.
+        limit=2 gives fetch_limit=6, so six alpha rows saturate the vector channel
+        and exclude the orthogonal 'zorpzorp' row. Its distance must come from
+        ``_annotate_fts_distances``, not the vector top-N.
         """
         db = get_db(tmp_path / "db")
         query = _corpus(db)

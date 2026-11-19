@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 @final
 @dataclass(frozen=True, slots=True)
 class SyncPlan:
+    """Partition discovered files into ingest, refresh, and guarded deletion work."""
+
     to_ingest: list[Path]
     to_refresh: list[tuple[Path, str]]
     to_delete: list[str]
@@ -77,6 +79,7 @@ class SyncPlanner:
         conn: SyncRegistry,
         extensions: frozenset[str],
     ) -> Self:
+        """Bind discovery and registry comparison to a collection's extensions."""
         self = super().__new__(cls)
         self._discovery = FileDiscovery(directory)
         self._collection = collection

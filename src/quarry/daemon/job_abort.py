@@ -54,6 +54,7 @@ class JobAbort:
     _threads: DaemonThreads
 
     def __new__(cls, settings: Settings, tally: AbortTally) -> Self:
+        """Share abort accounting and spool cleanup across the daemon thread pool."""
         self = super().__new__(cls)
         self._reason = AbortReason.for_settings(settings)
         self._respooling = set()

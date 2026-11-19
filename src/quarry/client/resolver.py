@@ -219,7 +219,7 @@ class TargetResolver:
 
     @staticmethod
     def _down_message() -> str:
-        """The fail-closed message when the local daemon is not running."""
+        """Explain how to recover when the local daemon is not running."""
         return (
             "quarryd is not running (no serve.port in the run dir). "
             "Start it with 'quarry install' (managed) or 'quarryd', then retry."
@@ -227,7 +227,7 @@ class TargetResolver:
 
     @staticmethod
     def _token_unreadable_message() -> str:
-        """The fail-closed message when quarryd is up but its serve.token is bad."""
+        """Explain how to recover an unreadable token from a running local daemon."""
         return (
             "quarryd is running but its serve.token is unreadable or stale "
             "(another user may own it, or it is empty/corrupt). Run 'quarry doctor'."

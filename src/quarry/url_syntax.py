@@ -13,13 +13,13 @@ _UNPRINTABLE = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 @final
 class UrlSyntax:
-    """One canonical reading of a URL, shared by every gate and parser.
+    r"""One canonical reading of a URL, shared by every gate and parser.
 
     Disagreement between parsers is how a secret escapes: ``urlsplit`` accepts a
     space or a control character that ``http.client`` later quotes in an
     exception, a ``@`` in the netloc hides userinfo from one parser and not
     another, and a bad port parses lazily and fails far from the gate.  So the URL
-    is admitted only if it is plain: no userinfo, no ``\\`` or ``%`` in the
+    is admitted only if it is plain: no userinfo, no ``\`` or ``%`` in the
     netloc, no control, format, line- or paragraph-separator, space or other whitespace
     character anywhere, and a port
     that is absent or in ``1..65535``, and a length of at most 8192 characters.

@@ -30,6 +30,7 @@ class ResumePolicy:
     _hash_unknown: str
 
     def __new__(cls, hash_unknown: str = HASH_UNKNOWN) -> Self:
+        """Select the sentinel used for files whose complete content hash is unknown."""
         self = super().__new__(cls)
         self._hash_unknown = hash_unknown
         return self

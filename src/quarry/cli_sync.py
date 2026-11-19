@@ -1,5 +1,4 @@
-"""The directory-sync commands: ``sync``, ``status``, ``insights``, and (through
-:class:`~quarry.cli_directories.DirectoryCli`) ``register`` and ``deregister``.
+"""Expose daemon-backed directory sync, status, and telemetry commands.
 
 All pure client calls against the daemon that owns the registry (DES-031 I2): the
 CLI never touches a local ``SyncRegistry``.  The task-dispatching commands are
@@ -31,6 +30,7 @@ class SyncCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind synchronization and telemetry commands to shared CLI plumbing."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

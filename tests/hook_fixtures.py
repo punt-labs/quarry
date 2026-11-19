@@ -1,13 +1,10 @@
-"""Fixtures for the hook-integration regression suite (quarry-yndv).
+"""Fixtures for the hook-integration suite.
 
-These fixtures spawn the real ``quarry-hook`` and ``quarryd`` binaries so the
-tests exercise the same code path a user hits, not a hermetic in-process
-double.  The in-process fake was what let quarry-jzqw, quarry-ridg, and
-quarry-871u ship in v3.2.0 unnoticed — this module exists so the fix beads
-have a black-box acceptance bar.
+These fixtures spawn real ``quarry-hook`` and ``quarryd`` binaries so tests
+exercise the installed entry points, daemon transport, and logging together.
 
 Everything here is gated behind the ``hook_integration`` pytest marker
-(registered in ``pyproject.toml``) and deselected from the default suite.
+and uses isolated directories and an ephemeral daemon port.
 """
 
 from __future__ import annotations
@@ -57,13 +54,10 @@ if TYPE_CHECKING:
 @final
 @dataclass(frozen=True, slots=True)
 class EphemeralDaemon:
-    """Coordinates for a live ``quarryd`` bound to loopback in a scratch tree.
+    """Coordinates for a live quarryd bound to loopback in a scratch tree.
 
-    ``ca_cert_path`` is ``None`` in the current fixture; the mission spec
-    named ``--tls`` but the regressions under test (jzqw/ridg/871u) do not
-    hinge on TLS transport, so the fixture binds plaintext loopback to keep
-    the cert-material bootstrap out of the failure path.  A follow-up may
-    restore TLS once the fix beads land and the tests turn green.
+    The fixture uses plaintext loopback with ca_cert_path=None: these hook,
+    transport, and logging contracts do not depend on TLS or certificate setup.
     """
 
     host: str

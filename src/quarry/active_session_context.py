@@ -39,6 +39,7 @@ class ActiveSessionContext:
     _collection: str
 
     def __new__(cls, directory: Path, collection: str) -> Self:
+        """Bind session guidance to a registered directory and collection."""
         self = super().__new__(cls)
         self._directory = directory
         self._collection = collection

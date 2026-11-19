@@ -73,6 +73,7 @@ class MissionStore:
     _seal: SealedTree
 
     def __new__(cls, missions_dir: Path, *, default_repo: Path) -> Self:
+        """Anchor mission discovery and sealed-tree checks at the configured repo."""
         self = super().__new__(cls)
         self._missions_dir = missions_dir
         self._default_repo = default_repo

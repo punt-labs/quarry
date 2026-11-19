@@ -48,6 +48,7 @@ class Utf8Source:
     _fail: Callable[[str], NoReturn]
 
     def __new__(cls, fail: Callable[[str], NoReturn]) -> Self:
+        """Select the caller's refusal callback for invalid UTF-8 input."""
         self = super().__new__(cls)
         self._fail = fail
         return self

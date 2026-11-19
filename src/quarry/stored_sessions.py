@@ -35,6 +35,7 @@ class StoredSessions:
     _stored: dict[str, str]
 
     def __new__(cls, documents: Iterable[Mapping[str, object]]) -> Self:
+        """Snapshot stored source versions for session-prefixed documents."""
         self = super().__new__(cls)
         self._stored = {
             name: str(doc.get("source_version") or "")

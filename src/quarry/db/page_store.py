@@ -47,6 +47,7 @@ class PageStore:
     _budget: RowBudget
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Bind page writes and reads to the default row-size budget."""
         self = super().__new__(cls)
         self._db = db
         self._budget = RowBudget()

@@ -35,6 +35,7 @@ class IngestCli:
     _text: Utf8Source
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind ingest commands and UTF-8 refusals to shared CLI plumbing."""
         self = super().__new__(cls)
         self._p = plumbing
         self._text = Utf8Source(self._fail)

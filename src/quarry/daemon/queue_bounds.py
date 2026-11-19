@@ -38,6 +38,7 @@ class QueueGate:
     _waiters: list[asyncio.Future[None]]
 
     def __new__(cls, max_depth: int) -> Self:
+        """Start an open admission gate at zero depth with no waiters."""
         self = super().__new__(cls)
         self._closing = False
         self._depth = 0
@@ -148,6 +149,7 @@ class WorkerPool:
         embed_gate: asyncio.Semaphore,
         release: Callable[[], None],
     ) -> Self:
+        """Start an empty route-key worker pool with shared embedding limits."""
         self = super().__new__(cls)
         self._ctx = ctx
         self._embed_gate = embed_gate

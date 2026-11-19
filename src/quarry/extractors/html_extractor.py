@@ -37,6 +37,7 @@ class HtmlExtractor:
     """
 
     def __new__(cls) -> Self:
+        """Create a stateless HTML page extractor without reading a document."""
         return super().__new__(cls)
 
     def extract_pages(

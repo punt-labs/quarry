@@ -44,6 +44,7 @@ class ShedEventRearmer:
     _timers: set[asyncio.TimerHandle]
 
     def __new__(cls, loop: asyncio.AbstractEventLoop) -> Self:
+        """Prepare retry timers without attaching a debouncer or arming events."""
         self = super().__new__(cls)
         self._loop = loop
         self._dispatcher = None

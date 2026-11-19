@@ -114,6 +114,14 @@ dev = [
     # Enforces the DES-031 I1 client/engine package boundary (make check-imports).
     "import-linter>=2.0",
     "punt-oo-ratchet==0.2.0",
+    "pydoclint==0.12.0",
+    "docstring-parser-fork==0.0.16",
+    "markdown==3.11.3",
+    "types-markdown>=3.10,<4",
+]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocstrings[python]>=1.0.8",
 ]
 # Eval-only. NEVER a core dependency, NEVER a dependency of `make check` or any
 # CI job. ranx pulls Numba/llvmlite (a C-JIT stack, not pure Python); it must
@@ -155,6 +163,16 @@ target-version = "py313"
 # default and mangles illustrative snippets (loose comma-separated expressions
 # become one-element tuples). Markdown is markdownlint's job, not ruff's.
 extend-exclude = ["tools/eval/fixtures", "*.md"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pydoclint]
+style = "google"
+arg-type-hints-in-docstring = false
+skip-checking-short-docstrings = false
+allow-init-docstring = true
+check-style-mismatch = true
 
 [tool.ruff.lint]
 select = [

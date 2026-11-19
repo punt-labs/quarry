@@ -1,8 +1,7 @@
 """Chunk search by vector similarity under the cosine metric.
 
-Hybrid BM25+vector retrieval and RRF fusion moved to ``quarry.retrieval``
-(the production seam shared with the eval harness); this module now owns only
-single-channel vector search.
+``quarry.retrieval`` owns hybrid BM25+vector retrieval and RRF fusion for
+production and the eval harness. This module owns single-channel vector search.
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ class ChunkSearch:
     _db: LanceDB
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Bind vector queries to an open chunks database."""
         self = super().__new__(cls)
         self._db = db
         return self
@@ -60,7 +60,7 @@ class ChunkSearch:
 
         table = self._db.open_table(TABLE_NAME)
         # Cosine metric on unit-length vectors makes ``_distance = 1 - cos(θ)``
-        # so ``similarity = 1 - _distance`` is true cosine ∈ [-1, 1] (quarry-3a7f).
+        # so ``similarity = 1 - _distance`` is true cosine ∈ [-1, 1].
         query = table.search(query_vector.tolist()).metric("cosine").limit(limit)
 
         predicates: list[str] = []

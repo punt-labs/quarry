@@ -3,8 +3,8 @@
 DES-045 §14.1 has the daemon watch every database in the operator's roster, not
 only its startup-bound active database.  ``WatchRoster`` owns that state: one
 persistent LanceDB connection per database (the active database reuses the
-daemon's own connection, so the fd-plateau invariant holds across all of them —
-quarry-0dss) and, per ``(database, collection)`` route key, the resolved root and
+daemon's own connection, so the fd-plateau invariant holds across all of them)
+and, per ``(database, collection)`` route key, the resolved root and
 the observer handle for its tree.
 
 Trust invariant (DES-045 §14.1): the only databases ever opened are those in the
@@ -78,6 +78,7 @@ class WatchRoster:
         active_database: Database,
         base_settings: Settings,
     ) -> Self:
+        """Seed the watch roster with a borrowed active database connection."""
         self = super().__new__(cls)
         self._source = source
         self._active_db = active_db

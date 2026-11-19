@@ -36,6 +36,7 @@ class ChunkCatalog:
     _db: LanceDB
 
     def __new__(cls, db: LanceDB) -> Self:
+        """Bind document, collection, and page metadata reads to an open database."""
         self = super().__new__(cls)
         self._db = db
         return self
@@ -91,8 +92,7 @@ class ChunkCatalog:
 
     @staticmethod
     def _by_name_and_collection(name: str, collection: str) -> str:
-        """Return the ``document_name``+``collection`` predicate every exact
-        single-document lookup in this file shares."""
+        """Build the shared exact document-and-collection SQL predicate."""
         return (
             f"document_name = '{escape_sql(name)}'"
             f" AND collection = '{escape_sql(collection)}'"

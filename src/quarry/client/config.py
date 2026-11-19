@@ -56,6 +56,7 @@ class ClientConfig:
     _token: str | None
 
     def __new__(cls, url: str, ca_cert: str | None, token: str | None) -> Self:
+        """Retain a resolved daemon URL and optional CA pin and bearer token."""
         self = super().__new__(cls)
         self._url = url
         self._ca_cert = ca_cert
@@ -64,18 +65,21 @@ class ClientConfig:
 
     @property
     def url(self) -> str:
+        """Expose the resolved daemon base URL."""
         return self._url
 
     @property
     def ca_cert(self) -> str | None:
         # None = plaintext target (no pinned CA); a documented transport state,
         # not a failure to resolve one.
+        """Expose the pinned CA path, or None when no CA pin is configured."""
         return self._ca_cert
 
     @property
     def token(self) -> str | None:
         # None = an unauthenticated remote server (the operator logged in with
         # no bearer); a documented auth state, not an unresolved value.
+        """Expose the bearer credential, or None for unauthenticated remote access."""
         return self._token
 
     @property
@@ -232,7 +236,7 @@ class ClientConfig:
 
     @classmethod
     def _target_host(cls, url: str) -> str:
-        """The literal host a live serve.token would be presented to.
+        """Identify the literal host that would receive the live serve.token.
 
         Derived from the MIGRATED url (:meth:`canonical_url`), NOT from
         canonicalizing the raw host — so the token gate (:meth:`is_loopback_url`,

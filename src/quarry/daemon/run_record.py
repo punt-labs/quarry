@@ -34,6 +34,7 @@ class RunRecord:
     _state: TaskState
 
     def __new__(cls, state: TaskState, stop: StopSignal, *, dry_run: bool) -> Self:
+        """Start backfill progress accounting against a shared stop signal."""
         self = super().__new__(cls)
         self._state = state
         self._dry_run = dry_run

@@ -31,6 +31,7 @@ class SearchService:
     _retriever: HybridRetriever
 
     def __new__(cls, database: Database, config: RetrievalConfig | None = None) -> Self:
+        """Bind search to one retriever, using the default policy when unspecified."""
         self = super().__new__(cls)
         self._retriever = HybridRetriever(database, config or RetrievalConfig())
         return self

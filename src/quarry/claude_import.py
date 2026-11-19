@@ -16,7 +16,7 @@ __all__ = ["ClaudeMdImport"]
 
 @final
 class ClaudeMdImport:
-    """Reconcile a single ``@``-import line inside a user-owned ``CLAUDE.md``.
+    r"""Reconcile a single ``@``-import line inside a user-owned ``CLAUDE.md``.
 
     The only mutation any tool may make to a ``CLAUDE.md`` is to add or remove
     one bare ``@``-import line (tool-enable-disable.md § 2.1). This class owns
@@ -28,7 +28,7 @@ class ClaudeMdImport:
       lost update; the lock closes that gap, which the vox reference lacks.
     * **Idempotent, terminator-insensitive** — presence is decided by matching
       the canonical line against each host line *net of its terminator*, so a
-      CRLF host does not carry a spurious ``\\r`` that defeats a byte-exact
+      CRLF host does not carry a spurious ``\r`` that defeats a byte-exact
       compare. ``register`` appends only if absent; ``prune`` removes every
       match (collapsing an accidental duplicate to zero).
     * **Top-level only** — a match inside a fenced (```` ``` ````/``~~~``) or an
@@ -45,6 +45,7 @@ class ClaudeMdImport:
     _file: AtomicFile
 
     def __new__(cls, path: Path) -> Self:
+        """Bind import-line reconciliation to a byte-preserving atomic file."""
         self = super().__new__(cls)
         self._file = AtomicFile(path)
         return self
@@ -150,10 +151,10 @@ class ClaudeMdImport:
 
     @staticmethod
     def _host_eol(content: str) -> str:
-        """Return the host's line ending from its FIRST newline: CRLF, lone CR, or LF.
+        r"""Return the host's line ending from its FIRST newline: CRLF, lone CR, or LF.
 
         Detecting the first terminator, not "contains anywhere", keeps a stray
-        ``\\r`` inside a code block from overriding a mostly-LF file's true ending
+        ``\r`` inside a code block from overriding a mostly-LF file's true ending
         and appending the import with the wrong line separator.
         """
         cr = content.find("\r")

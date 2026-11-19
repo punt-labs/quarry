@@ -38,6 +38,7 @@ class ThreadStep:
         call: Callable[[], None],
         earlier: Sequence[ThreadStep] = (),
     ) -> Self:
+        """Track a named cleanup call and the earlier steps it depends on."""
         self = super().__new__(cls)
         self._pool = pool
         self._name = name

@@ -87,6 +87,7 @@ jobs:
           ./scripts/check-readme-install-sha.sh
       # Includes the pinned punt-oo-ratchet gates invoked by Makefile targets.
       - run: uv sync --frozen --extra dev
+      - run: make check-comments check-docstrings
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/ tests/

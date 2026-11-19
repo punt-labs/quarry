@@ -44,6 +44,7 @@ class FetchBugRecord:
     _first: str
 
     def __new__(cls) -> Self:
+        """Start with no unexpected fetch failure recorded."""
         self = super().__new__(cls)
         self._first = ""
         return self

@@ -37,6 +37,7 @@ class SpoolDiscard:
     _threads: DaemonThreads
 
     def __new__(cls, threads: DaemonThreads) -> Self:
+        """Track asynchronous spool removals on the supplied daemon-thread pool."""
         self = super().__new__(cls)
         self._removals = {}
         self._threads = threads

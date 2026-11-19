@@ -24,6 +24,7 @@ class IngestCollection:
     _name: str
 
     def __new__(cls, name: str) -> Self:
+        """Retain an explicit collection override for URL-host fallback."""
         self = super().__new__(cls)
         self._name = name
         return self

@@ -42,7 +42,7 @@ class PageChrome:
         return cls(_page_top=top, _page_bottom=bottom)
 
     def is_droppable(self, block: ReflowBlock, others: tuple[ReflowBlock, ...]) -> bool:
-        """A lone page-number block, in the margin band and isolated, is chrome."""
+        """Identify isolated page-number blocks in the page's margin band."""
         return (
             block.is_page_number()
             and self._in_margin(block)

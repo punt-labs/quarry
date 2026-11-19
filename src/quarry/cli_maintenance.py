@@ -27,6 +27,7 @@ class MaintenanceCli:
     _p: CliPlumbing
 
     def __new__(cls, plumbing: CliPlumbing) -> Self:
+        """Bind optimize and backfill commands to shared CLI plumbing."""
         self = super().__new__(cls)
         self._p = plumbing
         return self

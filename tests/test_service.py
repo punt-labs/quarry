@@ -584,9 +584,8 @@ class TestInstallHostKeyGuard:
     ) -> None:
         """QUARRY_SERVE_HOST=localhost is loopback (LoopbackPolicy), no key needed.
 
-        Regression: the install gate previously matched only the literal
-        127.0.0.1, so localhost/::1 were wrongly refused without a key even
-        though quarryd would accept them as loopback.
+        The install gate must agree with quarryd's LoopbackPolicy for
+        localhost, ::1, and 127.0.0.1.
         """
         monkeypatch.setenv("QUARRY_SERVE_HOST", "localhost")
         monkeypatch.delenv("QUARRY_API_KEY", raising=False)

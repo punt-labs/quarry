@@ -65,12 +65,16 @@ _MAX_UNREACHABLE_POLLS = 3
 
 @final
 class QuarryClient:
-    """Authenticated transport to one daemon target: 21 REST operations plus
-    ``await_task`` (a client-side poll over ``task_status``)."""
+    """Provide authenticated REST operations and background-task polling.
+
+    Authenticated transport to one daemon target: 21 REST operations plus
+    ``await_task`` (a client-side poll over ``task_status``).
+    """
 
     _transport: Transport
 
     def __new__(cls, transport: Transport) -> Self:
+        """Use the supplied transport for every REST operation and task poll."""
         self = super().__new__(cls)
         self._transport = transport
         return self

@@ -23,6 +23,7 @@ class StopSignal:
     _reason: str
 
     def __new__(cls) -> Self:
+        """Create an unset thread-safe stop event with no reason."""
         self = super().__new__(cls)
         self._event = threading.Event()
         self._lock = threading.Lock()

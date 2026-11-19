@@ -66,6 +66,7 @@ class ShadowRepo:
     _repo_git: GitRunner
 
     def __new__(cls, captures_dir: Path, parent: Path, configured_remote: str) -> Self:
+        """Bind capture and parent git operations to the configured shadow remote."""
         self = super().__new__(cls)
         self._captures_dir = captures_dir
         self._parent = parent
@@ -76,6 +77,7 @@ class ShadowRepo:
 
     @property
     def captures_dir(self) -> Path:
+        """Expose the capture directory managed as a nested shadow repository."""
         return self._captures_dir
 
     @property

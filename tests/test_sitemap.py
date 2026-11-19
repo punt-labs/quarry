@@ -34,7 +34,7 @@ def _addrinfo(ip: str) -> list[tuple[int, int, int, str, tuple[object, ...]]]:
 def _resolve_public(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolve every host to a public address by default.
 
-    The sitemap ingest now SSRF-gates each entry (resolving its host), so an
+    The sitemap ingest SSRF-gates each entry (resolving its host), so an
     un-mocked test would hit real DNS or drop entries in CI; the SSRF tests
     below override this with host-specific internal addresses.
     """
@@ -1416,7 +1416,7 @@ class TestBulkIngestSsrfGate:
         """limit=2 with an internal URL first ingests 2 SAFE pages, not 1.
 
         Reproduces the under-delivery bug (limit applied before the gate) and
-        proves the fix: the internal URL is never fetched, and the limit counts
+        checks that the internal URL is never fetched, and the limit counts
         safe pages.
         """
         from quarry.ingestion.sitemap_ingest import ingest_sitemap

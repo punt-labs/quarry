@@ -30,6 +30,7 @@ class CollectionResolver:
     _conn: SyncRegistry
 
     def __new__(cls, conn: SyncRegistry) -> Self:
+        """Resolve directory coverage through an existing registry connection."""
         self = super().__new__(cls)
         self._conn = conn
         return self

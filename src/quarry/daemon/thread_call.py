@@ -42,6 +42,11 @@ class ThreadCall:
     def __new__(
         cls, loop: asyncio.AbstractEventLoop, stop: StopSignal, total_s: float
     ) -> Self:
+        """Bridge worker calls to a loop with cooperative cancellation.
+
+        Args:
+            total_s: Total seconds allowed for the bridged coroutine.
+        """
         self = super().__new__(cls)
         self._loop = loop
         self._stop = stop

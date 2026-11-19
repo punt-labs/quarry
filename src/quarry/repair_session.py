@@ -29,6 +29,7 @@ class RepairSession:
     def __new__(
         cls, plan: Callable[[], RepairPlan], rebuild: Callable[[], int]
     ) -> Self:
+        """Open a guarded repair session around plan and rebuild callbacks."""
         self = super().__new__(cls)
         self._is_open = True
         self._plan = plan

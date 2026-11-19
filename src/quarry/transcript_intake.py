@@ -21,7 +21,7 @@ class TranscriptIntake:
     so stamping a capture's version after building the reader lets a writer
     grow the file in between: the capture then ships stale content tagged with
     a version a later, now-quiescent pass will already match, and that growth
-    is silently never ingested (quarry-uq95). Pairing snapshot and reader in
+    is silently never ingested. Pairing snapshot and reader in
     one factory makes the correct ordering the only ordering a caller can get.
     """
 

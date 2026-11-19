@@ -40,12 +40,14 @@ class PortFile:
     _path: Path
 
     def __new__(cls, path: Path) -> Self:
+        """Select the daemon port sidecar without reading or creating it."""
         self = super().__new__(cls)
         self._path = path
         return self
 
     @property
     def path(self) -> Path:
+        """Expose the port sidecar's filesystem location."""
         return self._path
 
     def write(self, port: int) -> None:
@@ -80,6 +82,7 @@ class PortFile:
         return int(self._path.read_text().strip())
 
     def remove(self) -> None:
+        """Remove the port sidecar, logging filesystem failures without raising."""
         try:
             self._path.unlink(missing_ok=True)
             logger.info("Removed port file: %s", self._path)
@@ -102,12 +105,14 @@ class ServeTokenFile:
     _path: Path
 
     def __new__(cls, path: Path) -> Self:
+        """Select the loopback bearer sidecar without reading or creating it."""
         self = super().__new__(cls)
         self._path = path
         return self
 
     @property
     def path(self) -> Path:
+        """Expose the loopback bearer sidecar's filesystem location."""
         return self._path
 
     def write(self, token: str) -> None:
@@ -170,6 +175,7 @@ class ServeTokenFile:
         return self._path.read_text().strip()
 
     def remove(self) -> None:
+        """Remove the bearer sidecar, logging filesystem failures without raising."""
         try:
             self._path.unlink(missing_ok=True)
             logger.info("Removed serve token file: %s", self._path)
@@ -189,16 +195,19 @@ class RunDir:
     _data_dir: Path
 
     def __new__(cls, data_dir: Path) -> Self:
+        """Anchor daemon port, token, and ownership sidecars at a data directory."""
         self = super().__new__(cls)
         self._data_dir = data_dir
         return self
 
     @property
     def port_file(self) -> PortFile:
+        """Locate serve.port beneath this daemon's data directory."""
         return PortFile(self._data_dir / "serve.port")
 
     @property
     def token_file(self) -> ServeTokenFile:
+        """Locate serve.token beneath this daemon's data directory."""
         return ServeTokenFile(self._data_dir / "serve.token")
 
     @property

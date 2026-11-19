@@ -25,6 +25,7 @@ class RecycleGate:
     _recycle_after: int
 
     def __new__(cls, recycle_after: int) -> Self:
+        """Start an unarmed, idle recycle gate with zero recorded rebuilds."""
         self = super().__new__(cls)
         self._armed = False
         self._busy = False

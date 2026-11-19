@@ -3,7 +3,7 @@
 :class:`SkillDeposit` deposits quarry's OWN packaged skill tree
 (:meth:`~quarry.skills_source.SkillSource.packaged`) into every detected
 non-Claude harness — ungated by the enabled repo, since the source is the
-installed binary itself, not anything the repo supplies (PL-1049). The deposit
+installed binary itself, not anything the repo supplies. The deposit
 is machine-global and binary-owned, so ``disable`` does NOT retract it: one
 repo's disable must not delete skills another still-enabled repo depends on
 (``quarry skills install`` manages them explicitly instead). A deposit never

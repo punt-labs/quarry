@@ -1,4 +1,4 @@
-"""Phase-1 retrieval evaluation harness (glue around the frozen retrieval seam).
+"""Retrieval evaluation harness (glue around the frozen retrieval seam).
 
 Measures the shipped ``HybridRetriever`` — it never modifies it. Value objects:
 ``JudgedUnit`` (the join key), ``TrecRun``/``Qrels`` (TREC I/O), ``Corpus``,

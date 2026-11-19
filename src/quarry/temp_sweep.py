@@ -63,6 +63,7 @@ class TempSweep:
         label: str,
         stale_after_s: float = STALE_AFTER_S,
     ) -> Self:
+        """Configure sibling-temp matching, labels, and the stale-age bound."""
         self = super().__new__(cls)
         self._stale_after_s = stale_after_s
         self._label = label

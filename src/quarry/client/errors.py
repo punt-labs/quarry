@@ -41,12 +41,14 @@ class QuarryError(Exception):
 
     @property
     def message(self) -> str:
+        """Expose the client-facing failure description."""
         return self._message
 
     @property
     def status(self) -> int:
         # 0 = no HTTP status (a connection or protocol failure); :class:`HttpError`
         # overrides this with the real wire status.
+        """Use zero when a failure has no HTTP response status."""
         return 0
 
     def __str__(self) -> str:
@@ -96,6 +98,7 @@ class QuarryConnectionError(QuarryError):
 
     @property
     def target(self) -> str:
+        """Expose the daemon target that could not be reached."""
         return self._target
 
     @property
@@ -127,11 +130,13 @@ class HttpError(QuarryError):
 
     @property
     def status(self) -> int:
+        """Expose the HTTP status returned by the daemon."""
         return self._status
 
     @property
     def task_id(self) -> str:
         # Empty unless the server returned a 409 conflict naming a running task.
+        """Identify the conflicting running task, or use an empty string if absent."""
         return self._task_id
 
     @property

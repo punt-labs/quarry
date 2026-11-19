@@ -28,6 +28,7 @@ class PreCompactHook:
     _trace: HookTrace
 
     def __new__(cls, payload: dict[str, object]) -> Self:
+        """Retain the hook payload and start its pre-compact trace."""
         self = super().__new__(cls)
         self._payload = payload
         self._trace = HookTrace("pre-compact")

@@ -34,6 +34,7 @@ class TextExtractor:
     """
 
     def __new__(cls) -> Self:
+        """Create a stateless text-document extractor without opening a file."""
         return super().__new__(cls)
 
     def extract_pages(
