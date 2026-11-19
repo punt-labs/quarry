@@ -172,10 +172,8 @@ design docs, transcripts, agent memories). Three buckets:
 - *Query-type spread* — conceptual ("why/how"), known-item lookup, and keyword-ish, so we do
   not tune for one shape and regress another.
 
-Recall telemetry (DES-056) feeds this harness a real query set: `quarry insights`'s
-scrubbed top-empty-queries breakdown surfaces actual queries that returned nothing,
-turning them into regression cases without hand-curating a natural-question set from
-scratch.
+Recall telemetry (DES-061) ranks recurring misses by salted hash. It cannot supply
+query text to the harness; use separately curated, consented queries for regression cases.
 
 **b. Relevance judgments (qrels)** — for each query, which chunks/documents are relevant,
 graded 0–3. This is the hard, valuable part. Layered approach:

@@ -158,7 +158,7 @@ class CollectionIngestor:
         self._aborted = True
         self._registry.rollback()
         errors.append(f"[{self._collection}] {message}")
-        logger.exception("Flush failed for %s", self._collection)
+        logger.error("Flush failed for %s", self._collection)
 
     def _produce(self, file_path: Path) -> None:
         """Plan the file's resume watermark and stream its windows to the queue.

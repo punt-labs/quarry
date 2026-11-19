@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, ClassVar, cast
 
@@ -40,6 +41,7 @@ def _context(tmp_path: Path, *, budget_s: float = 30.0) -> DaemonContext:
     ctx = ctx_with_queue(tmp_path)
     bound = cast("SimpleNamespace", ctx)
     bound.settings.ingest_drain_timeout_s = budget_s
+    bound.recall = SimpleNamespace(running=nullcontext)
     bound.start_watch_loop = _no_op
     bound.aclose_watch_loop = _no_op
     return ctx

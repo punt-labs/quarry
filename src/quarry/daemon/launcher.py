@@ -103,7 +103,7 @@ class DaemonLauncher:
     @staticmethod
     def serve() -> None:
         """Configure logging, then parse argv and launch the daemon."""
-        LoggingConfig.configure(stderr_level="INFO", log_file=LoggingConfig.DAEMON_LOG)
+        LoggingConfig.daemon()
         UncaughtExceptionLog.install()
         typer.run(DaemonLauncher.cli)
 
@@ -151,17 +151,5 @@ class DaemonLauncher:
 
 
 def entrypoint() -> None:
-    """Console-script target: configure logging, then parse argv and launch.
-
-    Logging is configured HERE rather than inside :meth:`DaemonLauncher.launch`
-    so it covers the whole process: argument parsing, the bind-key and TLS
-    refusals that exit before any server exists, and the uncaught-exception
-    hooks.  Without it root has no handlers, so Python falls back to
-    ``logging.lastResort``, a bare stderr handler at WARNING with no formatter:
-    every operational INFO line is discarded, and what escapes reaches the
-    supervisor's stderr file with no timestamp.
-
-    ``stderr_level="INFO"`` keeps the supervisor's stderr file readable as a
-    live tail; the rotating file is the record.
-    """
+    """Run the daemon console command, including logging before argument parsing."""
     CliEntry.run(DaemonLauncher.serve)

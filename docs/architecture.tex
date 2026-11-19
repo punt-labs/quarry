@@ -1024,12 +1024,10 @@ All settings are environment variables read via pydantic-settings.
   Vector database location \\
 \texttt{REGISTRY\_PATH}  & \texttt{<root>/default/registry.db} &
   Directory sync SQLite database \\
-\texttt{TELEMETRY\_PATH} & \texttt{<root>/default/telemetry.db} &
-  Recall-telemetry SQLite database (DES-056) \\
-\texttt{QUARRY\_LOG\_DIR} & \texttt{\~{}/.punt-labs/quarry/logs/} &
-  Log directory (\texttt{quarry.log} for the CLI/MCP client tier,
-  \texttt{quarryd.log} for the daemon --- DES-048; rotating, 5\,MB
-  $\times$ 5; resolvable per call via \texttt{QUARRY\_LOG\_DIR}) \\
+Telemetry store & \texttt{\~{}/.punt-labs/quarry/telemetry.db} &
+  Private local search statistics (DES-061) \\
+Diagnostics & \texttt{\~{}/.punt-labs/quarry/logs/quarry.log} &
+  Shared private rotating file for all process roles (DES-061) \\
 \midrule
 \multicolumn{3}{l}{\textbf{Chunking}} \\
 \midrule
@@ -1054,13 +1052,12 @@ All settings are environment variables read via pydantic-settings.
   Chunks embedded per window, so a large document never materializes
   all its vectors (a kpz throughput seam) \\
 \midrule
-\multicolumn{3}{l}{\textbf{Recall telemetry (DES-056)}} \\
+\multicolumn{3}{l}{\textbf{Recall telemetry (DES-061)}} \\
 \midrule
 \texttt{TELEMETRY\_ENABLED}         & \texttt{true} &
-  Record one \texttt{query\_events} row + N \texttt{query\_hits} rows per
-  search; \texttt{false} makes the write path a true no-op \\
+  Capture typed recall telemetry; \texttt{false} disables capture \\
 \texttt{TELEMETRY\_RETENTION\_DAYS} & \texttt{90} &
-  Prune query-log rows older than this many days \\
+  Prune telemetry records older than this many days \\
 \midrule
 \multicolumn{3}{l}{\textbf{Watch/index loop (DES-045)}} \\
 \midrule
@@ -1389,33 +1386,19 @@ Subagent    & \modpath{subagent\_capture.py},
 \end{tabular}
 \end{center}
 
-\subsection{Recall Telemetry (DES-056)}
+\subsection{Recall Telemetry (DES-061)}
 
-DES-055 gave agents a place to write memory; DES-056 answers whether recall
-is actually exercised.  \modpath{daemon/routes/search.py} times every
-\texttt{SearchService.search()} call and, when
-\texttt{Settings.telemetry\_enabled}, scrubs the query text through the same
-\texttt{Scrubber} pass captures use (DES-041) and records one
-\texttt{query\_events} row plus one \texttt{query\_hits} row per ranked
-result to a local, engine-free SQLite store (\modpath{query\_log.py} +
-\modpath{query\_log\_schema.py}), mirroring \modpath{sync\_registry.py}'s
-WAL/busy-timeout connection lifecycle.  The write is boundary I/O: wrapped in
-\texttt{try/except}, a failure is logged and swallowed so a telemetry outage
-never turns a search into a 500.
+After each search response, the daemon sends a typed search span and one hit
+event per result through the shared \texttt{punt-observe} facade. It captures
+only lengths, counts, salted hashes, a closed calling-surface enum, latency,
+and hit-age bands. The local export retains records for 90 days by default.
+Quarry never reads or migrates the previous per-database query logs.
 
-\texttt{GET /v1/insights} mirrors the \texttt{status} chain across all three
-surfaces (\texttt{quarry insights}, the \texttt{insights} MCP tool, the HTTP
-route) and reports total queries, empty-result rate, p50/p95 latency, top
-empty (scrubbed) queries, per-collection and per-agent recall counts, a
-memory-vs-knowledge split, and a hit recency (decay-band) breakdown.  The
-decay-band join --- a hit's document identity against the live catalog's
-\texttt{ingestion\_timestamp} --- runs in the route, not the store: the
-query log has no LanceDB import, so only the code already holding
-\texttt{ctx.database} can perform it.  \texttt{SearchRequest} carries an
-optional \texttt{surface} field (\texttt{cli}/\texttt{mcp}/\texttt{http}/
-\texttt{plugin}) for provenance; the CLI \texttt{find} path stamps
-\texttt{surface="cli"} the same way the MCP \texttt{find} tool stamps
-\texttt{"mcp"}.
+\texttt{GET /v1/insights}, \texttt{quarry insights}, and the \texttt{insights}
+MCP tool report database-scoped aggregates from a read-only snapshot of the
+shared export. Empty-query, collection, and agent labels are hashes. Hit-age
+bands are derived from result ingestion timestamps without logging the
+timestamps or doing another catalog lookup.
 
 \subsection{Skills and Cross-Harness Distribution (quarry-x7ja)}
 
@@ -1503,10 +1486,10 @@ Every module that performs I/O declares
 \texttt{logger = logging.getLogger(\_\_name\_\_)}.  Pure data modules
 (\texttt{models.py}, \texttt{types.py}, \texttt{page\_chunker.py}) do not.
 
-Logging is configured once at each application entry point --- the CLI,
-the MCP server, and the \texttt{quarryd} daemon (DES-048; the daemon writes
-its own \texttt{quarryd.log} with crash hooks for all three uncaught-exception
-routes).  Library modules never call \texttt{logging.basicConfig}.
+The CLI, MCP server, hook dispatcher, daemon, and detached sync worker each
+configure diagnostics through \texttt{punt-observe} (DES-061).
+All roles use the same private rotating file; MCP stdout remains protocol-only.
+Library modules never configure logging.
 
 \begin{center}
 \begin{tabular}{lp{8cm}}

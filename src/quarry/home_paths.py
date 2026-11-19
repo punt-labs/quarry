@@ -84,7 +84,7 @@ class QuarryHome:
 
     @classmethod
     def log_root(cls) -> Path:
-        """Return the default log directory, used when ``QUARRY_LOG_DIR`` is unset."""
+        """Return the shared diagnostic log directory."""
         return cls.root() / "logs"
 
     @staticmethod

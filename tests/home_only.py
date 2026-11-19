@@ -19,9 +19,9 @@ class HomeOnly:
     def apply(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
         """Make *home* the one place quarry puts its data and logs.
 
-        The suite redirects ``QUARRY_ROOT`` and ``QUARRY_LOG_DIR``, which win over
+        The suite redirects ``QUARRY_ROOT``, which win over
         the home directory; a test about the home-derived paths clears them.
         """
         monkeypatch.setattr(Path, "home", lambda: home)
-        for name in ("QUARRY_ROOT", "QUARRY_LOG_DIR", "LANCEDB_PATH"):
+        for name in ("QUARRY_ROOT", "LANCEDB_PATH"):
             monkeypatch.delenv(name, raising=False)

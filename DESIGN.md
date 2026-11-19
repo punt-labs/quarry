@@ -2546,6 +2546,8 @@ project root may live) and DES-046 (the daemon's descriptor envelope).
 
 ## DES-048: Daemon operational logging — configured, separate, volume-governed
 
+**Superseded in part by DES-061.** This section describes the previous sinks.
+
 **Context.** For its entire life the daemon ran with no logging configuration
 at all: `LoggingConfig.configure` was called only by the CLI's Typer root
 callback and the MCP client tier, never on the `quarryd` path, so the root
@@ -3025,6 +3027,8 @@ dependency / DES-041 path-read rejection); filing reflections as lessons
 model, heavy work in a blocking hook). Full rejection table in the design doc §g.2.
 
 ## DES-056: Recall telemetry — a local scrubbed query log and an insights read surface
+
+**Superseded in part by DES-061.** This section describes the previous sinks.
 
 **Date:** 2026-09-20
 **Status:** SETTLED
@@ -3730,3 +3734,30 @@ implemented:
 
 - refusal and fault store outcomes, with the REFUSED term;
 - a tracked respool drained at loop close.
+
+## DES-061: Shared diagnostics and typed recall telemetry
+
+**Decision.** Use the punt-kit logging and telemetry standards and the
+punt-observe Python package in place of Quarry-owned sink implementations.
+Retain DES-048's diagnostic volume rule and daemon crash hooks. The CLI, MCP
+server, hook entry point, daemon and detached sync dispatcher select their
+own roles and use the same user-private, redacting, rotating `quarry.log`
+under `~/.punt-labs/quarry/logs/`. A detached dispatcher records its start
+and the success or failure of handing off the sync request, not the result of
+the daemon's later background scan. Service stdout and stderr are not the
+diagnostic store.
+
+The daemon records search usage once at the search boundary. Versioned
+search spans and hit events carry closed enums, counts, age bands, latency,
+query length, and salted hashes of scoped identifiers. They never contain
+raw or scrubbed query text, filter values, document content, or exception
+text. The shared facade owns asynchronous export, off switches, and a single
+90-day retention policy for the entire installation. The daemon has not granted network-export consent.
+
+Insights reads the local SQLite export without writing. It filters by the
+daemon database's salted scope; doctor reads the installation-wide summary.
+The v1 response retains its existing breakdown keys for mixed-version
+clients. New daemons return salted hashes, never plaintext, in those fields.
+Capture is asynchronous, so the
+latest search may not appear immediately. Old per-database stores are not
+read, migrated, or deleted.

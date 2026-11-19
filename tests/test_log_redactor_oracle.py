@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 from hypothesis import given, settings, strategies as st
+from punt_observe.logging import LogRedactor
 
-from quarry.log_redactor import LogRedactor
 from tests.redaction import redacted
 
 _MARKER_CHARS = "QXZJ"

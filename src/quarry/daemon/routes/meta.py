@@ -7,13 +7,11 @@ from typing import final
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
-from quarry.api.insights import InsightsResponse
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.routes.health_snapshot import HealthSnapshot
-from quarry.daemon.routes.insights_builder import InsightsBuilder
 from quarry.daemon.routes.status_snapshot import StatusSnapshot
 from quarry.home_paths import QuarryHome
-from quarry.query_log import get_query_log
+from quarry.recall_insights import RecallInsights
 
 # Naming symmetry with hooks._active_context: the daemon derives the captures
 # sibling from the caller's collection so a client never has to spell both.
@@ -81,21 +79,9 @@ class MetaRoutes(RouteGroup):
         return JSONResponse(dict(counts))
 
     def insights(self, request: Request) -> JSONResponse:
-        """Return the recall-telemetry snapshot behind ``quarry insights``.
-
-        A disabled toggle short-circuits before ``get_query_log`` -- opening
-        (and so creating) the telemetry database file for a store the operator
-        turned off would surprise a "disabled means untouched" reading of the
-        setting.
-        """
+        """Read this daemon's recall snapshot without opening a disabled store."""
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp
 
-        settings = self.ctx.settings
-        if not settings.telemetry_enabled:
-            return JSONResponse(InsightsResponse.disabled().model_dump())
-
-        query_log = get_query_log(settings.telemetry_path)
-        response = InsightsBuilder(self.ctx.database, query_log).build()
-        return JSONResponse(response.model_dump())
+        return JSONResponse(RecallInsights.for_daemon(self.ctx.recall).model_dump())

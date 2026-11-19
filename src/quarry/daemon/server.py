@@ -174,14 +174,7 @@ class DaemonServer:
             app = build_app(ctx, lifespan=self._lifespan)
             server = uvicorn.Server(self._uvicorn_config(app))
             self._install_startup_hook(server)
-            logger.info(
-                # Bracket an IPv6 literal for the log so it renders a valid
-                # host:port (starting on [::1]:8420, not ::1:8420); bind unchanged.
-                "Starting Quarry server on %s",
-                to_netloc(self._config.host, self._config.port),
-            )
             server.run()
-            logger.info("Server stopped")
         finally:
             self._release_run_dir_lock()
 
@@ -285,7 +278,8 @@ class DaemonServer:
         # continuous indexing runs as a queue producer.
         await ctx.start_watch_loop()
         try:
-            yield
+            with ctx.recall.running():
+                yield
         finally:
             try:
                 # Drain queued captures before touching sidecars so a clean
@@ -303,6 +297,7 @@ class DaemonServer:
                     self._run_dir.token_file.remove()
                 with suppress(asyncio.CancelledError):
                     await monitor
+                logger.info("Server stopped")
 
     def _uvicorn_config(self, app: Starlette) -> uvicorn.Config:
         return uvicorn.Config(

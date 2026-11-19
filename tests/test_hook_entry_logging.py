@@ -19,7 +19,7 @@ pytestmark = pytest.mark.hook_integration
 
 _QUARRY_RIDG_SUMMARY = (
     "quarry-ridg (G6): quarry-hook never configures logging, so HookTrace "
-    "breadcrumbs are silently dropped and $QUARRY_LOG_DIR/quarry.log stays "
+    "breadcrumbs are silently dropped and ~/.punt-labs/quarry/logs/quarry.log stays "
     "empty even when the handler ran."
 )
 
@@ -94,7 +94,7 @@ def test_quarry_hook_writes_expected_log_line(
 ) -> None:
     """A hook invocation logs its expected breadcrumb.
 
-    LoggingConfig initializes the file handler before dispatch so every
+    punt-observe initializes the file handler before dispatch so every
     invocation, including an early skip, emits a HookTrace line.
     """
     payload = load_payload(payload_fixture)

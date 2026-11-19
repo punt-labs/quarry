@@ -122,7 +122,7 @@ class OnnxSessionBuilder:
         CPU daemon runs at ``min(2, ncpu)``, not the failed GPU config's
         ``intra_op=1`` (DES-032).
         """
-        logger.warning("CUDA session failed, falling back to CPU + int8", exc_info=True)
+        logger.warning("CUDA session failed, falling back to CPU + int8")
         cpu_threads = ThreadConfig(is_gpu=False)
         options = self._session_options(ort_module, cpu_threads)
         cpu_model_file = PROVIDER_MODEL_MAP[_CPU_PROVIDER]

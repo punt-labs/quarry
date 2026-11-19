@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, final
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.doctor_failure import CheckFailure
-from quarry.logging_config import LoggingConfig
+from quarry.home_paths import QuarryHome
 from quarry.results import CheckResult
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ class InstallDirectories:
         """
         results = [
             cls._make("data", lambda: cls.data_dir(Settings())),
-            cls._make("logs", LoggingConfig.log_dir),
+            cls._make("logs", QuarryHome.log_root),
         ]
         return all(results)
 

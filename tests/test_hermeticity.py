@@ -12,9 +12,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from punt_observe.logging import Role
 
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
+from quarry.home_paths import QuarryHome
 from quarry.logging_config import LoggingConfig
 from quarry.url_admission import UrlAdmission
 from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
@@ -61,12 +63,12 @@ class TestHomeRedirect:
         assert SELECTION.path.is_relative_to(ENV.home)
 
     def test_log_dir_is_redirected(self) -> None:
-        assert LoggingConfig.log_dir().is_relative_to(ENV.home)
+        assert QuarryHome.log_root().is_relative_to(ENV.home)
 
     def test_configure_writes_inside_the_session_home(self) -> None:
         """The breach this whole design exists to close: CLI logging is contained."""
-        LoggingConfig.configure()
-        log = LoggingConfig.log_dir() / "quarry.log"
+        LoggingConfig(Role.CLI).configure()
+        log = QuarryHome.log_root() / "quarry.log"
         assert log.parent.is_dir()
         assert log.is_relative_to(ENV.home)
 
