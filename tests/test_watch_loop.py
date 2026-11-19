@@ -718,7 +718,7 @@ def test_safety_scan_picks_up_a_collection_registered_after_start(
     """A collection registered since start() is watched + scanned by the reconcile.
 
     Stands in for a sibling database (or collection) created via the CLI while
-    the daemon runs — the backstop that retires quarry-uae (fix 3).
+    the daemon runs.
     """
 
     async def _run() -> None:

@@ -2987,7 +2987,7 @@ class TestMemoryTypeVocabulary:
 
 
 class TestLearn:
-    """Tests for POST /learn endpoint (quarry-b6p)."""
+    """Tests for the POST /learn endpoint."""
 
     def test_success_returns_202_with_learn_prefixed_task_id(
         self, tmp_path: Path

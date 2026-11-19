@@ -38,7 +38,7 @@ _OMITTED_ARGS = "Arguments in the function signature but not in the docstring:"
 _STALE_ARGS = "Arguments in the docstring but not in the function signature:"
 _ARGS_HEADER = re.compile(r"^(?:Args|Arguments|Parameters|Params):[ \t\r\f\v]*$", re.M)
 _TRACKER_REFERENCE = re.compile(
-    r"(?<![\w-])(?:PL-\d+|quarry-[a-z0-9]{4,8})(?![\w-])"
+    r"(?<![\w-])(?:PL-\d+|quarry-[a-z0-9]{3,8})(?![\w-])"
     r"|\b(?:PR|issue|pull request)\s+#\d+\b"
     r"|\blinear\.app/[^/\s]+/issue/[^/\s]+"
     r"|\bgithub\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/\d+\b",

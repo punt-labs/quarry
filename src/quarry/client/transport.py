@@ -66,10 +66,11 @@ class Transport(Protocol):
             timeout: Per-request seconds; None uses the transport's default timeout.
 
         Returns:
-            HTTP status and decoded JSON, including non-success HTTP responses.
+            Successful HTTP status and decoded JSON; an empty body becomes {}.
 
         Raises:
             QuarryConnectionError: The daemon cannot be reached.
+            HttpError: The daemon returns HTTP status 300 or higher.
             QuarryError: The response body is not valid JSON.
         """
         ...

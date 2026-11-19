@@ -85,14 +85,13 @@ class DocumentTools:
 
         Args:
             document_name: Document filename (e.g., 'report.pdf').
-            page_number: Page number (1-indexed). 0 means show metadata only.
+            page_number: Page number (1-indexed); nonpositive means metadata only.
             collection: Optional collection scope.
 
         Returns:
-            Document metadata when page_number is zero, otherwise the selected page's
-            full stored text. A missing document or page is an error.
-            Input refusals, daemon errors, and unexpected failures return
-            Error: ... text. Connection failures include recovery guidance.
+            Document metadata (nonpositive page_number) or full page text. Missing
+            documents/pages return ordinary not-found text, not an Error: result.
+            Other failures return Error: ...; connection errors add recovery guidance.
         """
         if err := self._reject_blank(document_name, "document_name"):
             return err

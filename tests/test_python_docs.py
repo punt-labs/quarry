@@ -431,6 +431,26 @@ def test_tracker_gate_preserves_quarry_names_and_design_references() -> None:
     assert len(tracker_references(references, "ids.py")) == 5
 
 
+@pytest.mark.parametrize(
+    ("reference", "flagged"),
+    [
+        ("quarry-uae", True),
+        ("QUARRY-B6P", True),
+        ("quarry-5pg1", True),
+        ("quarry-12345678", True),
+        ("quarry-12", False),
+        ("quarry-123456789", False),
+        ("quarry-dev", False),
+        ("quarry-b6p-suffix", False),
+        ("", False),
+    ],
+)
+def test_tracker_gate_checks_short_ids_and_token_boundaries(
+    reference: str, *, flagged: bool
+) -> None:
+    assert bool(tracker_references(f"# {reference}", "reference.py")) is flagged
+
+
 def test_missing_api_directive_is_detected() -> None:
     header = (
         b"# Sphinx inventory version 2\n"
