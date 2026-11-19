@@ -118,7 +118,7 @@ class RecallTelemetry:
         if not isinstance(telemetry, NoopTelemetry):
             self._telemetry = telemetry
             self._scope = telemetry.hash_id(
-                f"database:{self._settings.lancedb_path.absolute()}"
+                f"database:{self._settings.lancedb_path.resolve()}"
             )
         try:
             yield

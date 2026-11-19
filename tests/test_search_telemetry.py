@@ -130,6 +130,21 @@ def test_capture_failure_cannot_escape_after_a_search(
     assert "private query" not in caplog.text
 
 
+def test_named_database_path_alias_keeps_recall_scope(tmp_path: Path) -> None:
+    """Stopping and reopening via a symlink must keep the same history."""
+    database = tmp_path / "database"
+    database.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(database, target_is_directory=True)
+    original = RecallTelemetry(Settings(lancedb_path=database))
+    with original.running():
+        original.record(SearchObservation("search", "cli", "", 10, []))
+
+    reopened = RecallTelemetry(Settings(lancedb_path=alias))
+    with reopened.running():
+        assert RecallInsights.for_daemon(reopened).total_queries == 1
+
+
 def test_environment_alone_cannot_enable_network_export(
     observe_home: Path, monkeypatch: MonkeyPatch
 ) -> None:
