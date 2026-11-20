@@ -59,7 +59,7 @@ _COUNTS = """
 
 @final
 class RecallInsights:
-    """Query the punt-observe SQLite projection for local reports."""
+    """Query the pinned punt-observe SQLite projection for local reports."""
 
     __slots__ = ("_args", "_conn")
 
