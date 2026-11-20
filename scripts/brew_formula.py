@@ -71,10 +71,9 @@ tree-sitter-embedded-template has no external scanner and built fine
 from sdist, but yaml does and hits the identical dlopen symbol failure.""",
 }
 
-# Pure-Python packages pinned to their universal wheel although the lock carries
-# an sdist.  omegaconf 2.3.0's setup.py imports pkg_resources, which Homebrew's
-# no-build-isolation pip cannot find in the venv, so its sdist never builds.
-UNIVERSAL_WHEEL_PINS: frozenset[str] = frozenset({"omegaconf"})
+# Use universal wheels to avoid sdist build dependencies in Homebrew's venv:
+# omegaconf needs pkg_resources, and punt-observe needs uv_build.
+UNIVERSAL_WHEEL_PINS: frozenset[str] = frozenset({"omegaconf", "punt-observe"})
 
 # Resources the formula declares but never installs (see the hf-xet comment in
 # the template's install block).  Each must be in the resolved closure.
@@ -110,9 +109,6 @@ class ResourceBuilder:
 
     def build(self, name: str) -> Resource:
         version = self._lock.version(name)
-        git_source = self._lock.git_source(name)
-        if git_source is not None:
-            return Resource(name, version, git_source=git_source)
         sdist = self._lock.sdist(name)
         if name in UNIVERSAL_WHEEL_PINS:
             universal = [w for w in self._lock.wheels(name) if w.is_universal()]
