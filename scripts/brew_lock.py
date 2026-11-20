@@ -41,10 +41,6 @@ TARGET_ENVIRONMENTS: tuple[dict[str, str], ...] = (
     },
 )
 
-_GIT_SOURCE = re.compile(
-    r"(https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
-    r"\?rev=([a-f0-9]{40})#\2"
-)
 _CLAUSE = re.compile(r"^\s*(\w+)\s*(==|!=)\s*'([^']*)'\s*$")
 _WHEEL_NAME = re.compile(
     r"^(?P<dist>[^-]+)-(?P<ver>[^-]+)(?:-(?P<build>\d[^-]*))?"
@@ -183,7 +179,6 @@ class Resource:
     version: str
     artifact: Artifact | None = None  # None exactly when ``wheels`` is set
     wheels: PlatformWheels | None = None
-    git_source: tuple[str, str] | None = None
 
     @property
     def is_wheel_pinned(self) -> bool:
@@ -193,9 +188,6 @@ class Resource:
         lines = [f'  resource "{self.name}" do']
         if self.wheels is not None:
             lines += self.wheels.render()
-        elif self.git_source is not None:
-            url, revision = self.git_source
-            lines.append(f'    url "{url}", using: :git, revision: "{revision}"')
         elif self.artifact is not None:
             lines += _url_lines(self.artifact, "    ")
         else:
@@ -263,16 +255,6 @@ class Lock:
 
     def version(self, name: str) -> str:
         return str(self._package(name)["version"])
-
-    def git_source(self, name: str) -> tuple[str, str] | None:
-        source = self._package(name).get("source", {})
-        git = source.get("git")
-        if git is None:
-            return None
-        match = _GIT_SOURCE.fullmatch(git)
-        if match is None:
-            raise FormulaError(f"{name}: expected a GitHub source pinned by commit")
-        return match[1], match[2]
 
     def sdist(self, name: str) -> Artifact | None:
         entry = self._package(name).get("sdist")

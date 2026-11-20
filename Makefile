@@ -109,8 +109,7 @@ check-skills-sync: ## Fail if src/quarry/_skills/ has drifted from plugin/skills
 # does not change the file; `--no-header` keeps the output free of the command
 # line, so the check and the regenerate target produce identical bytes.
 INSTALL_CONSTRAINTS ?= install-constraints.txt
-# The wheel metadata pins punt-observe by commit; the installer accepts only registry pins.
-INSTALL_CONSTRAINTS_EXPORT = uv export --frozen --no-hashes --no-dev --no-emit-project --no-emit-package punt-observe --no-annotate --no-header
+INSTALL_CONSTRAINTS_EXPORT = uv export --frozen --no-hashes --no-dev --no-emit-project --no-annotate --no-header
 
 install-constraints: ## Regenerate install-constraints.txt from uv.lock (run after any uv lock)
 	$(INSTALL_CONSTRAINTS_EXPORT) --output-file $(INSTALL_CONSTRAINTS)

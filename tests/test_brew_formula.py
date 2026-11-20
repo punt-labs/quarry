@@ -97,8 +97,9 @@ def test_formula_depends_on_freetype_for_pillow_sdist(formula: str) -> None:
     assert '  depends_on "freetype" # pillow\n' in formula
 
 
-def test_omegaconf_is_a_universal_wheel_not_an_sdist(formula: str) -> None:
-    body = _resource_blocks(formula)["omegaconf"]
+@pytest.mark.parametrize("name", ["omegaconf", "punt-observe"])
+def test_build_backend_workaround_uses_universal_wheel(formula: str, name: str) -> None:
+    body = _resource_blocks(formula)[name]
     assert "-py3-none-any.whl" in body
     assert ".tar.gz" not in body
 
@@ -126,12 +127,6 @@ def test_every_resource_version_and_hash_equals_the_lock(
     assert blocks
     for name, body in blocks.items():
         package = _locked(lock, name)
-        if git := package.get("source", {}).get("git"):
-            url, revision = git.split("?rev=", 1)
-            revision, resolved = revision.split("#")
-            assert resolved == revision
-            assert body.strip() == f'url "{url}", using: :git, revision: "{revision}"'
-            continue
         urls = re.findall(r'url "([^"]+)"', body)
         hashes = re.findall(r'sha256 "([0-9a-f]{64})"', body)
         assert len(urls) == len(hashes) >= 1
