@@ -254,6 +254,29 @@ async def test_a_refused_capture_refetch_fails_the_task(
     assert daemon.ctx.database.store.count() == 0
 
 
+async def test_a_refused_web_search_capture_does_not_log_the_query(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = InProcessDaemon(tmp_path)
+    state = TaskState(task_id="t-search", kind="capture")
+    query = "private search text"
+    inline = ScrubbedIngestJob(
+        name=f"search: {query}",
+        content="<html></html>",
+        format_hint="html",
+        scrub_label="capture",
+        labels=_capture_job().inline.labels,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await CaptureIngestJob(inline=inline, source_url=None).run(daemon.ctx, state)
+
+    _assert_quiet_and_url_free(
+        state, caplog, subject="capture WebSearch capture (task "
+    )
+    assert query not in caplog.text
+
+
 async def test_an_oversized_body_is_a_content_refusal(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -508,7 +531,7 @@ async def test_a_scrubbed_ingest_of_an_empty_page_fails_the_task(
     assert state.error == "capture stored nothing: no text extracted"
 
 
-async def test_a_refused_label_is_logged_under_its_stored_name(
+async def test_a_refused_url_label_logs_no_path_or_fragment(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     daemon = InProcessDaemon(tmp_path)
@@ -527,8 +550,9 @@ async def test_a_refused_label_is_logged_under_its_stored_name(
 
     refusals = [r for r in caplog.records if r.name.endswith("refusal_aware_terminal")]
     assert refusals
-    assert "https://x.test/p" in refusals[0].getMessage()
-    assert "#frag" not in refusals[0].getMessage()
+    assert "https://x.test/…(segments=1)" in refusals[0].getMessage()
+    assert "https://x.test/p" not in caplog.text
+    assert "#frag" not in caplog.text
 
 
 async def test_an_unexpected_sitemap_node_fails_the_task_as_an_internal_error(

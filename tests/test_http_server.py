@@ -1303,11 +1303,22 @@ class TestApiKeyAuth:
     def test_search_rejected_without_key(self, auth_client: TestClient) -> None:
         assert auth_client.get("/v1/search?q=test").status_code == 401
 
-    def test_search_rejected_with_wrong_key(self, auth_client: TestClient) -> None:
-        resp = auth_client.get(
-            "/v1/search?q=test", headers={"Authorization": "Bearer wrong-key"}
-        )
+    def test_search_rejected_with_wrong_key(
+        self, auth_client: TestClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="quarry.daemon.routes.base"):
+            resp = auth_client.get(
+                "/v1/search?q=private-query",
+                headers={"Authorization": "Bearer wrong-key"},
+            )
         assert resp.status_code == 401
+        assert (
+            "quarry.daemon.routes.base",
+            logging.WARNING,
+            "Rejected HTTP request: bearer authentication failed (401)",
+        ) in caplog.record_tuples
+        assert "wrong-key" not in caplog.text
+        assert "private-query" not in caplog.text
 
     def test_search_allowed_with_correct_key(self, auth_client: TestClient) -> None:
         with patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]):

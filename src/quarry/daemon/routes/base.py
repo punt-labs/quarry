@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 from typing import TYPE_CHECKING, Self
 
-from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
-from quarry.daemon.route_key import RouteKey
-from quarry.daemon.terminal import Terminal
+from quarry.daemon.routes.jobs import RouteJobs
 from quarry.http_guards import RequestGuards
 from quarry.memory_types import MemoryType
 
@@ -28,6 +27,9 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.task_state import TaskState
+
+
+_logger = logging.getLogger(__name__)
 
 
 class RouteGroup:
@@ -63,6 +65,7 @@ class RouteGroup:
             and hmac.compare_digest(parts[1], api_key)
         )
         if not ok:
+            _logger.warning("Rejected HTTP request: bearer authentication failed (401)")
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return None
 
@@ -130,29 +133,8 @@ class RouteGroup:
         )
 
     def submit(self, job: IngestUnit, state: TaskState) -> JSONResponse:
-        """Enqueue *job* on its collection's FIFO worker, returning 202 or 503.
-
-        The routing key is ``job.collection`` — the queue serializes ingest per
-        collection and bounds embed concurrency (DES-042).  A full queue returns
-        ``503`` — retriable, never a silent drop — and drops the task record so
-        no orphan lingers in ``queued``.  The message stays generic:
-        ``remember``/``ingest`` share this path and have no spooled local
-        artifact, so it cannot promise backfill recovery.
-        """
-        key = RouteKey(self._ctx.database_name, job.collection)
-        if not self._ctx.ingest_queue.try_submit(key, job, state):
-            self._ctx.tasks.drop(state)
-            return JSONResponse(
-                {
-                    "error": "ingest queue full; request not accepted, retry shortly",
-                    "status": "rejected",
-                },
-                status_code=503,
-            )
-        return JSONResponse(
-            {"task_id": state.task_id, "status": "accepted"},
-            status_code=202,
-        )
+        """Enqueue a collection job and return its acceptance or rejection."""
+        return RouteJobs.submit(self._ctx, job, state)
 
     def accept(
         self, state: TaskState, coro: Coroutine[object, object, None]
@@ -189,11 +171,5 @@ class RouteGroup:
         name: str,
         kind_label: str,
     ) -> None:
-        """Run *delete_call* in a worker thread and record the deleted count.
-
-        Shared by document and collection deletion, which differ only in the
-        store method invoked and the ``type`` label reported to the client.
-        """
-        with Terminal.for_task(state).recording():
-            count = await run_in_threadpool(delete_call)
-            state.complete({"deleted": count, "name": name, "type": kind_label})
+        """Run a delete job and record its outcome."""
+        await RouteJobs.run_delete(state, delete_call, name, kind_label)

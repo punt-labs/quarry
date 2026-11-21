@@ -415,7 +415,7 @@ class TestStoredHasOnlyTheCallersItIsMeantFor:
             and node.value.id == "HttpUrl"
         }
         assert callers == {
-            "display_name.py",
+            "document_url.py",
             "ingestion/legacy_url_names.py",
             "web_fetch_name.py",
         }

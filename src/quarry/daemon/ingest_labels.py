@@ -64,7 +64,7 @@ class IngestLabels:
     def stored_name(
         name: str, scrub: Callable[[str], str], *, url_sourced: bool
     ) -> str:
-        """Return the name an inline ingest stores *name* under; safe to log."""
+        """Return the scrubbed storage name for an inline ingest of *name*."""
         return web_ingest.InlineIngest(
             "", content_scrubber=scrub, url_sourced=url_sourced
         ).stored_name(name)

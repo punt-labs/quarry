@@ -17,9 +17,9 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from quarry.daemon.captured_body_ingest import CapturedBodyIngest
+from quarry.daemon.content_store import ContentStore
 from quarry.daemon.job_spool import SpoolRecord
-from quarry.daemon.refusal_aware_terminal import RefusalAwareTerminal
-from quarry.daemon.store_run import StoreRun
+from quarry.display_name import DisplayName
 from quarry.ingestion.unchanged_transcript import UnchangedTranscript
 
 if TYPE_CHECKING:
@@ -80,15 +80,9 @@ class ScrubbedIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Scrub then ingest the content in a background thread, tracking state."""
-        terminal = RefusalAwareTerminal.for_job(state, self._stored_name)
-        with terminal.record():
-            store = StoreRun.start(
-                self,
-                state,
-                partial(self.scrub_and_ingest, ctx),
-                RefusalAwareTerminal.settlement,
-            )
-            terminal.apply(await store.wait())
+        await ContentStore.run(
+            self, state, partial(self.scrub_and_ingest, ctx), self.diagnostic_name
+        )
 
     def spool_record(self) -> SpoolRecord | None:
         """Return a scrubbed snapshot; ``remember`` has no durable client copy.
@@ -130,7 +124,7 @@ class ScrubbedIngestJob:
             ingest_content,
         )
 
-        stored_name = self._stored_name()
+        stored_name = self.scrubbed_name()
         if unchanged := UnchangedTranscript.look_for(
             stored_name, self.source_version, self.collection, ctx.database
         ):
@@ -159,14 +153,14 @@ class ScrubbedIngestJob:
         )
 
     def scrubbed_name(self) -> str:
-        """Return the document name as stored, safe to log."""
-        return self._stored_name()
-
-    def _stored_name(self) -> str:
-        """Derive the same stored document name for refusals, re-fetches, and skips."""
+        """Return the scrubbed name used to store and look up the document."""
         return self.labels.stored_name(
             self.name, self._scrubbed, url_sourced=self.url_sourced
         )
+
+    def diagnostic_name(self) -> str:
+        """Return a log-safe name without capture text or URL paths."""
+        return DisplayName(self.scrubbed_name()).redacted()
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,15 +196,9 @@ class CaptureIngestJob:
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Ingest inline, re-fetching the source on empty, tracking task state."""
-        terminal = RefusalAwareTerminal.for_job(state, self.inline.scrubbed_name)
-        with terminal.record():
-            store = StoreRun.start(
-                self,
-                state,
-                partial(self._capture, ctx),
-                RefusalAwareTerminal.settlement,
-            )
-            terminal.apply(await store.wait())
+        await ContentStore.run(
+            self, state, partial(self._capture, ctx), self.inline.diagnostic_name
+        )
 
     def _capture(self, ctx: DaemonContext) -> dict[str, object]:
         """Scrub-ingest inline; on an empty extraction with a source URL, re-fetch.
@@ -221,7 +209,7 @@ class CaptureIngestJob:
         daemon holds (and then skip or rewrite it a second time).
         """
         result = self.inline.scrub_and_ingest(ctx)
-        if RefusalAwareTerminal.is_stored(result) or self.source_url is None:
+        if ContentStore.is_stored(result) or self.source_url is None:
             return result
         return self._refetch(ctx, self.source_url)
 
@@ -238,6 +226,6 @@ class CaptureIngestJob:
         """
         logger.info(
             "capture: %s inline extracted to zero chunks — re-fetching via daemon",
-            self.inline.scrubbed_name(),
+            self.inline.diagnostic_name(),
         )
         return CapturedBodyIngest(source, self.inline.labels).run(ctx)

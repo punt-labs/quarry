@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ import numpy as np
 import pyarrow as pa
 
 if TYPE_CHECKING:
+    import pytest
     from numpy.typing import NDArray
 
     from quarry.types import LanceDB
@@ -357,17 +359,23 @@ class TestDeleteDocument:
 class TestDeleteDocumentCountFalse:
     """Verify the count=False fast path skips count_rows() and returns 0."""
 
-    def test_count_false_returns_zero(self, tmp_path: Path) -> None:
+    def test_count_false_returns_zero(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        name = "search: private search text"
         db = get_db(tmp_path / "db")
         chunks = [
-            _make_chunk(chunk_index=0, document_name="a.pdf"),
-            _make_chunk(chunk_index=1, document_name="a.pdf"),
+            _make_chunk(chunk_index=0, document_name=name),
+            _make_chunk(chunk_index=1, document_name=name),
         ]
         vectors = _random_vectors(2)
         ChunkStore(db).insert(chunks, vectors)
 
-        result = ChunkStore(db).delete_document("a.pdf", count=False)
+        with caplog.at_level(logging.INFO, logger="quarry.db.chunk_store"):
+            result = ChunkStore(db).delete_document(name, count=False)
         assert result == 0
+        assert "Issued chunk delete for WebSearch capture" in caplog.text
+        assert name not in caplog.text
         # Document should actually be deleted from the table.
         assert ChunkStore(db).count() == 0
 

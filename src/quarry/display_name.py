@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, final
+from typing import final
 
-from quarry.capture_url import CaptureUrl
-from quarry.http_url import HttpUrl
+from quarry.document_url import DocumentUrl
 
 
 @final
@@ -19,16 +18,13 @@ class DisplayName:
     log, or every chunk's metadata, verbatim (CWE-532).  But the ingest funnel is
     also reached with an arbitrary caller-supplied name that is never a URL, and
     :class:`CaptureUrl` is unsafe on non-URL input: it silently truncates at the
-    first ``#`` or ``?`` (both valid in a plain name).  So only an ``http(s)://``
-    name is rewritten; any other name is shown verbatim, untruncated.  The prefix
-    test ignores leading whitespace and control characters, as ``urlsplit`` does,
-    so a padded URL cannot slip past it.  An ``http(s)://`` name that cannot be
-    parsed shows as a fixed placeholder, never as its raw text.
+    first ``#`` or ``?`` (both valid in a plain name).  Plain names are
+    kept intact in the store, but WebSearch names carry queries and must not
+    be displayed in diagnostics. :class:`DocumentUrl` handles both admitted
+    and malformed HTTP(S) names without exposing the raw URL.
     """
 
     name: str
-
-    _LEADING: ClassVar[str] = "".join(chr(code) for code in range(0x21))
 
     def stored(self, *, url_sourced: bool) -> str:
         """Strip URL credentials and fragments and retain only a query digest.
@@ -37,17 +33,12 @@ class DisplayName:
         itself.  A label is not: it is cleaned like any URL, but its query is never
         read as a digest already, so typing the marker cannot name another page.
         """
-        text = self.name.lstrip(self._LEADING)
-        if not text.lower().startswith(("http://", "https://")):
-            return self.name
-        try:
-            return HttpUrl.stored(text) if url_sourced else HttpUrl(text).document_name
-        except ValueError:
-            return CaptureUrl.display(text)  # tolerant of userinfo; never shows it
+        url = DocumentUrl.from_name(self.name)
+        return self.name if url is None else url.stored(url_sourced=url_sourced)
 
     def redacted(self) -> str:
-        """Return the log form: ``scheme://host[:port]/…(segments=N)``, no path."""
-        text = self.name.lstrip(self._LEADING)
-        if not text.lower().startswith(("http://", "https://")):
-            return self.name
-        return HttpUrl.shown(text)
+        """Return the diagnostic name without WebSearch queries or URL paths."""
+        if self.name.startswith("search: "):
+            return "WebSearch capture"
+        url = DocumentUrl.from_name(self.name)
+        return self.name if url is None else url.redacted()
