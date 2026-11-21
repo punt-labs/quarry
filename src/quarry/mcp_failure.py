@@ -7,7 +7,7 @@ from typing import Self, final
 
 from quarry.client import HttpError, QuarryConnectionError
 
-# Mirrors the CLI's autostart nudge (``__main__._AUTOSTART_HINT``) for the MCP
+# Mirrors the CLI's autostart nudge (``cli_errors._AUTOSTART_HINT``) for the MCP
 # surface. Shown only when the unreachable target is loopback (DES-031):
 # a remote daemon's absence can never be fixed by restarting a local service,
 # so the two branches carry different, non-misleading recovery actions.

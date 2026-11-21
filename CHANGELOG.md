@@ -23,6 +23,8 @@ across `transform`, `index`, and `connector`).
 
 - infra: WebSearch query text no longer appears in capture diagnostics, and
   the daemon logs bearer authentication failures without recording credentials.
+- infra: CLI connection failures are written to the private diagnostic log,
+  and HTTP 401 warnings remain readable after redaction.
 
 ## [3.8.0] - 2026-11-16
 

@@ -10,6 +10,8 @@ carries the wire model's field names.  A recording transport — rather than moc
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
@@ -475,15 +477,59 @@ class TestAutostartHintGating:
         assert result.exit_code == 1
         assert "If quarryd is not running" in result.output
 
-    def test_remote_failure_omits_hint(self) -> None:
-        # Starting a local daemon won't help a remote failure — no autostart hint.
+    def test_remote_failure_logs_no_target_or_exception_text(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
         down = QuarryConnectionError(
-            "Cannot reach remote quarry server", "https://remote.example:9000"
+            "Cannot reach remote quarry server: synthetic-detail",
+            "https://remote.example:9000/synthetic-path",
         )
         with patch.object(TargetResolver, "connect", side_effect=down):
             result = runner.invoke(app, ["status"])
         assert result.exit_code == 1
         assert "If quarryd is not running" not in result.output
+        assert "synthetic-detail" in result.stderr
+        assert "CLI operation status failed" not in result.stderr
+        log = (tmp_path / ".punt-labs/quarry/logs/quarry.log").read_text(
+            encoding="utf-8"
+        )
+        assert (
+            log.count("CLI operation status failed: could not connect to remote") == 1
+        )
+        assert "synthetic-detail" not in log
+        assert "remote.example" not in log
+        assert "synthetic-path" not in log
+        assert "Traceback" not in log
+
+    @pytest.mark.parametrize("options", [[], ["--quiet"]], ids=["default", "quiet"])
+    def test_daemon_down_writes_durable_failure(
+        self, tmp_path: Path, options: list[str]
+    ) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "quarry", *options, "status"],
+            env={"HOME": str(tmp_path), "NO_COLOR": "1"},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert result.returncode == 1, result.stderr
+        assert result.stdout == ""
+        assert "quarryd is not running" in result.stderr
+        assert "CLI operation status failed" not in result.stderr
+        log = (tmp_path / ".punt-labs/quarry/logs/quarry.log").read_text(
+            encoding="utf-8"
+        )
+        assert (
+            log.count(
+                "[INFO] quarry.cli_errors: CLI operation status failed: "
+                "could not connect to local Quarry daemon"
+            )
+            == 1
+        )
+        assert str(tmp_path) not in log
+        assert "Traceback" not in log
 
 
 class TestConflictSurfacesRunningTaskId:
