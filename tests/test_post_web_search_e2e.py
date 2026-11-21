@@ -195,7 +195,7 @@ def test_invalid_bearer_writes_durable_warning(
     log = _durable_log(ephemeral_daemon)[len(before) :]
     assert (
         "[WARNING] quarry.daemon.routes.base: Rejected HTTP request: "
-        "bearer authentication failed (401)"
+        "authentication failed (401)"
     ) in log
     assert marker not in log
     assert query not in log

@@ -1315,7 +1315,7 @@ class TestApiKeyAuth:
         assert (
             "quarry.daemon.routes.base",
             logging.WARNING,
-            "Rejected HTTP request: bearer authentication failed (401)",
+            "Rejected HTTP request: authentication failed (401)",
         ) in caplog.record_tuples
         assert "wrong-key" not in caplog.text
         assert "private-query" not in caplog.text

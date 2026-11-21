@@ -65,7 +65,7 @@ class RouteGroup:
             and hmac.compare_digest(parts[1], api_key)
         )
         if not ok:
-            _logger.warning("Rejected HTTP request: bearer authentication failed (401)")
+            _logger.warning("Rejected HTTP request: authentication failed (401)")
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
         return None
 

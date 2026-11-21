@@ -5,7 +5,6 @@ from __future__ import annotations
 import functools
 import importlib.metadata
 import json
-import logging
 import sys
 from typing import TYPE_CHECKING, Annotated
 
@@ -16,29 +15,14 @@ from rich.console import Console
 from quarry._cli_entry import CliEntry
 from quarry.cli_captures import CliPlumbing
 from quarry.cli_diagnostics import CliDiagnostics
+from quarry.cli_errors import CliErrors
 from quarry.cli_registry import CliRegistry
-from quarry.client import (
-    HttpError,
-    QuarryConnectionError,
-    QuarryError,
-    TargetResolver,
-)
+from quarry.client import TargetResolver
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
-from quarry.home_paths import HomeUnresolvedError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-logger = logging.getLogger(__name__)
-
-# Appended after a LOOPBACK QuarryConnectionError so a down local daemon points at
-# the fix.  Never shown for a remote failure — starting quarryd would not help.
-_AUTOSTART_HINT = (
-    "If quarryd is not running, start it with 'quarry install' (managed) or "
-    "'quarryd' (foreground)."
-)
-
 
 _COMMAND_ORDER: list[str] = [
     # Product commands
@@ -181,48 +165,11 @@ def _emit(data: object, text: str = "") -> None:
 
 
 def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
-    """Map typed client errors (and any escape) to a ``typer.Exit`` at the CLI edge.
-
-    This is the one place the client tier's :class:`QuarryError` hierarchy becomes
-    an exit code and a message; command bodies never catch it.  A 409 conflict is
-    "already in progress" (exit 0); a connection failure carries the autostart
-    nudge; every other typed error and any unexpected escape exits 1.
-    """
+    """Map command errors to an exit without changing the Typer signature."""
 
     @functools.wraps(fn)
     def wrapper(*args: object, **kwargs: object) -> None:
-        try:
-            fn(*args, **kwargs)
-        except (SystemExit, KeyboardInterrupt, typer.Exit, HomeUnresolvedError):
-            raise  # the entry point turns an unresolvable home into one line
-        except QuarryConnectionError as exc:
-            err_console.print(f"Error: {exc.message}", style="red")
-            if exc.is_loopback:
-                err_console.print(_AUTOSTART_HINT, style="yellow")
-            raise typer.Exit(code=1) from exc
-        except HttpError as exc:
-            if exc.is_conflict:
-                # 409 = a singleton task is already running. Surface ITS task_id
-                # the same way the 202 acceptance path does (via _emit to stdout),
-                # so an operator can poll/track the in-flight task. Exit 0 — this
-                # completes the acceptance model (202 = "accepted, here's the id";
-                # 409 = "already running, here's ITS id"), not an error.
-                text = (
-                    f"Already in progress (task {exc.task_id})"
-                    if exc.task_id
-                    else f"Already in progress: {exc.message}"
-                )
-                _emit({"task_id": exc.task_id, "status": "in_progress"}, text)
-                raise typer.Exit(code=0) from exc
-            err_console.print(f"Error: {exc.message}", style="red")
-            raise typer.Exit(code=1) from exc
-        except QuarryError as exc:
-            err_console.print(f"Error: {exc.message}", style="red")
-            raise typer.Exit(code=1) from exc
-        except Exception as exc:
-            logger.exception("Command %s failed", fn.__name__)
-            err_console.print(f"Error: {exc}", style="red")
-            raise typer.Exit(code=1) from exc
+        CliErrors(err_console, _emit).run(fn.__name__, lambda: fn(*args, **kwargs))
 
     return wrapper
 
