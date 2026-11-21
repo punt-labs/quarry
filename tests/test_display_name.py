@@ -72,6 +72,13 @@ def test_redacted(name: str, shown: str) -> None:
     assert DisplayName(name).redacted() == shown
 
 
+def test_web_search_name_is_stored_but_not_logged() -> None:
+    name = "search: private search text"
+    label = DisplayName(name)
+    assert label.stored(url_sourced=False) == name
+    assert label.redacted() == "WebSearch capture"
+
+
 def test_a_url_named_document_is_stored_as_a_url_ingest_of_it_would_be() -> None:
     url = "https://x.test:443/docs/a;jsessionid=PSEC?t=1#f"
     assert DisplayName(url).stored(url_sourced=True) == HttpUrl(url).document_name

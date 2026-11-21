@@ -70,8 +70,13 @@ def _hook_env(daemon: EphemeralDaemon) -> dict[str, str]:
         "QUARRY_URL": f"http://{daemon.host}:{daemon.port}",
         "QUARRY_TOKEN": daemon.api_token,
         "QUARRY_ROOT": str(daemon.data_dir),
-        "HOME": str(daemon.data_dir.parent),
     }
+
+
+def _durable_log(daemon: EphemeralDaemon) -> str:
+    return (
+        daemon.data_dir.parent / ".punt-labs" / "quarry" / "logs" / "quarry.log"
+    ).read_text(encoding="utf-8")
 
 
 def _search_for_capture(
@@ -140,10 +145,10 @@ def test_post_web_search_lands_in_captures(
 
     Runs the real ``quarry-hook post-web-search`` binary against the real
     ephemeral quarryd, waits up to 15s for the capture to appear in the
-    daemon's HTTP search, and asserts on the returned document name.  Fails
-    today (v3.2.0) — no capture ever appears.
+    daemon's HTTP search, and checks that only safe metadata reaches the log.
     """
     payload = load_payload(payload_fixture)
+    before = _durable_log(ephemeral_daemon)
     run = hook_subprocess.run(
         "post-web-search",
         payload,
@@ -163,6 +168,37 @@ def test_post_web_search_lands_in_captures(
         f"  hook stderr[:200]={run.stderr[:200]!r}\n"
         f"  log lines written: {len(run.log_lines)}"
     )
+    log = _durable_log(ephemeral_daemon)[len(before) :]
+    assert "Processing: WebSearch capture" in log
+    assert "chunks indexed from WebSearch capture" in log
+    assert query_substr not in log
+    hook_log = "\n".join(run.log_lines)
+    assert "post-web-search: entered" in hook_log
+    assert "-> capture" in hook_log
+    assert query_substr not in hook_log
+
+
+def test_invalid_bearer_writes_durable_warning(
+    ephemeral_daemon: EphemeralDaemon,
+) -> None:
+    """Reject an invalid bearer and persist only a fixed security diagnostic."""
+    marker = "synthetic-invalid-token"
+    query = "synthetic-private-request"
+    before = _durable_log(ephemeral_daemon)
+    resp = httpx.get(
+        f"{ephemeral_daemon.base_url}/v1/status",
+        params={"ignored": query},
+        headers={"Authorization": f"Bearer {marker}"},
+        timeout=5.0,
+    )
+    assert resp.status_code == 401
+    log = _durable_log(ephemeral_daemon)[len(before) :]
+    assert (
+        "[WARNING] quarry.daemon.routes.base: Rejected HTTP request: "
+        "bearer authentication failed (401)"
+    ) in log
+    assert marker not in log
+    assert query not in log
 
 
 def test_unknown_shape_logs_warn_with_metadata(

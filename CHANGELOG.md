@@ -19,6 +19,11 @@ across `transform`, `index`, and `connector`).
 - infra: Python comment and public-docstring checks in lint and CI, plus a
   generated Python API reference (`make build-api-docs`).
 
+### Fixed
+
+- infra: WebSearch query text no longer appears in capture diagnostics, and
+  the daemon logs bearer authentication failures without recording credentials.
+
 ## [3.8.0] - 2026-11-16
 
 ### Added
