@@ -14,6 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- infra: Report-only design ratchet with explicit layers for every current module.
+  `make design-shadow` compares against `origin/main` (override `DESIGN_BASE`),
+  and PR CI appends the advisory verdict to the job summary even after a gate
+  fails. Full diagnostics include a non-failing design scan; neither report
+  gates `make check` or CI.
+
+### Changed
+
+- infra: Upgrade the quality-gate dev dependency to `punt-oo-ratchet==0.4.0`,
+  retaining existing gate policies and baselines.
+
 ### Fixed
 
 - infra: The generated Homebrew formula now declares `pkgconf` (build) and

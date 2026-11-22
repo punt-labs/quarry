@@ -85,6 +85,13 @@ OO_BASE ?=
 COUPLING_BASE ?=
 SUPPRESSION_BASE ?=
 
+DESIGN_BASE ?= origin/main
+
+.PHONY: design-shadow
+
+design-shadow: ## Report advisory design changes; never part of check
+	uv run --extra dev oo-ratchet design src/quarry --shadow-check "$(DESIGN_BASE)"
+
 check: lint type test check-oo check-coupling check-suppressions check-imports check-openapi check-install-constraints check-skills-sync ## Run all quality gates
 
 openapi: ## Regenerate docs/openapi.json from the daemon FastAPI app
@@ -163,6 +170,7 @@ update-suppressions: ## Update suppression baseline after justified additions
 
 report: ## Full diagnostics (OO score + all checks, no fail-fast)
 	-uv run --extra dev oo-ratchet oo src/quarry/ --threshold
+	-uv run --extra dev oo-ratchet design src/quarry/
 	-uv run --extra dev mypy src/ tests/
 	-uv run --extra dev ruff format --check .
 	-uv run --extra dev ruff check --preview --select PLR6301,PLR0913,UP035,UP040,UP007,N,I,SIM,C1901,S101 .

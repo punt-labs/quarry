@@ -1,6 +1,6 @@
 # Published OO ratchet gates
 
-Quarry uses the PyPI dev dependency `punt-oo-ratchet==0.3.0`, locked in
+Quarry uses the PyPI dev dependency `punt-oo-ratchet==0.4.0`, locked in
 `uv.lock`. The source is [python-oo-ratchet](https://github.com/punt-labs/python-oo-ratchet).
 `make check` runs `oo-ratchet oo`, `oo-ratchet coupling`, and
 `oo-ratchet suppressions` on `src/quarry/`. Use the existing `make update-*`

@@ -12,7 +12,7 @@ If cloned outside the workspace, these rules and configuration will not be prese
 **OO Python standards adopted 2026-05-13.** The codebase does not yet fully comply. Every commit must improve OO scores (`make check-oo`), never regress. Do not match existing code patterns that violate the rules — write new code to the standard and improve touched files incrementally.
 
 The OO, coupling, and suppression gates come from the pinned PyPI dev
-dependency `punt-oo-ratchet==0.3.0` (`oo-ratchet` CLI), not embedded tools.
+dependency `punt-oo-ratchet==0.4.0` (`oo-ratchet` CLI), not embedded tools.
 Baseline and audit files stay at the repository root; use the existing
 `make check-*` and `make update-*` targets.
 See [the cutover comparison](docs/oo-ratchet-package.md) for scoring differences.
