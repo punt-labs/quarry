@@ -164,7 +164,7 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
         LoggingConfig.hook()
         result = handler(HookPayload.parse(read_hook_stdin()))
     except (MalformedHookPayloadError, UnicodeDecodeError):
-        logger.warning("malformed_payload")
+        HookTrace.reject()
         result = {}
     except Exception as exc:
         if isinstance(exc, HomeUnresolvedError):
