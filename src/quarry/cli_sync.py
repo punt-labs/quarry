@@ -1,24 +1,25 @@
 """Expose daemon-backed directory sync, status, and telemetry commands.
 
 All pure client calls against the daemon that owns the registry (DES-031 I2): the
-CLI never touches a local ``SyncRegistry``.  The task-dispatching commands are
-fire-and-forget (DES-001) — the daemon validates synchronously before the 202
-(malformed body / 409-concurrent for sync; path guard for register; existence +
-404 for deregister), so a rejection still exits non-zero via the shared decorator,
-and only the index/purge processing is deferred.
+CLI never touches a local ``SyncRegistry``. The directory commands delegate to
+:class:`~quarry.cli_sync_dispatch.DirectorySyncCli`, while this group renders
+database status and recall insights.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Self, final
+import logging
+from typing import TYPE_CHECKING, Self, final
 
-import typer
-
-from quarry.cli_directories import DirectoryCli
+from quarry.cli_sync_dispatch import DirectorySyncCli
 from quarry.reports import InsightsReport, StatusReport
 
 if TYPE_CHECKING:
+    import typer
+
     from quarry.cli_captures import CliPlumbing
+
+_logger = logging.getLogger(__name__)
 
 
 @final
@@ -37,39 +38,15 @@ class SyncCli:
 
     def register(self, app: typer.Typer) -> None:
         """Attach ``sync``/``register``/``deregister``/``status``/``insights``."""
-        app.command(name="sync")(self._p.cli_errors(self._sync))
-        DirectoryCli(self._p).register(app)
+        DirectorySyncCli(self._p).register(app)
         app.command(name="status")(self._p.cli_errors(self._status))
         app.command(name="insights")(self._p.cli_errors(self._insights))
-
-    def _sync(
-        self,
-        workers: Annotated[
-            int | None,
-            typer.Option("--workers", "-w", help="Ignored — the daemon sizes workers"),
-        ] = None,
-    ) -> None:
-        """Sync all registered directories (dispatch only).
-
-        Fire-and-forget: returns the daemon's task id and exits immediately (no
-        per-task poll command exists yet — that is the future ``--wait``). A 409
-        "already in progress" raised by the daemon is mapped to exit 0 by the
-        decorator.
-        """
-        if workers is not None and not self._p.is_quiet():
-            self._p.err_console.print(
-                "Warning: --workers is ignored; the daemon sizes its own workers.",
-                style="yellow",
-            )
-        accepted = self._p.client().sync()
-        self._p.emit(
-            accepted.model_dump(), f"Sync {accepted.status}: task_id={accepted.task_id}"
-        )
 
     def _status(self) -> None:
         """Show database status: documents, chunks, storage, model info."""
         data = self._p.client().status().model_dump()
         self._p.emit(data, StatusReport(data).render())
+        _logger.info("CLI operation status succeeded")
 
     def _insights(self) -> None:
         """Show recall telemetry: query volume, latency, and recall breakdowns."""

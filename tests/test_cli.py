@@ -419,13 +419,84 @@ class TestSyncRegisterDeregister:
         _run(["sync"])
         transport.body_for("POST", "/v1/sync")
 
-    def test_status_route(self, transport: RecordingTransport) -> None:
+
+class TestStatus:
+    @pytest.mark.parametrize(
+        "options", [["--json"], [], ["--quiet"]], ids=["json", "text", "quiet"]
+    )
+    def test_status_route_and_durable_success(
+        self,
+        transport: RecordingTransport,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        options: list[str],
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
         with patch.object(
             RecordingTransport,
             "request",
             _status_request,
         ):
-            _run(["status"])
+            result = runner.invoke(app, [*options, "status"])
+        assert result.exit_code == 0, result.output
+        assert transport.requests == [("GET", "/v1/status", {}, {})]
+        if "--json" in options:
+            assert json.loads(result.stdout) == {
+                "document_count": 0,
+                "collection_count": 0,
+                "chunk_count": 0,
+                "registered_directories": 0,
+                "database_path": "/synthetic-private-db",
+                "embedding_model": "synthetic-private-model",
+                "provider": "cpu",
+                "embedding_dimension": 768,
+                "disk_bytes": None,
+                "live_bytes": None,
+                "free_disk_bytes": None,
+            }
+        else:
+            assert result.stdout == (
+                "▶  quarry status\n"
+                "   Documents:      0\n"
+                "   Collections:    0\n"
+                "   Chunks:         0\n"
+                "   Directories:    0\n"
+                "   Database:       /synthetic-private-db\n"
+                "   Table size:     on disk unmeasured, live unmeasured\n"
+                "   Free disk:      free unmeasured\n"
+                "   Model:          synthetic-private-model\n"
+                "   Provider:       cpu\n"
+            )
+        assert result.stderr == ""
+        log = (tmp_path / ".punt-labs/quarry/logs/quarry.log").read_text(
+            encoding="utf-8"
+        )
+        assert [
+            line.partition(" [")[2]
+            for line in log.splitlines()
+            if "CLI operation status succeeded" in line
+        ] == ["INFO] quarry.cli_sync: CLI operation status succeeded"]
+        assert "synthetic-private-" not in log
+        assert str(tmp_path) not in log
+
+    def test_status_does_not_log_success_if_output_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        client = MagicMock()
+        client.status.return_value.model_dump.return_value = {}
+        with (
+            patch.object(TargetResolver, "connect", return_value=client),
+            patch("quarry.__main__.json.dump", side_effect=BrokenPipeError("closed")),
+        ):
+            result = runner.invoke(app, ["--json", "status"])
+        assert result.exit_code == 1
+        assert "Error: closed" in result.stderr
+        log = (tmp_path / ".punt-labs/quarry/logs/quarry.log").read_text(
+            encoding="utf-8"
+        )
+        assert "Command _status failed" in log
+        assert "CLI operation status succeeded" not in log
 
 
 class TestMaintenance:
@@ -501,6 +572,7 @@ class TestAutostartHintGating:
         assert "remote.example" not in log
         assert "synthetic-path" not in log
         assert "Traceback" not in log
+        assert "CLI operation status succeeded" not in log
 
     @pytest.mark.parametrize("options", [[], ["--quiet"]], ids=["default", "quiet"])
     def test_daemon_down_writes_durable_failure(
@@ -530,6 +602,7 @@ class TestAutostartHintGating:
         )
         assert str(tmp_path) not in log
         assert "Traceback" not in log
+        assert "CLI operation status succeeded" not in log
 
 
 class TestConflictSurfacesRunningTaskId:
@@ -600,8 +673,8 @@ def _status_request(
             "collection_count": 0,
             "chunk_count": 0,
             "registered_directories": 0,
-            "database_path": "/db",
-            "embedding_model": "m",
+            "database_path": "/synthetic-private-db",
+            "embedding_model": "synthetic-private-model",
             "provider": "cpu",
             "embedding_dimension": 768,
         },

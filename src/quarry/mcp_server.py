@@ -26,12 +26,11 @@ from mcp.server.mcpserver import MCPServer
 
 from quarry.api import IngestRequest, RememberRequest, SearchRequest
 from quarry.client import QuarryClient, TargetResolver
-from quarry.config import Settings
-from quarry.db_pointer import SELECTION
 from quarry.formatting import (
     format_search_results,
 )
 from quarry.mcp_catalog import ResourceCatalog
+from quarry.mcp_db_session import McpDatabaseSession
 from quarry.mcp_documents import DocumentTools
 from quarry.mcp_guard import ToolGuard
 from quarry.mcp_missions import MissionTools
@@ -42,6 +41,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_database_session = McpDatabaseSession()
 
 mcp = MCPServer(
     "punt-quarry",
@@ -345,28 +345,9 @@ class McpTools:
             Input refusals, daemon errors, and unexpected failures return
             Error: ... text. Connection failures include recovery guidance.
         """
-        # A local db selection only governs the loopback run-dir target. Under a
-        # remote/explicit target it is IGNORED by TargetResolver — so refuse
-        # rather than report a switch that silently doesn't take effect and could
-        # read or destroy data on the wrong (remote) daemon.
         if err := self._reject_blank(name, "name"):
             return err
-        if not TargetResolver.selects_local_db():
-            return (
-                "Error: no local switch — a remote quarry target is active "
-                "(QUARRY_URL or 'quarry login'). The remote daemon is fixed to "
-                "its own database; 'use' only selects among local databases. Run "
-                "'quarry logout' or unset QUARRY_URL to return to the local daemon."
-            )
-        previous = SELECTION.active() or "default"
-        # Select the literal named db, "default" included — never fall through to
-        # the persisted default, or use("default") would silently pick
-        # whatever the CLI last persisted and the summary path would lie about the
-        # target subsequent tools connect to. Validate before mutating:
-        # resolve_db_paths raises ValueError on a bad name, leaving the db unchanged.
-        resolved = Settings.load().resolve_db_paths(name)
-        SELECTION.override(name)
-        return f"\u25b6  Switched {previous} \u2192 {name} ({resolved.lancedb_path})"
+        return _database_session.switch_local(name)
 
     @staticmethod
     def _reject_blank(value: str, label: str) -> str | None:
@@ -381,13 +362,13 @@ class McpTools:
     def run_stdio(db_name: str | None = None) -> None:
         """Run the stdio MCP server, targeting *db_name* (the daemon's database).
 
-        Logging is the launcher's job: ``quarry mcp`` (the only entry point)
-        configures the stderr level before calling in, so this stays a pure
-        "select the database and serve" step.
+        The ``quarry mcp`` launcher configures diagnostics before calling in.
+        Log a clean shutdown only when the transport returns normally.
         """
-        SELECTION.override(db_name or "")
+        _database_session.select_startup(db_name)
         logger.info("Starting quarry MCP server (client tier)")
         mcp.run(transport="stdio")
+        logger.info("Quarry MCP shutdown outcome=completed")
 
 
 _tools = McpTools()
