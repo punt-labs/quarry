@@ -321,9 +321,7 @@ class WatchLoop:
             )
             return None
         if self._guard.refuses_root(resolved):
-            logger.info(
-                "watch: skipping temp/scratch root %s (%s)", resolved, collection
-            )
+            logger.info("watch: skipping temp/scratch root")
             return None
         return resolved
 

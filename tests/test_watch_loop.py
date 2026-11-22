@@ -1360,16 +1360,19 @@ def test_registered_system_temp_root_is_never_watched_on_restart(
     asyncio.run(_run())
 
 
-def test_registered_repo_scratch_root_is_never_watched(tmp_path: Path) -> None:
-    """A registry entry for a repo's own ``.tmp`` scratch is refused at start."""
+def test_registered_repo_scratch_root_is_never_watched(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Refuse repo scratch at startup without logging the path or collection."""
 
     async def _run() -> None:
         (tmp_path / ".git").mkdir()  # mark tmp_path as a git repo root
-        scratch_root = tmp_path / ".tmp" / "pytest-of-me" / "docs"
+        private_name = "scratch-user@example.test"
+        scratch_root = tmp_path / ".tmp" / private_name / "docs"
         scratch_root.mkdir(parents=True)
         queue = _RecordingQueue()
         ctx = _build_with_root(
-            tmp_path, queue=queue, root=scratch_root.resolve(), collection="scratch"
+            tmp_path, queue=queue, root=scratch_root.resolve(), collection=private_name
         )
         source = _FakeSource()
         loop = WatchLoop(ctx, source=source)
@@ -1378,7 +1381,14 @@ def test_registered_repo_scratch_root_is_never_watched(tmp_path: Path) -> None:
         assert queue.submitted == []
         await loop.stop()
 
-    asyncio.run(_run())
+    logger_name = "quarry.daemon.watch_loop"
+    with caplog.at_level(logging.INFO, logger=logger_name):
+        asyncio.run(_run())
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == logger_name and record.levelno == logging.INFO
+    ] == ["watch: skipping temp/scratch root"]
 
 
 def test_burst_on_registered_temp_root_produces_no_work(tmp_path: Path) -> None:
