@@ -227,6 +227,44 @@ class TestSurfaceComplete:
         assert "if false, skip it" in (ingest.description or "")
 
 
+class TestStdioLifecycle:
+    @pytest.mark.parametrize(
+        ("db_name", "expected"),
+        [("startup", "startup"), (None, "persisted")],
+    )
+    def test_selects_database_before_serving(
+        self, db_name: str | None, expected: str
+    ) -> None:
+        SELECTION.persist("persisted")
+        SELECTION.override("previous")
+
+        def serve(*, transport: str) -> None:
+            assert transport == "stdio"
+            assert SELECTION.active() == expected
+
+        with patch.object(mcp, "run", side_effect=serve) as run:
+            McpTools.run_stdio(db_name)
+        run.assert_called_once()
+        assert SELECTION.persisted() == "persisted"
+
+    def test_transport_failure_does_not_log_clean_shutdown(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        error = RuntimeError("synthetic transport failure")
+        with (
+            caplog.at_level("INFO", logger="quarry.mcp_server"),
+            patch.object(mcp, "run", side_effect=error) as run,
+            pytest.raises(RuntimeError, match="synthetic transport failure"),
+        ):
+            McpTools.run_stdio(db_name="synthetic-private-db")
+        run.assert_called_once_with(transport="stdio")
+        assert [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "quarry.mcp_server"
+        ] == ["Starting quarry MCP server (client tier)"]
+
+
 class TestFind:
     def test_returns_results(self, harness: _ToolHarness) -> None:
         rows = [

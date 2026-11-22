@@ -37,7 +37,7 @@ def _run(home: Path, *argv: str) -> subprocess.CompletedProcess[str]:
             ),
             "daemon",
         ),
-        (("-m", "quarry", "mcp"), "mcp"),
+        (("-m", "quarry", "--db", "synthetic-private-db", "mcp"), "mcp"),
         (("-m", "quarry._hook_entry", "session-setup"), "hook"),
     ],
 )
@@ -52,6 +52,18 @@ def test_entry_point_configures_shared_role(
     assert path.stat().st_mode & 0o777 == 0o600
     if role == "mcp":
         assert run.stdout == ""
+        log = path.read_text(encoding="utf-8")
+        lifecycle = [
+            line.partition(" [")[2]
+            for line in log.splitlines()
+            if "Starting quarry MCP server" in line or "Quarry MCP shutdown" in line
+        ]
+        assert lifecycle == [
+            "INFO] quarry.mcp_server: Starting quarry MCP server (client tier)",
+            "INFO] quarry.mcp_server: Quarry MCP shutdown outcome=completed",
+        ]
+        assert "synthetic-private-db" not in log
+        assert str(tmp_path) not in log
 
 
 @pytest.mark.parametrize(("code", "outcome"), [(0, "finished"), (1, "failed")])
