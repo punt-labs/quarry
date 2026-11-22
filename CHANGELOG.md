@@ -18,6 +18,25 @@ across `transform`, `index`, and `connector`).
 
 - infra: Python comment and public-docstring checks in lint and CI, plus a
   generated Python API reference (`make build-api-docs`).
+- infra: The CLI, MCP server, hooks, daemon, and detached sync worker write
+  diagnostics through punt-observe to one private, redacted, rotated log at
+  `~/.punt-labs/quarry/logs/quarry.log` (PL-1199).
+
+### Changed
+
+- query: Search telemetry now uses punt-observe. The daemon records versioned
+  search spans and hit events in the installation-wide
+  `~/.punt-labs/quarry/telemetry.db`, with no query text, filters, or result
+  content, under one 90-day retention policy. `quarry insights` keeps its v1
+  response keys but reports per-install salted hashes for queries, agents,
+  and collections. The old per-database `telemetry.db` files are neither read
+  nor migrated; the README explains how to delete them. Set
+  `PUNT_TELEMETRY=off`, `QUARRY_TELEMETRY=off`, or `TELEMETRY_ENABLED=false`
+  in the daemon's environment and restart it to disable capture (PL-1199).
+- infra: New runtime dependency `punt-observe==0.1.0` from PyPI.
+- infra: Bump pymupdf 1.28.2 → 2.1 (major), which also brings in
+  `pymupdf-layout` and `pymupdf4llm` 2.1, in `uv.lock` and
+  `install-constraints.txt`.
 
 ### Fixed
 
