@@ -1,0 +1,80 @@
+name: quarry-default
+description: >-
+  Ruff, shellcheck and markdownlint on the edited file (advisory); Ruff, the
+  OO/coupling/suppression ratchets and the import boundary at commit; the full
+  make check at handoff.
+checks:
+  - name: ruff-lint-edit
+    stage: edit
+    files: ["**/*.py", "**/*.pyi"]
+    adapter: uv
+    uv: [--extra, dev, ruff, check, "{file}"]
+    on_fail: advisory
+    timeout: 10s
+  - name: ruff-format-edit
+    stage: edit
+    files: ["**/*.py", "**/*.pyi"]
+    adapter: uv
+    uv: [--extra, dev, ruff, format, --check, "{file}"]
+    on_fail: advisory
+    timeout: 10s
+  - name: shellcheck-edit
+    stage: edit
+    files: ["**/*.sh"]
+    run: [shellcheck, "{file}"]
+    on_fail: advisory
+    timeout: 10s
+  - name: markdownlint-edit
+    stage: edit
+    files: ["**/*.md"]
+    run: [npx, --no-install, markdownlint-cli2, "{file}"]
+    on_fail: advisory
+    timeout: 10s
+  - name: ruff-lint-commit
+    stage: commit
+    files: ["**/*.py", "**/*.pyi"]
+    adapter: uv
+    uv: [--extra, dev, ruff, check, "{files}"]
+    on_fail: block
+  - name: ruff-format-commit
+    stage: commit
+    files: ["**/*.py", "**/*.pyi"]
+    adapter: uv
+    uv: [--extra, dev, ruff, format, --check, "{files}"]
+    on_fail: block
+  - name: shellcheck-commit
+    stage: commit
+    files: ["**/*.sh"]
+    run: [shellcheck, "{files}"]
+    on_fail: block
+  - name: oo-ratchet
+    stage: commit
+    files: ["src/quarry/**/*.py", ".oo-baseline.json"]
+    adapter: make
+    target: check-oo
+    on_fail: block
+  - name: coupling-ratchet
+    stage: commit
+    files: ["src/quarry/**/*.py", ".oo-coupling-baseline.json"]
+    adapter: make
+    target: check-coupling
+    on_fail: block
+  - name: suppression-ratchet
+    stage: commit
+    files: ["src/quarry/**/*.py", ".suppression-baseline.json"]
+    adapter: make
+    target: check-suppressions
+    on_fail: block
+  - name: import-boundary
+    stage: commit
+    files: ["src/quarry/**/*.py", ".importlinter"]
+    adapter: make
+    target: check-imports
+    on_fail: block
+  - name: full-gate
+    stage: handoff
+    files: all
+    adapter: make
+    target: check
+    on_fail: block
+    timeout: 30m
