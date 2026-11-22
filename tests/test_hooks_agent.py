@@ -87,17 +87,17 @@ class TestHookTrace:
         assert len(records) == 1
         assert "-> capture" in records[0].getMessage()
 
-    def test_unknown_state_renders_as_question_mark(
+    def test_unknown_state_renders_as_unknown(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Emitting before marks resolves the unknown dimension to ``?``."""
+        """Emitting before marks explicitly names the unknown dimension."""
         import logging as _logging
 
         caplog.set_level(_logging.INFO, logger="quarry.hooks")
         HookTrace("session-start").skip("config")
         msg = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
-        assert "config=?" in msg
-        assert "payload_ok=?" in msg
+        assert "config=unknown" in msg
+        assert "payload_ok=unknown" in msg
 
 
 class TestReadAdmission:

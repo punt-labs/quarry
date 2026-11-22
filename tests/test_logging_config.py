@@ -73,3 +73,26 @@ def test_detached_dispatch_logs_exit_status(
     log = tmp_path / ".punt-labs" / "quarry" / "logs" / "quarry.log"
     assert "Background sync dispatcher started" in log.read_text()
     assert f"Background sync dispatcher {outcome}" in log.read_text()
+
+
+def test_hook_breadcrumb_has_one_logger_prefix_and_intact_unknown(
+    tmp_path: Path,
+) -> None:
+    script = (
+        "import logging\n"
+        "from quarry.logging_config import LoggingConfig\n"
+        "from quarry._hook_trace import HookTrace\n"
+        "LoggingConfig.hook()\n"
+        "for handler in logging.getLogger().handlers:\n"
+        "    handler.formatter.formatTime = lambda *args: '2000-01-01 00:00:00'\n"
+        "trace = HookTrace('pre-compact')\n"
+        "trace.mark_config(on=False)\n"
+        "trace.skip('config')\n"
+    )
+    run = _run(tmp_path, "-c", script)
+    assert run.returncode == 0, run.stderr
+    path = tmp_path / ".punt-labs/quarry/logs/quarry.log"
+    assert path.read_text() == (
+        "2000-01-01 00:00:00 [INFO] quarry.hooks: pre-compact: "
+        "entered (config=off, payload_ok=unknown) -> skip:config\n"
+    )
