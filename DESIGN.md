@@ -2158,8 +2158,8 @@ daemon restart without the registry being edited first.
 
 **Consequence.** The watch loop can never index scratch/temp/VCS/gitignored content
 on any surface, whether the temp root was registered before or after the guard
-shipped. Verified on the live daemon: it logs `watch: skipping temp/scratch root
-/private/tmp (systmp)` and stays idle where it previously stormed. The stale
+shipped. The daemon logs `watch: skipping temp/scratch root` without the path or
+collection and stays idle where it previously stormed. The stale
 registration is left in place (harmless — refused) and cleared by a one-time manual
 step, not migration code (there is one user; a migration path protects users who do
 not exist).
