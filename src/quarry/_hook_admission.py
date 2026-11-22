@@ -1,9 +1,7 @@
-"""Untrusted hook input and Read-capture admission checks."""
+"""Read-capture admission checks for the post-Read hook."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 from quarry.scrub import Scrubber, ScrubConfig
@@ -17,37 +15,6 @@ if TYPE_CHECKING:
 # points at a remote daemon.  PII/profanity passes are off — those aren't
 # reasons to withhold a capture, only genuine secrets are.
 _SECRET_SCRUBBER = Scrubber(ScrubConfig(scrub_pii=False, scrub_profanity=False))
-
-
-class MalformedHookPayload(ValueError):
-    """Hook stdin cannot be interpreted as a JSON object."""
-
-
-@final
-class HookInput:
-    """Decode untrusted JSON without retaining it in diagnostics."""
-
-    __slots__ = ()
-
-    @staticmethod
-    def resolve_jsonl(path_str: str) -> Path | None:
-        """Resolve a transcript path, rejecting invalid paths without diagnostics."""
-        try:
-            resolved = Path(path_str).resolve()
-        except (OSError, ValueError):
-            return None
-        return resolved if resolved.suffix == ".jsonl" else None
-
-    @staticmethod
-    def parse(raw: str) -> dict[str, object]:
-        """Return a JSON object or raise a dedicated input rejection."""
-        try:
-            payload = json.loads(raw) if raw.strip() else {}
-        except (ValueError, RecursionError):
-            raise MalformedHookPayload from None
-        if isinstance(payload, dict):
-            return payload
-        raise MalformedHookPayload
 
 
 @final

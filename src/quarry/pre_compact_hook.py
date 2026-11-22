@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Self, final
 
-from quarry._hook_admission import HookInput
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
 from quarry.send_outcome import SendOutcome
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
-
-logger = logging.getLogger(__name__)
 
 
 @final
@@ -85,9 +81,8 @@ class PreCompactHook:
         transcript_path = HookPayload.as_str(self._payload.get("transcript_path"))
         session_id = HookPayload.as_str(self._payload.get("session_id"))
         if not transcript_path or not session_id:
-            logger.debug("pre-compact: missing transcript_path or session_id")
             return None
-        resolved = HookInput.resolve_jsonl(transcript_path)
+        resolved = HookPayload.resolve_jsonl(transcript_path)
         if resolved is None:
             return None
         return TranscriptSource(cwd, session_id, resolved, "pre-compact")

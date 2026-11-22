@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 
-from quarry._hook_admission import HookInput
 from quarry._hook_trace import HookPayload, HookTrace, ReadAdmission
 from quarry._stdlib import load_hook_config
 from quarry.daemon_capture import DaemonCaptureSender
@@ -63,11 +62,7 @@ class HookAgent:
             return {}
         transcript_path = HookPayload.as_str(payload.get("transcript_path"))
         session_id = HookPayload.as_str(payload.get("session_id"))
-        tp = (
-            HookInput.resolve_jsonl(transcript_path)
-            if (transcript_path and session_id)
-            else None
-        )
+        tp = HookPayload.resolve_jsonl(transcript_path) if session_id else None
         if tp is None:
             trace.mark_payload(ok=False)
             trace.reject()
@@ -248,11 +243,7 @@ class HookAgent:
 
         transcript_path = HookPayload.as_str(payload.get("agent_transcript_path"))
         agent_id = HookPayload.as_str(payload.get("agent_id"))
-        tp = (
-            HookInput.resolve_jsonl(transcript_path)
-            if (transcript_path and agent_id)
-            else None
-        )
+        tp = HookPayload.resolve_jsonl(transcript_path) if agent_id else None
         if tp is None:
             trace.mark_payload(ok=False)
             trace.reject()

@@ -9,6 +9,8 @@ secret pre-scanning for ``HookAgent.post_read``.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +21,11 @@ from quarry._hook_admission import (
 )
 
 logger = logging.getLogger("quarry.hooks")
+
+
+class MalformedHookPayloadError(ValueError):
+    """Hook stdin cannot be interpreted as a JSON object."""
+
 
 Outcome = Literal["capture", "skip", "error"]
 
@@ -127,3 +134,20 @@ class HookPayload:
         """
         cwd = cls.as_str(value)
         return cwd if cwd and Path(cwd).is_absolute() else ""
+
+    @staticmethod
+    def resolve_jsonl(path_str: str) -> Path | None:
+        """Resolve a transcript path, rejecting invalid paths without diagnostics."""
+        with contextlib.suppress(OSError, ValueError):
+            if (resolved := Path(path_str).resolve()).suffix == ".jsonl":
+                return resolved
+        return None
+
+    @staticmethod
+    def parse(raw: str) -> dict[str, object]:
+        """Return the stdin JSON object; raise MalformedHookPayloadError otherwise."""
+        try:
+            # ``**`` unpacking rejects every non-object JSON value with TypeError.
+            return dict(**json.loads(raw.strip() or "{}"))
+        except (ValueError, TypeError, RecursionError):
+            raise MalformedHookPayloadError from None
