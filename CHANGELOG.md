@@ -14,6 +14,12 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- infra: The generated Homebrew formula now declares `pkgconf` (build) and
+  `openssl@3` on Linux, so the cryptography resource builds from source, and
+  uses `File::NULL` for the service log paths so `brew audit` passes.
+
 ## [3.9.0] - 2026-11-22
 
 ### Added
