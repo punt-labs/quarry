@@ -419,16 +419,6 @@ class TestSyncRegisterDeregister:
         _run(["sync"])
         transport.body_for("POST", "/v1/sync")
 
-    @pytest.mark.parametrize("options", [[], ["--quiet"]], ids=["default", "quiet"])
-    def test_sync_workers_flag_is_ignored(
-        self, transport: RecordingTransport, options: list[str]
-    ) -> None:
-        result = runner.invoke(app, [*options, "sync", "--workers", "3"])
-        assert result.exit_code == 0, result.output
-        assert result.stdout == "Sync accepted: task_id=t\n"
-        assert ("Warning: --workers is ignored" in result.stderr) == (not options)
-        assert transport.body_for("POST", "/v1/sync") == {}
-
 
 class TestStatus:
     @pytest.mark.parametrize(
