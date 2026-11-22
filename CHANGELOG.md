@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.9.1] - 2026-11-22
+
 ### Added
 
 - infra: Report-only design ratchet with explicit layers for every current module.
