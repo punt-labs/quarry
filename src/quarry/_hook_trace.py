@@ -38,7 +38,7 @@ class HookTrace:
     ``config`` is ``None`` until the handler has checked its config gate
     (``on``/``off``), and ``payload_ok`` is ``None`` until the payload
     has been parsed and validated.  Emitting before either has been
-    tagged still renders — the missing dimension shows as ``?``.
+    tagged still renders — the missing dimension shows as ``unknown``.
     """
 
     _name: str
@@ -78,7 +78,7 @@ class HookTrace:
         if detail:
             tail = f"{tail}:{detail}"
         logger.info(
-            "quarry.hooks: %s: entered (config=%s, payload_ok=%s)%s",
+            "%s: entered (config=%s, payload_ok=%s)%s",
             self._name,
             cfg,
             pay,
@@ -87,10 +87,8 @@ class HookTrace:
 
     @staticmethod
     def _render(*, flag: bool | None, on_str: str, off_str: str) -> str:
-        """Render a tri-state boolean as ``on``/``off``/``?``."""
-        if flag is None:
-            return "?"
-        return on_str if flag else off_str
+        """Render a tri-state boolean as ``on``/``off``/``unknown``."""
+        return {True: on_str, False: off_str, None: "unknown"}[flag]
 
 
 @final
