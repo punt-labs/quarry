@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Literal, final
 
 from quarry._hook_admission import (
-    HookInput as HookInput,
     ReadAdmission as ReadAdmission,
 )
 
@@ -128,5 +127,3 @@ class HookPayload:
         """
         cwd = cls.as_str(value)
         return cwd if cwd and Path(cwd).is_absolute() else ""
-
-    resolve_jsonl = HookInput.resolve_jsonl

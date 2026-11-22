@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+from quarry._hook_admission import HookInput
 from quarry._hook_trace import HookPayload, HookTrace, ReadAdmission
 from quarry.hooks_agent import HookAgent
 from quarry.send_outcome import SendOutcome
@@ -47,12 +48,12 @@ class TestHookPayload:
     def test_resolve_jsonl_returns_resolved_path(self, tmp_path: Path) -> None:
         jsonl = tmp_path / "t.jsonl"
         jsonl.write_text("{}")
-        resolved = HookPayload.resolve_jsonl(str(jsonl), label="test")
+        resolved = HookInput.resolve_jsonl(str(jsonl))
         assert resolved is not None
         assert resolved.suffix == ".jsonl"
 
     def test_resolve_jsonl_rejects_non_jsonl_suffix(self, tmp_path: Path) -> None:
-        assert HookPayload.resolve_jsonl(str(tmp_path / "t.txt"), label="test") is None
+        assert HookInput.resolve_jsonl(str(tmp_path / "t.txt")) is None
 
 
 class TestHookTrace:

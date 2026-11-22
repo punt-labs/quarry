@@ -27,9 +27,8 @@ class HookInput:
     __slots__ = ()
 
     @staticmethod
-    def resolve_jsonl(path_str: str, *, label: str) -> Path | None:
+    def resolve_jsonl(path_str: str) -> Path | None:
         """Resolve a transcript path, rejecting invalid paths without diagnostics."""
-        del label
         try:
             resolved = Path(path_str).resolve()
         except (OSError, ValueError):

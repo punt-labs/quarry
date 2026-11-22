@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._frontmatter import Frontmatter
-from quarry._hook_trace import HookInput, HookTrace
+from quarry._hook_admission import HookInput
+from quarry._hook_trace import HookTrace
 from quarry.home_paths import HomeUnresolvedError, QuarryHome
 from quarry.logging_config import LoggingConfig
 
