@@ -46,7 +46,8 @@ def test_remote_switch_preserves_selection(monkeypatch: pytest.MonkeyPatch) -> N
     assert selection.active() == "startup"
 
 
-def test_invalid_switch_preserves_selection() -> None:
+def test_invalid_switch_preserves_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUARRY_URL", "wss://127.0.0.1:8420")
     selection = DatabaseSelection()
     session = McpDatabaseSession(selection)
     session.select_startup("startup")
