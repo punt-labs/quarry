@@ -362,6 +362,10 @@ entry = [
     "quarry.daemon.routes.*",
 ]
 adapters = [
+    "quarry.fd_config",
+    "quarry.installed_stop_timeout",
+    "quarry.shared_project_dirs",
+    "quarry.ingestion.text_splitter",
     "quarry",
     "quarry.daemon.daemon_threads",
     "quarry.daemon.fs_watchdog",
@@ -519,6 +523,8 @@ adapters = [
     "quarry.user_scope_shadow",
 ]
 application = [
+    "quarry.daemon.abort_reason",
+    "quarry.daemon.job_lifecycle",
     "quarry._hook_admission",
     "quarry.active_session_context",
     "quarry.backfill",
@@ -656,7 +662,6 @@ domain = [
     "quarry.ethos_ext_block",
     "quarry.ethos_ext_scan",
     "quarry.failure_reason",
-    "quarry.fd_config",
     "quarry.fence",
     "quarry.fetch_bug_record",
     "quarry.file_stamp",
@@ -666,7 +671,6 @@ domain = [
     "quarry.ignore_spec",
     "quarry.ingest_collection",
     "quarry.installed_budget",
-    "quarry.installed_stop_timeout",
     "quarry.latex_utils",
     "quarry.lesson",
     "quarry.loaded_transcript",
@@ -697,7 +701,6 @@ domain = [
     "quarry.session_start_reply",
     "quarry.session_start_templates",
     "quarry.shadow_prune",
-    "quarry.shared_project_dirs",
     "quarry.shown_value",
     "quarry.shutdown_budget",
     "quarry.shutdown_policy",
@@ -735,7 +738,6 @@ domain = [
     "quarry.db.recycle_gate",
     "quarry.db.row_budget",
     "quarry.shadow.visibility",
-    "quarry.daemon.abort_reason",
     "quarry.daemon.abort_record",
     "quarry.daemon.abort_tally",
     "quarry.daemon.backfill_args",
@@ -745,7 +747,6 @@ domain = [
     "quarry.daemon.fs_events",
     "quarry.daemon.ingest_labels",
     "quarry.daemon.ingest_refusal",
-    "quarry.daemon.job_lifecycle",
     "quarry.daemon.queue_bounds",
     "quarry.daemon.queued_unit",
     "quarry.daemon.route_key",
@@ -767,7 +768,6 @@ domain = [
     "quarry.ingestion.sentence_chunker",
     "quarry.ingestion.sitemap_node_failure",
     "quarry.ingestion.text_format",
-    "quarry.ingestion.text_splitter",
     "quarry.ingestion.unchanged_transcript",
 ]
 
