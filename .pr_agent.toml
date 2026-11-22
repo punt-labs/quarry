@@ -16,7 +16,7 @@ Targets: macOS (launchd) and Ubuntu 24.04 (systemd), CPU and NVIDIA CUDA. Nothin
 Report every finding in this one pass; do not hold findings back for a later pass.
 Flag only defects reachable by a real caller of the changed code: logic errors, None paths, security, API contract breaks, concurrency, resource leaks.
 Do not flag hypothetical environments (exotic env vars such as CDPATH or GIT_TRACE, control bytes in paths, tests run as root).
-Do not flag what CI enforces: ruff format/lint, mypy and pyright strict, import-linter (the client/engine boundary), shellcheck, markdownlint, the OpenAPI freshness check, the OO ratchet (tools/oo_ratchet), coupling and suppression ratchets.
+Do not flag what CI enforces: ruff format/lint, mypy and pyright strict, import-linter (the client/engine boundary), shellcheck, markdownlint, the OpenAPI freshness check, the OO, coupling and suppression ratchets (punt-oo-ratchet==0.4.0 from PyPI; source: punt-labs/python-oo-ratchet).
 Do not flag lines the PR did not change.
 Never suggest suppressions (# noqa, # type: ignore, xfail) or replacing __new__ with __init__; __new__ is the constructor by design.
 """
