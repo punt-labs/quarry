@@ -37,20 +37,20 @@ class Guidance:
     same tool version always produces identical output.
     """
 
-    __slots__ = ("_root",)
+    __slots__ = ("_guide",)
 
-    _root: Path
+    _guide: SafeRepoPath
 
     def __new__(cls, root: Path) -> Self:
         """Anchor vendored user guidance at the supplied repository root."""
         self = super().__new__(cls)
-        self._root = root
+        self._guide = SafeRepoPath(root, _GUIDE_RELATIVE)
         return self
 
     @property
     def guide_path(self) -> Path:
         """Return the deposited guide's path under the tool subtree."""
-        return self._root.joinpath(*_GUIDE_RELATIVE)
+        return self._guide.path
 
     def deposit(self) -> None:
         """Write the vendored guide wholesale, following no symlink.
@@ -60,9 +60,7 @@ class Guidance:
         symlink at ``.punt-labs`` or ``.punt-labs/quarry``: a symlinked ancestor
         is refused, and the write lands atomically on the real in-repo guide.
         """
-        SafeRepoPath(self._root, _GUIDE_RELATIVE).write_atomic(
-            self._guide_text(), mode=0o644
-        )
+        self._guide.write_atomic(self._guide_text(), mode=0o644)
 
     @staticmethod
     def _guide_text() -> str:
