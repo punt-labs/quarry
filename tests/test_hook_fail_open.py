@@ -9,6 +9,7 @@ and asserts the entry point still answers ``{}`` and does not raise.
 from __future__ import annotations
 
 import io
+import logging
 import sys
 from unittest.mock import patch
 
@@ -40,7 +41,10 @@ def test_the_table_covers_every_entry_point() -> None:
 
 @pytest.mark.parametrize("event", sorted(_TARGETS))
 def test_a_raising_handler_answers_an_empty_object_and_does_not_raise(
-    event: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    event: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
     target = _TARGETS[event]
@@ -51,3 +55,32 @@ def test_a_raising_handler_answers_an_empty_object_and_does_not_raise(
     ):
         _hook_entry._HANDLERS[event]()  # pyright: ignore[reportPrivateUsage]
     assert capsys.readouterr().out.strip() == "{}"
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.ERROR
+
+
+@pytest.mark.parametrize("event", sorted(_TARGETS))
+@pytest.mark.parametrize("raw", ["PRIVATE_BAD_JSON", "[]", "null", "", "{}"])
+def test_malformed_payload_is_one_private_warning(
+    event: str,
+    raw: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    if event == "session-setup" and raw in {"{}", ""}:
+        pytest.skip("Setup uses environment, not payload fields")
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(raw))
+    monkeypatch.setattr(sys, "argv", ["quarry-hook", event])
+    with patch("quarry._stdlib.LoggingConfig.hook"):
+        _hook_entry.main()
+    assert capsys.readouterr().out == "{}\n"
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == "malformed_payload"
+    assert record.exc_info is None
+    assert record.exc_text is None
+    assert "PRIVATE_BAD_JSON" not in caplog.text
+    assert "Error" not in caplog.text

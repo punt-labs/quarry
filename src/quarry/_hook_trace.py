@@ -12,22 +12,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, final
+from typing import Literal, final
 
-from quarry.scrub import Scrubber, ScrubConfig
-
-if TYPE_CHECKING:
-    from quarry.collection_resolver import CollectionResolver
-    from quarry.config import Settings
+from quarry._hook_admission import (
+    HookInput as HookInput,
+    ReadAdmission as ReadAdmission,
+)
 
 logger = logging.getLogger("quarry.hooks")
-
-# Secrets-only scrubber, built once: a client-side defense-in-depth check on
-# Read content ahead of the daemon's own scrub, relevant when QUARRY_URL
-# points at a remote daemon.  PII/profanity passes are off — those aren't
-# reasons to withhold a capture, only genuine secrets are.
-_SECRET_SCRUBBER = Scrubber(ScrubConfig(scrub_pii=False, scrub_profanity=False))
-
 
 Outcome = Literal["capture", "skip", "error"]
 
@@ -57,7 +49,15 @@ class HookTrace:
 
     def skip(self, reason: str) -> None:
         """Emit the outcome line for a no-op skip (config, payload, filter, dedup)."""
+        if reason in {"cwd", "payload", "no-url", "no-digest"}:
+            self.reject()
+            return
         self._emit("skip", reason)
+
+    @staticmethod
+    def reject() -> None:
+        """Reject an unusable payload without recording untrusted fields."""
+        logger.warning("malformed_payload")
 
     def capture(self, detail: str = "") -> None:
         """Emit the outcome line for a successful capture (or send)."""
@@ -132,73 +132,4 @@ class HookPayload:
         cwd = cls.as_str(value)
         return cwd if cwd and Path(cwd).is_absolute() else ""
 
-    @staticmethod
-    def resolve_jsonl(path_str: str, *, label: str) -> Path | None:
-        """Resolve *path_str* to a ``.jsonl`` transcript, else ``None``.
-
-        Skip conditions match the no-op contract: an OS-invalid path or
-        a non-``.jsonl`` suffix returns ``None``, never crashes the
-        hook.
-        """
-        try:
-            resolved = Path(path_str).resolve()
-        except (OSError, ValueError):
-            logger.warning("%s: unresolvable transcript_path", label, exc_info=True)
-            return None
-        if resolved.suffix != ".jsonl":
-            logger.warning("%s: unexpected suffix %s", label, resolved.suffix)
-            return None
-        return resolved
-
-
-@final
-class ReadAdmission:
-    """Read-hook admission helpers grouped by shared vocabulary.
-
-    Settings load, resolver build, and client-side secret pre-scanning live
-    here so the post-Read handler stays focused on orchestration.
-    """
-
-    __slots__ = ()
-
-    @staticmethod
-    def content_has_secret(content: str) -> bool:
-        """Return whether *content* matches a secret pattern (PEM/env/PAT/etc).
-
-        Defense-in-depth ahead of the daemon's own scrub — catches an
-        obvious secret before it leaves the machine, which matters when
-        ``QUARRY_URL`` points at a remote daemon.
-        """
-        _, redactions = _SECRET_SCRUBBER.scrub(content)
-        return bool(redactions)
-
-    @classmethod
-    def collection_resolver_for(cls, cwd: str) -> CollectionResolver | None:
-        """Open a :class:`CollectionResolver`, or ``None`` on failure.
-
-        Read fires often; a settings-load failure must never crash the
-        handler.  ``None`` is the "no in-tree exclusion possible"
-        contract that :class:`ReadCaptureFilter` treats as "resolver
-        unavailable" — the first admission check skips, the remaining
-        three still run.
-        """
-        del cwd  # resolver is settings-scoped; cwd flows to should_capture
-        try:
-            settings = cls._resolve_settings()
-        except (OSError, ValueError):
-            return None
-        try:
-            from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
-            from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-            conn = SyncRegistry(settings.registry_path)
-        except (OSError, ValueError):
-            return None
-        return CollectionResolver(conn)
-
-    @staticmethod
-    def _resolve_settings() -> Settings:
-        """Load settings resolved for the default database."""
-        from quarry.config import Settings  # noqa: PLC0415
-
-        return Settings.load().resolve_db_paths(None)
+    resolve_jsonl = HookInput.resolve_jsonl

@@ -118,11 +118,9 @@ class HookAgent:
                 return {}
 
         parsed = WebSearchPayload(payload)
-        parsed.log_shape()
         digest = parsed.digest
         if digest is None:
             trace.mark_payload(ok=False)
-            parsed.warn_no_digest()
             trace.skip("no-digest")
             return {}
         trace.mark_payload(ok=True)

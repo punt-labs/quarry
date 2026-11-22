@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._frontmatter import Frontmatter
-from quarry._hook_trace import HookTrace
+from quarry._hook_trace import HookInput, HookTrace
 from quarry.home_paths import HomeUnresolvedError, QuarryHome
 from quarry.logging_config import LoggingConfig
 
@@ -165,9 +165,8 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
     """
     try:
         LoggingConfig.hook()
-        raw = read_hook_stdin()
-        payload: dict[str, object] = json.loads(raw) if raw.strip() else {}
-        result = handler(payload)
+        payload = HookInput.parse(read_hook_stdin())
+        result = {} if payload is None else handler(payload)
         sys.stdout.write(json.dumps(result))
         sys.stdout.write("\n")
     except Exception as exc:

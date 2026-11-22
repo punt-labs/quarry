@@ -69,10 +69,9 @@ class TestHookTrace:
         records = [r for r in caplog.records if r.name == "quarry.hooks"]
         assert len(records) == 1
         msg = records[0].getMessage()
-        assert "post-web-search" in msg
-        assert "config=on" in msg
-        assert "payload_ok=N" in msg
-        assert "-> skip:no-digest" in msg
+        assert msg == "malformed_payload"
+        assert records[0].levelname == "WARNING"
+        assert records[0].exc_info is None
 
     def test_capture_emits_expected_shape(
         self, caplog: pytest.LogCaptureFixture
@@ -95,7 +94,7 @@ class TestHookTrace:
         import logging as _logging
 
         caplog.set_level(_logging.INFO, logger="quarry.hooks")
-        HookTrace("session-start").skip("cwd")
+        HookTrace("session-start").skip("config")
         msg = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
         assert "config=?" in msg
         assert "payload_ok=?" in msg
