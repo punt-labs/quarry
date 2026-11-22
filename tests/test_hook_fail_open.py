@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -103,3 +104,25 @@ def test_disabled_compaction_is_not_malformed(
     assert len(caplog.records) == 1
     assert caplog.records[0].levelno == logging.INFO
     assert "skip:config" in caplog.text
+
+
+def test_invalid_utf8_is_one_private_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "r") as stdin, os.fdopen(write_fd, "wb") as writer:
+        writer.write(b"PRIVATE_BYTES\xff")
+        writer.close()
+        monkeypatch.setattr(sys, "stdin", stdin)
+        monkeypatch.setattr(sys, "argv", ["quarry-hook", "session-start"])
+        with patch("quarry._stdlib.LoggingConfig.hook"):
+            _hook_entry.main()
+    assert capsys.readouterr().out == "{}\n"
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == "malformed_payload"
+    assert record.exc_info is None
+    assert record.exc_text is None

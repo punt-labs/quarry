@@ -169,6 +169,9 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
         result = {} if payload is None else handler(payload)
         sys.stdout.write(json.dumps(result))
         sys.stdout.write("\n")
+    except UnicodeDecodeError:
+        logger.warning("malformed_payload")
+        sys.stdout.write("{}\n")
     except Exception as exc:
         if isinstance(exc, HomeUnresolvedError):
             raise  # one clean line from the entry point, never a traceback
