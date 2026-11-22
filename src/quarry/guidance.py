@@ -33,7 +33,7 @@ class Guidance:
     """Own quarry's vendored repo user-guide file.
 
     :meth:`deposit` writes ``<repo>/.punt-labs/quarry/CLAUDE.md`` wholesale —
-    the vendored zone (punt-labs-dir.md § 7), overwritten on every enable so the
+    the vendored zone (punt-labs-dir.md PLD-7), overwritten on every enable so the
     same tool version always produces identical output.
     """
 
