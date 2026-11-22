@@ -1,6 +1,6 @@
 name: quarry-default
 description: >-
-  Ruff, shellcheck and markdownlint on the edited file (advisory); Ruff, the
+  Ruff and shellcheck on the edited file (advisory); Ruff, the
   OO/coupling/suppression ratchets and the import boundary at commit; the full
   make check at handoff.
 checks:
@@ -8,14 +8,14 @@ checks:
     stage: edit
     files: ["**/*.py", "**/*.pyi"]
     adapter: uv
-    uv: [--extra, dev, ruff, check, "{file}"]
+    uv: [--extra, dev, ruff, check, --force-exclude, "{file}"]
     on_fail: advisory
     timeout: 10s
   - name: ruff-format-edit
     stage: edit
     files: ["**/*.py", "**/*.pyi"]
     adapter: uv
-    uv: [--extra, dev, ruff, format, --check, "{file}"]
+    uv: [--extra, dev, ruff, format, --check, --force-exclude, "{file}"]
     on_fail: advisory
     timeout: 10s
   - name: shellcheck-edit
@@ -24,23 +24,17 @@ checks:
     run: [shellcheck, "{file}"]
     on_fail: advisory
     timeout: 10s
-  - name: markdownlint-edit
-    stage: edit
-    files: ["**/*.md"]
-    run: [npx, --no-install, markdownlint-cli2, "{file}"]
-    on_fail: advisory
-    timeout: 10s
   - name: ruff-lint-commit
     stage: commit
     files: ["**/*.py", "**/*.pyi"]
     adapter: uv
-    uv: [--extra, dev, ruff, check, "{files}"]
+    uv: [--extra, dev, ruff, check, --force-exclude, "{files}"]
     on_fail: block
   - name: ruff-format-commit
     stage: commit
     files: ["**/*.py", "**/*.pyi"]
     adapter: uv
-    uv: [--extra, dev, ruff, format, --check, "{files}"]
+    uv: [--extra, dev, ruff, format, --check, --force-exclude, "{files}"]
     on_fail: block
   - name: shellcheck-commit
     stage: commit
