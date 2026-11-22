@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._frontmatter import Frontmatter
-from quarry._hook_admission import HookInput
+from quarry._hook_admission import HookInput, MalformedHookPayload
 from quarry._hook_trace import HookTrace
 from quarry.home_paths import HomeUnresolvedError, QuarryHome
 from quarry.logging_config import LoggingConfig
@@ -167,10 +167,10 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
     try:
         LoggingConfig.hook()
         payload = HookInput.parse(read_hook_stdin())
-        result = {} if payload is None else handler(payload)
+        result = handler(payload)
         sys.stdout.write(json.dumps(result))
         sys.stdout.write("\n")
-    except UnicodeDecodeError:
+    except (MalformedHookPayload, UnicodeDecodeError):
         logger.warning("malformed_payload")
         sys.stdout.write("{}\n")
     except Exception as exc:

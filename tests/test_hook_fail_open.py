@@ -98,9 +98,16 @@ def test_disabled_compaction_is_not_malformed(
         "quarry.pre_compact_hook.load_hook_config",
         return_value=HookConfig(compaction=False),
     ):
-        assert PreCompactHook(
-            {"cwd": str(tmp_path), "transcript_path": "/session.jsonl", "session_id": "s"}
-        ).run() == {}
+        assert (
+            PreCompactHook(
+                {
+                    "cwd": str(tmp_path),
+                    "transcript_path": "/session.jsonl",
+                    "session_id": "s",
+                }
+            ).run()
+            == {}
+        )
     assert len(caplog.records) == 1
     assert caplog.records[0].levelno == logging.INFO
     assert "skip:config" in caplog.text

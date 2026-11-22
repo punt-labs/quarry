@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
@@ -18,6 +17,10 @@ if TYPE_CHECKING:
 # points at a remote daemon.  PII/profanity passes are off — those aren't
 # reasons to withhold a capture, only genuine secrets are.
 _SECRET_SCRUBBER = Scrubber(ScrubConfig(scrub_pii=False, scrub_profanity=False))
+
+
+class MalformedHookPayload(ValueError):
+    """Hook stdin cannot be interpreted as a JSON object."""
 
 
 @final
@@ -36,16 +39,15 @@ class HookInput:
         return resolved if resolved.suffix == ".jsonl" else None
 
     @staticmethod
-    def parse(raw: str) -> dict[str, object] | None:
-        """Return an object, or emit one fixed warning and reject."""
+    def parse(raw: str) -> dict[str, object]:
+        """Return a JSON object or raise a dedicated input rejection."""
         try:
             payload = json.loads(raw) if raw.strip() else {}
         except (ValueError, RecursionError):
-            payload = None
+            raise MalformedHookPayload from None
         if isinstance(payload, dict):
             return payload
-        logging.getLogger("quarry.hooks").warning("malformed_payload")
-        return None
+        raise MalformedHookPayload
 
 
 @final
