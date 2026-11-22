@@ -11,11 +11,14 @@ from __future__ import annotations
 import io
 import logging
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from quarry import _hook_entry
+from quarry._stdlib import HookConfig
+from quarry.pre_compact_hook import PreCompactHook
 
 
 def _raiser(_payload: dict[str, object]) -> dict[str, object]:
@@ -84,3 +87,19 @@ def test_malformed_payload_is_one_private_warning(
     assert record.exc_text is None
     assert "PRIVATE_BAD_JSON" not in caplog.text
     assert "Error" not in caplog.text
+
+
+def test_disabled_compaction_is_not_malformed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    with patch(
+        "quarry.pre_compact_hook.load_hook_config",
+        return_value=HookConfig(compaction=False),
+    ):
+        assert PreCompactHook(
+            {"cwd": str(tmp_path), "transcript_path": "/session.jsonl", "session_id": "s"}
+        ).run() == {}
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.INFO
+    assert "skip:config" in caplog.text

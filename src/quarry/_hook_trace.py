@@ -49,9 +49,6 @@ class HookTrace:
 
     def skip(self, reason: str) -> None:
         """Emit the outcome line for a no-op skip (config, payload, filter, dedup)."""
-        if reason in {"cwd", "payload", "no-url", "no-digest"}:
-            self.reject()
-            return
         self._emit("skip", reason)
 
     @staticmethod

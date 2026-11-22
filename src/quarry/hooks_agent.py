@@ -53,7 +53,7 @@ class HookAgent:
         trace = HookTrace("post-session-end")
         cwd = HookPayload.as_dir(payload.get("cwd"))
         if not cwd:
-            trace.skip("cwd")
+            trace.reject()
             return {}
         on = load_hook_config(cwd).session_end
         trace.mark_config(on=on)
@@ -69,7 +69,7 @@ class HookAgent:
         )
         if tp is None:
             trace.mark_payload(ok=False)
-            trace.skip("payload")
+            trace.reject()
             return {}
         trace.mark_payload(ok=True)
         outcome = SessionTranscriptCapture.for_session(
@@ -121,7 +121,7 @@ class HookAgent:
         digest = parsed.digest
         if digest is None:
             trace.mark_payload(ok=False)
-            trace.skip("no-digest")
+            trace.reject()
             return {}
         trace.mark_payload(ok=True)
 
@@ -161,7 +161,7 @@ class HookAgent:
         trace = HookTrace("post-read")
         cwd = HookPayload.as_dir(payload.get("cwd"))
         if not cwd:
-            trace.skip("cwd")
+            trace.reject()
             return {}
         on = load_hook_config(cwd).read
         trace.mark_config(on=on)
@@ -175,7 +175,7 @@ class HookAgent:
         elif outcome.startswith("error:"):
             trace.error(outcome.removeprefix("error:"))
         else:
-            trace.skip(outcome)
+            trace.reject() if outcome == "payload" else trace.skip(outcome)
         return {}
 
     @staticmethod
@@ -237,7 +237,7 @@ class HookAgent:
         trace = HookTrace("post-subagent-stop")
         cwd = HookPayload.as_dir(payload.get("cwd"))
         if not cwd:
-            trace.skip("cwd")
+            trace.reject()
             return {}
         on = load_hook_config(cwd).subagent_stop
         trace.mark_config(on=on)
@@ -254,7 +254,7 @@ class HookAgent:
         )
         if tp is None:
             trace.mark_payload(ok=False)
-            trace.skip("payload")
+            trace.reject()
             return {}
         trace.mark_payload(ok=True)
         outcome = SubagentCapture(

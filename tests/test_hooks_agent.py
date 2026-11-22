@@ -65,7 +65,7 @@ class TestHookTrace:
         trace = HookTrace("post-web-search")
         trace.mark_config(on=True)
         trace.mark_payload(ok=False)
-        trace.skip("no-digest")
+        trace.reject()
         records = [r for r in caplog.records if r.name == "quarry.hooks"]
         assert len(records) == 1
         msg = records[0].getMessage()
