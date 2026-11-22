@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-11-22
+
 ### Added
 
 - infra: Python comment and public-docstring checks in lint and CI, plus a
