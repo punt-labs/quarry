@@ -14,9 +14,11 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
-- Bump punt-observe to 0.1.1 (log masking fixes)
-
 ### Fixed
+
+- infra: Bump punt-observe to 0.1.1: diagnostic logs now mask bare bearer
+  credentials and home-directory prefixes, and URL query redaction keeps
+  prose punctuation.
 
 - infra: The generated Homebrew formula now declares `pkgconf` (build) and
   `openssl@3` on Linux, so the cryptography resource builds from source, and
