@@ -162,16 +162,16 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
     """
     try:
         LoggingConfig.hook()
-        result = handler(HookPayload.parse(read_hook_stdin()))
+        reply = json.dumps(handler(HookPayload.parse(read_hook_stdin())))
     except (MalformedHookPayloadError, UnicodeDecodeError):
         HookTrace.reject()
-        result = {}
+        reply = "{}"
     except Exception as exc:
         if isinstance(exc, HomeUnresolvedError):
             raise  # one clean line from the entry point, never a traceback
         logger.error("Hook dispatch failed (fail-open, %s)", type(exc).__name__)
-        result = {}
-    sys.stdout.write(json.dumps(result) + "\n")
+        reply = "{}"
+    sys.stdout.write(reply + "\n")
 
 
 # ── Session setup (plugin bootstrap) ─────────────────────────────────

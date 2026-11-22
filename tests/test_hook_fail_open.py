@@ -63,6 +63,22 @@ def test_a_raising_handler_answers_an_empty_object_and_does_not_raise(
     assert caplog.records[0].levelno == logging.ERROR
 
 
+def test_an_unserializable_reply_answers_an_empty_object(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+    with (
+        patch("quarry._stdlib.LoggingConfig.hook"),
+        patch(_TARGETS["session-start"], new=lambda _payload: {"x": object()}),
+    ):
+        _hook_entry._HANDLERS["session-start"]()  # pyright: ignore[reportPrivateUsage]
+    assert capsys.readouterr().out == "{}\n"
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.ERROR
+
+
 @pytest.mark.parametrize("event", sorted(_TARGETS))
 @pytest.mark.parametrize("raw", ["PRIVATE_BAD_JSON", "[]", "null", "", "{}"])
 def test_malformed_payload_is_one_private_warning(
@@ -82,6 +98,7 @@ def test_malformed_payload_is_one_private_warning(
     assert capsys.readouterr().out == "{}\n"
     assert len(caplog.records) == 1
     record = caplog.records[0]
+    assert record.name == "quarry.hooks"
     assert record.levelno == logging.WARNING
     assert record.getMessage() == "malformed_payload"
     assert record.exc_info is None
@@ -129,6 +146,7 @@ def test_invalid_utf8_is_one_private_warning(
     assert capsys.readouterr().out == "{}\n"
     assert len(caplog.records) == 1
     record = caplog.records[0]
+    assert record.name == "quarry.hooks"
     assert record.levelno == logging.WARNING
     assert record.getMessage() == "malformed_payload"
     assert record.exc_info is None
