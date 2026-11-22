@@ -47,12 +47,12 @@ class TestHookPayload:
     def test_resolve_jsonl_returns_resolved_path(self, tmp_path: Path) -> None:
         jsonl = tmp_path / "t.jsonl"
         jsonl.write_text("{}")
-        resolved = HookPayload.resolve_jsonl(str(jsonl), label="test")
+        resolved = HookPayload.resolve_jsonl(str(jsonl))
         assert resolved is not None
         assert resolved.suffix == ".jsonl"
 
     def test_resolve_jsonl_rejects_non_jsonl_suffix(self, tmp_path: Path) -> None:
-        assert HookPayload.resolve_jsonl(str(tmp_path / "t.txt"), label="test") is None
+        assert HookPayload.resolve_jsonl(str(tmp_path / "t.txt")) is None
 
 
 class TestHookTrace:
@@ -65,14 +65,13 @@ class TestHookTrace:
         trace = HookTrace("post-web-search")
         trace.mark_config(on=True)
         trace.mark_payload(ok=False)
-        trace.skip("no-digest")
+        trace.reject()
         records = [r for r in caplog.records if r.name == "quarry.hooks"]
         assert len(records) == 1
         msg = records[0].getMessage()
-        assert "post-web-search" in msg
-        assert "config=on" in msg
-        assert "payload_ok=N" in msg
-        assert "-> skip:no-digest" in msg
+        assert msg == "malformed_payload"
+        assert records[0].levelname == "WARNING"
+        assert records[0].exc_info is None
 
     def test_capture_emits_expected_shape(
         self, caplog: pytest.LogCaptureFixture
@@ -95,7 +94,7 @@ class TestHookTrace:
         import logging as _logging
 
         caplog.set_level(_logging.INFO, logger="quarry.hooks")
-        HookTrace("session-start").skip("cwd")
+        HookTrace("session-start").skip("config")
         msg = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
         assert "config=?" in msg
         assert "payload_ok=?" in msg

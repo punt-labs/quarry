@@ -65,7 +65,7 @@ class WebFetchHook:
         url = self._parsed.url
         if not url:
             self._trace.mark_payload(ok=False)
-            self._trace.skip("no-url")
+            self._trace.reject()
             return {}
         self._trace.mark_payload(ok=True)
         document_name = WebFetchName.maybe(url)

@@ -61,7 +61,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     trace = HookTrace("session-start")
     cwd = HookPayload.as_dir(payload.get("cwd"))
     if not cwd:
-        trace.skip("cwd")
+        trace.reject()
         return {}
     on = load_hook_config(cwd).session_sync
     trace.mark_config(on=on)

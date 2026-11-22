@@ -205,12 +205,7 @@ def test_unknown_shape_logs_warn_with_metadata(
     ephemeral_daemon: EphemeralDaemon,
     hook_subprocess: HookInvoker,
 ) -> None:
-    """An unknown tool_response shape logs metadata without search content.
-
-    WebSearchPayload.warn_no_digest reports query presence and length so an
-    operator can diagnose unparseable payloads. The entry point must configure
-    logging before dispatch for that WARN to reach quarry.log.
-    """
+    """An unknown response shape logs one fixed warning without search content."""
     payload = load_payload("websearch/unknown_shape.json")
     run = hook_subprocess.run(
         "post-web-search",
@@ -222,20 +217,17 @@ def test_unknown_shape_logs_warn_with_metadata(
         f"quarry-hook exited {run.exit_code}; stderr[:400]={run.stderr[:400]!r}"
     )
 
-    warn_lines = run.grep("post-web-search: no result digest in payload")
+    warn_lines = run.grep("malformed_payload")
     assert warn_lines, (
         f"{_QUARRY_871U_SUMMARY}\n"
         f"{_QUARRY_RIDG_SUMMARY}\n"
-        "  expected a WARN line containing 'query_present=', 'query_len=', and "
-        "'tool_response type=' — the operator's only diagnostic that an "
-        "unknown-shape payload arrived and was skipped.\n"
+        "  expected the fixed malformed_payload rejection warning.\n"
         f"  log_path={run.log_path}\n"
         f"  log_line_count={len(run.log_lines)}"
     )
     joined = "\n".join(warn_lines)
-    assert "query_present=" in joined and "query_len=" in joined, (
+    assert len(warn_lines) == 1 and "[WARNING]" in joined, (
         f"{_QUARRY_871U_SUMMARY}\n"
-        "  WARN line missing the shape-metadata fields "
-        "(query_present / query_len).\n"
+        "  expected exactly one WARNING rejection.\n"
         f"  lines={warn_lines}"
     )

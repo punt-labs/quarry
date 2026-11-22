@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
 from quarry._stdlib import load_hook_config
 from quarry.send_outcome import SendOutcome
 from quarry.session_transcript import SessionTranscriptCapture, TranscriptSource
-
-logger = logging.getLogger(__name__)
 
 
 @final
@@ -36,9 +33,14 @@ class PreCompactHook:
 
     def run(self) -> dict[str, object]:
         """Return the hook output: the capture notice or warning, or ``{}``."""
+        cwd = HookPayload.as_dir(self._payload.get("cwd"))
+        if cwd and not load_hook_config(cwd).compaction:
+            self._trace.mark_config(on=False)
+            self._trace.skip("config")
+            return {}
         target = self._target()
         if target is None:
-            self._trace.skip("payload")
+            self._trace.reject()
             return {}
         self._trace.mark_payload(ok=True)
 
@@ -76,15 +78,11 @@ class PreCompactHook:
         required.
         """
         cwd = HookPayload.as_dir(self._payload.get("cwd"))
-        if cwd and not load_hook_config(cwd).compaction:
-            logger.debug("pre-compact: disabled by config")
-            return None
         transcript_path = HookPayload.as_str(self._payload.get("transcript_path"))
         session_id = HookPayload.as_str(self._payload.get("session_id"))
         if not transcript_path or not session_id:
-            logger.debug("pre-compact: missing transcript_path or session_id")
             return None
-        resolved = HookPayload.resolve_jsonl(transcript_path, label="pre-compact")
+        resolved = HookPayload.resolve_jsonl(transcript_path)
         if resolved is None:
             return None
         return TranscriptSource(cwd, session_id, resolved, "pre-compact")

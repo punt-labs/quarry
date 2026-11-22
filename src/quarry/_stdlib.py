@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._frontmatter import Frontmatter
-from quarry._hook_trace import HookTrace
+from quarry._hook_trace import HookPayload, HookTrace, MalformedHookPayloadError
 from quarry.home_paths import HomeUnresolvedError, QuarryHome
 from quarry.logging_config import LoggingConfig
 
@@ -148,10 +148,7 @@ def read_hook_stdin() -> str:
     if not select.select([fd], [], [], 0.1)[0]:
         return ""
     chunks: list[bytes] = []
-    while True:
-        chunk = os.read(fd, 65536)
-        if not chunk:
-            break
+    while chunk := os.read(fd, 65536):
         chunks.append(chunk)
         if not select.select([fd], [], [], 0.05)[0]:
             break
@@ -165,16 +162,16 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
     """
     try:
         LoggingConfig.hook()
-        raw = read_hook_stdin()
-        payload: dict[str, object] = json.loads(raw) if raw.strip() else {}
-        result = handler(payload)
-        sys.stdout.write(json.dumps(result))
-        sys.stdout.write("\n")
+        reply = json.dumps(handler(HookPayload.parse(read_hook_stdin())))
+    except (MalformedHookPayloadError, UnicodeDecodeError):
+        HookTrace.reject()
+        reply = "{}"
     except Exception as exc:
         if isinstance(exc, HomeUnresolvedError):
             raise  # one clean line from the entry point, never a traceback
         logger.error("Hook dispatch failed (fail-open, %s)", type(exc).__name__)
-        sys.stdout.write("{}\n")
+        reply = "{}"
+    sys.stdout.write(reply + "\n")
 
 
 # ── Session setup (plugin bootstrap) ─────────────────────────────────

@@ -53,7 +53,7 @@ class HookAgent:
         trace = HookTrace("post-session-end")
         cwd = HookPayload.as_dir(payload.get("cwd"))
         if not cwd:
-            trace.skip("cwd")
+            trace.reject()
             return {}
         on = load_hook_config(cwd).session_end
         trace.mark_config(on=on)
@@ -62,14 +62,10 @@ class HookAgent:
             return {}
         transcript_path = HookPayload.as_str(payload.get("transcript_path"))
         session_id = HookPayload.as_str(payload.get("session_id"))
-        tp = (
-            HookPayload.resolve_jsonl(transcript_path, label="session-end")
-            if (transcript_path and session_id)
-            else None
-        )
+        tp = HookPayload.resolve_jsonl(transcript_path) if session_id else None
         if tp is None:
             trace.mark_payload(ok=False)
-            trace.skip("payload")
+            trace.reject()
             return {}
         trace.mark_payload(ok=True)
         outcome = SessionTranscriptCapture.for_session(
@@ -118,12 +114,10 @@ class HookAgent:
                 return {}
 
         parsed = WebSearchPayload(payload)
-        parsed.log_shape()
         digest = parsed.digest
         if digest is None:
             trace.mark_payload(ok=False)
-            parsed.warn_no_digest()
-            trace.skip("no-digest")
+            trace.reject()
             return {}
         trace.mark_payload(ok=True)
 
@@ -163,7 +157,7 @@ class HookAgent:
         trace = HookTrace("post-read")
         cwd = HookPayload.as_dir(payload.get("cwd"))
         if not cwd:
-            trace.skip("cwd")
+            trace.reject()
             return {}
         on = load_hook_config(cwd).read
         trace.mark_config(on=on)
@@ -177,7 +171,7 @@ class HookAgent:
         elif outcome.startswith("error:"):
             trace.error(outcome.removeprefix("error:"))
         else:
-            trace.skip(outcome)
+            trace.reject() if outcome == "payload" else trace.skip(outcome)
         return {}
 
     @staticmethod
@@ -239,7 +233,7 @@ class HookAgent:
         trace = HookTrace("post-subagent-stop")
         cwd = HookPayload.as_dir(payload.get("cwd"))
         if not cwd:
-            trace.skip("cwd")
+            trace.reject()
             return {}
         on = load_hook_config(cwd).subagent_stop
         trace.mark_config(on=on)
@@ -249,14 +243,10 @@ class HookAgent:
 
         transcript_path = HookPayload.as_str(payload.get("agent_transcript_path"))
         agent_id = HookPayload.as_str(payload.get("agent_id"))
-        tp = (
-            HookPayload.resolve_jsonl(transcript_path, label="subagent-stop")
-            if (transcript_path and agent_id)
-            else None
-        )
+        tp = HookPayload.resolve_jsonl(transcript_path) if agent_id else None
         if tp is None:
             trace.mark_payload(ok=False)
-            trace.skip("payload")
+            trace.reject()
             return {}
         trace.mark_payload(ok=True)
         outcome = SubagentCapture(
