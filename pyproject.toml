@@ -16,7 +16,7 @@ classifiers = [
     "Topic :: Text Processing :: Indexing",
 ]
 dependencies = [
-    "punt-observe==0.1.0",
+    "punt-observe==0.1.1",
     "pymupdf>=1.25.0",
     # lancedb and pyarrow (below) are the storage stack: they are bounded to the
     # tested minor, not just floored, so pip, uv tool install and Homebrew
