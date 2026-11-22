@@ -32,7 +32,7 @@ across `transform`, `index`, and `connector`).
   and collections. The old per-database `telemetry.db` files are neither read
   nor migrated; the README explains how to delete them. Set
   `PUNT_TELEMETRY=off`, `QUARRY_TELEMETRY=off`, or `TELEMETRY_ENABLED=false`
-  in the daemon's environment to disable capture (PL-1199).
+  in the daemon's environment and restart it to disable capture (PL-1199).
 - infra: New runtime dependency `punt-observe==0.1.0` from PyPI.
 - infra: Bump pymupdf 1.28.2 → 2.1 (major), which also brings in
   `pymupdf-layout` and `pymupdf4llm` 2.1, in `uv.lock` and
