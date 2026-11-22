@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+- Bump punt-observe to 0.1.1 (log masking fixes)
+
 ### Fixed
 
 - infra: The generated Homebrew formula now declares `pkgconf` (build) and
