@@ -1,7 +1,7 @@
 """Golden self-test: the harness over a 2-doc micro-fixture, fixed MRR/success.
 
-Slow — it embeds with the real ONNX model, so it is excluded from the default
-suite (``-m 'not slow'``) and CI. It is the harness carrying its own end-to-end
+Slow — it embeds with the real ONNX model, so it runs in Nightly instead of the
+default suite. It is the harness carrying its own end-to-end
 test: two unambiguous known-item queries must each retrieve their answer doc at
 rank 1, giving MRR = success@5 = success@10 = 1.0 and zero pollution on clean
 prose. A regression here means the measurement loop itself broke.
@@ -23,6 +23,7 @@ _MICRO_QUERIES = _REPO_ROOT / "tools" / "eval" / "queries_micro.jsonl"
 
 
 @pytest.mark.slow
+@pytest.mark.embedding
 def test_golden_micro_fixture_scores_are_fixed(tmp_path: Path) -> None:
     from tools.eval.__main__ import Harness
 
@@ -39,6 +40,7 @@ def test_golden_micro_fixture_scores_are_fixed(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.embedding
 def test_golden_run_is_deterministic(tmp_path: Path) -> None:
     from tools.eval.__main__ import Harness
 
