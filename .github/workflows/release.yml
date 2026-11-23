@@ -211,6 +211,10 @@ jobs:
         run: |
           TAG="$GITHUB_REF_NAME"
           VERSION="${TAG#v}"
+          release_flags=()
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            release_flags+=(--prerelease --latest=false)
+          fi
           # punt-kit phase 7 may create the release concurrently. Wait briefly,
           # then create it ourselves if it still does not exist, so this job is
           # correct whether or not punt-kit runs.
@@ -223,10 +227,6 @@ jobs:
             # above and this create, making `gh release create` error even
             # though the release now exists. On create failure, re-check and
             # proceed if it is present rather than failing the workflow.
-            release_flags=()
-            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              release_flags+=(--prerelease --latest=false)
-            fi
             if ! gh release create "$TAG" --generate-notes --title "$TAG" "${release_flags[@]}"; then
               if ! gh release view "$TAG" >/dev/null 2>&1; then
                 echo "::error::failed to create release $TAG and it does not exist"
@@ -234,6 +234,11 @@ jobs:
               fi
               echo "release $TAG was created concurrently — proceeding to upload"
             fi
+          fi
+          if (( ${#release_flags[@]} )) &&
+            [[ "$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease')" != true ]]; then
+            echo "::error::Mark $TAG as a prerelease before attaching its MCPB"
+            exit 1
           fi
           gh release upload "$TAG" \
             "dist/punt-quarry.mcpb" \
