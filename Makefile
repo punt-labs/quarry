@@ -24,6 +24,9 @@ test-push: test test-subprocess-fast ## Run the local push gate
 
 .PHONY: test-nightly test-unit test-embedding test-subprocess test-e2e test-retrieval-eval test-quarantine test-live test-agent
 
+test-nightly test-embedding test-subprocess test-retrieval-eval test-agent test-slow: export HF_HOME ?= $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)/huggingface
+test-nightly test-embedding test-subprocess test-retrieval-eval test-agent test-slow: export HF_HUB_OFFLINE = 1
+
 test-nightly: ## Run broader offline suites (requires provisioned pinned model)
 	uv sync --frozen --extra dev --extra eval
 	uv run --no-sync python -c 'from quarry.embeddings import OnnxEmbeddingBackend as Model; Model.download_model_files(); import ranx'
