@@ -2,6 +2,7 @@
 # Build once, then drive the installed wheel from a disposable local daemon.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+repo=$PWD
 work=$(if [[ -n "${TMPDIR:-}" && ! -d "$TMPDIR" ]]; then unset TMPDIR; fi; mktemp -d)
 daemon_pid=""
 
@@ -100,33 +101,8 @@ for ((second = 0; second < 40; second++)); do
 done
 [[ "$ready" == 1 ]] || fail "Daemon did not become ready"
 
-name="wheel-canary.md"
-body="The wheel canary lives in the blue observatory."
 query="blue observatory"
-printf '%s\n' "$body" | "${runtime[@]}" "$cli" remember --name "$name" --collection wheel-smoke
-found=0
-for ((attempt = 1; attempt <= 30; attempt++)); do
-  "${runtime[@]}" "$cli" --json find --collection wheel-smoke --limit 1 "$query" >hits.json
-  if "$python" -I - "$name" "$body" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-name, body = sys.argv[1:]
-hits = json.loads(Path("hits.json").read_text())
-if not isinstance(hits, list):
-    raise ValueError("Expected a JSON result list")
-sys.exit(0 if any(hit["document_name"] == name and body in hit["text"] for hit in hits) else 3)
-PY
-  then
-    found=1
-    break
-  elif [[ "$?" != 3 ]]; then
-    fail "Invalid search results"
-  fi
-  sleep 1
-done
-[[ "$found" == 1 ]] || fail "Search did not return the indexed document and its contents"
+"${runtime[@]}" bash "$repo/scripts/check-wheel-canary.sh" "$python" "$cli" "$query"
 stop_daemon
 
 observe="$work/home/.punt-labs/quarry"
