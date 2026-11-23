@@ -24,9 +24,9 @@ custom hook path; chain the two Quarry scripts from those hooks instead.
 Pre-commit uses staged path names to select tests from the working tree. Stage
 and test the same changes; avoid partial staging when relying on this result.
 Shared fixtures/configuration and unmapped source files fall back to the default
-suite. Pre-push runs the same default suite across four isolated pytest workers,
-then runs fast real hook entry-point tests.
-A warm pre-push run took 2m21s in the rollout Linux VM.
+suite. Pre-push runs the default suite plus fast real hook entry-point tests.
+A warm pre-push run took 5m47s in the rollout Linux VM. This exceeds the target:
+profile the slow tests rather than adding workers (DES-047).
 A warm one-file test change took 2.2 s in the rollout Linux VM; the shared-file
 fallback runs the whole default suite and may exceed the small-change target.
 

@@ -109,7 +109,6 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0",
-    "pytest-xdist==3.8.0",
     "types-PyYAML>=6.0.0",
     # Oracle property test for the log redactor (tests/test_log_redactor_oracle.py).
     "hypothesis>=6.100",
