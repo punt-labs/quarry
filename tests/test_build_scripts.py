@@ -310,6 +310,28 @@ def test_build_mcpb_stages_and_sources_version_from_pyproject() -> None:
     assert "dist/punt-quarry.mcpb" in script, "stable-named copy must be produced"
 
 
+def test_build_mcpb_accepts_python_prerelease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    build = shutil.copy2(BUILD_MCPB, scripts)
+    shutil.copy2(MANIFEST_TEMPLATE, scripts)
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "3.9.1rc1"\n')
+    packer = tmp_path / "mcpb"
+    packer.write_text(
+        '#!/bin/sh\nif [ "$1" = pack ]; then cp "$2/manifest.json" "$3"; fi\n'
+    )
+    packer.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+
+    subprocess.run(["bash", build], check=True, timeout=15)
+
+    bundle = tmp_path / "dist" / "punt-quarry-3.9.1rc1.mcpb"
+    assert json.loads(bundle.read_text())["version"] == "3.9.1rc1"
+    assert (bundle.parent / "punt-quarry.mcpb").read_bytes() == bundle.read_bytes()
+
+
 def test_no_manifest_json_in_plugin_root() -> None:
     """A manifest.json in the plugin root re-breaks plugin slash commands.
 
