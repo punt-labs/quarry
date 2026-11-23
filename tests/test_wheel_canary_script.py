@@ -1,93 +1,154 @@
-"""Exercise the installed-wheel search check without a model or package install."""
+"""Exercise installed-wheel smoke failures without model or package downloads."""
 
 from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-_CANARY = Path(__file__).resolve().parents[1] / "scripts" / "check-wheel-canary.sh"
+_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 _NAME = "wheel-canary.md"
 _BODY = "The wheel canary lives in the blue observatory."
+_GOOD = json.dumps([{"document_name": _NAME, "text": _BODY}])
+
+
+@dataclass(frozen=True)
+class CanaryCase:
+    """Inputs and expected diagnostic for a wheel canary invocation."""
+
+    hits: str = _GOOD
+    failure: str = ""
+    expected: str = ""
 
 
 @pytest.mark.parametrize(
-    ("search_output", "remember_status", "expected", "attempts"),
+    "case",
     [
-        (json.dumps([{"document_name": _NAME, "text": _BODY}]), 0, "", 2),
-        ("[]", 0, "did not return the indexed document", 30),
-        ("invalid JSON", 0, "Invalid search results", 1),
-        ('[{"document_name": "other", "text": null}]', 0, "Invalid search results", 1),
-        (
-            json.dumps([{"document_name": "wrong", "text": _BODY}]),
-            0,
-            "did not return",
-            30,
+        pytest.param(CanaryCase(), id="success"),
+        pytest.param(CanaryCase("[]", expected="did not return"), id="missing"),
+        pytest.param(
+            CanaryCase("invalid JSON", expected="Invalid search results"), id="invalid"
         ),
-        (
-            json.dumps([{"document_name": _NAME, "text": "wrong"}]),
-            0,
-            "did not return",
-            30,
+        pytest.param(
+            CanaryCase(
+                '[{"document_name": "other", "text": null}]',
+                expected="Invalid search results",
+            ),
+            id="malformed-result",
         ),
-        ("[]", 2, "remember refused", 0),
+        pytest.param(
+            CanaryCase(failure="nul", expected="Invalid search results"), id="nul"
+        ),
+        pytest.param(
+            CanaryCase(
+                json.dumps([{"document_name": "wrong", "text": _BODY}]),
+                expected="did not return",
+            ),
+            id="wrong-name",
+        ),
+        pytest.param(
+            CanaryCase(
+                json.dumps([{"document_name": _NAME, "text": "wrong"}]),
+                expected="did not return",
+            ),
+            id="wrong-body",
+        ),
+        pytest.param(
+            CanaryCase(failure="remember", expected="remember refused"),
+            id="remember-refused",
+        ),
+        pytest.param(
+            CanaryCase(failure="task", expected="remember task failed"),
+            id="task-failed",
+        ),
     ],
 )
-def test_wheel_canary_handles_search_results(
-    tmp_path: Path,
-    search_output: str,
-    remember_status: int,
-    expected: str,
-    attempts: int,
-) -> None:
-    """Distinguish a retryable indexing delay from definite CLI or schema errors."""
+def test_wheel_canary_handles_search_results(tmp_path: Path, case: CanaryCase) -> None:
+    """Find uses one query argument and only runs after the remember task completes."""
     quarry = tmp_path / "quarry"
     quarry.write_text(
         """#!/usr/bin/env bash
 set -eu
-case "$*" in
-  'remember --name wheel-canary.md --collection wheel-smoke')
+case "$2" in
+  remember)
+    [[ "$#" == 6 && "$3" == --name && "$4" == wheel-canary.md ]]
+    [[ "$5" == --collection && "$6" == wheel-smoke ]]
     read -r body
     [[ "$body" == 'The wheel canary lives in the blue observatory.' ]]
-    if [[ "$REMEMBER_STATUS" != 0 ]]; then echo 'remember refused' >&2; fi
-    exit "$REMEMBER_STATUS"
+    if [[ "$FAILURE" == remember ]]; then echo 'remember refused' >&2; exit 2; fi
+    printf '{"task_id":"canary-accepted"}\n'
     ;;
-  '--json find --collection wheel-smoke --limit 1 blue observatory')
-    if [[ "$DELAY_FIRST" == 1 && ! -e requests ]]; then
-      printf '[]\n'
-    else
-      printf '%s\n' "$SEARCH_OUTPUT"
-    fi
-    printf '1\n' >>requests
+  find)
+    [[ "$#" == 7 && "$1" == --json && "$3" == --collection && "$4" == wheel-smoke ]]
+    [[ "$5" == --limit && "$6" == 1 && "$7" == 'blue observatory' ]]
+    [[ -e task-completed ]]
+    printf '%s' "$SEARCH_OUTPUT"
+    if [[ "$FAILURE" == nul ]]; then printf '\\000'; fi
     ;;
   *) exit 2 ;;
 esac
 """
     )
     quarry.chmod(0o755)
-    sleep = tmp_path / "sleep"
-    sleep.write_text("#!/bin/sh\nexit 0\n")
-    sleep.chmod(0o755)
+    python = tmp_path / "python"
+    python.write_text(
+        """#!/usr/bin/env bash
+set -eu
+if [[ "$*" == '-I - remember.json' ]]; then
+  grep -Fx '{"task_id":"canary-accepted"}' remember.json >/dev/null
+  if [[ "$FAILURE" == task ]]; then echo 'remember task failed' >&2; exit 1; fi
+  touch task-completed
+  exit
+fi
+"""
+        f'exec {shlex.quote(sys.executable)} "$@"\n'
+    )
+    python.chmod(0o755)
     result = subprocess.run(
-        ["bash", str(_CANARY), sys.executable, str(quarry), "blue observatory"],
+        [
+            "bash",
+            str(_SCRIPTS / "check-wheel-canary.sh"),
+            str(python),
+            str(quarry),
+            "blue observatory",
+        ],
         cwd=tmp_path,
         env={
-            "PATH": f"{tmp_path}{os.pathsep}{os.defpath}",
+            "PATH": os.defpath,
             "HOME": str(tmp_path),
-            "SEARCH_OUTPUT": search_output,
-            "REMEMBER_STATUS": str(remember_status),
-            "DELAY_FIRST": "0" if expected else "1",
+            "SEARCH_OUTPUT": case.hits,
+            "FAILURE": case.failure,
         },
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=10,
         check=False,
     )
-    assert (result.returncode == 0) == (not expected), result.stderr
-    assert expected in result.stderr
-    log = tmp_path / "requests"
-    assert (log.read_text().count("\n") if log.exists() else 0) == attempts
+    assert (result.returncode == 0) == (not case.expected), result.stderr
+    assert case.expected in result.stderr
+
+
+def test_wheel_smoke_reaches_build_after_tmpdir_is_deleted(tmp_path: Path) -> None:
+    """A stale direnv TMPDIR must not stop the smoke before the build."""
+    uv = tmp_path / "uv"
+    uv.write_text('#!/bin/sh\n[ "$1 $2" = "--no-config build" ] && exit 34\nexit 1\n')
+    uv.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(_SCRIPTS / "test-wheel.sh")],
+        env={
+            "PATH": f"{tmp_path}{os.pathsep}{os.defpath}",
+            "HOME": str(tmp_path),
+            "TMPDIR": str(tmp_path / "deleted"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == 34, result.stderr
