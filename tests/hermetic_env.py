@@ -98,11 +98,12 @@ def _drop_ambient_git_config() -> None:
         for index in range(int(count)):
             os.environ.pop(f"GIT_CONFIG_KEY_{index}", None)
             os.environ.pop(f"GIT_CONFIG_VALUE_{index}", None)
-    local_keys = subprocess.check_output(
-        ["git", "rev-parse", "--local-env-vars"], text=True
-    )
-    for key in local_keys.splitlines():
-        os.environ.pop(key, None)
+    if git := shutil.which("git"):
+        local_keys = subprocess.check_output(
+            [git, "rev-parse", "--local-env-vars"], text=True
+        )
+        for key in local_keys.splitlines():
+            os.environ.pop(key, None)
 
 
 @final
