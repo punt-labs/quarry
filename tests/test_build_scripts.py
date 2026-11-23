@@ -27,6 +27,9 @@ BUILD_MCPB = SCRIPTS_DIR / "build-mcpb.sh"
 MANIFEST_TEMPLATE = SCRIPTS_DIR / "mcpb-manifest.template.json"
 README_SHA_CHECK = SCRIPTS_DIR / "check-readme-install-sha.sh"
 RELEASE_SMOKE = SCRIPTS_DIR / "smoke-release.sh"
+CANARY_NAME = "release-canary.md"
+CANARY_BODY = "The release canary lives in the blue observatory."
+MISSING_CANARY = "did not return the indexed document and its contents"
 
 
 @pytest.mark.parametrize(
@@ -34,19 +37,22 @@ RELEASE_SMOKE = SCRIPTS_DIR / "smoke-release.sh"
     [
         (
             0,
-            json.dumps(
-                [
-                    {
-                        "document_name": "release-canary.md",
-                        "text": "The release canary lives in the blue observatory.",
-                    }
-                ]
-            ),
+            json.dumps([{"document_name": CANARY_NAME, "text": CANARY_BODY}]),
             "PASS:",
         ),
         (1, "[]", "could not submit a document for indexing"),
         (0, "not JSON", "returned invalid search results"),
-        (0, "[]", "did not return the indexed document and its contents"),
+        (0, "[]", MISSING_CANARY),
+        (
+            0,
+            json.dumps([{"document_name": "wrong.md", "text": CANARY_BODY}]),
+            MISSING_CANARY,
+        ),
+        (
+            0,
+            json.dumps([{"document_name": CANARY_NAME, "text": "Wrong text."}]),
+            MISSING_CANARY,
+        ),
     ],
 )
 def test_release_smoke_checks_canary(
@@ -69,9 +75,9 @@ def test_release_smoke_checks_canary(
         "quarry",
         f"""case "$*" in
       version) printf '3.9.1\\n' ;;
-      'remember --name release-canary.md --collection release-smoke')
+      'remember --name {CANARY_NAME} --collection release-smoke')
         read -r body
-        [[ "$body" == 'The release canary lives in the blue observatory.' ]]
+        [[ "$body" == {shlex.quote(CANARY_BODY)} ]]
         exit {remember_result}
         ;;
       '--json find --collection release-smoke --limit 1 blue observatory')
