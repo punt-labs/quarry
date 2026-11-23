@@ -46,7 +46,8 @@ if [ -z "$version" ]; then
     exit 1
 fi
 
-# Validate the extracted version against a strict semver shape. This is filename
+# Validate the version's filename-safe shape, including Python prereleases
+# such as 1.2.3rc1 as well as separated suffixes. This is filename
 # hygiene, NOT injection defense: bash does not re-evaluate a $() inside a
 # variable's stored value, so a parsed version like "1.0.0$(id)" is used
 # literally, never executed. The guard keeps the derived artifact names
@@ -54,9 +55,9 @@ fi
 # shell metacharacters leaking a malformed pyproject version into a filename.
 # Fail closed on anything that is not digits/dots with an optional
 # pre-release/build suffix.
-readonly SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$'
-if ! [[ "$version" =~ $SEMVER_RE ]]; then
-    echo "ERROR: version '$version' from pyproject.toml is not a valid semver — refusing to build" >&2
+readonly VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+(([aAbB]|[rR][cC])[0-9]+)?([.-][A-Za-z0-9.]+)?$'
+if ! [[ "$version" =~ $VERSION_RE ]]; then
+    echo "ERROR: version '$version' from pyproject.toml is not a supported artifact version — refusing to build" >&2
     exit 1
 fi
 

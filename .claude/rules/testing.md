@@ -22,6 +22,8 @@ paths:
 | HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
 | Wheel install | `make test-wheel` | PR and main, required on Linux and macOS | Build once → isolated venv and loopback daemon → `remember` → `find`, diagnostics and local telemetry |
 | MCP smoke test | `docs/smoke-test.md` | post-release manual | MCP + CLI + enable/disable + install verification (see `docs/smoke-test.md` for the current check count) |
+| Release candidate | `bash scripts/smoke-release.sh candidate VERSION WHEEL` | before promotion | Install the uploaded wheel and verify `remember` → `find` |
+| Published wheel | `bash scripts/smoke-release.sh published VERSION` | after PyPI publication | Install the exact version from PyPI and repeat the round trip |
 
 `make check-full` = `make check` + `make test-wheel`. During development, use
 targeted tests: `uv run --extra dev pytest tests/test_specific.py -v`.
@@ -35,6 +37,11 @@ to a populated Hugging Face Hub cache. The daemon allocates its own port.
 branches in Quarry code executed in the default pytest process. They do not
 claim coverage of child processes, the installed-wheel smoke, or opt-in
 suites. CI retains the XML as `coverage-<commit>` on PRs and main.
+
+The release smokes use Python 3.13, uv, and the release's pinned ONNX model.
+They use PyPI for dependencies and provision the public model separately before
+running the daemon offline. Local runs can set `QUARRY_SMOKE_MODEL_CACHE` to an
+absolute path to an existing Hugging Face Hub cache for the pinned model.
 
 ## The suite is hermetic and bounded (DES-047)
 
