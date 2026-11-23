@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import shutil
+import os
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,19 +18,25 @@ def test_hook_install_preserves_commit_trailer(
     tmp_path: Path, *, trailer_installed_in_active_hook: bool
 ) -> None:
     root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
     def run(*args: str) -> None:
-        subprocess.run(args, cwd=tmp_path, check=True, timeout=10)
+        subprocess.run(args, cwd=tmp_path, env=env, check=True, timeout=10)
 
-    run("git", "init", "-q")
-    shutil.copytree(root / ".githooks", tmp_path / ".githooks")
+    run("git", "init", "-q", "--template=")
+    active_hook = tmp_path / ".githooks" / "commit-msg"
+    active_hook.parent.mkdir()
     old_hook = tmp_path / ".git" / "hooks" / "commit-msg"
+    old_hook.parent.mkdir()
     trailer = "printf '\\nMission: test-mission\\n' >> \"$1\"\n"
     old_hook.write_text("#!/bin/sh\n" + trailer)
     old_hook.chmod(0o755)
+    boundary = "\n# --- BEGIN ETHOS DES-054 TRAILER ---\n"
+    wrapper = (root / ".githooks" / "commit-msg").read_text().partition(boundary)[0]
     if trailer_installed_in_active_hook:
-        with (tmp_path / ".githooks" / "commit-msg").open("a") as hook:
-            hook.write("# --- BEGIN ETHOS DES-054 TRAILER ---\n" + trailer)
+        wrapper += boundary + trailer
+    active_hook.write_text(wrapper)
+    active_hook.chmod(0o755)
     run("make", "-f", str(root / "Makefile"), "hooks")
 
     message = tmp_path / "commit message"
