@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -96,8 +97,8 @@ esac
     )
     quarry.chmod(0o755)
     python = tmp_path / "python"
-    python.write_text(
-        f"#!{sys.executable}\n"
+    stub = tmp_path / "task stub.py"
+    stub.write_text(
         """import os
 import sys
 import time
@@ -127,6 +128,12 @@ time.sleep = lambda _: None
 sys.argv = sys.argv[2:]
 exec(compile(sys.stdin.read(), '<task polling>', 'exec'))
 """
+    )
+    interpreter = tmp_path / "real python"
+    interpreter.symlink_to(sys.executable)
+    python.write_text(
+        f"#!/bin/bash\nexec {shlex.quote(str(interpreter))} "
+        f'{shlex.quote(str(stub))} "$@"\n'
     )
     python.chmod(0o755)
     result = subprocess.run(
