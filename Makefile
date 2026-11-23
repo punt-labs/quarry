@@ -20,7 +20,9 @@ test-changed: ## Run default tests affected by staged paths
 test-subprocess-fast: ## Check real hook startup, JSON and diagnostics without a model
 	uv run --extra dev pytest -m 'hook_integration and not quarantine' tests/test_hook_entry_logging.py
 
-test-push: test test-subprocess-fast ## Run the local push gate
+test-push: ## Run the default suite and fast boundary tests before pushing
+	uv run --extra dev pytest -n 4 --dist loadfile
+	$(MAKE) test-subprocess-fast
 
 .PHONY: test-nightly test-unit test-embedding test-subprocess test-e2e test-retrieval-eval test-quarantine test-live test-agent
 

@@ -16,7 +16,7 @@ the old Test workflow overrides pytest's default marker expression.
 | PR | [Test workflow][test-ci]: default pytest with coverage on Ubuntu; `make test-wheel` on Linux and Apple Silicon macOS | <10 min wall time | Required `test` gate |
 | Merge to main | [Test workflow][test-ci] on the main SHA | <10 min wall time | Repeat PR gate; retain SHA-keyed coverage |
 | Nightly | [Nightly QA][nightly-ci] on upstream main, Ubuntu | 30 min check job; 5 min notification job | Advisory for PRs; red run and Biff alert on failure |
-| Release candidate | [Release workflow][release-ci] on Ubuntu: `bash scripts/smoke-release.sh candidate VERSION WHEEL MCPB` | 5 min timeout | Test the built wheel and bundle before TestPyPI and production approval |
+| Release candidate | [Release workflow][release-ci] on Ubuntu: `QUARRY_SMOKE_LIVE=1 bash scripts/smoke-release.sh candidate VERSION WHEEL MCPB` | 5 min smoke timeout | Test the built wheel, bundle and HTTPS fetch before promotion; verify TestPyPI serves the tested wheel |
 | Post-release | [Release workflow][release-ci] on Ubuntu: `bash scripts/smoke-release.sh published VERSION [MCPB]` | <2 min target; 5 min PyPI timeout | Verify the PyPI release before attaching the tested MCPB, then verify the downloaded asset |
 
 Install the versioned hooks with `make hooks`. This refuses to change an existing
@@ -24,13 +24,16 @@ custom hook path; chain the two Quarry scripts from those hooks instead.
 Pre-commit uses staged path names to select tests from the working tree. Stage
 and test the same changes; avoid partial staging when relying on this result.
 Shared fixtures/configuration and unmapped source files fall back to the default
-suite. Pre-push runs the default suite plus fast real hook entry-point tests.
+suite. Pre-push runs the same default suite across four isolated pytest workers,
+then runs fast real hook entry-point tests.
+A warm pre-push run took 2m21s in the rollout Linux VM.
 A warm one-file test change took 2.2 s in the rollout Linux VM; the shared-file
 fallback runs the whole default suite and may exceed the small-change target.
 
 Release scripts require network access to provision public packages and the pinned
-model. The functional portion starts an installed daemon on an ephemeral local
-port and runs offline. Supply `QUARRY_SMOKE_MODEL_CACHE` as an absolute path to an
+model. The installed daemon runs offline on an ephemeral local port; the
+candidate job also explicitly runs the public HTTPS canary. Supply
+`QUARRY_SMOKE_MODEL_CACHE` as an absolute path to an
 already provisioned Hub cache for a local smoke.
 
 ## Select a suite (TST-2)
@@ -41,7 +44,7 @@ already provisioned Hub cache for a local smoke.
 | Unit | `make test-unit` or an in-process pytest path | Fast client and target contract sample; no running daemon |
 | Subprocess | `make test-subprocess-fast`; `make test-subprocess` | Fast hook commands need no model; full hook suite uses the pinned ONNX model and test-owned daemon |
 | E2E | `make test-e2e` | Installed wheel and real CLI indexing/retrieval; public dependencies and the pinned ONNX model |
-| Slow and embedding | `make test-slow`; `make test-embedding` | Local TLS, socket and real model tests; provision the model |
+| Slow and embedding | `make test-slow`; `make test-embedding` | Local TLS, socket and real model tests; provision the model and install dev and eval extras |
 | Domain/retrieval | `make test-retrieval-eval`; `uv run --extra dev pytest -m resource` | Eval extra for ranking; default resource guards exercise local lifetime invariants |
 | Live | `make test-live` | Authorized public HTTPS fetch, no credentials; not a PR test |
 | Agent | `make test-agent` | Authorized run with scoped `ANTHROPIC_API_KEY`, Claude Code, CPU model, and a fresh Quarry daemon |
@@ -84,8 +87,8 @@ Candidate and published checks verify exact versions, exercise the installed
 CLI and launch the bundled MCP entry point. If a check fails, inspect the
 install and daemon logs, then rerun failed jobs before the build artifacts
 expire. A post-publication failure does not roll back an uploaded artifact.
-Nightly credential and alert delivery and release-critical live/agent checks
-against the exact candidate still need evidence.
+Nightly credential and alert delivery and real-agent recall against the exact
+candidate still need evidence.
 There is no browser application to exercise; CLI, HTTP, and MCP apply.
 
 The [tracking issue][deviations] records those deviations, local/hosted budget
