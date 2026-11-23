@@ -2,7 +2,7 @@
 # Build once, then drive the installed wheel from a disposable local daemon.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-work=$(mktemp -d)
+work=$(if [[ -n "${TMPDIR:-}" && ! -d "$TMPDIR" ]]; then unset TMPDIR; fi; mktemp -d)
 daemon_pid=""
 
 stop_daemon() {
