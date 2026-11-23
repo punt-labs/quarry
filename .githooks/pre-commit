@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+make test-changed
+
+existing="$(git rev-parse --git-common-dir)/hooks/pre-commit"
+# Ethos can also install its shim into this hook directly.
+if [[ -x "$existing" && ! "$existing" -ef "${BASH_SOURCE[0]}" ]] &&
+  ! grep -q '^# --- BEGIN ETHOS DES-058 SEAL ---$' "${BASH_SOURCE[0]}"; then
+  "$existing"
+fi

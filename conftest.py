@@ -13,5 +13,6 @@ rootdir reaches ``sys.path``.
 from __future__ import annotations
 
 from tests.hermetic_env import ENV, pytest_unconfigure
+from tools.test_quarantine import pytest_collection_modifyitems
 
-__all__ = ["ENV", "pytest_unconfigure"]
+__all__ = ["ENV", "pytest_collection_modifyitems", "pytest_unconfigure"]

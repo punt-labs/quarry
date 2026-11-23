@@ -29,6 +29,7 @@ from quarry.ingestion.ssrf_redirect import SsrfGuardedRedirectHandler
 from quarry.sitemap import SitemapDiscovery
 from quarry.sitemap_web_client import GatedSitemapWebClient
 from quarry.url_admission import UrlAdmission
+from quarry.url_safety import UrlSafetyCheck
 
 _GETADDRINFO = "quarry.url_safety.socket_module.getaddrinfo"
 _PUBLIC = "93.184.216.34"
@@ -559,14 +560,10 @@ def http_server() -> Generator[HTTPServer]:
         server.server_close()
 
 
-# Real-socket OS-fd invariant test: it needs a live loopback HTTP server, which
-# is CI-network-fragile (connection hangs on the runner), so it is tiered OUT of
-# the fast CI unit suite (-m "not slow", via the slow marker) and runs in the
-# integration tier instead.  The deterministic close-count unit tests above are
-# the CI-tier fd guard.
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.resource
+@pytest.mark.network
 def test_failing_fetches_do_not_leak_real_fds(
     http_server: HTTPServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -577,18 +574,28 @@ def test_failing_fetches_do_not_leak_real_fds(
     and the RedirectRejectedError path (a real 302 intermediate response whose
     fp is closed in the redirect handler).  404 is non-retryable, so each fetch
     is exactly one round-trip -- no retry storm.  The SSRF gate correctly blocks
-    loopback, so the resolver is mocked public to let the connection through to
-    the real 127.0.0.1 server; urllib still opens a real socket per request.  A
+    loopback, so the test exempts only its loopback address. The redirect
+    is still blocked and urllib opens a real socket per initial request. A
     1-fd-per-fetch leak over 200 fetches is delta ~200, far above the tolerance,
     so this detects a leak just as surely as a larger count while staying fast.
     """
-    monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo(_PUBLIC))
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    is_blocked = UrlSafetyCheck._is_blocked
+    monkeypatch.setattr(
+        UrlSafetyCheck,
+        "_is_blocked",
+        staticmethod(lambda ip: str(ip) != "127.0.0.1" and is_blocked(ip)),
+    )
     base = f"http://127.0.0.1:{http_server.server_port}"
-    client = GatedSitemapWebClient()
+    client = GatedSitemapWebClient(timeout=2)
 
     for _ in range(5):  # warm up connection/thread fds before sampling
-        client.get(f"{base}/err")
-        client.get(f"{base}/redir")
+        err = client.get(f"{base}/err")
+        redir = client.get(f"{base}/redir")
+        assert isinstance(err, WebClientErrorResponse)
+        assert err.message() == "404 Not Found"
+        assert isinstance(redir, WebClientErrorResponse)
+        assert "redirect" in redir.message().lower()
 
     before = _open_fd_count()
     for _ in range(100):

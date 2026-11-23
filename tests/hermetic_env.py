@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
@@ -93,11 +94,16 @@ def _drop_ambient_git_config() -> None:
     repository they create and nothing else.
     """
     count = os.environ.pop("GIT_CONFIG_COUNT", "")
-    if not count.isdigit():
-        return
-    for index in range(int(count)):
-        os.environ.pop(f"GIT_CONFIG_KEY_{index}", None)
-        os.environ.pop(f"GIT_CONFIG_VALUE_{index}", None)
+    if count.isdigit():
+        for index in range(int(count)):
+            os.environ.pop(f"GIT_CONFIG_KEY_{index}", None)
+            os.environ.pop(f"GIT_CONFIG_VALUE_{index}", None)
+    if git := shutil.which("git"):
+        local_keys = subprocess.check_output(
+            [git, "rev-parse", "--local-env-vars"], text=True
+        )
+        for key in local_keys.splitlines():
+            os.environ.pop(key, None)
 
 
 @final

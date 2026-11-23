@@ -96,12 +96,8 @@ def _hf_home() -> str | None:
     """Return an ``HF_HOME`` value that keeps the daemon hermetic.
 
     An explicit ``$HF_HOME`` in the parent env wins — operators and CI can
-    force a specific cache location. Otherwise reuse the operator's real
-    cache only if it already exists on disk; without that guard a first-run
-    test would trigger a ~200 MB download into the operator's real home,
-    violating DES-047 hermeticity. When neither applies, return ``None`` so
-    the caller leaves ``HF_HOME`` unset and any download stays under the
-    sandbox ``HOME``.
+    force a specific cache location. Otherwise reuse an existing operator
+    cache. When neither applies, the offline daemon cannot load the model.
     """
     if hf_home := os.environ.get("HF_HOME"):
         return hf_home
@@ -116,22 +112,28 @@ def _daemon_env(root: Path, api_key: str) -> dict[str, str]:
 
     Quarry paths are isolated to *root* (``QUARRY_ROOT`` and ``HOME``
     override every home-derived path :mod:`quarry.config` resolves). The
-    operator's HuggingFace cache is reused via ``HF_HOME`` when it exists —
-    otherwise ``quarryd`` would re-download the ~200 MB ONNX embedding model
-    every session and ``/health`` would never reach ``ready`` inside the 30s
-    poll window. When no operator cache is available, ``HF_HOME`` is left
-    unset so any download lands under the sandbox ``HOME`` and hermeticity
-    holds — see :func:`_hf_home`.
+    daemon is offline and needs a pre-provisioned Hugging Face model cache.
     """
-    env = os.environ.copy()
-    env["HOME"] = str(root)
-    env["QUARRY_ROOT"] = str(root / "quarry")
+    env = _isolated_child_env(root)
     env["QUARRY_API_KEY"] = api_key
-    env["TMPDIR"] = str(root / "tmp")
-    if (hf_home := _hf_home()) is not None:
-        env["HF_HOME"] = hf_home
-    (root / "tmp").mkdir(parents=True, exist_ok=True)
+    env["QUARRY_PROVIDER"] = "cpu"
+    env["HF_HUB_OFFLINE"] = "1"
+    hf_home = _hf_home()
+    if hf_home is None:
+        pytest.fail("Provision the pinned ONNX model before running daemon tests")
+    env["HF_HOME"] = hf_home
     return env
+
+
+def _isolated_child_env(root: Path) -> dict[str, str]:
+    (root / "tmp").mkdir(parents=True, exist_ok=True)
+    return {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "HOME": str(root),
+        "QUARRY_ROOT": str(root / "quarry"),
+        "TMPDIR": str(root / "tmp"),
+        "PUNT_TELEMETRY": "off",
+    }
 
 
 def _wait_ready(base_url: str, api_token: str, timeout_s: float) -> None:
@@ -141,7 +143,9 @@ def _wait_ready(base_url: str, api_token: str, timeout_s: float) -> None:
     last: str = "no attempt made"
     while time.monotonic() < deadline:
         try:
-            resp = httpx.get(f"{base_url}/health", headers=headers, timeout=2.0)
+            resp = httpx.get(
+                f"{base_url}/health", headers=headers, timeout=2.0, trust_env=False
+            )
         except httpx.HTTPError as exc:
             last = f"{type(exc).__name__}: {exc}"
         else:
@@ -166,7 +170,7 @@ def ephemeral_daemon(
     """
     binary = shutil.which("quarryd")
     if binary is None:
-        pytest.skip("quarryd binary not on PATH (install the wheel first)")
+        pytest.fail("quarryd binary not on PATH; install Quarry first")
 
     root = tmp_path_factory.mktemp("ephemeral-daemon-home")
     log_dir = root / "logs"
@@ -293,11 +297,7 @@ class HookInvoker:
 
     def _compose_env(self, env_overrides: dict[str, str] | None) -> dict[str, str]:
         """Return the child env: base + fixture defaults + per-call overrides."""
-        env = os.environ.copy()
-        env["HOME"] = str(self._tmp_root)
-        env["QUARRY_ROOT"] = str(self._tmp_root / "quarry")
-        env["TMPDIR"] = str(self._tmp_root / "tmp")
-        (self._tmp_root / "tmp").mkdir(parents=True, exist_ok=True)
+        env = _isolated_child_env(self._tmp_root)
         env.update(self._extra_env)
         if env_overrides:
             env.update(env_overrides)

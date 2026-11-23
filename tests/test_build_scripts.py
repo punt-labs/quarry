@@ -244,6 +244,9 @@ def _shell_scripts() -> list[Path]:
         *sorted(SCRIPTS_DIR.glob("*.sh")),
         REPO_ROOT / "install.sh",
         *sorted((PLUGIN_ROOT / "hooks").glob("*.sh")),
+        REPO_ROOT / ".githooks" / "pre-commit",
+        REPO_ROOT / ".githooks" / "pre-push",
+        REPO_ROOT / ".githooks" / "commit-msg",
     ]
 
 

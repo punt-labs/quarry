@@ -3,13 +3,63 @@
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-test: ## Run tests (excludes slow integration tests)
+test: ## Run the default credential-free suite
 	uv run --extra dev pytest
 
-# The slow tier the fast CI job never runs (-m 'not slow'): live-server / real-TLS
-# smokes that can hang a shared runner. Run here or in the wheel gate.
+.PHONY: hooks test-changed test-push test-subprocess-fast
+
+hooks: ## Install the repository's local test hooks
+	@if path=$$(git config --get core.hooksPath) && [ "$$path" != .githooks ]; then \
+		echo "core.hooksPath already set to $$path; chain .githooks manually" >&2; exit 1; \
+	fi
+	git config --local core.hooksPath .githooks
+
+test-changed: ## Run default tests affected by staged paths
+	uv run --extra dev python tools/test_changed.py
+
+test-subprocess-fast: ## Check real hook startup, JSON and diagnostics without a model
+	uv run --extra dev pytest -m 'hook_integration and not quarantine' tests/test_hook_entry_logging.py
+
+test-push: test ## Run the local push gate
+	$(MAKE) test-subprocess-fast
+
+.PHONY: test-nightly test-unit test-embedding test-subprocess test-e2e test-retrieval-eval test-quarantine test-live test-agent
+
+test-nightly test-embedding test-subprocess test-retrieval-eval test-agent test-slow: export HF_HOME ?= $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)/huggingface
+test-nightly test-embedding test-subprocess test-retrieval-eval test-agent test-slow: export HF_HUB_OFFLINE = 1
+
+test-nightly: ## Run broader offline suites (requires provisioned pinned model)
+	uv sync --frozen --extra dev --extra eval
+	uv run --no-sync python -c 'from quarry.embeddings import OnnxEmbeddingBackend as Model; Model.download_model_files(); import ranx'
+	uv run --no-sync pytest -m '(slow or embedding or hook_integration) and not quarantine' --ignore=tests/eval
+	uv run --no-sync pytest -m 'not quarantine' tests/eval
+
+test-unit: ## Run a fast in-process sample of client and target contracts
+	uv run --extra dev pytest tests/test_client.py tests/test_client_config.py tests/test_client_task.py
+
+test-embedding: ## Run against the pinned ONNX model
+	uv run --extra dev --extra eval pytest -m 'embedding and not quarantine'
+
+test-subprocess: ## Run all real hook and daemon subprocess tests
+	uv run --extra dev pytest -m 'hook_integration and not quarantine'
+
+test-e2e: test-wheel ## Run the real CLI round-trip against an installed wheel
+
+test-retrieval-eval: ## Run the retrieval evaluation regression suite
+	uv run --extra dev --extra eval python -c 'import ranx'
+	uv run --no-sync pytest -m 'not quarantine' tests/eval
+
+test-quarantine: ## List quarantines; an empty selection is expected
+	@uv run --extra dev pytest --collect-only -m quarantine tests tests/trusted_smoke.py || [ "$$?" = 5 ]
+
+test-live: ## Fetch a real public HTTPS page with Quarry's production fetcher
+	uv run --extra dev pytest -m 'live and not quarantine' tests/trusted_smoke.py
+
+test-agent: ## Retrieve a synthetic canary via Claude Code and Quarry's MCP server
+	uv run --extra dev pytest -m 'agent and not quarantine' tests/trusted_smoke.py
+
 test-slow: ## Run the slow tier (real-TLS/live-server smokes)
-	uv run --extra dev pytest -m slow
+	uv run --extra dev --extra eval pytest -m 'slow and not quarantine'
 
 # EVERY invocation of a dev-extra tool runs under `--extra dev`, and the flag is
 # load-bearing rather than tidy.  ruff, pytest, mypy, pyright and import-linter
