@@ -16,8 +16,8 @@ the old Test workflow overrides pytest's default marker expression.
 | PR | [Test workflow][test-ci]: default pytest with coverage on Ubuntu; `make test-wheel` on Linux and Apple Silicon macOS | <10 min wall time | Required `test` gate |
 | Merge to main | [Test workflow][test-ci] on the main SHA | <10 min wall time | Repeat PR gate; retain SHA-keyed coverage |
 | Nightly | [Nightly QA][nightly-ci] on upstream main, Ubuntu | 30 min check job; 5 min notification job | Advisory for PRs; red run and Biff alert on failure |
-| Release candidate | [Release workflow][release-ci] on Ubuntu: `bash scripts/smoke-release.sh candidate VERSION WHEEL` | 5 min timeout | Test the built wheel before TestPyPI and production approval |
-| Post-release | [Release workflow][release-ci] on Ubuntu: `bash scripts/smoke-release.sh published VERSION` | <2 min target; 5 min timeout | Verify the exact PyPI version before MCPB publication continues |
+| Release candidate | [Release workflow][release-ci] on Ubuntu: `bash scripts/smoke-release.sh candidate VERSION WHEEL MCPB` | 5 min timeout | Test the built wheel and bundle before TestPyPI and production approval |
+| Post-release | [Release workflow][release-ci] on Ubuntu: `bash scripts/smoke-release.sh published VERSION [MCPB]` | <2 min target; 5 min PyPI timeout | Verify the PyPI release before attaching the tested MCPB, then verify the downloaded asset |
 
 Install the versioned hooks with `make hooks`. This refuses to change an existing
 custom hook path; chain the two Quarry scripts from those hooks instead.
@@ -49,7 +49,8 @@ already provisioned Hub cache for a local smoke.
 
 Provision the pinned model with
 `uv run --extra dev python -c 'from quarry.embeddings import OnnxEmbeddingBackend; OnnxEmbeddingBackend.download_model_files()'`.
-Then run broader offline checks with `HF_HUB_OFFLINE=1 make test-nightly`.
+Then run broader offline checks with `make test-nightly`. Model-backed suites
+reuse `HF_HOME` or the provisioned cache under the operator's cache directory.
 Add `and not quarantine` to any hand-written marker expression for supported suites.
 
 ## Isolation and coverage (TST-4, TST-5)
@@ -79,10 +80,12 @@ the case by expiry. An expired or malformed mark fails collection.
 
 ## Open deviations (TST-7, TST-8, TST-10)
 
-PyPI candidate and published checks exercise exact package identity and a real
-operation. The release blocks on either smoke. Nightly credential and alert
-delivery, release-critical live/agent checks against the exact candidate, and a
-functional check of the exact published MCPB still need evidence.
+Candidate and published checks verify exact versions, exercise the installed
+CLI and launch the bundled MCP entry point. If a check fails, inspect the
+install and daemon logs, then rerun failed jobs before the build artifacts
+expire. A post-publication failure does not roll back an uploaded artifact.
+Nightly credential and alert delivery and release-critical live/agent checks
+against the exact candidate still need evidence.
 There is no browser application to exercise; CLI, HTTP, and MCP apply.
 
 The [tracking issue][deviations] records those deviations, local/hosted budget
