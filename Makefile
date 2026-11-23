@@ -243,7 +243,7 @@ build: ## Build wheel and sdist
 	uv build
 	uvx twine check dist/*
 
-test-wheel: build ## Test the built wheel in an isolated venv on port 8422
+test-wheel: ## Build and test a wheel in an isolated venv and daemon
 	bash scripts/test-wheel.sh
 
 test-install-clean: ## Clean-machine Docker gate: run install.sh from scratch, assert the CLI-only path
@@ -294,9 +294,14 @@ bench-cuda: ## Benchmark embedding providers (requires NVIDIA GPU)
 metrics: ## ABC complexity analysis (magnitude >200 needs attention)
 	@python3 -c "from pathlib import Path; import re, math; src = Path('src/quarry'); rows = []; [rows.append((len(t:=f.read_text().splitlines()), sum(1 for l in t if re.match(r'^\s*([\w.]+\s*=[^=]|[\w.]+\s*[+\-*/%&|^]=)', l)), sum(1 for l in t if re.search(r'\w+\(', l) and not re.match(r'^\s*(def |class |#|from |import )', l)), sum(1 for l in t if re.search(r'\b(if|elif|else|except|assert|and|or|not|in|is)\b', l) and not re.match(r'^\s*#', l)), f.name)) for f in sorted(src.glob('*.py'))]; rows.sort(key=lambda r: -math.sqrt(r[1]**2+r[2]**2+r[3]**2)); print(f\"{'Module':<30} {'Lines':>6} {'A':>5} {'B':>5} {'C':>5} {'|ABC|':>7}\"); print('-'*62); [print(f'{n:<30} {loc:>6} {a:>5} {b:>5} {c:>5} {math.sqrt(a**2+b**2+c**2):>7.1f}') for loc,a,b,c,n in rows]; print('-'*62); over=[n for loc,a,b,c,n in rows if math.sqrt(a**2+b**2+c**2)>200]; print(f'Modules over 200: {len(over)}' + (f' — {\", \".join(over)}' if over else ''))"
 
-coverage: ## Test coverage with HTML report
-	uv run --extra dev pytest --cov=quarry --cov-report=html --cov-report=term-missing
+.PHONY: coverage-ci
+
+coverage: ## Test line and branch coverage with HTML report
+	uv run --extra dev pytest --cov=quarry --cov-branch --cov-report=html --cov-report=term-missing
 	@echo "HTML report: htmlcov/index.html"
+
+coverage-ci: ## Test line and branch coverage with CI XML report
+	uv run --extra dev pytest --cov=quarry --cov-branch --cov-report=xml --cov-report=term
 
 # Daemon log location + how many recent matching lines to show. Overridable per
 # PY-BS-4 so the target runs against a fixture dir in tests and any host layout.

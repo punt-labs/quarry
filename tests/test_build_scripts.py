@@ -10,9 +10,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -24,6 +27,186 @@ PLUGIN_ROOT = REPO_ROOT / "plugin"
 BUILD_MCPB = SCRIPTS_DIR / "build-mcpb.sh"
 MANIFEST_TEMPLATE = SCRIPTS_DIR / "mcpb-manifest.template.json"
 README_SHA_CHECK = SCRIPTS_DIR / "check-readme-install-sha.sh"
+RELEASE_SMOKE = SCRIPTS_DIR / "smoke-release.sh"
+MCPB_SMOKE = SCRIPTS_DIR / "smoke-mcpb.py"
+CANARY_NAME = "release-canary.md"
+CANARY_BODY = "The release canary lives in the blue observatory."
+MISSING_CANARY = "did not return the indexed document and its contents"
+
+
+@pytest.mark.parametrize(
+    ("version", "command", "expected"),
+    [
+        ("3.9.0", "quarry", "Expected MCPB version 3.9.1"),
+        ("3.9.1", "unexpected", "Unexpected MCPB command"),
+    ],
+)
+def test_mcpb_smoke_rejects_invalid_manifest(
+    tmp_path: Path, version: str, command: str, expected: str
+) -> None:
+    bundle = tmp_path / "quarry.mcpb"
+    with ZipFile(bundle, "w") as archive:
+        archive.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "version": version,
+                    "server": {"mcp_config": {"command": command, "args": ["mcp"]}},
+                }
+            ),
+        )
+    result = subprocess.run(
+        [sys.executable, "-I", str(MCPB_SMOKE), str(bundle), "3.9.1", CANARY_BODY],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("remember_result", "search_result", "expected"),
+    [
+        (
+            0,
+            json.dumps([{"document_name": CANARY_NAME, "text": CANARY_BODY}]),
+            "PASS:",
+        ),
+        (1, "[]", "could not submit a document for indexing"),
+        (0, "[]", "Quarry remember task failed"),
+        (0, "not JSON", "returned invalid search results"),
+        (0, "[]", MISSING_CANARY),
+        (
+            0,
+            json.dumps([{"document_name": "wrong.md", "text": CANARY_BODY}]),
+            MISSING_CANARY,
+        ),
+        (
+            0,
+            json.dumps([{"document_name": CANARY_NAME, "text": "Wrong text."}]),
+            MISSING_CANARY,
+        ),
+    ],
+)
+def test_release_smoke_checks_canary(
+    tmp_path: Path, remember_result: int, search_result: str, expected: str
+) -> None:
+    """Drive the release script with installed entry points under our control."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    model_cache = tmp_path / "hub"
+    model_cache.mkdir()
+    wheel = tmp_path / "punt_quarry-3.9.1-py3-none-any.whl"
+    wheel.touch()
+
+    def executable(name: str, body: str) -> None:
+        path = fake_bin / name
+        path.write_text("#!/usr/bin/env bash\nset -eu\n" + body)
+        path.chmod(0o755)
+
+    executable(
+        "quarry",
+        f"""case "$*" in
+      version) printf '3.9.1\\n' ;;
+      '--json remember --name {CANARY_NAME} --collection release-smoke')
+        read -r body
+        [[ "$body" == {shlex.quote(CANARY_BODY)} ]]
+        printf '{{"task_id":"release-smoke"}}\n'
+        exit {remember_result}
+        ;;
+      '--json find --collection release-smoke --limit 1 blue observatory')
+        touch {shlex.quote(str(tmp_path / "searched"))}
+        [[ "$#" == 7 && "$7" == 'blue observatory' && -e task-completed ]]
+        cat {shlex.quote(str(tmp_path / "hits.json"))}
+        ;;
+      *) exit 2 ;;
+    esac
+    """,
+    )
+    (tmp_path / "hits.json").write_text(search_result)
+    executable(
+        "quarryd",
+        """mkdir -p "$QUARRY_ROOT/default"
+    printf '12345\\n' > "$QUARRY_ROOT/default/serve.port"
+    exec /bin/sleep 60
+    """,
+    )
+    polling_stub = tmp_path / "task stub.py"
+    polling_stub.write_text(
+        """import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+failed = sys.argv[1] == 'True'
+responses = iter(('running', 'failed' if failed else 'completed'))
+
+def task_status(task_id):
+    assert task_id == 'release-smoke'
+    status = next(responses)
+    if status == 'completed':
+        Path('task-completed').touch()
+    return SimpleNamespace(status=status, error='bad document')
+
+sys.modules['quarry'] = SimpleNamespace(
+    TargetResolver=SimpleNamespace(
+        connect=lambda: SimpleNamespace(task_status=task_status)
+    )
+)
+time.sleep = lambda _: None
+sys.argv = [sys.argv[0], sys.argv[2]]
+exec(compile(sys.stdin.read(), '<task polling>', 'exec'))
+"""
+    )
+    python = shlex.quote(sys.executable)
+    fails_task = expected == "Quarry remember task failed"
+    executable(
+        "python",
+        'if [[ "$#" == 3 && "$3" == */remember.json ]]; then\n'
+        f'  exec {python} {shlex.quote(str(polling_stub))} {fails_task} "$3"\n'
+        "fi\n"
+        f'exec {python} "$@"\n',
+    )
+    executable(
+        "uv",
+        f"""case "$2" in
+      venv)
+        mkdir -p venv/bin
+        ;;
+      pip)
+        cp {shlex.quote(str(fake_bin))}/{{python,quarry,quarryd}} venv/bin/
+        ;;
+      *) exit 2 ;;
+    esac
+    """,
+    )
+    executable(
+        "curl",
+        """[[ "${*: -1}" == http://127.0.0.1:12345/health ]]
+    printf '{"state":"ready"}\\n'
+    """,
+    )
+    executable("sleep", "exec /bin/sleep 0.1\n")
+    result = subprocess.run(
+        ["bash", str(RELEASE_SMOKE), "candidate", "3.9.1", str(wheel)],
+        env={
+            "PATH": f"{fake_bin}{os.pathsep}{os.defpath}",
+            "HOME": str(tmp_path),
+            "QUARRY_SMOKE_MODEL_CACHE": str(model_cache),
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == (0 if expected == "PASS:" else 1), result.stderr
+    assert expected in result.stdout + result.stderr
+    assert (tmp_path / "searched").exists() == (not remember_result and not fails_task)
+
+
 # Every module that registers MCP tools via ``add_tool`` — split across
 # sibling classes (ResourceCatalog, DocumentTools, MissionTools) so no single
 # module holds every tool, per the 500-line module cap.
@@ -127,6 +310,28 @@ def test_build_mcpb_stages_and_sources_version_from_pyproject() -> None:
     assert "dist/mcpb-staging" in script, "manifest must be staged, not at repo root"
     assert "pyproject.toml" in script, "version must come from pyproject.toml"
     assert "dist/punt-quarry.mcpb" in script, "stable-named copy must be produced"
+
+
+def test_build_mcpb_accepts_python_prerelease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    build = shutil.copy2(BUILD_MCPB, scripts)
+    shutil.copy2(MANIFEST_TEMPLATE, scripts)
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "3.9.1rc1"\n')
+    packer = tmp_path / "mcpb"
+    packer.write_text(
+        '#!/bin/sh\nif [ "$1" = pack ]; then cp "$2/manifest.json" "$3"; fi\n'
+    )
+    packer.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+
+    subprocess.run(["bash", build], check=True, timeout=15)
+
+    bundle = tmp_path / "dist" / "punt-quarry-3.9.1rc1.mcpb"
+    assert json.loads(bundle.read_text())["version"] == "3.9.1rc1"
+    assert (bundle.parent / "punt-quarry.mcpb").read_bytes() == bundle.read_bytes()
 
 
 def test_no_manifest_json_in_plugin_root() -> None:

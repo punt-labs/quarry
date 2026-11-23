@@ -3,9 +3,6 @@
 This guide applies Punt Kit's [Testing standard][standard] and [Python rules][python-rules].
 Use Python 3.13 and uv. Provision dependencies before measuring a warm gate.
 Run `make check` before opening a PR; `make check-full` also exercises a wheel.
-The release and required PR rows depend on [release gates][release-pr] and
-[PR gates][test-pr]. Land the PR gates before activating the quarantine policy:
-the old Test workflow overrides pytest's default marker expression.
 
 ## Trigger map (TST-1, TST-3)
 
@@ -30,11 +27,12 @@ profile the slow tests rather than adding workers (DES-047).
 A warm one-file test change took 2.2 s in the rollout Linux VM; the shared-file
 fallback runs the whole default suite and may exceed the small-change target.
 
-Release scripts require network access to provision public packages and the pinned
-model. The installed daemon runs offline on an ephemeral local port; the
-candidate job also explicitly runs the public HTTPS canary. Supply
-`QUARRY_SMOKE_MODEL_CACHE` as an absolute path to an
-already provisioned Hub cache for a local smoke.
+Wheel and release smokes use curl and require network access to provision public
+packages and the pinned model. The installed daemon runs offline on an ephemeral
+local port; the candidate job also explicitly runs the public HTTPS canary.
+Supply `QUARRY_SMOKE_MODEL_CACHE` as an absolute path to an already provisioned
+Hub cache for a local smoke. See the [manual plugin smoke guide][manual-smoke]
+for operator-level MCP, CLI, and install checks.
 
 ## Select a suite (TST-2)
 
@@ -100,6 +98,5 @@ measurement and the child coverage scope. Owner: Quarry maintainers. Review by
 [test-ci]: .github/workflows/test.yml
 [nightly-ci]: .github/workflows/nightly.yml
 [release-ci]: .github/workflows/release.yml
+[manual-smoke]: docs/smoke-test.md
 [deviations]: https://linear.app/punt-labs/issue/PL-1419/close-quarry-testing-standard-deviations
-[release-pr]: https://github.com/punt-labs/quarry/pull/707
-[test-pr]: https://github.com/punt-labs/quarry/pull/708

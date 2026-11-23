@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  pytest:
     runs-on: ubuntu-latest
     # The pytest step alone takes 9 minutes on a healthy runner (run
     # 42922109313), so a 10-minute cap left one minute for checkout, uv sync,
@@ -21,6 +21,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
@@ -30,40 +31,47 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest -m "not slow and not hook_integration" --cov=quarry --cov-report=xml
+      - run: make coverage-ci
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage.xml
+          if-no-files-found: error
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           files: coverage.xml
           fail_ci_if_not_token: false
 
-  # quarry-nke8: make test-wheel builds the real wheel, installs it in an
-  # isolated venv, boots the daemon, and round-trips a search -- catching
-  # wheel-packaging regressions the in-process `test` job above cannot see
-  # (missing package_data, a broken console-script entry point, a daemon that
-  # fails to boot from the installed artifact). This gate was LOCAL-ONLY
-  # (`make check-full`, never CI) until now; that gap is exactly how a real
-  # regression stayed green in CI for weeks before it was caught and fixed
-  # locally in #429. A separate job, not a step tacked onto `test` above, so a
-  # wheel-smoke failure is unambiguous in the checks list rather than buried
-  # inside the pytest job's log.
+  # Run the installed user flow on both supported platforms.
   test-wheel:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      # No dependency caching for the ~120-220 MB embedding model download
-      # (scripts/test-wheel.sh's search round-trip needs a real embedding, so
-      # there is no fake to substitute here as tests/hermetic_env.py uses).
-      # Every run re-downloads it from the Hugging Face Hub. This is a
-      # deliberate trade-off, not an oversight: caching would need a pinned
-      # actions/cache SHA this change did not introduce elsewhere in the repo,
-      # and the download itself is a small, bounded cost against the
-      # documented failure mode this job exists to close (a real regression
-      # invisible to CI for weeks). Revisit with actions/cache if download time
-      # becomes the bottleneck.
       - run: make test-wheel
+
+  # Keep the required ruleset context and fail on any non-success dependency.
+  test:
+    needs: [pytest, test-wheel]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require pytest and the installed-wheel matrix
+        env:
+          PYTEST_RESULT: ${{ needs.pytest.result }}
+          WHEEL_RESULT: ${{ needs.test-wheel.result }}
+        run: |
+          printf 'pytest: %s\nwheel: %s\n' "$PYTEST_RESULT" "$WHEEL_RESULT"
+          [[ "$PYTEST_RESULT" == success && "$WHEEL_RESULT" == success ]]

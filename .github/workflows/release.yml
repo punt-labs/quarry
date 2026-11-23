@@ -32,9 +32,48 @@ jobs:
           name: dist
           path: dist/
           retention-days: 1
+      - name: Build the .mcpb bundle
+        run: |
+          npm install -g @anthropic-ai/mcpb@2.1.2
+          ./scripts/build-mcpb.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mcpb
+          path: dist/*.mcpb
+          if-no-files-found: error
+          retention-days: 1
+
+  candidate-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mcpb
+          path: dist/
+      - run: |
+          version="${GITHUB_REF_NAME#v}"
+          cmp dist/punt-quarry.mcpb "dist/punt-quarry-$version.mcpb"
+          bash scripts/smoke-release.sh candidate "$version" dist/punt_quarry-*.whl dist/punt-quarry.mcpb
+        env:
+          QUARRY_SMOKE_LIVE: "1"
 
   testpypi:
-    needs: build
+    needs: [build, candidate-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: testpypi
@@ -59,26 +98,36 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - name: Install from TestPyPI
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Install the exact candidate from TestPyPI
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          wheels=(dist/punt_quarry-*.whl)
+          [[ "${#wheels[@]}" == 1 && -f "${wheels[0]}" ]]
+          filename="${wheels[0]##*/}"
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          index="https://test.pypi.org/simple/punt-quarry/"
+          staged="$work/$filename"
           for attempt in 1 2 3 4 5; do
-            echo "Attempt $attempt: installing punt-quarry==$VERSION from TestPyPI..."
-            if uv pip install --system \
-              --index-url https://test.pypi.org/simple/ \
-              --extra-index-url https://pypi.org/simple/ \
-              --index-strategy unsafe-best-match \
-              "punt-quarry==$VERSION"; then
-              echo "Successfully installed punt-quarry==$VERSION"
+            if metadata=$(curl -fsS --max-time 15 -H 'Accept: application/vnd.pypi.simple.v1+json' "$index") &&
+              url=$(jq -er --arg name "$filename" '.files[] | select(.filename == $name and (.yanked // false) == false) | .url' <<<"$metadata") &&
+              [[ "$url" == https://test-files.pythonhosted.org/* ]] &&
+              curl -fsSL --proto '=https' --proto-redir '=https' --max-time 20 "$url" -o "$staged"; then
+              cmp "${wheels[0]}" "$staged"
+              uv venv --python 3.13 "$work/venv"
+              uv pip install --python "$work/venv/bin/python" --default-index https://pypi.org/simple/ "$staged"
+              "$work/venv/bin/quarry" --help
+              echo "Verified the candidate wheel from TestPyPI: $filename"
               exit 0
             fi
-            echo "Attempt $attempt failed, waiting 30s..."
-            sleep 30
+            echo "TestPyPI wheel unavailable (attempt $attempt)"
+            [[ "$attempt" == 5 ]] || sleep 15
           done
-          echo "Failed to install punt-quarry==$VERSION after 5 attempts"
+          echo "::error::Could not download $filename from TestPyPI"
           exit 1
-      - name: Verify CLI
-        run: quarry --help
 
   pypi:
     needs: test-install
@@ -100,9 +149,25 @@ jobs:
           # the testpypi job above.
           skip-existing: true
 
+  published-smoke:
+    needs: pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: bash scripts/smoke-release.sh published "${GITHUB_REF_NAME#v}"
+
   # Claude Desktop .mcpb bundle. Self-contained and decoupled from punt-kit's
-  # release.py: this job builds the bundle and attaches it to the GitHub release
-  # for the tag, then verifies the asset is downloadable. quarry-521g: the
+  # release.py: this job attaches the tested bundle to the GitHub release
+  # for the tag, then verifies both assets. quarry-521g: the
   # README linked to releases/latest/download/punt-quarry.mcpb but no release
   # ever attached it, so the link 404'd.
   #
@@ -114,12 +179,11 @@ jobs:
   # confirmed live on v3.0.3's tag run). It now runs in lint.yml on regular PR
   # CI instead, where install.sh and the README pin are actually expected to
   # agree.
+  # A failed smoke does not undo PyPI publication. Diagnose the failure and
+  # rerun failed jobs before build artifacts expire.
   mcpb:
-    # Gate on pypi: the .mcpb is a thin client of the punt-quarry package, so it
-    # is only useful once that package is actually published. Without this gate a
-    # failed PyPI publish would still create/attach a GitHub release for a version
-    # users cannot install.
-    needs: [pypi]
+    # The .mcpb is a thin client of the published punt-quarry package.
+    needs: published-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -137,20 +201,20 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      # Node is preinstalled on ubuntu-latest; no setup-node action needed.
-      # Pin mcpb to an exact version — this job holds contents: write, so a
-      # floating/compromised mcpb release must not run with the ability to
-      # create and upload the release asset. Bump deliberately.
-      - name: Install mcpb
-        run: npm install -g @anthropic-ai/mcpb@2.1.2
-      - name: Build .mcpb bundle
-        run: ./scripts/build-mcpb.sh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mcpb
+          path: dist/
       - name: Attach .mcpb to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="$GITHUB_REF_NAME"
           VERSION="${TAG#v}"
+          release_flags=()
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            release_flags+=(--prerelease --latest=false)
+          fi
           # punt-kit phase 7 may create the release concurrently. Wait briefly,
           # then create it ourselves if it still does not exist, so this job is
           # correct whether or not punt-kit runs.
@@ -163,7 +227,7 @@ jobs:
             # above and this create, making `gh release create` error even
             # though the release now exists. On create failure, re-check and
             # proceed if it is present rather than failing the workflow.
-            if ! gh release create "$TAG" --generate-notes --title "$TAG"; then
+            if ! gh release create "$TAG" --generate-notes --title "$TAG" "${release_flags[@]}"; then
               if ! gh release view "$TAG" >/dev/null 2>&1; then
                 echo "::error::failed to create release $TAG and it does not exist"
                 exit 1
@@ -171,17 +235,25 @@ jobs:
               echo "release $TAG was created concurrently — proceeding to upload"
             fi
           fi
+          if (( ${#release_flags[@]} )) &&
+            [[ "$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease')" != true ]]; then
+            echo "::error::Mark $TAG as a prerelease before attaching its MCPB"
+            exit 1
+          fi
           gh release upload "$TAG" \
             "dist/punt-quarry.mcpb" \
             "dist/punt-quarry-${VERSION}.mcpb" \
             --clobber
-      - name: Verify the .mcpb asset is downloadable
+      - name: Verify the published bundles against the installed PyPI package
         run: |
           TAG="$GITHUB_REF_NAME"
-          url="https://github.com/punt-labs/quarry/releases/download/${TAG}/punt-quarry.mcpb"
-          code=$(curl -fsSL -o /dev/null -w '%{http_code}' "$url" || true)
-          if [ "$code" != "200" ]; then
-            echo "::error::$url returned HTTP $code (expected 200) — the .mcpb asset is missing from the release."
-            exit 1
-          fi
-          echo "OK: $url returns HTTP 200"
+          VERSION="${TAG#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          mkdir -p "$RUNNER_TEMP/published"
+          for asset in punt-quarry.mcpb "punt-quarry-${VERSION}.mcpb"; do
+            curl --fail --silent --show-error --location --retry 3 --max-time 15 \
+              "$base/$asset" -o "$RUNNER_TEMP/published/$asset"
+            cmp "dist/$asset" "$RUNNER_TEMP/published/$asset"
+          done
+          cmp "$RUNNER_TEMP/published/punt-quarry.mcpb" "$RUNNER_TEMP/published/punt-quarry-${VERSION}.mcpb"
+          bash scripts/smoke-release.sh published "$VERSION" "$RUNNER_TEMP/published/punt-quarry.mcpb"
