@@ -37,7 +37,7 @@ test-unit: ## Run a fast in-process sample of client and target contracts
 	uv run --extra dev pytest tests/test_client.py tests/test_client_config.py tests/test_client_task.py
 
 test-embedding: ## Run against the pinned ONNX model
-	uv run --extra dev pytest -m 'embedding and not quarantine'
+	uv run --extra dev --extra eval pytest -m 'embedding and not quarantine'
 
 test-subprocess: ## Run all real hook and daemon subprocess tests
 	uv run --extra dev pytest -m 'hook_integration and not quarantine'
@@ -58,7 +58,7 @@ test-agent: ## Retrieve a synthetic canary via Claude Code and Quarry's MCP serv
 	uv run --extra dev pytest -m 'agent and not quarantine' tests/trusted_smoke.py
 
 test-slow: ## Run the slow tier (real-TLS/live-server smokes)
-	uv run --extra dev pytest -m 'slow and not quarantine'
+	uv run --extra dev --extra eval pytest -m 'slow and not quarantine'
 
 # EVERY invocation of a dev-extra tool runs under `--extra dev`, and the flag is
 # load-bearing rather than tidy.  ruff, pytest, mypy, pyright and import-linter
