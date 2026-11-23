@@ -41,6 +41,7 @@ MISSING_CANARY = "did not return the indexed document and its contents"
             "PASS:",
         ),
         (1, "[]", "could not submit a document for indexing"),
+        (0, "[]", "Quarry remember task failed"),
         (0, "not JSON", "returned invalid search results"),
         (0, "[]", MISSING_CANARY),
         (
@@ -97,14 +98,41 @@ def test_release_smoke_checks_canary(
     exec /bin/sleep 60
     """,
     )
+    polling_stub = tmp_path / "task stub.py"
+    polling_stub.write_text(
+        """import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+failed = sys.argv[1] == 'True'
+responses = iter(('running', 'failed' if failed else 'completed'))
+
+def task_status(task_id):
+    assert task_id == 'release-smoke'
+    status = next(responses)
+    if status == 'completed':
+        Path('task-completed').touch()
+    return SimpleNamespace(status=status, error='bad document')
+
+sys.modules['quarry'] = SimpleNamespace(
+    TargetResolver=SimpleNamespace(
+        connect=lambda: SimpleNamespace(task_status=task_status)
+    )
+)
+time.sleep = lambda _: None
+sys.argv = [sys.argv[0], sys.argv[2]]
+exec(compile(sys.stdin.read(), '<task polling>', 'exec'))
+"""
+    )
+    python = shlex.quote(sys.executable)
+    fails_task = expected == "Quarry remember task failed"
     executable(
         "python",
         'if [[ "$#" == 3 && "$3" == */remember.json ]]; then\n'
-        '  grep -q release-smoke "$3"\n'
-        "  touch task-completed\n"
-        "  exit\n"
+        f'  exec {python} {shlex.quote(str(polling_stub))} {fails_task} "$3"\n'
         "fi\n"
-        f'exec {shlex.quote(sys.executable)} "$@"\n',
+        f'exec {python} "$@"\n',
     )
     executable(
         "uv",
