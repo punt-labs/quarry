@@ -83,6 +83,7 @@ def test_release_smoke_checks_canary(
         exit {remember_result}
         ;;
       '--json find --collection release-smoke --limit 1 blue observatory')
+        touch {shlex.quote(str(tmp_path / "searched"))}
         [[ "$#" == 7 && "$7" == 'blue observatory' && -e task-completed ]]
         cat {shlex.quote(str(tmp_path / "hits.json"))}
         ;;
@@ -169,6 +170,7 @@ exec(compile(sys.stdin.read(), '<task polling>', 'exec'))
 
     assert result.returncode == (0 if expected == "PASS:" else 1), result.stderr
     assert expected in result.stdout + result.stderr
+    assert (tmp_path / "searched").exists() == (not remember_result and not fails_task)
 
 
 # Every module that registers MCP tools via ``add_tool`` — split across
