@@ -47,11 +47,17 @@ def select_tests(root: Path, staged: set[Path]) -> list[Path] | None:
         return None
     if source:
         modules = {".".join(path.with_suffix("").parts[1:]) for path in source}
+        packages = {
+            ".".join(parts[:depth])
+            for module in modules
+            for parts in [module.split(".")]
+            for depth in range(1, len(parts))
+        }
         matched: set[str] = set()
         for path in (root / "tests").rglob("test_*.py"):
-            direct = _imports(path) & modules
-            if direct:
-                matched.update(direct)
+            imports = _imports(path)
+            matched.update(imports & modules)
+            if imports & (modules | packages):
                 tests.add(path.relative_to(root))
         if matched != modules:
             return None

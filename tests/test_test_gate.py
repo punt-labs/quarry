@@ -33,6 +33,16 @@ def test_changed_scripts_select_their_contracts_or_the_default(tmp_path: Path) -
     assert select_tests(tmp_path, {Path(".github/workflows/nightly.yml")}) is None
 
 
+def test_changed_module_selects_tests_using_parent_reexports(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    direct = Path("tests/test_client.py")
+    through_package = Path("tests/test_mcp.py")
+    (tmp_path / direct).write_text("from quarry.client.client import QuarryClient\n")
+    (tmp_path / through_package).write_text("from quarry.client import QuarryClient\n")
+    source = Path("src/quarry/client/client.py")
+    assert select_tests(tmp_path, {source}) == [direct, through_package]
+
+
 @pytest.mark.parametrize(
     ("issue", "days", "valid"),
     [
