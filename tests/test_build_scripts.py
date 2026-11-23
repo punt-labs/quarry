@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,107 @@ PLUGIN_ROOT = REPO_ROOT / "plugin"
 BUILD_MCPB = SCRIPTS_DIR / "build-mcpb.sh"
 MANIFEST_TEMPLATE = SCRIPTS_DIR / "mcpb-manifest.template.json"
 README_SHA_CHECK = SCRIPTS_DIR / "check-readme-install-sha.sh"
+RELEASE_SMOKE = SCRIPTS_DIR / "smoke-release.sh"
+
+
+@pytest.mark.parametrize(
+    ("remember_result", "search_result", "expected"),
+    [
+        (
+            0,
+            json.dumps(
+                [
+                    {
+                        "document_name": "release-canary.md",
+                        "text": "The release canary lives in the blue observatory.",
+                    }
+                ]
+            ),
+            "PASS:",
+        ),
+        (1, "[]", "could not submit a document for indexing"),
+        (0, "not JSON", "returned invalid search results"),
+        (0, "[]", "did not return the indexed document and its contents"),
+    ],
+)
+def test_release_smoke_checks_canary(
+    tmp_path: Path, remember_result: int, search_result: str, expected: str
+) -> None:
+    """Drive the release script with installed entry points under our control."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    model_cache = tmp_path / "hub"
+    model_cache.mkdir()
+    wheel = tmp_path / "punt_quarry-3.9.1-py3-none-any.whl"
+    wheel.touch()
+
+    def executable(name: str, body: str) -> None:
+        path = fake_bin / name
+        path.write_text("#!/usr/bin/env bash\nset -eu\n" + body)
+        path.chmod(0o755)
+
+    executable(
+        "quarry",
+        f"""case "$*" in
+      version) printf '3.9.1\\n' ;;
+      'remember --name release-canary.md --collection release-smoke')
+        read -r body
+        [[ "$body" == 'The release canary lives in the blue observatory.' ]]
+        exit {remember_result}
+        ;;
+      '--json find --collection release-smoke --limit 1 blue observatory')
+        cat {shlex.quote(str(tmp_path / "hits.json"))}
+        ;;
+      *) exit 2 ;;
+    esac
+    """,
+    )
+    (tmp_path / "hits.json").write_text(search_result)
+    executable(
+        "quarryd",
+        """mkdir -p "$QUARRY_ROOT/default"
+    printf '12345\\n' > "$QUARRY_ROOT/default/serve.port"
+    exec /bin/sleep 60
+    """,
+    )
+    executable("python", f'exec {shlex.quote(sys.executable)} "$@"\n')
+    executable(
+        "uv",
+        f"""case "$2" in
+      venv)
+        mkdir -p venv/bin
+        ;;
+      pip)
+        cp {shlex.quote(str(fake_bin))}/{{python,quarry,quarryd}} venv/bin/
+        ;;
+      *) exit 2 ;;
+    esac
+    """,
+    )
+    executable(
+        "curl",
+        """[[ "${*: -1}" == http://127.0.0.1:12345/health ]]
+    printf '{"state":"ready"}\\n'
+    """,
+    )
+    executable("sleep", "exec /bin/sleep 0.1\n")
+    result = subprocess.run(
+        ["bash", str(RELEASE_SMOKE), "candidate", "3.9.1", str(wheel)],
+        env={
+            "PATH": f"{fake_bin}{os.pathsep}{os.defpath}",
+            "HOME": str(tmp_path),
+            "QUARRY_SMOKE_MODEL_CACHE": str(model_cache),
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == (0 if expected == "PASS:" else 1), result.stderr
+    assert expected in result.stdout + result.stderr
+
+
 # Every module that registers MCP tools via ``add_tool`` — split across
 # sibling classes (ResourceCatalog, DocumentTools, MissionTools) so no single
 # module holds every tool, per the 500-line module cap.
