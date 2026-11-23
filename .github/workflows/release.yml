@@ -104,17 +104,16 @@ jobs:
           path: dist/
       - name: Install the exact candidate from TestPyPI
         run: |
-          version="${GITHUB_REF_NAME#v}"
           wheels=(dist/punt_quarry-*.whl)
           [[ "${#wheels[@]}" == 1 && -f "${wheels[0]}" ]]
           filename="${wheels[0]##*/}"
           work=$(mktemp -d)
           trap 'rm -rf -- "$work"' EXIT
-          index="https://test.pypi.org/pypi/punt-quarry/$version/json"
+          index="https://test.pypi.org/simple/punt-quarry/"
           staged="$work/$filename"
           for attempt in 1 2 3 4 5; do
-            if metadata=$(curl -fsS --max-time 15 "$index") &&
-              url=$(jq -er --arg name "$filename" '.urls[] | select(.filename == $name) | .url' <<<"$metadata") &&
+            if metadata=$(curl -fsS --max-time 15 -H 'Accept: application/vnd.pypi.simple.v1+json' "$index") &&
+              url=$(jq -er --arg name "$filename" '.files[] | select(.filename == $name and (.yanked // false) == false) | .url' <<<"$metadata") &&
               [[ "$url" == https://test-files.pythonhosted.org/* ]] &&
               curl -fsSL --proto '=https' --proto-redir '=https' --max-time 20 "$url" -o "$staged"; then
               cmp "${wheels[0]}" "$staged"
