@@ -11,19 +11,8 @@ paths:
 
 # Testing
 
-## Pyramid
-
-| Layer | Make target | Runs in CI | What it covers |
-|-------|-------------|------------|----------------|
-| Unit | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, enable/disable, service, install scripts |
-| Resource-invariant | `make test` (marker `resource`) | yes | Long-lived-process leak guards: a single connection over many optimize cycles must not leak file descriptors (`tests/test_resource_invariants.py`). The daemon holds a connection for its whole lifetime; `create_fts_index(replace=True)` supersedes an index generation and LanceDB's Rust core never evicts the deleted-file readers, so a leak here is invisible to short-lived CLI tests and only surfaces as EMFILE → HTTP 500 in the daemon. |
-| Integration | `make test-slow` | no (needs real ONNX model) | Real filesystem + ONNX model end-to-end. Carries both `slow` and `embedding`; the `embedding` marker is what lets the real model load, so removing it silently reroutes the tier through the fake. |
-| Shell scripts | `make test` (via pytest) | yes | Install script ordering, shellcheck |
-| HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
-| Wheel install | `make test-wheel` | local pre-PR gate | Build wheel → isolated venv → serve on 8422 → smoke checks |
-| MCP smoke test | `docs/smoke-test.md` | post-release manual | MCP + CLI + enable/disable + install verification (see `docs/smoke-test.md` for the current check count) |
-
-`make check-full` = `make check` + `make test-wheel`. Full test suite needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
+Use the [Quarry test guide](../../TESTING.md) for trigger budgets, suite selectors,
+and coverage scope. During development, run affected pytest paths directly.
 
 ## The suite is hermetic and bounded (DES-047)
 

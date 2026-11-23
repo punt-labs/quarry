@@ -773,7 +773,7 @@ domain = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not embedding and not hook_integration'"
+addopts = "-ra -q --strict-markers -m 'not slow and not embedding and not hook_integration and not quarantine and not live and not agent'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 timeout = 30
@@ -784,6 +784,9 @@ markers = [
     "embedding: opts back in to the real ONNX model (410 MB); deselected by default alongside slow, run via -m embedding",
     "network: opts back in to real DNS resolution; the default suite resolves from a fake so it does not depend on the network",
     "hook_integration: spawns a real quarry-hook and/or quarryd subprocess; deselected by default, run via -m hook_integration",
+    "quarantine(issue, owner, expires): temporarily exclude a tracked flaky test",
+    "live: calls an external service; only run explicitly in trusted jobs",
+    "agent: drives an external agent; only run explicitly in trusted jobs",
 ]
 
 [tool.coverage.run]

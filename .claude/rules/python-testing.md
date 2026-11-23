@@ -4,37 +4,28 @@ paths:
   - "tests/**"
 ---
 
-# Testing Standards
+# Python Testing Rules
 
-## PL-TT-1: Four-Tier Testing Pyramid
+**Updated:** 2026-11-22
 
-**Statement**: Every project must define and maintain a testing pyramid with
-four tiers. Default `pytest` runs tiers 1-2. Higher tiers are opt-in.
+Language rules for the [Testing standard](https://github.com/punt-labs/punt-kit/blob/main/standards/testing.md).
 
-| Tier | What It Tests | Speed | Runs in CI |
-|------|---------------|-------|------------|
-| 1. Unit | Tool logic, data models, pure functions | ~1s | Yes |
-| 2. Integration | MCP protocol, cross-component state | ~2-5s | Yes |
-| 3. Subprocess/E2E | Wire protocol, CLI args, process lifecycle | ~5-10s | Optional |
-| 4. SDK | End-to-end with Claude (costs money) | ~30s | No |
+## PL-TT-1: Map pytest selections to gates
 
-**Criterion**:
+**Implements:** TST-1, TST-2, TST-3, TST-10 · **Gate:** `make test`, PR CI and review (code-reviewer)
 
-- Pass: tiers 1-2 run in `make test`; tiers 3-4 behind pytest markers
-- Fail: no tier separation; all tests are slow; or no tests at all
-
-**Tooling**:
-
-- `uv run pytest` — tiers 1-2
-- `uv run pytest -m integration` — tier 2 only
-- `uv run pytest -m e2e` — tier 3
-- Markers: `@pytest.mark.integration`, `@pytest.mark.e2e`, `@pytest.mark.sdk`
+Use pytest paths or registered markers with strict marker validation.
+Select affected tests for Pre-commit, broadening the selection when shared
+fixtures change. Run the credential-free default suite and fast local process
+selections for Pre-push. Include the required installed-wheel and domain
+checks in PR CI and on main. Document the actual selectors and commands
+(such as `uv run pytest -m e2e`), along with tools and credentials required.
 
 ## PL-TT-2: Coverage Increases With Every Change
 
-**Statement**: When you touch a file, its test coverage must not decrease. When
-you add a function, it gets tests. When you fix a bug, the fix includes a
-regression test.
+**Implements:** TST-5 · **Gate:** project coverage entry point, CI coverage report and review (code-reviewer)
+
+**Statement**: New behavior gets tests. A bug fix includes a regression test.
 
 **Criterion**:
 
@@ -44,9 +35,16 @@ regression test.
 **Tooling**:
 
 - LLM review: diff includes test changes proportional to source changes
-- `uv run pytest --co -q` before and after — test count should not decrease
+
+Use coverage.py with pytest-cov and branch measurement. Start instrumentation
+in the subprocesses or installed-wheel entry points whose coverage the report
+claims. Combine worker and child data with source paths mapped to the same
+package. When a project has a coverage ratchet, use equivalent selection and
+instrumentation at head and merge base.
 
 ## PL-TT-3: Tests Document Behavior
+
+**Implements:** TST-5 · **Gate:** review (code-reviewer)
 
 **Statement**: The test suite is the executable specification. When someone asks
 "what happens when X?", the answer should be in a test. Tests that only verify
@@ -63,6 +61,8 @@ happy paths are incomplete.
 
 ## PL-TT-4: Test Infrastructure Is First-Class
 
+**Implements:** TST-4, TST-9 · **Gate:** pytest isolation fixtures and review (code-reviewer)
+
 **Statement**: Fixtures, factories, helpers, and test utilities are real code
 that deserves the same quality as production code. Flaky tests are bugs. Slow
 tests are performance issues.
@@ -77,7 +77,13 @@ tests are performance issues.
 - Grep: duplicate setup patterns across test files
 - CI: flaky test = immediate fix, not retry
 
+Use `tmp_path` and explicit environment overrides for HOME, XDG paths,
+caches and credentials. Pass that environment to children and use test-owned
+ports or sockets. Tear down children in fixtures even on failure.
+
 ## PL-TT-5: Humble Object Testing
+
+**Implements:** TST-4 · **Gate:** command unit tests without a running server
 
 **Statement**: When a project uses the commands layer (PL-PA-3), command functions
 are testable without mocks, subprocesses, or network. Construct context with an
@@ -94,17 +100,37 @@ result fields.
 - Test runtime: command tests should complete in < 100ms each
 - Reference: biff commands tests with `LocalRelay(tmp_path)`
 
-## PL-TT-6: No Skipping, No Ignoring
+## PL-TT-6: Select and track quarantine
 
-**Statement**: If a test fails, fix it. Do not skip, ignore, or work around it.
-`@pytest.mark.skip` and `@pytest.mark.xfail` are temporary — they must include
-a reason and a bead ID for the fix.
+**Implements:** TST-9 · **Gate:** pytest collection and review (code-reviewer)
+
+**Statement**: Fix or quarantine a flaky case. Use a registered quarantine
+marker whose reason names its owner and Linear issue. Record the
+fix-or-remove deadline in that issue. Reserve skips for cases that do not
+apply to a platform or configuration; do not use skip or expected failure
+to hide a failure in a required case.
 
 **Criterion**:
 
-- Pass: zero `@pytest.mark.skip` without a tracked issue
-- Fail: skipped tests without justification; xfail used permanently
+- Pass: quarantined cases have a reason, issue, owner and deadline
+- Fail: a flaky required test is hidden behind a skip or untracked marker
 
 **Tooling**:
 
-- Grep: `grep -rn "pytest.mark.skip\|pytest.mark.xfail" tests/`
+- Exclude quarantine from required runs with `-m "not quarantine"` or
+  group the explicit selection before appending `and not quarantine`, for
+  example `-m "(integration or e2e) and not quarantine"`. A default
+  expression in pytest configuration does not cover CI commands that pass
+  their own `-m`.
+- List quarantines with `uv run pytest --collect-only -m quarantine`.
+- Run the separate selection with `uv run pytest -m quarantine`.
+
+## PL-TT-7: Test the live and distributed entry points
+
+**Implements:** TST-6, TST-7, TST-8 · **Gate:** Nightly and release workflows
+
+**Statement**: Select live and agent cases explicitly with pytest markers or paths in
+trusted CI. Install the candidate wheel non-editably in a fresh environment
+and invoke its installed entry point without resyncing the checkout. For
+Post-release, reuse that check against the exact published version installed
+from the production index.

@@ -21,9 +21,6 @@ if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
 
 
-pytestmark = pytest.mark.hook_integration
-
-
 _QUARRY_JZQW_SUMMARY = (
     "quarry-jzqw (G4): IngestJob._ingest still raises ValueError on non-HTML "
     "URLs — capture re-fetch drops the body instead of storing it as text."
@@ -165,19 +162,18 @@ def test_non_html_ingest_redacts_url_secrets_in_document_name(
     _assert_document_name_omits(url, leak)
 
 
-def test_non_html_ingest_redacts_userinfo_in_document_name() -> None:
-    """URL userinfo (``user:pass@``) is stripped from the stored document_name.
-
-    The URL and expected-leak substring are assembled at runtime from local
-    parts so no credential-shaped literal (``foo:bar@host``) appears in this
-    source file — pre-commit secret scrubbers would otherwise redact the
-    fixture and make the assertion trivially true.
-    """
-    user = "usr"
-    pw = "pwd"
-    url = f"https://{user}:{pw}@host.example/path?q=1"
-    leak = f"{user}:{pw}"
-    _assert_document_name_omits(url, leak)
+def test_non_html_ingest_rejects_userinfo_before_fetch() -> None:
+    """Reject a credential-bearing URL without fetching or persisting it."""
+    user, password = "usr", "fixture"
+    url = f"https://{user}:{password}@host.example/path"
+    with (
+        patch("quarry.ingestion.web_fetch.WebFetcher.fetch_body") as fetch,
+        patch("quarry.ingestion.web_ingest.ingest_content") as persist,
+        pytest.raises(ValueError, match=r"^malformed URL$"),
+    ):
+        _job(url)._ingest(_ctx())
+    fetch.assert_not_called()
+    persist.assert_not_called()
 
 
 def test_captured_body_ingest_sanitizes_media_type_in_marker() -> None:

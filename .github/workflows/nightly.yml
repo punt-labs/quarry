@@ -1,0 +1,84 @@
+name: Nightly QA
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quarry-nightly
+  cancel-in-progress: false
+
+jobs:
+  broader:
+    if: github.repository == 'punt-labs/quarry' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      QUARRY_PROVIDER: cpu
+      PUNT_TELEMETRY: "off"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Provision the pinned model
+        run: |
+          export HF_HOME="$RUNNER_TEMP/quarry-model"
+          printf 'HF_HOME=%s\n' "$HF_HOME" >> "$GITHUB_ENV"
+          uv sync --frozen --extra dev
+          uv run --no-sync python -c 'from quarry.embeddings import OnnxEmbeddingBackend; OnnxEmbeddingBackend.download_model_files()'
+      - name: Check broader offline suites
+        run: make test-nightly
+        env:
+          HF_HUB_OFFLINE: "1"
+      - name: List quarantines and reject expired entries
+        if: ${{ !cancelled() }}
+        run: make test-quarantine
+      - name: Check the public HTTPS fetcher
+        run: make test-live
+      - name: Install Claude Code
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/claude-code" @anthropic-ai/claude-code@2.1.330
+          printf '%s\n' "$RUNNER_TEMP/claude-code/bin" >> "$GITHUB_PATH"
+      - name: Ask Claude Code to recall the synthetic Quarry canary
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo 'Configure a scoped ANTHROPIC_API_KEY for Nightly QA'; exit 1; }
+          make test-agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HF_HUB_OFFLINE: "1"
+
+  notify:
+    needs: broader
+    if: >-
+      ${{ always() && github.repository == 'punt-labs/quarry' &&
+          github.ref == 'refs/heads/main' &&
+          (needs.broader.result == 'failure' || needs.broader.result == 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .punt-labs/biff
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Notify the Quarry team
+        env:
+          BIFF_RELAY_URL: ${{ vars.BIFF_RELAY_URL }}
+          BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
+          BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
+        run: >-
+          uvx --from punt-biff==1.21.0 biff --user github-actions wall
+          "Nightly QA failed on Quarry — ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          --duration 24h

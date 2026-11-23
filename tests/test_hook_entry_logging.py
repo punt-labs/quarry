@@ -1,11 +1,12 @@
 """Hook-entry logging through the installed console script.
 
 Claude Code invokes ``quarry-hook`` for every handler. Each invocation must
-write an INFO breadcrumb to the isolated log, including config-off and
-invalid-payload paths, without corrupting the hook's JSON stdout.
+write its diagnostic to the isolated log, without corrupting JSON stdout.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -25,9 +26,8 @@ _QUARRY_RIDG_SUMMARY = (
 
 
 # Per-event (payload fixture, expected substring in a written log line).  The
-# expected line is the HookTrace 'entered' breadcrumb each handler emits on
-# every code path (skip / capture / error), so it fires whether the payload
-# passes validation or is discarded on a cwd/config skip.
+# Invalid transcript hooks emit a privacy-safe warning instead of an INFO
+# breadcrumb. Other early skips still emit the HookTrace breadcrumb.
 _EVENT_CASES: tuple[tuple[str, str, str, str], ...] = (
     (
         "session-start",
@@ -56,20 +56,20 @@ _EVENT_CASES: tuple[tuple[str, str, str, str], ...] = (
     (
         "session-end",
         "webfetch/httpbin_json.json",
-        "quarry.hooks: post-session-end: entered",
-        "session-end handler emits the entered breadcrumb on the cwd skip",
+        "[WARNING] quarry.hooks: malformed_payload",
+        "session-end rejects a missing working directory",
     ),
     (
         "subagent-stop",
         "webfetch/httpbin_json.json",
-        "quarry.hooks: post-subagent-stop: entered",
-        "subagent-stop handler emits the entered breadcrumb on the cwd skip",
+        "[WARNING] quarry.hooks: malformed_payload",
+        "subagent-stop rejects a missing working directory",
     ),
     (
         "pre-compact",
         "webfetch/httpbin_json.json",
-        "quarry.hooks: pre-compact: entered",
-        "pre-compact handler emits the entered breadcrumb on the payload skip",
+        "[WARNING] quarry.hooks: malformed_payload",
+        "pre-compact rejects a missing transcript",
     ),
     (
         "session-setup",
@@ -95,10 +95,12 @@ def test_quarry_hook_writes_expected_log_line(
     """A hook invocation logs its expected breadcrumb.
 
     punt-observe initializes the file handler before dispatch so every
-    invocation, including an early skip, emits a HookTrace line.
+    invocation, including an early skip or rejection, emits a diagnostic.
     """
     payload = load_payload(payload_fixture)
     run = hook_subprocess.run(event, payload)
+    assert run.exit_code == 0
+    assert isinstance(json.loads(run.stdout), dict)
 
     matches = run.grep(expected_substr)
     assert matches, (

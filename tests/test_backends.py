@@ -141,20 +141,11 @@ class TestClearCaches:
 
 
 @pytest.mark.slow
-def test_embedding_backend_loads_real_model_when_cached() -> None:
-    """Smoke test: real ONNX model loads when in HuggingFace cache.
-
-    Skips when model is not cached (e.g. CI). Run with `pytest -m slow` or
-    `quarry install` first to populate cache. Verifies load only; inference
-    is covered by integration tests.
-    """
-    from huggingface_hub.errors import LocalEntryNotFoundError
-
+@pytest.mark.embedding
+def test_embedding_backend_loads_real_model() -> None:
+    """Load the pinned ONNX model; integration tests cover inference."""
     clear_caches()
-    try:
-        backend = get_embedding_backend(_settings())
-    except LocalEntryNotFoundError as e:
-        pytest.skip(f"ONNX model not in cache: {e}. Run 'quarry install' to download.")
+    backend = get_embedding_backend(_settings())
     assert isinstance(backend, OnnxEmbeddingBackend)
     assert backend.dimension == 768
     assert backend.model_name == "Snowflake/snowflake-arctic-embed-m-v1.5"

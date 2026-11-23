@@ -137,7 +137,10 @@ def tls_fixture(tmp_path: Path) -> _TlsFixture:
 
 @pytest.mark.slow
 @pytest.mark.integration
-def test_tls_loopback_client_round_trip(tls_fixture: _TlsFixture) -> None:
+@pytest.mark.network
+def test_tls_loopback_client_round_trip(
+    tls_fixture: _TlsFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A real loopback quarryd over TLS answers a pinned-CA ``QuarryClient``.
 
     Asserts the full wire: the pinned-CA HTTPS handshake (the server cert's
@@ -145,6 +148,7 @@ def test_tls_loopback_client_round_trip(tls_fixture: _TlsFixture) -> None:
     encrypted channel, and both the unversioned ``/health`` and a ``/v1`` route
     returning the expected empty state on a fresh database.
     """
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
     with tls_fixture.server.running() as port:
         transport = HttpxTransport.from_mapping(
             {

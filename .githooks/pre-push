@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+make test-push
+
+existing="$(git rev-parse --git-common-dir)/hooks/pre-push"
+if [[ -x "$existing" && ! "$existing" -ef "${BASH_SOURCE[0]}" ]]; then
+  exec "$existing" "$@"
+fi
