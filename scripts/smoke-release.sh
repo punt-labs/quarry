@@ -126,13 +126,31 @@ done
 
 name="release-canary.md"
 body="The release canary lives in the blue observatory."
-printf '%s\n' "$body" | "${cli[@]}" remember --name "$name" --collection release-smoke ||
+printf '%s\n' "$body" | "${cli[@]}" --json remember --name "$name" --collection release-smoke >"$work/remember.json" ||
   fail "Installed CLI could not submit a document for indexing"
-found=0
-for ((attempt = 1; attempt <= 30; attempt++)); do
-  "${cli[@]}" --json find --collection release-smoke --limit 1 "blue observatory" >"$work/hits.json" ||
-    fail "Installed CLI search failed"
-  if "$python" -I - "$work/hits.json" "$name" "$body" <<'PY'
+"${isolated[@]}" "$python" -I - "$work/remember.json" <<'PY'
+import json
+import sys
+import time
+from pathlib import Path
+
+from quarry import TargetResolver
+
+accepted = json.loads(Path(sys.argv[1]).read_bytes())
+client = TargetResolver.connect()
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    status = client.task_status(accepted["task_id"])
+    if status.status == "completed":
+        sys.exit(0)
+    if status.status == "failed":
+        sys.exit(f"Quarry remember task failed: {status.error}")
+    time.sleep(0.5)
+sys.exit("Quarry remember task did not finish")
+PY
+"${cli[@]}" --json find --collection release-smoke --limit 1 "blue observatory" >"$work/hits.json" ||
+  fail "Installed CLI search failed"
+if "$python" -I - "$work/hits.json" "$name" "$body" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -143,13 +161,11 @@ if not isinstance(hits, list):
     raise ValueError("Expected a JSON result list")
 sys.exit(0 if any(hit["document_name"] == name and body in hit["text"] for hit in hits) else 3)
 PY
-  then
-    found=1
-    break
-  elif [[ "$?" != 3 ]]; then
+then
+  printf 'PASS: punt-quarry %s from %s (installed CLI remember → find)\n' "$version" "$channel"
+else
+  if [[ "$?" != 3 ]]; then
     fail "Installed CLI returned invalid search results"
   fi
-  sleep 1
-done
-[[ "$found" == 1 ]] || fail "Search did not return the indexed document and its contents"
-printf 'PASS: punt-quarry %s from %s (installed CLI remember → find)\n' "$version" "$channel"
+  fail "Search did not return the indexed document and its contents"
+fi

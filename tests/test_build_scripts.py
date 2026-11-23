@@ -75,12 +75,14 @@ def test_release_smoke_checks_canary(
         "quarry",
         f"""case "$*" in
       version) printf '3.9.1\\n' ;;
-      'remember --name {CANARY_NAME} --collection release-smoke')
+      '--json remember --name {CANARY_NAME} --collection release-smoke')
         read -r body
         [[ "$body" == {shlex.quote(CANARY_BODY)} ]]
+        printf '{{"task_id":"release-smoke"}}\n'
         exit {remember_result}
         ;;
       '--json find --collection release-smoke --limit 1 blue observatory')
+        [[ "$#" == 7 && "$7" == 'blue observatory' && -e task-completed ]]
         cat {shlex.quote(str(tmp_path / "hits.json"))}
         ;;
       *) exit 2 ;;
@@ -95,7 +97,15 @@ def test_release_smoke_checks_canary(
     exec /bin/sleep 60
     """,
     )
-    executable("python", f'exec {shlex.quote(sys.executable)} "$@"\n')
+    executable(
+        "python",
+        'if [[ "$#" == 3 && "$3" == */remember.json ]]; then\n'
+        '  grep -q release-smoke "$3"\n'
+        "  touch task-completed\n"
+        "  exit\n"
+        "fi\n"
+        f'exec {shlex.quote(sys.executable)} "$@"\n',
+    )
     executable(
         "uv",
         f"""case "$2" in
