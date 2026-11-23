@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.9.1] - 2026-11-22
+
 ### Added
 
 - infra: Report-only design ratchet with explicit layers for every current module.
@@ -36,6 +38,20 @@ across `transform`, `index`, and `connector`).
 - infra: The generated Homebrew formula now declares `pkgconf` (build) and
   `openssl@3` on Linux, so the cryptography resource builds from source, and
   uses `File::NULL` for the service log paths so `brew audit` passes.
+
+- infra: Malformed hook payloads now produce one fixed warning without
+  logging payload or exception text. Unexpected hook failures still log as
+  errors (PL-1273, #691).
+
+- infra: Hook log entries no longer repeat the logger name or lose
+  punctuation when a state is unknown (PL-1277, #695).
+
+- infra: Skipped temporary or scratch watch roots no longer expose paths or
+  collection names in diagnostic logs (#697).
+
+- infra: Successful `quarry status` calls and clean `quarry mcp` shutdowns
+  now log an outcome without recording inputs, paths, or response content
+  (PL-1289, PL-1290, #698).
 
 ## [3.9.0] - 2026-11-22
 
