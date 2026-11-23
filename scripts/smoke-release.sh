@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Install and exercise a release wheel without using the checkout or a local daemon.
-# Usage: bash scripts/smoke-release.sh candidate VERSION WHEEL
-#        bash scripts/smoke-release.sh published VERSION
+# Usage: bash scripts/smoke-release.sh candidate VERSION WHEEL [MCPB]
+#        bash scripts/smoke-release.sh published VERSION [MCPB]
 set -euo pipefail
 
 usage() {
-  printf '%s\n' 'Usage: smoke-release.sh candidate VERSION WHEEL | published VERSION'
+  printf '%s\n' 'Usage: smoke-release.sh candidate VERSION WHEEL [MCPB] | published VERSION [MCPB]'
 }
 
 fail() {
@@ -18,26 +18,36 @@ if [[ "${1:-}" == "--help" ]]; then
   exit 0
 fi
 version=${2:-}
+bundle_arg=""
 case "${1:-}:$#" in
-  candidate:3)
+  candidate:3|candidate:4)
     channel="candidate wheel"
     wheel_dir=$(cd -- "$(dirname -- "$3")" && pwd -P) || fail "Cannot resolve the candidate wheel path"
     package="$wheel_dir/$(basename -- "$3")"
     [[ -f "$package" && "$package" == *.whl ]] || fail "Expected an existing wheel"
+    bundle_arg=${4:-}
     ;;
   candidate:*)
     channel="candidate wheel"
     fail "Pass exactly one candidate wheel"
     ;;
-  published:2)
+  published:2|published:3)
     channel="production PyPI"
     package="punt-quarry==$version"
+    bundle_arg=${3:-}
     ;;
   *)
     usage >&2
     exit 2
     ;;
 esac
+bundle=""
+if [[ -n "$bundle_arg" ]]; then
+  bundle_dir=$(cd -- "$(dirname -- "$bundle_arg")" && pwd -P) || fail "Cannot resolve the bundle path"
+  bundle="$bundle_dir/$(basename -- "$bundle_arg")"
+  [[ -f "$bundle" && "$bundle" == *.mcpb ]] || fail "Expected an existing MCPB"
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+fi
 [[ "$version" =~ ^[0-9][0-9A-Za-z.!+_-]*$ ]] || fail "Expected a PEP 440 version without its v prefix"
 printf 'Testing punt-quarry %s from %s\n' "$version" "$channel"
 model_cache=${QUARRY_SMOKE_MODEL_CACHE:-}
@@ -168,4 +178,8 @@ else
     fail "Installed CLI returned invalid search results"
   fi
   fail "Search did not return the indexed document and its contents"
+fi
+if [[ -n "$bundle" ]]; then
+  "${isolated[@]}" "$python" -I "$script_dir/smoke-mcpb.py" "$bundle" "$version" "$body"
+  printf 'PASS: Quarry MCPB %s (manifest-launched MCP find)\n' "$version"
 fi

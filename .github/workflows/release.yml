@@ -32,6 +32,16 @@ jobs:
           name: dist
           path: dist/
           retention-days: 1
+      - name: Build the .mcpb bundle
+        run: |
+          npm install -g @anthropic-ai/mcpb@2.1.2
+          ./scripts/build-mcpb.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mcpb
+          path: dist/*.mcpb
+          if-no-files-found: error
+          retention-days: 1
 
   candidate-smoke:
     needs: build
@@ -51,7 +61,14 @@ jobs:
         with:
           name: dist
           path: dist/
-      - run: bash scripts/smoke-release.sh candidate "${GITHUB_REF_NAME#v}" dist/punt_quarry-*.whl
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mcpb
+          path: dist/
+      - run: |
+          version="${GITHUB_REF_NAME#v}"
+          cmp dist/punt-quarry.mcpb "dist/punt-quarry-$version.mcpb"
+          bash scripts/smoke-release.sh candidate "$version" dist/punt_quarry-*.whl dist/punt-quarry.mcpb
 
   testpypi:
     needs: [build, candidate-smoke]
@@ -137,8 +154,8 @@ jobs:
       - run: bash scripts/smoke-release.sh published "${GITHUB_REF_NAME#v}"
 
   # Claude Desktop .mcpb bundle. Self-contained and decoupled from punt-kit's
-  # release.py: this job builds the bundle and attaches it to the GitHub release
-  # for the tag, then verifies the asset is downloadable. quarry-521g: the
+  # release.py: this job attaches the tested bundle to the GitHub release
+  # for the tag, then verifies both assets. quarry-521g: the
   # README linked to releases/latest/download/punt-quarry.mcpb but no release
   # ever attached it, so the link 404'd.
   #
@@ -150,6 +167,8 @@ jobs:
   # confirmed live on v3.0.3's tag run). It now runs in lint.yml on regular PR
   # CI instead, where install.sh and the README pin are actually expected to
   # agree.
+  # A failed smoke does not undo PyPI publication. Diagnose the failure and
+  # rerun failed jobs before build artifacts expire.
   mcpb:
     # The .mcpb is a thin client of the published punt-quarry package.
     needs: published-smoke
@@ -170,14 +189,10 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      # Node is preinstalled on ubuntu-latest; no setup-node action needed.
-      # Pin mcpb to an exact version — this job holds contents: write, so a
-      # floating/compromised mcpb release must not run with the ability to
-      # create and upload the release asset. Bump deliberately.
-      - name: Install mcpb
-        run: npm install -g @anthropic-ai/mcpb@2.1.2
-      - name: Build .mcpb bundle
-        run: ./scripts/build-mcpb.sh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mcpb
+          path: dist/
       - name: Attach .mcpb to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -208,13 +223,16 @@ jobs:
             "dist/punt-quarry.mcpb" \
             "dist/punt-quarry-${VERSION}.mcpb" \
             --clobber
-      - name: Verify the .mcpb asset is downloadable
+      - name: Verify the published bundles against the installed PyPI package
         run: |
           TAG="$GITHUB_REF_NAME"
-          url="https://github.com/punt-labs/quarry/releases/download/${TAG}/punt-quarry.mcpb"
-          code=$(curl -fsSL -o /dev/null -w '%{http_code}' "$url" || true)
-          if [ "$code" != "200" ]; then
-            echo "::error::$url returned HTTP $code (expected 200) — the .mcpb asset is missing from the release."
-            exit 1
-          fi
-          echo "OK: $url returns HTTP 200"
+          VERSION="${TAG#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          mkdir -p "$RUNNER_TEMP/published"
+          for asset in punt-quarry.mcpb "punt-quarry-${VERSION}.mcpb"; do
+            curl --fail --silent --show-error --location --retry 3 --max-time 15 \
+              "$base/$asset" -o "$RUNNER_TEMP/published/$asset"
+            cmp "dist/$asset" "$RUNNER_TEMP/published/$asset"
+          done
+          cmp "$RUNNER_TEMP/published/punt-quarry.mcpb" "$RUNNER_TEMP/published/punt-quarry-${VERSION}.mcpb"
+          bash scripts/smoke-release.sh published "$VERSION" "$RUNNER_TEMP/published/punt-quarry.mcpb"

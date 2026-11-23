@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -27,9 +28,42 @@ BUILD_MCPB = SCRIPTS_DIR / "build-mcpb.sh"
 MANIFEST_TEMPLATE = SCRIPTS_DIR / "mcpb-manifest.template.json"
 README_SHA_CHECK = SCRIPTS_DIR / "check-readme-install-sha.sh"
 RELEASE_SMOKE = SCRIPTS_DIR / "smoke-release.sh"
+MCPB_SMOKE = SCRIPTS_DIR / "smoke-mcpb.py"
 CANARY_NAME = "release-canary.md"
 CANARY_BODY = "The release canary lives in the blue observatory."
 MISSING_CANARY = "did not return the indexed document and its contents"
+
+
+@pytest.mark.parametrize(
+    ("version", "command", "expected"),
+    [
+        ("3.9.0", "quarry", "Expected MCPB version 3.9.1"),
+        ("3.9.1", "unexpected", "Unexpected MCPB command"),
+    ],
+)
+def test_mcpb_smoke_rejects_invalid_manifest(
+    tmp_path: Path, version: str, command: str, expected: str
+) -> None:
+    bundle = tmp_path / "quarry.mcpb"
+    with ZipFile(bundle, "w") as archive:
+        archive.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "version": version,
+                    "server": {"mcp_config": {"command": command, "args": ["mcp"]}},
+                }
+            ),
+        )
+    result = subprocess.run(
+        [sys.executable, "-I", str(MCPB_SMOKE), str(bundle), "3.9.1", CANARY_BODY],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert expected in result.stderr
 
 
 @pytest.mark.parametrize(
