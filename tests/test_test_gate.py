@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,6 +11,32 @@ import pytest
 
 from tools.test_changed import select_tests
 from tools.test_quarantine import pytest_collection_modifyitems
+
+
+@pytest.mark.parametrize("trailer_installed_in_active_hook", [False, True])
+def test_hook_install_preserves_commit_trailer(
+    tmp_path: Path, *, trailer_installed_in_active_hook: bool
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+
+    def run(*args: str) -> None:
+        subprocess.run(args, cwd=tmp_path, check=True, timeout=10)
+
+    run("git", "init", "-q")
+    shutil.copytree(root / ".githooks", tmp_path / ".githooks")
+    old_hook = tmp_path / ".git" / "hooks" / "commit-msg"
+    trailer = "printf '\\nMission: test-mission\\n' >> \"$1\"\n"
+    old_hook.write_text("#!/bin/sh\n" + trailer)
+    old_hook.chmod(0o755)
+    if trailer_installed_in_active_hook:
+        with (tmp_path / ".githooks" / "commit-msg").open("a") as hook:
+            hook.write("# --- BEGIN ETHOS DES-054 TRAILER ---\n" + trailer)
+    run("make", "-f", str(root / "Makefile"), "hooks")
+
+    message = tmp_path / "commit message"
+    message.write_text("Apply test gate\n")
+    run("git", "hook", "run", "commit-msg", "--", str(message))
+    assert message.read_text() == "Apply test gate\n\nMission: test-mission\n"
 
 
 def test_changed_source_selects_direct_imports(tmp_path: Path) -> None:

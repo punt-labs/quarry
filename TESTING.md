@@ -17,7 +17,9 @@ Run `make check` before opening a PR; `make check-full` also exercises a wheel.
 | Post-release | [Release workflow][release-ci] on Ubuntu: `bash scripts/smoke-release.sh published VERSION [MCPB]` | <2 min target; 5 min PyPI timeout | Verify the PyPI release before attaching the tested MCPB, then verify the downloaded asset |
 
 Install the versioned hooks with `make hooks`. This refuses to change an existing
-custom hook path; chain the two Quarry scripts from those hooks instead.
+custom hook path; chain the Quarry test hooks from those hooks instead.
+The versioned hooks preserve the default `commit-msg` hook, including Ethos
+trailers, unless Ethos already handles trailers in the active hook.
 Pre-commit uses staged path names to select tests from the working tree. Stage
 and test the same changes; avoid partial staging when relying on this result.
 Shared fixtures/configuration and unmapped source files fall back to the default
