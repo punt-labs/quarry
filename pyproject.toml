@@ -773,7 +773,7 @@ domain = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not embedding and not hook_integration'"
+addopts = "-ra -q --strict-markers -m 'not slow and not embedding and not hook_integration'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 timeout = 30

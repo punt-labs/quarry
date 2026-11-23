@@ -20,12 +20,23 @@ paths:
 | Integration | `make test-slow` | no (needs real ONNX model) | Real filesystem + ONNX model end-to-end. Carries both `slow` and `embedding`; the `embedding` marker is what lets the real model load, so removing it silently reroutes the tier through the fake. |
 | Shell scripts | `make test` (via pytest) | yes | Install script ordering, shellcheck |
 | HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
-| Wheel install | `make test-wheel` | local pre-PR gate | Build wheel → isolated venv → serve on 8422 → smoke checks |
+| Wheel install | `make test-wheel` | PR and main, required on Linux and macOS | Build once → isolated venv and loopback daemon → `remember` → `find`, diagnostics and local telemetry |
 | MCP smoke test | `docs/smoke-test.md` | post-release manual | MCP + CLI + enable/disable + install verification (see `docs/smoke-test.md` for the current check count) |
 | Release candidate | `bash scripts/smoke-release.sh candidate VERSION WHEEL` | before promotion | Install the uploaded wheel and verify `remember` → `find` |
 | Published wheel | `bash scripts/smoke-release.sh published VERSION` | after PyPI publication | Install the exact version from PyPI and repeat the round trip |
 
-`make check-full` = `make check` + `make test-wheel`. Full test suite needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
+`make check-full` = `make check` + `make test-wheel`. During development, use
+targeted tests: `uv run --extra dev pytest tests/test_specific.py -v`.
+
+Wheel smoke requires Python 3.13, uv, curl, and the pinned ONNX model. The model
+is provisioned before the daemon starts and runtime uses the local cache only.
+To skip model provisioning, set `QUARRY_SMOKE_MODEL_CACHE` to an absolute path
+to a populated Hugging Face Hub cache. The daemon allocates its own port.
+
+`make coverage` (local HTML) and `make coverage-ci` (CI XML) measure lines and
+branches in Quarry code executed in the default pytest process. They do not
+claim coverage of child processes, the installed-wheel smoke, or opt-in
+suites. CI retains the XML as `coverage-<commit>` on PRs and main.
 
 The release smokes use Python 3.13, uv, and the release's pinned ONNX model.
 They use PyPI for dependencies and provision the public model separately before
