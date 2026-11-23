@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -18,7 +17,7 @@ _BODY = "The wheel canary lives in the blue observatory."
 _GOOD = json.dumps([{"document_name": _NAME, "text": _BODY}])
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CanaryCase:
     """Inputs and expected diagnostic for a wheel canary invocation."""
 
@@ -87,7 +86,7 @@ case "$2" in
   find)
     [[ "$#" == 7 && "$1" == --json && "$3" == --collection && "$4" == wheel-smoke ]]
     [[ "$5" == --limit && "$6" == 1 && "$7" == 'blue observatory' ]]
-    [[ -e task-completed ]]
+    [[ -e task-completed && "$FAILURE" != task ]]
     printf '%s' "$SEARCH_OUTPUT"
     if [[ "$FAILURE" == nul ]]; then printf '\\000'; fi
     ;;
@@ -98,16 +97,36 @@ esac
     quarry.chmod(0o755)
     python = tmp_path / "python"
     python.write_text(
-        """#!/usr/bin/env bash
-set -eu
-if [[ "$*" == '-I - remember.json' ]]; then
-  grep -Fx '{"task_id":"canary-accepted"}' remember.json >/dev/null
-  if [[ "$FAILURE" == task ]]; then echo 'remember task failed' >&2; exit 1; fi
-  touch task-completed
-  exit
-fi
+        f"#!{sys.executable}\n"
+        """import os
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+if sys.argv[1:] != ['-I', '-', 'remember.json']:
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+
+def task_status(task_id):
+    assert task_id == 'canary-accepted'
+    pending = Path('task-pending')
+    if not pending.exists():
+        pending.touch()
+        return SimpleNamespace(status='running')
+    if os.environ['FAILURE'] == 'task':
+        return SimpleNamespace(status='failed', error='bad document')
+    Path('task-completed').touch()
+    return SimpleNamespace(status='completed')
+
+sys.modules['quarry'] = SimpleNamespace(
+    TargetResolver=SimpleNamespace(
+        connect=lambda: SimpleNamespace(task_status=task_status)
+    )
+)
+time.sleep = lambda _: None
+sys.argv = sys.argv[2:]
+exec(compile(sys.stdin.read(), '<task polling>', 'exec'))
 """
-        f'exec {shlex.quote(sys.executable)} "$@"\n'
     )
     python.chmod(0o755)
     result = subprocess.run(
