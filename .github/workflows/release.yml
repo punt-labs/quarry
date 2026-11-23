@@ -69,6 +69,8 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           cmp dist/punt-quarry.mcpb "dist/punt-quarry-$version.mcpb"
           bash scripts/smoke-release.sh candidate "$version" dist/punt_quarry-*.whl dist/punt-quarry.mcpb
+        env:
+          QUARRY_SMOKE_LIVE: "1"
 
   testpypi:
     needs: [build, candidate-smoke]
@@ -96,26 +98,37 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - name: Install from TestPyPI
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Install the exact candidate from TestPyPI
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          version="${GITHUB_REF_NAME#v}"
+          wheels=(dist/punt_quarry-*.whl)
+          [[ "${#wheels[@]}" == 1 && -f "${wheels[0]}" ]]
+          filename="${wheels[0]##*/}"
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          index="https://test.pypi.org/pypi/punt-quarry/$version/json"
+          staged="$work/$filename"
           for attempt in 1 2 3 4 5; do
-            echo "Attempt $attempt: installing punt-quarry==$VERSION from TestPyPI..."
-            if uv pip install --system \
-              --index-url https://test.pypi.org/simple/ \
-              --extra-index-url https://pypi.org/simple/ \
-              --index-strategy unsafe-best-match \
-              "punt-quarry==$VERSION"; then
-              echo "Successfully installed punt-quarry==$VERSION"
+            if metadata=$(curl -fsS --max-time 15 "$index") &&
+              url=$(jq -er --arg name "$filename" '.urls[] | select(.filename == $name) | .url' <<<"$metadata") &&
+              [[ "$url" == https://test-files.pythonhosted.org/* ]] &&
+              curl -fsSL --proto '=https' --proto-redir '=https' --max-time 20 "$url" -o "$staged"; then
+              cmp "${wheels[0]}" "$staged"
+              uv venv --python 3.13 "$work/venv"
+              uv pip install --python "$work/venv/bin/python" --default-index https://pypi.org/simple/ "$staged"
+              "$work/venv/bin/quarry" --help
+              echo "Verified the candidate wheel from TestPyPI: $filename"
               exit 0
             fi
-            echo "Attempt $attempt failed, waiting 30s..."
-            sleep 30
+            echo "TestPyPI wheel unavailable (attempt $attempt)"
+            [[ "$attempt" == 5 ]] || sleep 15
           done
-          echo "Failed to install punt-quarry==$VERSION after 5 attempts"
+          echo "::error::Could not download $filename from TestPyPI"
           exit 1
-      - name: Verify CLI
-        run: quarry --help
 
   pypi:
     needs: test-install
@@ -211,7 +224,11 @@ jobs:
             # above and this create, making `gh release create` error even
             # though the release now exists. On create failure, re-check and
             # proceed if it is present rather than failing the workflow.
-            if ! gh release create "$TAG" --generate-notes --title "$TAG"; then
+            release_flags=()
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              release_flags+=(--prerelease --latest=false)
+            fi
+            if ! gh release create "$TAG" --generate-notes --title "$TAG" "${release_flags[@]}"; then
               if ! gh release view "$TAG" >/dev/null 2>&1; then
                 echo "::error::failed to create release $TAG and it does not exist"
                 exit 1

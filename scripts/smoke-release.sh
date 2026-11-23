@@ -183,3 +183,14 @@ if [[ -n "$bundle" ]]; then
   "${isolated[@]}" "$python" -I "$script_dir/smoke-mcpb.py" "$bundle" "$version" "$body"
   printf 'PASS: Quarry MCPB %s (manifest-launched MCP find)\n' "$version"
 fi
+if [[ "${QUARRY_SMOKE_LIVE:-0}" == 1 ]]; then
+  "${isolated[@]}" "$python" -I - <<'PY'
+from quarry.http_url import HttpUrl
+from quarry.ingestion.web_fetch import WebFetcher
+
+page = WebFetcher(timeout=10).fetch_body(HttpUrl("https://example.com/"))
+if page.media_type != "text/html" or "Example Domain" not in page.text:
+    raise SystemExit("Public HTTPS canary did not return the expected page")
+PY
+  printf 'PASS: punt-quarry %s (public HTTPS fetch)\n' "$version"
+fi
