@@ -1324,6 +1324,13 @@ class TestRunInstall:
 
     def test_creates_data_directory(self, tmp_path: Path, monkeypatch: MP):
         HomeOnly.apply(monkeypatch, tmp_path)
+        for name in (
+            "HF_HUB_CACHE",
+            "HUGGINGFACE_HUB_CACHE",
+            "HF_HOME",
+            "XDG_CACHE_HOME",
+        ):
+            monkeypatch.delenv(name, raising=False)
         _mock_install_deps(monkeypatch)
         with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
@@ -1331,6 +1338,7 @@ class TestRunInstall:
         assert result == 0
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         assert data_dir.is_dir()
+        assert (tmp_path / ".punt-labs" / "quarry" / "cache").is_dir()
 
     def test_downloads_model(self, tmp_path: Path, monkeypatch: MP):
         HomeOnly.apply(monkeypatch, tmp_path)
@@ -1344,14 +1352,40 @@ class TestRunInstall:
 
     def test_idempotent(self, tmp_path: Path, monkeypatch: MP):
         HomeOnly.apply(monkeypatch, tmp_path)
+        for name in (
+            "HF_HUB_CACHE",
+            "HUGGINGFACE_HUB_CACHE",
+            "HF_HOME",
+            "XDG_CACHE_HOME",
+        ):
+            monkeypatch.delenv(name, raising=False)
         _mock_install_deps(monkeypatch)
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
+        cache = tmp_path / ".punt-labs" / "quarry" / "cache"
+        cache.mkdir()
+        (cache / "existing").write_text("keep")
         with patch(self._DL) as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
         assert result == 0
         assert data_dir.is_dir()
+        assert (cache / "existing").read_text() == "keep"
+
+    def test_provisions_override_instead_of_unavailable_default(
+        self, tmp_path: Path, monkeypatch: MP
+    ) -> None:
+        HomeOnly.apply(monkeypatch, tmp_path)
+        _mock_install_deps(monkeypatch)
+        default = tmp_path / ".punt-labs" / "quarry" / "cache"
+        default.parent.mkdir(parents=True)
+        default.write_text("existing")
+        selected = tmp_path / "hub"
+        monkeypatch.setenv("HF_HUB_CACHE", str(selected))
+        with patch(self._DL, return_value=("/fake/model.onnx", "/fake/tokenizer.json")):
+            assert run_install() == 0
+        assert selected.is_dir()
+        assert default.read_text() == "existing"
 
     def test_gpu_restore_failed_marks_error(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
@@ -1688,7 +1722,7 @@ class TestCheckShadowRepo:
         # report a required failure (fail-CLOSED), never crash and never a
         # green check that could mask a tracked-capture leak.
         config = MagicMock(enabled=True, remote="git@h:o/r-quarry.git")
-        repo = MagicMock()
+        repo = MagicMock(captures_dir=tmp_path / ".punt-labs/local/quarry/captures")
         repo.parent_tracked_captures.side_effect = RuntimeError(
             "parent capture enumeration failed: git ls-files exited 1"
         )
@@ -1696,7 +1730,7 @@ class TestCheckShadowRepo:
         assert result.passed is False
         assert result.required is True
         assert "cannot verify parent-tracked captures" in result.message
-        assert ".punt-labs/quarry/captures" in result.message  # the shadow repo
+        assert ".punt-labs/local/quarry/captures" in result.message  # the shadow repo
 
     def test_public_remote_refusal(self, tmp_path: Path) -> None:
         from quarry.shadow.visibility import Visibility

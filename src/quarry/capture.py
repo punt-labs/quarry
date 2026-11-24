@@ -10,13 +10,14 @@ atomic, so a partial or half-redacted capture is never left behind.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from quarry.capture_file import CaptureFile
 from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from quarry.artifacts import SessionArtifacts
     from quarry.capture_outcome import CaptureResult
 
@@ -39,8 +40,7 @@ class CaptureRequest:
 
     def capture_path(self) -> Path:
         """Return the capture file's path under the project's captures dir."""
-        captures_dir = self.project_dir / ".punt-labs" / "quarry" / "captures"
-        return captures_dir / f"session-{self.session_id[:8]}.md"
+        return CaptureFile.path_for(self)
 
     def scrubbed_content(self) -> str:
         """Return the scrubbed frontmatter+body, or ``""`` if no frontmatter."""

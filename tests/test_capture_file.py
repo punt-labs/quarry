@@ -7,6 +7,7 @@ import fcntl
 import logging
 import os
 import stat
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,11 +19,80 @@ from quarry.capture_directory import CaptureDirectory
 from quarry.capture_file import CaptureFile
 from quarry.capture_outcome import CaptureOutcome
 from quarry.capture_temp import CaptureTemp
+from quarry.checkout_ignore import CheckoutIgnore
 
 _NAME = "session-abcd1234.md"
 _EMPTY_ARTIFACTS = SessionArtifacts(
     commit_shas=(), pr_numbers=(), branch_names=(), bead_ids=()
 )
+
+
+def test_git_capture_needs_the_private_zone_ignored(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    legacy = tmp_path / ".punt-labs" / "quarry" / "captures"
+    legacy.mkdir(parents=True)
+    (legacy / _NAME).write_text("legacy capture")
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text(".punt-labs/quarry/captures/\n")
+
+    new_path = tmp_path / ".punt-labs" / "local" / "quarry" / "captures" / _NAME
+    assert _write(tmp_path) is CaptureOutcome.FAILED
+    assert not new_path.exists()
+
+    gitignore.write_text(".punt-labs/quarry/captures/\n.punt-labs/**/local\n")
+    assert _write(tmp_path) is CaptureOutcome.WRITTEN
+    assert new_path.is_file()
+    assert (legacy / _NAME).read_text() == "legacy capture"
+
+    subprocess.run(
+        ["git", "add", "-f", "--", str(new_path)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    assert _write(tmp_path) is CaptureOutcome.FAILED
+
+
+def test_capture_stays_ignored_after_git_init(tmp_path: Path) -> None:
+    with patch.object(CheckoutIgnore, "_has_checkout", return_value=False):
+        assert _write(tmp_path) is CaptureOutcome.WRITTEN
+        assert _write(tmp_path) is CaptureOutcome.WRITTEN
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    (_captures(tmp_path) / ".gitignore").write_text("*\n!.gitignore\n!session-*.md\n")
+    assert _write(tmp_path, session_id="12345678") is CaptureOutcome.WRITTEN
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+    staged = subprocess.run(
+        ["git", "ls-files"], cwd=tmp_path, check=True, capture_output=True
+    )
+    assert staged.stdout == b""
+    assert (_captures(tmp_path) / _NAME).is_file()
+
+
+def test_capture_keeps_the_same_root_after_ignore_check(tmp_path: Path) -> None:
+    checked = tmp_path / "checked"
+    unchecked = tmp_path / "unchecked"
+    for root in (checked, unchecked):
+        root.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+    (checked / ".gitignore").write_text(".punt-labs/local/\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to(checked)
+    covers = CheckoutIgnore.covers
+
+    def check_then_retarget(
+        root: Path, paths: tuple[str, ...], *, include_parents: bool
+    ) -> bool | None:
+        ignored = covers(root, paths, include_parents=include_parents)
+        alias.unlink()
+        alias.symlink_to(unchecked)
+        return ignored
+
+    with patch.object(CheckoutIgnore, "covers", check_then_retarget):
+        assert _write(alias) is CaptureOutcome.WRITTEN
+
+    assert (_captures(checked) / _NAME).is_file()
+    assert not (_captures(unchecked) / _NAME).exists()
 
 
 def _request(root: Path, *, session_id: str = "abcd1234ef") -> CaptureRequest:
@@ -141,7 +211,7 @@ def test_a_symlinked_captures_directory_is_refused_and_nothing_lands_outside(
 ) -> None:
     elsewhere = _victim(tmp_path)
     root = tmp_path / "project"
-    quarry_dir = root / ".punt-labs" / "quarry"
+    quarry_dir = root / ".punt-labs" / "local" / "quarry"
     quarry_dir.mkdir(parents=True)
     (quarry_dir / "captures").symlink_to(elsewhere)
 
@@ -155,7 +225,7 @@ def test_a_symlinked_ancestor_is_refused_and_nothing_lands_outside(
     tmp_path: Path,
 ) -> None:
     elsewhere = _victim(tmp_path)
-    (elsewhere / "quarry" / "captures").mkdir(parents=True)
+    (elsewhere / "local" / "quarry" / "captures").mkdir(parents=True)
     root = tmp_path / "project"
     root.mkdir()
     (root / ".punt-labs").symlink_to(elsewhere)
@@ -163,7 +233,7 @@ def test_a_symlinked_ancestor_is_refused_and_nothing_lands_outside(
     outcome = _write(root)
 
     assert outcome is CaptureOutcome.SYMLINK
-    assert list((elsewhere / "quarry" / "captures").iterdir()) == []
+    assert list((elsewhere / "local" / "quarry" / "captures").iterdir()) == []
 
 
 def test_a_project_root_reached_through_a_symlink_is_fine(tmp_path: Path) -> None:
@@ -202,8 +272,10 @@ def test_a_directory_swapped_for_a_symlink_after_it_was_opened_is_not_followed(
     elsewhere = _victim(tmp_path)
     real_open = CaptureDirectory.open
 
-    def opens_then_swaps(self: CaptureDirectory, *, create: bool) -> int:
-        fd = real_open(self, create=create)
+    def opens_then_swaps(
+        self: CaptureDirectory, *, create: bool, protect: bool = False
+    ) -> int:
+        fd = real_open(self, create=create, protect=protect)
         captures = _captures(tmp_path)
         captures.rename(tmp_path / "moved")
         captures.symlink_to(elsewhere)  # the attacker's move, after the open

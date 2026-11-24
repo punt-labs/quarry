@@ -125,7 +125,7 @@ and runs `SessionTranscriptCapture(...).capture()` (`src/quarry/session_transcri
 
 1. archive the raw JSONL to `~/.punt-labs/quarry/sessions/session-<id8>-<ts>.jsonl` (`session_transcript.py:124-132`; `src/quarry/transcript_reader.py:79-106`);
 2. extract text — every user/assistant turn, tool results ≤500 chars, front-truncated to 500 000 chars (`transcript_reader.py:39-77,108-171`);
-3. write the scrubbed `.md` under `<cwd>/.punt-labs/quarry/captures/` (`session_transcript.py:134-154`; `src/quarry/capture.py:57-88`);
+3. write the scrubbed `.md` under `<cwd>/.punt-labs/local/quarry/captures/` (PLD-2; `session_transcript.py`, `capture.py`);
 4. POST `CaptureIngestRequest(content=wire_text, cwd, session_id=agent_id, agent_handle, format_hint="markdown")` (`session_transcript.py:156-171`) via `DaemonCaptureSender.send_capture` with a 5 s cap (`src/quarry/daemon_capture.py:28,48-55`).
 
 The daemon files it as document `session-<agent_id[:8]>` (`captures.py:109-124`)

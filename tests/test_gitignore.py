@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import fnmatch
+import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from quarry.file_lock import FILE_LOCK_GITIGNORE_GLOB
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY, QuarryGitignore
+
+if TYPE_CHECKING:
+    from pytest import MonkeyPatch
 
 
 def test_ensure_creates_missing_gitignore(tmp_path: Path) -> None:
@@ -66,6 +71,47 @@ def test_ensure_backfills_only_the_missing_entry(tmp_path: Path) -> None:
     content = (tmp_path / ".gitignore").read_text()
     assert content == f"{CAPTURES_GITIGNORE_ENTRY}\n{FILE_LOCK_GITIGNORE_GLOB}\n"
     assert content.count(CAPTURES_GITIGNORE_ENTRY) == 1
+
+
+def test_ensure_reuses_the_canonical_local_ignore_in_git(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    path = tmp_path / ".gitignore"
+    original = ".punt-labs/**/local\n# === Repo-specific ===\n"
+    path.write_text(original)
+
+    assert QuarryGitignore(tmp_path).ensure()
+    assert path.read_text() == original + FILE_LOCK_GITIGNORE_GLOB + "\n"
+
+
+def test_ensure_protects_untracked_legacy_captures(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    old_capture = tmp_path / ".punt-labs/quarry/captures/session-old.md"
+    old_capture.parent.mkdir(parents=True)
+    old_capture.write_text("legacy capture")
+    (tmp_path / ".gitignore").write_text(".punt-labs/local/\n")
+    gitignore = QuarryGitignore(tmp_path)
+
+    assert gitignore.ensure()
+    assert not gitignore.ensure()
+    subprocess.run(
+        ["git", "check-ignore", "--", str(old_capture)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    assert old_capture.read_text() == "legacy capture"
+
+
+def test_ensure_writes_the_ignore_rules_without_git(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    monkeypatch.setenv("PATH", "")
+
+    assert QuarryGitignore(tmp_path).ensure()
+    assert (tmp_path / ".gitignore").read_text() == (
+        f"{CAPTURES_GITIGNORE_ENTRY}\n{FILE_LOCK_GITIGNORE_GLOB}\n"
+    )
 
 
 def test_ensure_twice_does_not_duplicate_any_entry(tmp_path: Path) -> None:

@@ -1199,7 +1199,7 @@ class TestACaptureThatWasNotWrittenSaysWhy:
         self, tmp_path: Path
     ) -> None:
         env = _registered_env(tmp_path)
-        target = env["real_project"] / ".punt-labs" / "quarry" / "captures"
+        target = env["real_project"] / ".punt-labs" / "local" / "quarry" / "captures"
         target.mkdir(parents=True)
         (target / "session-abcd1234.md").symlink_to(tmp_path / "elsewhere.md")
         writer = RecordingWriter()
@@ -1840,7 +1840,14 @@ class TestBackfillCaptureRedaction:
         os.utime(transcript, (1_700_000_000, 1_700_000_000))
         session = BackfillSession(transcript, str(tmp_path), text)
         CaptureWriter().outcome(session.capture_request())
-        return tmp_path / ".punt-labs" / "quarry" / "captures" / "session-sess1234.md"
+        return (
+            tmp_path
+            / ".punt-labs"
+            / "local"
+            / "quarry"
+            / "captures"
+            / "session-sess1234.md"
+        )
 
     def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
         capture = self._write(
@@ -1871,7 +1878,7 @@ class TestBackfillCaptureRedaction:
         session = BackfillSession(missing, str(tmp_path), "ran /Users/jdoe/x here")
         CaptureWriter().outcome(session.capture_request())
 
-        captures = tmp_path / ".punt-labs" / "quarry" / "captures"
+        captures = tmp_path / ".punt-labs" / "local" / "quarry" / "captures"
         content = (captures / "session-sess1234.md").read_text(encoding="utf-8")
         assert "~/x" in content
         assert "/Users/" not in content

@@ -14,6 +14,8 @@ from quarry.failure_reason import FailureReason
 from quarry.redacted_failure import RedactedFailure
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from quarry.capture import CaptureRequest
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,14 @@ class CaptureFile:
         """Write the capture file; return whether one landed."""
         return self.write().outcome is CaptureOutcome.WRITTEN
 
+    @staticmethod
+    def path_for(request: CaptureRequest) -> Path:
+        """Return the path reserved for this session's Markdown capture."""
+        return (
+            CaptureDirectory.path_at(request.project_dir)
+            / f"session-{request.session_id[:8]}.md"
+        )
+
     def write(self) -> CaptureResult:
         """Scrub the request and write its capture file; say how that ended."""
         try:
@@ -67,8 +77,9 @@ class CaptureFile:
         if not content:
             return CaptureOutcome.EMPTY
         name = self._request.capture_path().name
+        directory = CaptureDirectory(self._request.project_dir)
         try:
-            with CaptureDirectory(self._request.project_dir).opened(create=True) as fd:
+            with directory.opened_for_write(name) as fd:
                 return self._store(fd, name, content)
         except CaptureSymlinkError:
             logger.warning(

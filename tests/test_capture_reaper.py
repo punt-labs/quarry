@@ -97,7 +97,7 @@ def test_a_symlinked_captures_directory_reaps_nothing_outside(tmp_path: Path) ->
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     outside = _leftover(elsewhere, _STALE, age_s=7200)
-    quarry_dir = tmp_path / "project" / ".punt-labs" / "quarry"
+    quarry_dir = tmp_path / "project" / ".punt-labs" / "local" / "quarry"
     quarry_dir.mkdir(parents=True)
     (quarry_dir / "captures").symlink_to(elsewhere)
 

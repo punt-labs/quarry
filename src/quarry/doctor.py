@@ -236,7 +236,7 @@ def run_install() -> int:
     print(f"punt-quarry {_quarry_version()}")  # noqa: T201
     print()  # noqa: T201
 
-    # Step 1: data + logs directories
+    # Step 1: data, logs, and cache directories
     print("[1/7] Creating directories...")  # noqa: T201
     failed = not InstallDirectories.create()
 

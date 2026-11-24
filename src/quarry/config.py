@@ -13,11 +13,6 @@ from quarry.home_paths import QuarryHome
 
 logger = logging.getLogger(__name__)
 
-ONNX_MODEL_REPO = "Snowflake/snowflake-arctic-embed-m-v1.5"
-ONNX_MODEL_REVISION = "e58a8f756156a1293d763f17e3aae643474e9b8a"
-ONNX_TOKENIZER_FILE = "tokenizer.json"
-ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
-
 # The resident daemon's file-descriptor budget: the soft RLIMIT_NOFILE FdEnvelope
 # raises to at daemon start.  Many times the bounded working set of a large roster,
 # and well under any reasonable hard limit, so the roster has room to grow.

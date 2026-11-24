@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 from typing import Self, final
 
+from quarry.capture_directory import CaptureDirectory
 from quarry.shadow._git import GitRunner
 from quarry.shadow.config import ShadowConfig
 from quarry.shadow.visibility import Visibility
@@ -39,8 +40,8 @@ _ALLOWLIST_GITIGNORE = "*\n!.gitignore\n!session-*.md\n"
 # stops *future* tracking but does NOT purge history: a capture already committed
 # (and especially already pushed) stays exposed via `git log`/`git show`.
 PARENT_TRACKED_REMEDIATION = (
-    "run `git rm --cached -r .punt-labs/quarry/captures && git commit` to stop "
-    "tracking (the working files stay on disk for the shadow to adopt). Note: "
+    "run `git rm --cached -r -- <listed capture paths>`, then `git commit` to "
+    "stop tracking (the working files stay on disk). Note: "
     "this does NOT purge history — a capture already committed/pushed needs a "
     "history purge (git filter-repo or BFG) plus a force-push, coordinated with "
     "the repo owner (force-push rewrites shared history)."
@@ -65,13 +66,13 @@ class ShadowRepo:
     _parent_git: GitRunner
     _repo_git: GitRunner
 
-    def __new__(cls, captures_dir: Path, parent: Path, configured_remote: str) -> Self:
+    def __new__(cls, parent: Path, configured_remote: str) -> Self:
         """Bind capture and parent git operations to the configured shadow remote."""
         self = super().__new__(cls)
-        self._captures_dir = captures_dir
+        self._captures_dir = CaptureDirectory.path_at(parent)
         self._parent = parent
         self._configured_remote = configured_remote
-        self._repo_git = GitRunner(captures_dir)
+        self._repo_git = GitRunner(self._captures_dir)
         self._parent_git = GitRunner(parent)
         return self
 
@@ -101,7 +102,7 @@ class ShadowRepo:
         directory argument when that directory exists on disk — probing a file
         path under it matches the rule whether or not the dir yet exists.
         """
-        probe = str(Path(self._captures_rel()) / "session-probe.md")
+        probe = f"{CaptureDirectory.RELATIVE_PATH}/session-probe.md"
         return self._parent_git.ok(["git", "check-ignore", "--", probe])
 
     def parent_in_work_tree(self) -> bool:
@@ -147,7 +148,13 @@ class ShadowRepo:
             return []
         out = self._ls_files(
             self._parent_git,
-            ["git", "ls-files", "--", self._captures_rel()],
+            [
+                "git",
+                "ls-files",
+                "--",
+                CaptureDirectory.RELATIVE_PATH,
+                CaptureDirectory.LEGACY,
+            ],
             "parent capture",
         )
         return [Path(line) for line in out.splitlines() if line]
@@ -202,7 +209,8 @@ class ShadowRepo:
 
     def _init_repo(self) -> bool:
         """Create the captures dir and nested git repo; False on init failure."""
-        self._captures_dir.mkdir(parents=True, exist_ok=True)
+        with CaptureDirectory(self._parent).opened(create=True):
+            pass
         if not self.is_initialized and not self._repo_git.ok(
             ["git", "init", "-b", "main", "."]
         ):
@@ -356,9 +364,3 @@ class ShadowRepo:
         local_has_commit = self._repo_git.ok(["git", "rev-parse", "--verify", "HEAD"])
         if remote_has_main and not local_has_commit:
             self._repo_git.run(["git", "reset", "--mixed", "origin/main"])
-
-    def _captures_rel(self) -> str:
-        try:
-            return str(self._captures_dir.relative_to(self._parent))
-        except ValueError:
-            return str(self._captures_dir)

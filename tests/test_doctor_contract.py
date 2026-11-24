@@ -1015,9 +1015,15 @@ def test_a_malformed_setting_is_reported_with_no_roots_either() -> None:
     assert any("invalid settings (ingest_drain_timeout_s" in line for line in failing)
 
 
-def test_a_shadow_leak_is_still_a_failure_without_a_home(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "relative",
+    [".punt-labs/quarry/captures", ".punt-labs/local/quarry/captures"],
+)
+def test_a_shadow_leak_is_still_a_failure_without_a_home(
+    tmp_path: Path, relative: str
+) -> None:
     repo = tmp_path / "project"
-    captures = repo / ".punt-labs" / "quarry" / "captures"
+    captures = repo / relative
     captures.mkdir(parents=True)
     (captures / "session-old.md").write_text("a capture that must stay private\n")
     for argv in (

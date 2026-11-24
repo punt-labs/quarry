@@ -7,6 +7,8 @@ import errno
 import os
 from typing import TYPE_CHECKING, ClassVar, Self, final
 
+from quarry.checkout_ignore import CheckoutIgnore
+
 if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
@@ -30,7 +32,11 @@ class CaptureDirectory:
     everything done through it stays inside it.
     """
 
-    RELATIVE: ClassVar[tuple[str, ...]] = (".punt-labs", "quarry", "captures")
+    RELATIVE: ClassVar[tuple[str, ...]] = (".punt-labs", "local", "quarry", "captures")
+    RELATIVE_PATH: ClassVar[str] = "/".join(RELATIVE)
+    LEGACY: ClassVar[str] = ".punt-labs/quarry/captures"
+    IGNORE: ClassVar[str] = RELATIVE_PATH + "/"
+    IGNORE_PATTERNS: ClassVar[tuple[str, str]] = (IGNORE, LEGACY + "/")
 
     __slots__ = ("_root",)
 
@@ -39,19 +45,42 @@ class CaptureDirectory:
     def __new__(cls, root: Path) -> Self:
         """Anchor capture-directory traversal at the supplied project root."""
         self = super().__new__(cls)
-        self._root = root
+        self._root = root.resolve()
         return self
 
+    @classmethod
+    def path_at(cls, root: Path) -> Path:
+        """Return the project's private captures path (PLD-2)."""
+        return root.joinpath(*cls.RELATIVE)
+
+    def is_ignored(self, name: str, *, include_parents: bool = False) -> bool | None:
+        """Check the directory and target; return None when not in Git."""
+        return CheckoutIgnore.covers(
+            self._root,
+            (self.IGNORE, f"{self.IGNORE}{name}"),
+            include_parents=include_parents,
+        )
+
     @contextlib.contextmanager
-    def opened(self, *, create: bool) -> Generator[int]:
+    def opened_for_write(self, name: str) -> Generator[int]:
+        """Open safely and refuse writes unless the checkout excludes this target."""
+        ignored = self.is_ignored(name, include_parents=True)
+        with self.opened(create=True, protect=ignored is None) as fd:
+            if ignored is False:
+                msg = f"protect {self.IGNORE} in .gitignore"
+                raise PermissionError(msg)
+            yield fd
+
+    @contextlib.contextmanager
+    def opened(self, *, create: bool, protect: bool = False) -> Generator[int]:
         """Hold a descriptor for the directory for the length of the block."""
-        fd = self.open(create=create)
+        fd = self.open(create=create, protect=protect)
         try:
             yield fd
         finally:
             os.close(fd)
 
-    def open(self, *, create: bool) -> int:
+    def open(self, *, create: bool, protect: bool = False) -> int:
         """Return a descriptor for the directory, creating it if *create*.
 
         The caller closes it.  The captures directory itself is created
@@ -64,9 +93,13 @@ class CaptureDirectory:
         """
         fd = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
         for index, part in enumerate(self.RELATIVE):
-            mode = 0o700 if index == len(self.RELATIVE) - 1 else 0o755
+            is_leaf = index == len(self.RELATIVE) - 1
             try:
-                child = self._descend(fd, part, mode, create=create)
+                if is_leaf and protect:
+                    CheckoutIgnore.protect_future_checkout(fd, part)
+                child = self._descend(
+                    fd, part, 0o700 if is_leaf else 0o755, create=create
+                )
             finally:
                 os.close(fd)
             fd = child

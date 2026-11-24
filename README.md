@@ -281,7 +281,9 @@ If the scrubber itself fails, the capture is not written. Content you add
 yourself with `ingest` or `remember` is not scrubbed. See [DES-036 in
 DESIGN.md](DESIGN.md).
 
-**Private capture repo.** You can opt in to a private companion repo per
+**Private capture repo.** Scrubbed session capture files live in the checkout's
+ignored `.punt-labs/local/quarry/captures/` directory (PLD-2, PLD-4). You can
+opt in to a private companion repo per
 project (`<repo>` → private `<repo>-quarry`) so that scrubbed captures are
 pushed there instead of living in the public repo's history. Set it up with
 `quarry captures init`. See [DES-039 in DESIGN.md](DESIGN.md) and

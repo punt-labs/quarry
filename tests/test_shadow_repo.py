@@ -18,7 +18,7 @@ from quarry.shadow.rescrub import CaptureReScrubber
 from quarry.shadow.sync import CaptureSync
 from quarry.shadow.visibility import Visibility
 
-_CAPTURES = (".punt-labs", "quarry", "captures")
+_CAPTURES = (".punt-labs", "local", "quarry", "captures")
 
 
 @pytest.fixture(autouse=True)
@@ -39,15 +39,14 @@ def _public_repo(tmp_path: Path, *, ignore_captures: bool = True) -> Path:
     _git(repo, "init", "-b", "main")
     (repo / "README.md").write_text("public repo\n")
     if ignore_captures:
-        (repo / ".gitignore").write_text(".punt-labs/quarry/captures/\n")
+        (repo / ".gitignore").write_text(".punt-labs/**/local\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "init")
     return repo
 
 
 def _repo(public: Path, remote: str = "git@h:o/r-quarry.git") -> ShadowRepo:
-    captures = public.joinpath(*_CAPTURES)
-    return ShadowRepo(captures, public, remote)
+    return ShadowRepo(public, remote)
 
 
 def _tracked_files(captures: Path) -> list[str]:
@@ -77,7 +76,7 @@ class TestBootstrapGates:
         _git(public, "add", "-A")
         _git(public, "commit", "-m", "committed a capture")
         # Now add the gitignore (does NOT untrack the already-committed file).
-        (public / ".gitignore").write_text(".punt-labs/quarry/captures/\n")
+        (public / ".gitignore").write_text(".punt-labs/**/local\n")
         _git(public, "add", ".gitignore")
         _git(public, "commit", "-m", "ignore captures")
 

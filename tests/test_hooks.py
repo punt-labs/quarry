@@ -2299,7 +2299,12 @@ class TestPreCompactCaptureRedaction:
         )
 
         capture = (
-            tmp_path / ".punt-labs" / "quarry" / "captures" / "session-abcd1234.md"
+            tmp_path
+            / ".punt-labs"
+            / "local"
+            / "quarry"
+            / "captures"
+            / "session-abcd1234.md"
         )
         content = capture.read_text(encoding="utf-8")
         assert "/Users/" not in content

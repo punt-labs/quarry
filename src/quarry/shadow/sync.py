@@ -27,8 +27,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CAPTURES_SUBPATH = (".punt-labs", "quarry", "captures")
-
 
 @dataclass(frozen=True, slots=True)
 class ShadowSyncResult:
@@ -124,9 +122,8 @@ class CaptureSync:
         config = ShadowConfig.from_project(directory)
         if config is None:
             return None
-        captures_dir = directory.joinpath(*_CAPTURES_SUBPATH)
-        repo = ShadowRepo(captures_dir, directory, config.remote)
-        rescrubber = CaptureReScrubber(captures_dir)
+        repo = ShadowRepo(directory, config.remote)
+        rescrubber = CaptureReScrubber(repo.captures_dir)
         return cls(directory, config, repo, rescrubber)
 
     @classmethod

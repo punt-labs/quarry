@@ -14,6 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (FS-4, FS-7):** Quarry now caches the embedding model in
+  `~/.punt-labs/quarry/cache/` instead of `~/.cache/huggingface/hub/` by default.
+  Existing files are left untouched. To reuse them, set `HF_HUB_CACHE` to the
+  old hub path or copy the model's `models--Snowflake--snowflake-arctic-embed-m-v1.5`
+  directory, preserving symlinks, into the new cache.
+- **Breaking (PLD-2, PLD-4):** Checkout-local capture files and their optional
+  shadow Git repository now live in `.punt-labs/local/quarry/captures/` instead
+  of `.punt-labs/quarry/captures/`. Quarry leaves the old directory untouched.
+  Before capturing or pushing from an upgraded checkout, ensure Git ignores the
+  new path (or rerun `quarry enable`). To preserve existing captures and unpushed
+  shadow history, move the entire directory, including the nested `.git`, to the
+  new location while Quarry is idle and before the new directory exists. Keep the
+  old ignore rule until no private files remain there.
+
 ## [3.9.1] - 2026-11-22
 
 ### Added

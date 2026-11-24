@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self
 
-from quarry.config import ONNX_MODEL_REVISION
 from quarry.db.facade import Database
 from quarry.db.schema import TABLE_NAME
+from quarry.model_cache import ONNX_MODEL_REVISION
 from tools.eval.judged_unit import JudgedUnit
 
 if TYPE_CHECKING:

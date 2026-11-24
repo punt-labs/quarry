@@ -19,6 +19,12 @@ These customize the local daemon; none are required for a default install.
 
 The full configuration reference is in [docs/architecture.tex](docs/architecture.tex).
 
+Quarry uses `~/.punt-labs/quarry/cache/` for its embedding model and tokenizer
+(FS-4). Explicit overrides take precedence in this order: `HF_HUB_CACHE`,
+`HUGGINGFACE_HUB_CACHE`, `HF_HOME/hub`, then `XDG_CACHE_HOME/huggingface/hub`.
+Relative overrides are resolved from the user's home, not the daemon's or
+the CLI's working directory.
+
 ## Remote Server
 
 Run quarry on a GPU host and connect from any Mac or Linux client over TLS. On the server, set an API key and install in network mode (binds `0.0.0.0`, registers a service, prints a CA fingerprint):

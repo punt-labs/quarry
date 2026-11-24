@@ -21,7 +21,7 @@ from typing import Final, Self, final
 
 import pathspec
 
-from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
+from quarry.capture_directory import CaptureDirectory
 from quarry.scratch_paths import ScratchGuard
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
     # scrubbed captures (the daemon's <repo>-captures) must never be folded into
     # the project's MAIN collection by directory sync.  Shared with
     # quarry.gitignore's own ``.gitignore``-writing entry so the two never drift.
-    CAPTURES_GITIGNORE_ENTRY,
+    *CaptureDirectory.IGNORE_PATTERNS,
 ]
 
 
