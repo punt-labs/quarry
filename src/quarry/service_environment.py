@@ -44,32 +44,60 @@ class ServiceEnvironment:
 
     @classmethod
     def installed_cache(cls) -> Path | None:
-        """Read the cache override from the installed service definition."""
+        """Return the managed cache, or None when no service is installed."""
         try:
-            value = cls._installed_cache_value()
-        except (HomeUnresolvedError, OSError, ValueError, ExpatError):
+            return cls._read_installed_cache()
+        except (HomeUnresolvedError, FileNotFoundError):
             return None
-        if isinstance(value, str) and (path := Path(value)).is_absolute():
-            return path
+        except (OSError, ValueError, ExpatError) as exc:
+            msg = f"cannot read installed service settings ({type(exc).__name__})"
+            raise ValueError(msg) from None
+
+    @classmethod
+    def _read_installed_cache(cls) -> Path | None:
+        system = platform.system()
+        if system == "Darwin":
+            return cls._cache_path(cls._launchd_cache())
+        if system == "Linux" and QuarryHome.systemd_unit().is_file():
+            return cls._cache_path(cls._systemd_cache())
         return None
 
     @staticmethod
-    def _installed_cache_value() -> object:
-        system = platform.system()
-        if system == "Darwin":
-            plist: object = plistlib.loads(
-                QuarryHome.launchd_plist(SERVICE_LABEL).read_bytes()
-            )
-            if isinstance(plist, dict) and isinstance(
-                env := plist.get("EnvironmentVariables"), dict
-            ):
-                return env.get(_CACHE_KEY)
-        if system == "Linux" and QuarryHome.systemd_unit().is_file():
-            for entry in shlex.split(QuarryHome.env_file().read_text(), comments=True):
-                key, _, value = entry.partition("=")
-                if key == _CACHE_KEY:
-                    return value
+    def _launchd_cache() -> object:
+        plist: object = plistlib.loads(
+            QuarryHome.launchd_plist(SERVICE_LABEL).read_bytes()
+        )
+        if isinstance(plist, dict) and isinstance(
+            env := plist.get("EnvironmentVariables"), dict
+        ):
+            return env.get(_CACHE_KEY)
         return None
+
+    @staticmethod
+    def _systemd_cache() -> str | None:
+        try:
+            content = QuarryHome.env_file().read_text()
+        except FileNotFoundError:
+            return None
+        entries = shlex.split(content, comments=True)
+        prefix = f"{_CACHE_KEY}="
+        return next(
+            (
+                entry.removeprefix(prefix)
+                for entry in reversed(entries)
+                if entry.startswith(prefix)
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _cache_path(value: object) -> Path:
+        if value is None:
+            return QuarryHome.cache_root()
+        if isinstance(value, str) and (path := Path(value)).is_absolute():
+            return path
+        msg = "expected an absolute cache path in installed service settings"
+        raise ValueError(msg)
 
     @staticmethod
     def _values(api_key: str, policy: ShutdownPolicy) -> dict[str, str]:

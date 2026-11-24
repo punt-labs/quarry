@@ -50,12 +50,15 @@ def test_override_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 
 
 @pytest.mark.parametrize("system", ["Linux", "Darwin"])
+@pytest.mark.parametrize("override", [False, True])
 def test_doctor_checks_the_cache_saved_by_managed_install(
-    system: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    system: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, override: bool
 ) -> None:
     monkeypatch.setattr("quarry.service_environment.platform.system", lambda: system)
-    cache = tmp_path / 'cache & "models"'
-    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    cache = QuarryHome.cache_root()
+    if override:
+        cache = tmp_path / 'cache & "models"'
+        monkeypatch.setenv("HF_HUB_CACHE", str(cache))
     if system == "Linux":
         unit = QuarryHome.systemd_unit()
         unit.parent.mkdir(parents=True)
@@ -69,7 +72,10 @@ def test_doctor_checks_the_cache_saved_by_managed_install(
             f'<plist version="1.0"><dict><key>EnvironmentVariables</key>'
             f"<dict>{entries}</dict></dict></plist>"
         )
-    monkeypatch.delenv("HF_HUB_CACHE")
+    if override:
+        monkeypatch.delenv("HF_HUB_CACHE")
+    else:
+        monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "unrelated-shell-cache"))
     model = cache / ("models--" + ONNX_MODEL_REPO.replace("/", "--"))
     snapshot = model / "snapshots" / ONNX_MODEL_REVISION
     (snapshot / "onnx").mkdir(parents=True)
@@ -77,6 +83,24 @@ def test_doctor_checks_the_cache_saved_by_managed_install(
     (snapshot / "tokenizer.json").write_text("tokenizer")
 
     assert EmbeddingModel.check().passed
+
+
+def test_doctor_reports_invalid_managed_service_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("quarry.service_environment.platform.system", lambda: "Linux")
+    unit = QuarryHome.systemd_unit()
+    unit.parent.mkdir(parents=True)
+    unit.touch()
+    config = QuarryHome.env_file()
+    config.parent.mkdir(parents=True)
+    config.write_text('HF_HUB_CACHE="/unclosed\n')
+
+    result = EmbeddingModel.check()
+
+    assert not result.passed
+    assert "cannot read installed service settings" in result.message
+    assert "/unclosed" not in result.message
 
 
 @pytest.mark.parametrize("override", [False, True])
