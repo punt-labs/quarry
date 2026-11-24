@@ -103,11 +103,13 @@ class ServiceEnvironment:
 
     @staticmethod
     def _values(api_key: str, policy: ShutdownPolicy) -> dict[str, str]:
-        values = {"MALLOC_CONF": MALLOC_CONF, policy.ENV_NAME: f"{policy.total_s:g}"}
+        values = {
+            "MALLOC_CONF": MALLOC_CONF,
+            policy.ENV_NAME: f"{policy.total_s:g}",
+            _CACHE_KEY: str(ModelCache.root()),
+        }
         if api_key:
             values["QUARRY_API_KEY"] = api_key
-        if ModelCache.override() is not None:
-            values[_CACHE_KEY] = str(ModelCache.root())
         return values
 
     @staticmethod

@@ -64,10 +64,14 @@ def test_doctor_checks_the_cache_saved_by_managed_install(
         unit.parent.mkdir(parents=True)
         unit.touch()
         ServiceEnvironment.write()
+        if not override:
+            assert f'HF_HUB_CACHE="{cache}"' in QuarryHome.env_file().read_text()
     else:
         plist = QuarryHome.launchd_plist(SERVICE_LABEL)
         plist.parent.mkdir(parents=True)
         entries = ServiceEnvironment.launchd_entries("", ShutdownPolicy.from_settings())
+        if not override:
+            assert f"<string>{cache}</string>" in entries
         plist.write_text(
             f'<plist version="1.0"><dict><key>EnvironmentVariables</key>'
             f"<dict>{entries}</dict></dict></plist>"

@@ -24,8 +24,8 @@ Quarry uses `~/.punt-labs/quarry/cache/` for its embedding model and tokenizer
 `HUGGINGFACE_HUB_CACHE`, `HF_HOME/hub`, then `XDG_CACHE_HOME/huggingface/hub`.
 Relative overrides are resolved from the user's home, not the daemon's or
 the CLI's working directory.
-Managed services keep the override selected when you run `quarry install`;
-rerun it to change or clear that override. When a managed service is
+Managed services keep the cache selected when you run `quarry install`;
+rerun it to change or clear an override. When a managed service is
 installed, `quarry doctor` checks its cache even from a different shell.
 
 ## Remote Server
