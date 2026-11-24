@@ -59,10 +59,8 @@ USER tester
 WORKDIR /home/tester
 ENV PATH=/home/tester/.local/bin:${PATH}
 
-# Pre-seeded model cache in the user's OWN cache dir (owned + writable by tester),
-# so install.sh's model download is a hit. HF_HOME defaults to ~/.cache/huggingface,
-# whose hub/ subdir is exactly what the seed stage populated under /opt/hf-cache/hub.
-COPY --from=modelcache --chown=tester:tester /opt/hf-cache /home/tester/.cache/huggingface
+# Seed Quarry's default model cache so install.sh does not redownload it.
+COPY --from=modelcache --chown=tester:tester /opt/hf-cache/hub /home/tester/.punt-labs/quarry/cache
 
 # The installer under test, the working-tree wheel, and the executable guide —
 # copied last so a change to any of them does not bust the apt/model layers. The

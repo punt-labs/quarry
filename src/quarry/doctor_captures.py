@@ -16,9 +16,6 @@ if TYPE_CHECKING:
     from quarry.shadow.config import ShadowConfig
     from quarry.shadow.repo import ShadowRepo
 
-# Where a project keeps its private capture shadow, relative to the project.
-_SHADOW_REPO = ".punt-labs/quarry/captures"
-
 
 @final
 class CaptureDiagnostics:
@@ -81,9 +78,8 @@ class CaptureDiagnostics:
         from quarry.shadow.repo import ShadowRepo  # noqa: PLC0415
 
         directory = Path(cwd)
-        captures_dir = directory / _SHADOW_REPO
         config = ShadowConfig.from_project(directory)
-        repo = ShadowRepo(captures_dir, directory, config.remote if config else "")
+        repo = ShadowRepo(directory, config.remote if config else "")
         if not repo.parent_in_work_tree():
             return CaptureDiagnostics._not_in_repo()
         leak = CaptureDiagnostics._parent_tracked_leak(repo)
@@ -143,7 +139,7 @@ class CaptureDiagnostics:
                 required=True,
                 message=(
                     "cannot verify parent-tracked captures for the shadow repo "
-                    f"{_SHADOW_REPO} (git error: {CheckFailure.detail(exc)})"
+                    f"{repo.captures_dir} (git error: {CheckFailure.detail(exc)})"
                 ),
             )
         if not tracked:

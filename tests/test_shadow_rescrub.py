@@ -15,7 +15,6 @@ from quarry.shadow.repo import ShadowRepo
 from quarry.shadow.rescrub import CaptureReScrubber
 
 _LOCAL_HOST = "test-machine"
-_CAPTURES = (".punt-labs", "quarry", "captures")
 
 
 @pytest.fixture(autouse=True)
@@ -48,9 +47,15 @@ def _init_captures_repo(tmp_path: Path) -> ShadowRepo:
     subprocess.run(
         ["git", "init", "-b", "main"], cwd=public, check=True, capture_output=True
     )
-    (public / ".gitignore").write_text(".punt-labs/quarry/captures/\n")
-    captures = public.joinpath(*_CAPTURES)
-    repo = ShadowRepo(captures, public, "git@h:o/r-quarry.git")
+    (public / ".gitignore").write_text(".punt-labs/**/local\n")
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "-b", "main", "--bare", str(remote)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    repo = ShadowRepo(public, str(remote))
     assert repo.bootstrap() is True
     return repo
 

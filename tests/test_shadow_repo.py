@@ -18,7 +18,7 @@ from quarry.shadow.rescrub import CaptureReScrubber
 from quarry.shadow.sync import CaptureSync
 from quarry.shadow.visibility import Visibility
 
-_CAPTURES = (".punt-labs", "quarry", "captures")
+_CAPTURES = (".punt-labs", "local", "quarry", "captures")
 
 
 @pytest.fixture(autouse=True)
@@ -39,15 +39,18 @@ def _public_repo(tmp_path: Path, *, ignore_captures: bool = True) -> Path:
     _git(repo, "init", "-b", "main")
     (repo / "README.md").write_text("public repo\n")
     if ignore_captures:
-        (repo / ".gitignore").write_text(".punt-labs/quarry/captures/\n")
+        (repo / ".gitignore").write_text(".punt-labs/**/local\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "init")
+    _git(tmp_path, "init", "-b", "main", "--bare", str(tmp_path / "fixture.git"))
     return repo
 
 
-def _repo(public: Path, remote: str = "git@h:o/r-quarry.git") -> ShadowRepo:
-    captures = public.joinpath(*_CAPTURES)
-    return ShadowRepo(captures, public, remote)
+def _repo(public: Path, remote: str | None = None) -> ShadowRepo:
+    if remote is None:
+        fixture = public.parent / "fixture.git"
+        remote = str(fixture) if fixture.is_dir() else "git@h:o/r-quarry.git"
+    return ShadowRepo(public, remote)
 
 
 def _tracked_files(captures: Path) -> list[str]:
@@ -58,6 +61,79 @@ def _tracked_files(captures: Path) -> list[str]:
 
 
 class TestBootstrapGates:
+    def test_fresh_shadow_cannot_stage_when_remote_history_is_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        public = _public_repo(tmp_path)
+        config = ShadowConfig(
+            enabled=True,
+            remote=str(tmp_path / "unreachable.git"),
+            acknowledge_unverified=True,
+        )
+        repo = _repo(public, config.remote)
+        repo.captures_dir.mkdir(parents=True)
+        (repo.captures_dir / "session-offline.md").write_text("capture while offline\n")
+        sync = CaptureSync(public, config, repo, CaptureReScrubber(repo.captures_dir))
+
+        result = sync.run()
+
+        assert result.aborted_reason == "bootstrap-refused"
+        assert not result.committed
+        assert _tracked_files(repo.captures_dir) == []
+
+    def test_fresh_shadow_does_not_stage_deletions_from_populated_remote(
+        self, tmp_path: Path
+    ) -> None:
+        remote = tmp_path / "remote.git"
+        _git(tmp_path, "init", "-b", "main", "--bare", str(remote))
+        public = _public_repo(tmp_path)
+        old_checkout = tmp_path / "old"
+        old_checkout.mkdir()
+        _git(old_checkout, "init", "-b", "main")
+        (old_checkout / "session-old.md").write_text("previous capture\n")
+        _git(old_checkout, "add", "-A")
+        _git(old_checkout, "commit", "-m", "old capture")
+        _git(old_checkout, "push", str(remote), "main")
+        config = ShadowConfig(
+            enabled=True, remote=str(remote), acknowledge_unverified=True
+        )
+        repo = _repo(public, config.remote)
+        sync = CaptureSync(public, config, repo, CaptureReScrubber(repo.captures_dir))
+
+        result = sync.run()
+
+        assert result.aborted_reason == "bootstrap-refused"
+        _git(remote, "cat-file", "-e", "main:session-old.md")
+        assert _tracked_files(repo.captures_dir) == []
+
+    def test_fresh_shadow_can_switch_from_a_populated_to_an_empty_remote(
+        self, tmp_path: Path
+    ) -> None:
+        public = _public_repo(tmp_path)
+        populated = tmp_path / "populated.git"
+        empty = tmp_path / "empty.git"
+        for remote in (populated, empty):
+            _git(tmp_path, "init", "-b", "main", "--bare", str(remote))
+        _git(public, "push", str(populated), "main")
+
+        assert not _repo(public, str(populated)).bootstrap()
+        assert _repo(public, str(empty)).bootstrap()
+
+    def test_fetch_prunes_branches_without_pruning_local_tags(
+        self, tmp_path: Path
+    ) -> None:
+        public = _public_repo(tmp_path)
+        remote = tmp_path / "remote.git"
+        _git(tmp_path, "init", "-b", "main", "--bare", str(remote))
+        repo = _repo(public, str(remote))
+        assert repo.bootstrap()
+        _git(repo.captures_dir, "commit", "--allow-empty", "-m", "local")
+        _git(repo.captures_dir, "tag", "local-only")
+        _git(repo.captures_dir, "config", "fetch.pruneTags", "true")
+
+        assert repo.bootstrap()
+        _git(repo.captures_dir, "rev-parse", "--verify", "refs/tags/local-only")
+
     def test_refuses_when_not_ignored(self, tmp_path: Path) -> None:
         public = _public_repo(tmp_path, ignore_captures=False)
         repo = _repo(public)
@@ -77,7 +153,7 @@ class TestBootstrapGates:
         _git(public, "add", "-A")
         _git(public, "commit", "-m", "committed a capture")
         # Now add the gitignore (does NOT untrack the already-committed file).
-        (public / ".gitignore").write_text(".punt-labs/quarry/captures/\n")
+        (public / ".gitignore").write_text(".punt-labs/**/local\n")
         _git(public, "add", ".gitignore")
         _git(public, "commit", "-m", "ignore captures")
 

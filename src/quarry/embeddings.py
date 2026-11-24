@@ -9,13 +9,8 @@ from typing import TYPE_CHECKING, Self
 
 import numpy as np
 
-from quarry.config import (
-    ONNX_MODEL_REPO,
-    ONNX_MODEL_REVISION,
-    ONNX_QUERY_PREFIX,
-    ONNX_TOKENIZER_FILE,
-)
 from quarry.ingestion.provider import PROVIDER_MODEL_MAP, ProviderSelection
+from quarry.model_cache import ONNX_MODEL_REPO, ONNX_QUERY_PREFIX, ModelCache
 from quarry.onnx_session import OnnxSessionBuilder
 from quarry.thread_config import ThreadConfig
 
@@ -45,19 +40,7 @@ class OnnxEmbeddingBackend:
         cls, model_file: str = "onnx/model_int8.onnx"
     ) -> tuple[str, str]:
         """Download ONNX model and tokenizer from HuggingFace Hub."""
-        from huggingface_hub import hf_hub_download  # noqa: PLC0415
-
-        model_path = hf_hub_download(
-            repo_id=ONNX_MODEL_REPO,
-            filename=model_file,
-            revision=ONNX_MODEL_REVISION,
-        )
-        tokenizer_path = hf_hub_download(
-            repo_id=ONNX_MODEL_REPO,
-            filename=ONNX_TOKENIZER_FILE,
-            revision=ONNX_MODEL_REVISION,
-        )
-        return model_path, tokenizer_path
+        return ModelCache.fetch(model_file, local_files_only=False)
 
     @classmethod
     def _load_model_files(cls, model_file: str) -> tuple[str, str]:
@@ -71,21 +54,7 @@ class OnnxEmbeddingBackend:
     @classmethod
     def _load_local_model_files(cls, model_file: str) -> tuple[str, str]:
         """Load ONNX model and tokenizer from local cache only."""
-        from huggingface_hub import hf_hub_download  # noqa: PLC0415
-
-        model_path = hf_hub_download(
-            repo_id=ONNX_MODEL_REPO,
-            filename=model_file,
-            revision=ONNX_MODEL_REVISION,
-            local_files_only=True,
-        )
-        tokenizer_path = hf_hub_download(
-            repo_id=ONNX_MODEL_REPO,
-            filename=ONNX_TOKENIZER_FILE,
-            revision=ONNX_MODEL_REVISION,
-            local_files_only=True,
-        )
-        return model_path, tokenizer_path
+        return ModelCache.fetch(model_file, local_files_only=True)
 
     def __new__(cls) -> Self:
         """Load the tokenizer and selected ONNX model with provider-specific limits.

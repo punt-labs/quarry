@@ -34,11 +34,12 @@ class PreCompactHook:
     def run(self) -> dict[str, object]:
         """Return the hook output: the capture notice or warning, or ``{}``."""
         cwd = HookPayload.as_dir(self._payload.get("cwd"))
-        if cwd and not load_hook_config(cwd).compaction:
+        project = TranscriptSource.resolve_project(cwd)
+        if project and not load_hook_config(project).compaction:
             self._trace.mark_config(on=False)
             self._trace.skip("config")
             return {}
-        target = self._target()
+        target = self._target(cwd, project)
         if target is None:
             self._trace.reject()
             return {}
@@ -68,7 +69,7 @@ class PreCompactHook:
             ),
         }
 
-    def _target(self) -> TranscriptSource | None:
+    def _target(self, cwd: str, project: str) -> TranscriptSource | None:
         """Return the transcript source for a capturable compaction.
 
         ``None`` means the hook must no-op — the documented skip contract, not a
@@ -77,7 +78,6 @@ class PreCompactHook:
         (an unregistered directory still archives and ingests); the other two are
         required.
         """
-        cwd = HookPayload.as_dir(self._payload.get("cwd"))
         transcript_path = HookPayload.as_str(self._payload.get("transcript_path"))
         session_id = HookPayload.as_str(self._payload.get("session_id"))
         if not transcript_path or not session_id:
@@ -85,4 +85,4 @@ class PreCompactHook:
         resolved = HookPayload.resolve_jsonl(transcript_path)
         if resolved is None:
             return None
-        return TranscriptSource(cwd, session_id, resolved, "pre-compact")
+        return TranscriptSource(cwd, session_id, resolved, "pre-compact", project)

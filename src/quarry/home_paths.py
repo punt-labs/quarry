@@ -83,6 +83,11 @@ class QuarryHome:
         return cls.root() / "data"
 
     @classmethod
+    def cache_root(cls) -> Path:
+        """Return Quarry's default cache directory."""
+        return cls.root() / "cache"
+
+    @classmethod
     def log_root(cls) -> Path:
         """Return the shared diagnostic log directory."""
         return cls.root() / "logs"

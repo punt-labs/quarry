@@ -38,7 +38,7 @@ def test_a_missing_directory_is_missing_when_not_asked_to_create(
 @pytest.mark.parametrize("level", range(len(CaptureDirectory.RELATIVE)))
 def test_a_symlink_at_any_level_is_refused(tmp_path: Path, level: int) -> None:
     elsewhere = tmp_path / "elsewhere"
-    (elsewhere / "quarry" / "captures").mkdir(parents=True)
+    (elsewhere / "local" / "quarry" / "captures").mkdir(parents=True)
     path = tmp_path / "project"
     path.mkdir()
     for part in CaptureDirectory.RELATIVE[:level]:
@@ -86,7 +86,7 @@ def test_the_captures_directory_is_owner_only_and_the_levels_above_are_not(
         path = tmp_path.joinpath(*CaptureDirectory.RELATIVE[:depth])
         return stat.S_IMODE(path.stat().st_mode)
 
-    assert [mode(1), mode(2), mode(3)] == [0o755, 0o755, 0o700]
+    assert [mode(1), mode(2), mode(3), mode(4)] == [0o755, 0o755, 0o755, 0o700]
 
 
 def test_a_level_that_is_a_file_says_it_is_a_non_directory(tmp_path: Path) -> None:

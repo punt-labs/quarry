@@ -55,7 +55,8 @@ class HookAgent:
         if not cwd:
             trace.reject()
             return {}
-        on = load_hook_config(cwd).session_end
+        project = TranscriptSource.resolve_project(cwd)
+        on = load_hook_config(project).session_end
         trace.mark_config(on=on)
         if not on:
             trace.skip("config")
@@ -69,7 +70,7 @@ class HookAgent:
             return {}
         trace.mark_payload(ok=True)
         outcome = SessionTranscriptCapture.for_session(
-            TranscriptSource(cwd, session_id, tp, "session-end")
+            TranscriptSource(cwd, session_id, tp, "session-end", project)
         ).capture()
         HookAgent._trace_transcript_outcome(trace, outcome)
         return {}
@@ -235,7 +236,8 @@ class HookAgent:
         if not cwd:
             trace.reject()
             return {}
-        on = load_hook_config(cwd).subagent_stop
+        project = TranscriptSource.resolve_project(cwd)
+        on = load_hook_config(project).subagent_stop
         trace.mark_config(on=on)
         if not on:
             trace.skip("config")
@@ -250,7 +252,7 @@ class HookAgent:
             return {}
         trace.mark_payload(ok=True)
         outcome = SubagentCapture(
-            TranscriptSource(cwd, agent_id, tp, "subagent-stop"),
+            TranscriptSource(cwd, agent_id, tp, "subagent-stop", project),
             agent_type=HookPayload.as_str(payload.get("agent_type")),
             parent_session_id=HookPayload.as_str(payload.get("session_id")),
         ).capture()

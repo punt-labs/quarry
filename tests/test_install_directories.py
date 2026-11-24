@@ -33,15 +33,21 @@ class TestCreate:
         assert f"Failed to create the logs directory {blocker}:" in out
         assert f"✓ {tmp_path / 'data' / 'default' / 'lancedb'}" in out
 
-    def test_both_directories_are_listed_when_both_are_made(
+    def test_all_directories_are_listed_when_created(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
     ) -> None:
         monkeypatch.setenv("QUARRY_ROOT", str(tmp_path / "data"))
         monkeypatch.setenv("HOME", str(tmp_path))
+        cache = tmp_path / "model-cache"
+        monkeypatch.setenv("HF_HUB_CACHE", str(cache))
 
         assert InstallDirectories.create() is True
 
-        assert capsys.readouterr().out.count("✓") == 2
+        out = capsys.readouterr().out
+        assert out.count("✓") == 3
+        assert f"✓ {tmp_path / 'data' / 'default' / 'lancedb'}" in out
+        assert f"✓ {tmp_path / '.punt-labs' / 'quarry' / 'logs'}" in out
+        assert f"✓ {cache}" in out
 
     def test_a_data_directory_that_cannot_be_made_does_not_hide_the_logs(
         self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]

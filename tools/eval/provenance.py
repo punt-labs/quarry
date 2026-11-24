@@ -14,7 +14,7 @@ import platform
 from dataclasses import dataclass
 from typing import Self
 
-from quarry.config import ONNX_MODEL_REPO, ONNX_MODEL_REVISION
+from quarry.model_cache import ONNX_MODEL_REPO, ONNX_MODEL_REVISION
 from tools.eval._threadpins import ThreadPins
 
 

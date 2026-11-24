@@ -1,4 +1,4 @@
-"""The data and logs directories `quarry install` creates, and how it says so."""
+"""The directories `quarry install` creates, and how it says so."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.doctor_failure import CheckFailure
 from quarry.home_paths import QuarryHome
+from quarry.model_cache import ModelCache
 from quarry.results import CheckResult
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 @final
 class InstallDirectories:
-    """Locate and create the selected database's directory and the log directory."""
+    """Locate and create the required directories for a local installation."""
 
     __slots__ = ()
 
@@ -42,7 +43,7 @@ class InstallDirectories:
 
     @classmethod
     def create(cls) -> bool:
-        """Create the data and logs directories; return whether both now exist.
+        """Create the data, logs, and cache directories.
 
         Each is located and made on its own, so one that cannot be does not hide
         the other. A failure to locate a directory names which one; a failure to
@@ -51,6 +52,7 @@ class InstallDirectories:
         results = [
             cls._make("data", lambda: cls.data_dir(Settings())),
             cls._make("logs", QuarryHome.log_root),
+            cls._make("cache", ModelCache.root),
         ]
         return all(results)
 

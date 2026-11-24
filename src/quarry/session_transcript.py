@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.checkout_ignore import CheckoutIgnore
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
 from quarry.home_paths import QuarryHome
@@ -45,6 +46,12 @@ class TranscriptSource:
     session_id: str
     transcript_path: Path
     label: str
+    project_dir: str = ""
+
+    @staticmethod
+    def resolve_project(cwd: str) -> str:
+        """Bind hook configuration and local storage to one project directory."""
+        return str(CheckoutIgnore.project_root(Path(cwd))) if cwd else ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +203,7 @@ class SessionTranscriptCapture:
             return False
         return CaptureWriter().write(
             CaptureRequest(
-                project_dir=Path(self._source.cwd),
+                project_dir=Path(self._source.project_dir or self._source.cwd),
                 session_id=self._source.session_id,
                 timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 artifacts=artifacts,
