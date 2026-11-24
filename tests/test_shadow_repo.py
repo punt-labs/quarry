@@ -57,6 +57,31 @@ def _tracked_files(captures: Path) -> list[str]:
 
 
 class TestBootstrapGates:
+    def test_fresh_shadow_does_not_stage_deletions_from_populated_remote(
+        self, tmp_path: Path
+    ) -> None:
+        remote = tmp_path / "remote.git"
+        _git(tmp_path, "init", "-b", "main", "--bare", str(remote))
+        public = _public_repo(tmp_path)
+        old_checkout = tmp_path / "old"
+        old_checkout.mkdir()
+        _git(old_checkout, "init", "-b", "main")
+        (old_checkout / "session-old.md").write_text("previous capture\n")
+        _git(old_checkout, "add", "-A")
+        _git(old_checkout, "commit", "-m", "old capture")
+        _git(old_checkout, "push", str(remote), "main")
+        config = ShadowConfig(
+            enabled=True, remote=str(remote), acknowledge_unverified=True
+        )
+        repo = _repo(public, config.remote)
+        sync = CaptureSync(public, config, repo, CaptureReScrubber(repo.captures_dir))
+
+        result = sync.run()
+
+        assert result.aborted_reason == "bootstrap-refused"
+        _git(remote, "cat-file", "-e", "main:session-old.md")
+        assert _tracked_files(repo.captures_dir) == []
+
     def test_refuses_when_not_ignored(self, tmp_path: Path) -> None:
         public = _public_repo(tmp_path, ignore_captures=False)
         repo = _repo(public)

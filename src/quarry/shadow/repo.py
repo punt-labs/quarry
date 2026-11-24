@@ -164,9 +164,9 @@ class ShadowRepo:
 
         Refuses if the captures dir is not gitignored by the parent, if the
         parent already tracks captures (B3), or if no remote can be resolved.
-        Otherwise inits the repo, writes the allowlist ``.gitignore``, sets the
-        origin, and adopts any existing remote history without clobbering local
-        capture files.
+        A fresh working tree refuses a populated remote until the user migrates
+        or checks out its history; otherwise staging would record missing files
+        as deletions.
         """
         refusal = self._refusal_reason()
         if refusal is not None:
@@ -178,9 +178,11 @@ class ShadowRepo:
             return False
         if not self._init_repo():
             return False
-        self._write_allowlist_gitignore()
         self._ensure_origin(remote)
-        self._fetch_and_reconcile()
+        if not self._can_stage():
+            logger.warning("shadow: migrate the existing shadow before syncing")
+            return False
+        self._write_allowlist_gitignore()
         return True
 
     def _refusal_reason(self) -> str | None:
@@ -355,12 +357,9 @@ class ShadowRepo:
         elif current != remote:
             self._repo_git.run(["git", "remote", "set-url", "--", "origin", remote])
 
-    def _fetch_and_reconcile(self) -> None:
-        if not self._repo_git.ok(["git", "fetch", "origin"]):
-            return  # fail-open: offline is fine; the first push creates the remote
-        remote_has_main = self._repo_git.ok(
-            ["git", "rev-parse", "--verify", "origin/main"]
-        )
-        local_has_commit = self._repo_git.ok(["git", "rev-parse", "--verify", "HEAD"])
-        if remote_has_main and not local_has_commit:
-            self._repo_git.run(["git", "reset", "--mixed", "origin/main"])
+    def _can_stage(self) -> bool:
+        """Refuse staging against remote files absent from a new working tree."""
+        self._repo_git.ok(["git", "fetch", "origin"])
+        if self._repo_git.ok(["git", "rev-parse", "--verify", "HEAD"]):
+            return True
+        return not self._repo_git.ok(["git", "rev-parse", "--verify", "origin/main"])
