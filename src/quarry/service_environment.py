@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 import plistlib
+import re
 import shlex
 from pathlib import Path
 from typing import final
@@ -18,6 +19,11 @@ from quarry.shutdown_policy import ShutdownPolicy
 MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false"
 SERVICE_LABEL = "com.punt-labs.quarry"
 _CACHE_KEY = "HF_HUB_CACHE"
+_SYSTEMD_COMMENTS = re.compile(
+    r"""^(?P<comment>[^\S\n]*[#;][^\n]*)|'[^']*'|"(?:[^"\\]|\\[\s\S])*"""
+    '"',
+    re.MULTILINE,
+)
 
 
 @final
@@ -79,14 +85,14 @@ class ServiceEnvironment:
             content = QuarryHome.env_file().read_text()
         except FileNotFoundError:
             return None
-        lexer = shlex.shlex(content, posix=True)
-        lexer.whitespace_split = True
-        lexer.commenters = "#;"
+        active = _SYSTEMD_COMMENTS.sub(
+            lambda match: "" if match["comment"] is not None else match[0], content
+        )
         prefix = f"{_CACHE_KEY}="
         return next(
             (
                 entry.removeprefix(prefix)
-                for entry in reversed(list(lexer))
+                for entry in reversed(shlex.split(active))
                 if entry.startswith(prefix)
             ),
             None,

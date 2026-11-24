@@ -107,8 +107,15 @@ def test_doctor_reports_invalid_managed_service_settings(
     assert "/unclosed" not in result.message
 
 
+@pytest.mark.parametrize(
+    ("expression", "directory"),
+    [
+        ("cache;models#1", "cache;models#1"),
+        ('"cache\n;models\n#1"', "cache\n;models\n#1"),
+    ],
+)
 def test_doctor_ignores_commented_systemd_cache_assignments(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expression: str, directory: str
 ) -> None:
     monkeypatch.setattr("quarry.service_environment.platform.system", lambda: "Linux")
     unit = QuarryHome.systemd_unit()
@@ -116,14 +123,14 @@ def test_doctor_ignores_commented_systemd_cache_assignments(
     unit.touch()
     config = QuarryHome.env_file()
     config.parent.mkdir(parents=True)
-    cache = tmp_path / "cache;models"
+    serialised = expression.replace("cache", str(tmp_path / "cache"), 1)
     config.write_text(
-        f'HF_HUB_CACHE="{cache}"\n'
-        '; HF_HUB_CACHE="/not-active"\n'
+        f"HF_HUB_CACHE={serialised}\n"
+        '  ; HF_HUB_CACHE="/not-active\n'
         '# HF_HUB_CACHE="/also-not-active"\n'
     )
 
-    assert ServiceEnvironment.installed_cache() == cache
+    assert ServiceEnvironment.installed_cache() == tmp_path / directory
 
 
 @pytest.mark.parametrize("override", [False, True])
