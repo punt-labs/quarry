@@ -27,7 +27,7 @@ from quarry.fd_config import FdServiceLimits
 from quarry.home_paths import QuarryHome
 from quarry.net import LoopbackPolicy
 from quarry.private_write import PrivateWrite
-from quarry.service_environment import ServiceEnvironment
+from quarry.service_environment import SERVICE_LABEL as _LABEL, ServiceEnvironment
 from quarry.shutdown_policy import ShutdownPolicy
 from quarry.temp_sweep import TempSweep
 from quarry.tls import cert_fingerprint, write_tls_files
@@ -55,8 +55,6 @@ class ServiceBackend(Protocol):
 
 
 logger = logging.getLogger(__name__)
-
-_LABEL = "com.punt-labs.quarry"
 
 
 def _quarryd_exec_args() -> list[str]:

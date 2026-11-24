@@ -54,9 +54,11 @@ class ModelCache:
         return override is None or not override.is_absolute()
 
     @classmethod
-    def cached_size(cls, lookup: _CacheLookup) -> int | None:
+    def cached_size(
+        cls, lookup: _CacheLookup, *, cache_dir: Path | None = None
+    ) -> int | None:
         """Return the cached INT8 model size only when both files are present."""
-        cache = cls.root()
+        cache = cache_dir if cache_dir is not None else cls.root()
         paths: list[Path] = []
         for filename in ("onnx/model_int8.onnx", ONNX_TOKENIZER_FILE):
             hit = lookup(

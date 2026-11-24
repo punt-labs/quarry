@@ -10,7 +10,10 @@ from huggingface_hub import hf_hub_download
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_preconditions import Need
 from quarry.embeddings import OnnxEmbeddingBackend
+from quarry.home_paths import QuarryHome
 from quarry.model_cache import ONNX_MODEL_REPO, ONNX_MODEL_REVISION, ModelCache
+from quarry.service_environment import SERVICE_LABEL, ServiceEnvironment
+from quarry.shutdown_policy import ShutdownPolicy
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +47,36 @@ def test_override_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     ):
         monkeypatch.setenv(name, f"~/{subpath}")
         assert ModelCache.root() == tmp_path / expected
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_doctor_checks_the_cache_saved_by_managed_install(
+    system: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("quarry.service_environment.platform.system", lambda: system)
+    cache = tmp_path / 'cache & "models"'
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    if system == "Linux":
+        unit = QuarryHome.systemd_unit()
+        unit.parent.mkdir(parents=True)
+        unit.touch()
+        ServiceEnvironment.write()
+    else:
+        plist = QuarryHome.launchd_plist(SERVICE_LABEL)
+        plist.parent.mkdir(parents=True)
+        entries = ServiceEnvironment.launchd_entries("", ShutdownPolicy.from_settings())
+        plist.write_text(
+            f'<plist version="1.0"><dict><key>EnvironmentVariables</key>'
+            f"<dict>{entries}</dict></dict></plist>"
+        )
+    monkeypatch.delenv("HF_HUB_CACHE")
+    model = cache / ("models--" + ONNX_MODEL_REPO.replace("/", "--"))
+    snapshot = model / "snapshots" / ONNX_MODEL_REVISION
+    (snapshot / "onnx").mkdir(parents=True)
+    (snapshot / "onnx/model_int8.onnx").write_text("model")
+    (snapshot / "tokenizer.json").write_text("tokenizer")
+
+    assert EmbeddingModel.check().passed
 
 
 @pytest.mark.parametrize("override", [False, True])
