@@ -18,7 +18,6 @@ from quarry.config import DEFAULT_PORT
 from quarry.home_paths import QuarryHome
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.service import (
-    _LABEL,
     ServiceBackend,
     _get_tls_hostname,
     _launchd_install,
@@ -31,7 +30,11 @@ from quarry.service import (
     install,
     uninstall,
 )
-from quarry.service_environment import MALLOC_CONF as _MALLOC_CONF, ServiceEnvironment
+from quarry.service_environment import (
+    MALLOC_CONF as _MALLOC_CONF,
+    SERVICE_LABEL as _LABEL,
+    ServiceEnvironment,
+)
 from quarry.shutdown_policy import ShutdownPolicy
 
 # Patch write_tls_files across all install() calls to avoid writing to
