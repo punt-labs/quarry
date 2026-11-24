@@ -103,6 +103,25 @@ def test_doctor_reports_invalid_managed_service_settings(
     assert "/unclosed" not in result.message
 
 
+def test_doctor_ignores_commented_systemd_cache_assignments(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("quarry.service_environment.platform.system", lambda: "Linux")
+    unit = QuarryHome.systemd_unit()
+    unit.parent.mkdir(parents=True)
+    unit.touch()
+    config = QuarryHome.env_file()
+    config.parent.mkdir(parents=True)
+    cache = tmp_path / "cache;models"
+    config.write_text(
+        f'HF_HUB_CACHE="{cache}"\n'
+        '; HF_HUB_CACHE="/not-active"\n'
+        '# HF_HUB_CACHE="/also-not-active"\n'
+    )
+
+    assert ServiceEnvironment.installed_cache() == cache
+
+
 @pytest.mark.parametrize("override", [False, True])
 def test_download_local_reuse_and_doctor_share_the_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, override: bool

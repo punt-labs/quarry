@@ -79,12 +79,14 @@ class ServiceEnvironment:
             content = QuarryHome.env_file().read_text()
         except FileNotFoundError:
             return None
-        entries = shlex.split(content, comments=True)
+        lexer = shlex.shlex(content, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#;"
         prefix = f"{_CACHE_KEY}="
         return next(
             (
                 entry.removeprefix(prefix)
-                for entry in reversed(entries)
+                for entry in reversed(list(lexer))
                 if entry.startswith(prefix)
             ),
             None,
