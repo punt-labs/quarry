@@ -48,7 +48,14 @@ def _init_captures_repo(tmp_path: Path) -> ShadowRepo:
         ["git", "init", "-b", "main"], cwd=public, check=True, capture_output=True
     )
     (public / ".gitignore").write_text(".punt-labs/**/local\n")
-    repo = ShadowRepo(public, "git@h:o/r-quarry.git")
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "-b", "main", "--bare", str(remote)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    repo = ShadowRepo(public, str(remote))
     assert repo.bootstrap() is True
     return repo
 

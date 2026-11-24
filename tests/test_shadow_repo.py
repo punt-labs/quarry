@@ -42,10 +42,14 @@ def _public_repo(tmp_path: Path, *, ignore_captures: bool = True) -> Path:
         (repo / ".gitignore").write_text(".punt-labs/**/local\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "init")
+    _git(tmp_path, "init", "-b", "main", "--bare", str(tmp_path / "fixture.git"))
     return repo
 
 
-def _repo(public: Path, remote: str = "git@h:o/r-quarry.git") -> ShadowRepo:
+def _repo(public: Path, remote: str | None = None) -> ShadowRepo:
+    if remote is None:
+        fixture = public.parent / "fixture.git"
+        remote = str(fixture) if fixture.is_dir() else "git@h:o/r-quarry.git"
     return ShadowRepo(public, remote)
 
 
@@ -57,6 +61,26 @@ def _tracked_files(captures: Path) -> list[str]:
 
 
 class TestBootstrapGates:
+    def test_fresh_shadow_cannot_stage_when_remote_history_is_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        public = _public_repo(tmp_path)
+        config = ShadowConfig(
+            enabled=True,
+            remote=str(tmp_path / "unreachable.git"),
+            acknowledge_unverified=True,
+        )
+        repo = _repo(public, config.remote)
+        repo.captures_dir.mkdir(parents=True)
+        (repo.captures_dir / "session-offline.md").write_text("capture while offline\n")
+        sync = CaptureSync(public, config, repo, CaptureReScrubber(repo.captures_dir))
+
+        result = sync.run()
+
+        assert result.aborted_reason == "bootstrap-refused"
+        assert not result.committed
+        assert _tracked_files(repo.captures_dir) == []
+
     def test_fresh_shadow_does_not_stage_deletions_from_populated_remote(
         self, tmp_path: Path
     ) -> None:
