@@ -78,6 +78,8 @@ def test_incomplete_ignore_marker_is_removed_and_capture_can_retry(
     opened: list[int] = []
 
     def short_write(fd: int, data: bytes) -> int:
+        if data != b"/captures/\n/.gitignore\n":
+            return real_write(fd, data)
         opened.append(fd)
         return real_write(fd, data[:1])
 
