@@ -83,6 +83,23 @@ def test_ensure_reuses_the_canonical_local_ignore_in_git(tmp_path: Path) -> None
     assert path.read_text() == original + FILE_LOCK_GITIGNORE_GLOB + "\n"
 
 
+def test_ensure_does_not_rely_on_checkout_local_excludes(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    exclude = tmp_path / ".git/info/exclude"
+    exclude.write_text(".punt-labs/local/\n")
+    gitignore = QuarryGitignore(tmp_path)
+
+    assert gitignore.ensure()
+    assert CAPTURES_GITIGNORE_ENTRY in gitignore.path.read_text().splitlines()
+    exclude.unlink()
+    subprocess.run(
+        ["git", "check-ignore", "--", CAPTURES_GITIGNORE_ENTRY + "session-probe.md"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+
 def test_ensure_protects_untracked_legacy_captures(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
     old_capture = tmp_path / ".punt-labs/quarry/captures/session-old.md"

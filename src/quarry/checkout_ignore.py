@@ -35,7 +35,8 @@ class CheckoutIgnore:
         """Check the target checkout, or its enclosing checkout for a capture write.
 
         For enablement, an unrelated parent checkout's ignore must not prevent
-        writing a rule to a project that can later become its own checkout.
+        writing a rule to a project that can later become its own checkout, and
+        only the root .gitignore can supply the project's persistent rule.
         Capture writes instead need protection in whichever checkout owns them.
         """
         if not cls._has_checkout(root, include_parents=include_parents):
@@ -44,15 +45,31 @@ class CheckoutIgnore:
         if git is None:
             return False
         targets = os.fsencode("\0".join((*paths, "")))
+        flags = [] if include_parents else ["-v"]
         result = subprocess.run(  # noqa: S603
-            [git, "check-ignore", "-z", "--stdin"],
+            [git, "check-ignore", "-z", *flags, "--stdin"],
             cwd=root,
             capture_output=True,
             check=False,
             input=targets,
             timeout=5,
         )
-        return result.returncode == 0 and result.stdout == targets
+        if result.returncode != 0:
+            return False
+        if include_parents:
+            return result.stdout == targets
+        return cls._from_root_rules(result.stdout, paths)
+
+    @staticmethod
+    def _from_root_rules(output: bytes, paths: tuple[str, ...]) -> bool:
+        """Match each verbose result against a positive root .gitignore rule."""
+        fields = output.split(b"\0")[:-1]
+        matches = zip(fields[::4], fields[2::4], fields[3::4], strict=True)
+        return tuple(
+            path
+            for source, pattern, path in matches
+            if source == b".gitignore" and not pattern.startswith(b"!")
+        ) == tuple(map(os.fsencode, paths))
 
     @classmethod
     def protect_future_checkout(cls, directory: int, child: str) -> None:
