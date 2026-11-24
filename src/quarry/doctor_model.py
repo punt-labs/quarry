@@ -8,7 +8,6 @@ from quarry.doctor_failure import CheckFailure
 from quarry.doctor_preconditions import Need
 from quarry.model_cache import ModelCache
 from quarry.results import CheckResult
-from quarry.service_environment import ServiceEnvironment
 
 
 @final
@@ -36,9 +35,7 @@ class EmbeddingModel:
                 message=CheckFailure.import_message("huggingface_hub", exc),
             )
         try:
-            model_size = ModelCache.cached_size(
-                try_to_load_from_cache, cache_dir=ServiceEnvironment.installed_cache()
-            )
+            model_size = ModelCache.cached_size(try_to_load_from_cache)
         except CheckFailure.BROKEN_STACK as exc:
             return CheckResult(
                 name="Embedding model",

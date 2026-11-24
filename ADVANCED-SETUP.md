@@ -25,8 +25,8 @@ Quarry uses `~/.punt-labs/quarry/cache/` for its embedding model and tokenizer
 Relative overrides are resolved from the user's home, not the daemon's or
 the CLI's working directory.
 Managed services keep the cache selected when you run `quarry install`;
-rerun it to change or clear an override. When a managed service is
-installed, `quarry doctor` checks its cache even from a different shell.
+rerun it to change or clear an override. `quarry doctor` uses the current shell's
+cache settings, so pass the same override when checking an overridden cache.
 
 ## Remote Server
 

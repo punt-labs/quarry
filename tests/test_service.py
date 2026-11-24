@@ -18,6 +18,7 @@ from quarry.config import DEFAULT_PORT
 from quarry.home_paths import QuarryHome
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.service import (
+    _LABEL,
     ServiceBackend,
     _get_tls_hostname,
     _launchd_install,
@@ -30,11 +31,7 @@ from quarry.service import (
     install,
     uninstall,
 )
-from quarry.service_environment import (
-    MALLOC_CONF as _MALLOC_CONF,
-    SERVICE_LABEL as _LABEL,
-    ServiceEnvironment,
-)
+from quarry.service_environment import MALLOC_CONF as _MALLOC_CONF, ServiceEnvironment
 from quarry.shutdown_policy import ShutdownPolicy
 
 # Patch write_tls_files across all install() calls to avoid writing to
@@ -256,14 +253,22 @@ class TestQuarrydExecArgs:
 
 
 class TestWriteEnvFile:
+    @pytest.mark.parametrize("override", [False, True])
     def test_managed_services_forward_the_resolved_model_cache(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, override: bool
     ) -> None:
-        monkeypatch.delenv("HF_HUB_CACHE", raising=False)
-        monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
-        monkeypatch.setenv("HF_HOME", str(tmp_path / "cache & models"))
+        for name in (
+            "HF_HUB_CACHE",
+            "HUGGINGFACE_HUB_CACHE",
+            "HF_HOME",
+            "XDG_CACHE_HOME",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        cache = QuarryHome.cache_root()
+        if override:
+            monkeypatch.setenv("HF_HOME", str(tmp_path / "cache & models"))
+            cache = tmp_path / "cache & models" / "hub"
         env_file = tmp_path / "quarry.env"
-        cache = tmp_path / "cache & models" / "hub"
         with (
             patch.object(QuarryHome, "env_file", return_value=env_file),
             patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),

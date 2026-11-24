@@ -10,10 +10,7 @@ from huggingface_hub import hf_hub_download
 from quarry.doctor_model import EmbeddingModel
 from quarry.doctor_preconditions import Need
 from quarry.embeddings import OnnxEmbeddingBackend
-from quarry.home_paths import QuarryHome
 from quarry.model_cache import ONNX_MODEL_REPO, ONNX_MODEL_REVISION, ModelCache
-from quarry.service_environment import SERVICE_LABEL, ServiceEnvironment
-from quarry.shutdown_policy import ShutdownPolicy
 
 
 @pytest.fixture(autouse=True)
@@ -47,90 +44,6 @@ def test_override_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     ):
         monkeypatch.setenv(name, f"~/{subpath}")
         assert ModelCache.root() == tmp_path / expected
-
-
-@pytest.mark.parametrize("system", ["Linux", "Darwin"])
-@pytest.mark.parametrize("override", [False, True])
-def test_doctor_checks_the_cache_saved_by_managed_install(
-    system: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, override: bool
-) -> None:
-    monkeypatch.setattr("quarry.service_environment.platform.system", lambda: system)
-    cache = QuarryHome.cache_root()
-    if override:
-        cache = tmp_path / 'cache & "models"'
-        monkeypatch.setenv("HF_HUB_CACHE", str(cache))
-    if system == "Linux":
-        unit = QuarryHome.systemd_unit()
-        unit.parent.mkdir(parents=True)
-        unit.touch()
-        ServiceEnvironment.write()
-        if not override:
-            assert f'HF_HUB_CACHE="{cache}"' in QuarryHome.env_file().read_text()
-    else:
-        plist = QuarryHome.launchd_plist(SERVICE_LABEL)
-        plist.parent.mkdir(parents=True)
-        entries = ServiceEnvironment.launchd_entries("", ShutdownPolicy.from_settings())
-        if not override:
-            assert f"<string>{cache}</string>" in entries
-        plist.write_text(
-            f'<plist version="1.0"><dict><key>EnvironmentVariables</key>'
-            f"<dict>{entries}</dict></dict></plist>"
-        )
-    if override:
-        monkeypatch.delenv("HF_HUB_CACHE")
-    else:
-        monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "unrelated-shell-cache"))
-    model = cache / ("models--" + ONNX_MODEL_REPO.replace("/", "--"))
-    snapshot = model / "snapshots" / ONNX_MODEL_REVISION
-    (snapshot / "onnx").mkdir(parents=True)
-    (snapshot / "onnx/model_int8.onnx").write_text("model")
-    (snapshot / "tokenizer.json").write_text("tokenizer")
-
-    assert EmbeddingModel.check().passed
-
-
-def test_doctor_reports_invalid_managed_service_settings(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("quarry.service_environment.platform.system", lambda: "Linux")
-    unit = QuarryHome.systemd_unit()
-    unit.parent.mkdir(parents=True)
-    unit.touch()
-    config = QuarryHome.env_file()
-    config.parent.mkdir(parents=True)
-    config.write_text('HF_HUB_CACHE="/unclosed\n')
-
-    result = EmbeddingModel.check()
-
-    assert not result.passed
-    assert "cannot read installed service settings" in result.message
-    assert "/unclosed" not in result.message
-
-
-@pytest.mark.parametrize(
-    ("expression", "directory"),
-    [
-        ("cache;models#1", "cache;models#1"),
-        ('"cache\n;models\n#1"', "cache\n;models\n#1"),
-    ],
-)
-def test_doctor_ignores_commented_systemd_cache_assignments(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expression: str, directory: str
-) -> None:
-    monkeypatch.setattr("quarry.service_environment.platform.system", lambda: "Linux")
-    unit = QuarryHome.systemd_unit()
-    unit.parent.mkdir(parents=True)
-    unit.touch()
-    config = QuarryHome.env_file()
-    config.parent.mkdir(parents=True)
-    serialised = expression.replace("cache", str(tmp_path / "cache"), 1)
-    config.write_text(
-        f"HF_HUB_CACHE={serialised}\n"
-        '  ; HF_HUB_CACHE="/not-active\n'
-        '# HF_HUB_CACHE="/also-not-active"\n'
-    )
-
-    assert ServiceEnvironment.installed_cache() == tmp_path / directory
 
 
 @pytest.mark.parametrize("override", [False, True])
