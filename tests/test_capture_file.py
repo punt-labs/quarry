@@ -67,6 +67,30 @@ def test_capture_stays_ignored_after_git_init(tmp_path: Path) -> None:
     )
     assert staged.stdout == b""
     assert (_captures(tmp_path) / _NAME).is_file()
+    marker = _captures(tmp_path).parent / ".gitignore"
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+
+
+def test_incomplete_ignore_marker_is_removed_and_capture_can_retry(
+    tmp_path: Path,
+) -> None:
+    real_write = os.write
+    opened: list[int] = []
+
+    def short_write(fd: int, data: bytes) -> int:
+        opened.append(fd)
+        return real_write(fd, data[:1])
+
+    with patch.object(CheckoutIgnore, "_has_checkout", return_value=False):
+        with patch("os.write", short_write):
+            assert _write(tmp_path) is CaptureOutcome.FAILED
+
+        parent = _captures(tmp_path).parent
+        assert list(parent.iterdir()) == []
+        assert len(opened) == 1
+        with pytest.raises(OSError, match="Bad file descriptor"):
+            os.fstat(opened[0])
+        assert _write(tmp_path) is CaptureOutcome.WRITTEN
 
 
 def test_capture_keeps_the_same_root_after_ignore_check(tmp_path: Path) -> None:

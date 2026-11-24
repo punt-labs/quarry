@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import os
+import secrets
 import shutil
 import subprocess
 from typing import TYPE_CHECKING, final
@@ -57,19 +59,36 @@ class CheckoutIgnore:
         """Exclude the captures directory before Git is initialized above it."""
         rules = os.fsencode(f"/{child}/\n/.gitignore\n")
         try:
-            fd = os.open(
-                ".gitignore",
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-                dir_fd=directory,
-            )
-        except FileExistsError:
             cls._verify_marker(directory, rules)
-        else:
-            with os.fdopen(fd, "wb") as marker:
-                marker.write(rules)
-                marker.flush()
-                os.fsync(marker.fileno())
+        except FileNotFoundError:
+            cls._publish_marker(directory, rules)
+
+    @classmethod
+    def _publish_marker(cls, directory: int, rules: bytes) -> None:
+        """Publish a completed marker without replacing an existing rule file."""
+        temp = f".gitignore.quarry-{secrets.token_hex(8)}"
+        fd = os.open(
+            temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory
+        )
+        try:
+            cls._sync_marker(fd, rules)
+            try:
+                os.link(temp, ".gitignore", src_dir_fd=directory, dst_dir_fd=directory)
+            except FileExistsError:
+                cls._verify_marker(directory, rules)
+        finally:
+            os.unlink(temp, dir_fd=directory)
+
+    @staticmethod
+    def _sync_marker(fd: int, rules: bytes) -> None:
+        """Write the complete small rule file or close it and fail."""
+        try:
+            if os.write(fd, rules) != len(rules):
+                msg = "incomplete write of capture ignore marker"
+                raise OSError(errno.EIO, msg)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
     @classmethod
     def _verify_marker(cls, directory: int, rules: bytes) -> None:
@@ -77,10 +96,12 @@ class CheckoutIgnore:
         fd = os.open(
             ".gitignore", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
         )
-        with os.fdopen(fd, "rb") as marker:
-            if marker.read(len(rules) + 1) != rules:
+        try:
+            if os.read(fd, len(rules) + 1) != rules:
                 msg = "cannot verify the captures directory's .gitignore"
                 raise PermissionError(msg)
+        finally:
+            os.close(fd)
 
     @classmethod
     def _has_checkout(cls, root: Path, *, include_parents: bool) -> bool:
