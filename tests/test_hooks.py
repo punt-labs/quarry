@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shlex
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -2397,6 +2398,37 @@ class TestCwdHardeningPostWebFetch:
 
 class TestCwdHardeningPreCompact:
     """A non-absolute cwd must not write the capture relative to the process cwd."""
+
+    def test_subdirectory_captures_land_in_the_owning_checkout(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "repo"
+        child = root / "src"
+        child.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+        (root / ".gitignore").write_text(".punt-labs/local/\n")
+        transcript = _make_transcript(tmp_path, "Working in a checkout subdirectory")
+        with (
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=SendOutcome(sent=True),
+            ) as cap,
+        ):
+            handle_pre_compact(
+                {
+                    "cwd": str(child),
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        capture = ".punt-labs/local/quarry/captures/session-abc12345.md"
+        assert (root / capture).is_file()
+        assert not (child / capture).exists()
+        assert cap.call_args.args[0].cwd == str(child)
 
     def test_relative_cwd_skips_local_write(self, tmp_path: Path) -> None:
         transcript = _make_transcript(tmp_path, "Working somewhere")

@@ -18,6 +18,15 @@ class CheckoutIgnore:
     __slots__ = ()
 
     @classmethod
+    def project_root(cls, directory: Path) -> Path:
+        """Find the owning checkout for a session started in a subdirectory."""
+        directory = directory.resolve()
+        marker = cls._find_marker(directory, include_parents=True)
+        if marker is not None and (marker.is_file() or (marker / "HEAD").is_file()):
+            return marker.parent
+        return directory
+
+    @classmethod
     def covers(
         cls, root: Path, paths: tuple[str, ...], *, include_parents: bool
     ) -> bool | None:
@@ -73,8 +82,13 @@ class CheckoutIgnore:
                 msg = "cannot verify the captures directory's .gitignore"
                 raise PermissionError(msg)
 
+    @classmethod
+    def _has_checkout(cls, root: Path, *, include_parents: bool) -> bool:
+        return cls._find_marker(root, include_parents=include_parents) is not None
+
     @staticmethod
-    def _has_checkout(root: Path, *, include_parents: bool) -> bool:
+    def _find_marker(root: Path, *, include_parents: bool) -> Path | None:
         """Recognize both Git directories and worktree pointer files."""
         candidates = (root, *root.parents) if include_parents else (root,)
-        return any((path / ".git").exists() for path in candidates)
+        markers = (path / ".git" for path in candidates)
+        return next((marker for marker in markers if marker.exists()), None)
