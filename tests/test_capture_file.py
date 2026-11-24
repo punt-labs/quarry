@@ -37,7 +37,7 @@ def test_git_capture_needs_the_private_zone_ignored(tmp_path: Path) -> None:
 
     new_path = tmp_path / ".punt-labs" / "local" / "quarry" / "captures" / _NAME
     assert _write(tmp_path) is CaptureOutcome.FAILED
-    assert not new_path.exists()
+    assert not new_path.parent.exists()
 
     gitignore.write_text(".punt-labs/quarry/captures/\n.punt-labs/**/local\n")
     assert _write(tmp_path) is CaptureOutcome.WRITTEN

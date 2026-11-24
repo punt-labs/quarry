@@ -65,7 +65,7 @@ class CaptureDirectory:
     def opened_for_write(self, name: str) -> Generator[int]:
         """Open safely and refuse writes unless the checkout excludes this target."""
         ignored = self.is_ignored(name, include_parents=True)
-        with self.opened(create=True, protect=ignored is None) as fd:
+        with self.opened(create=ignored is not False, protect=ignored is None) as fd:
             if ignored is False:
                 msg = f"protect {self.IGNORE} in .gitignore"
                 raise PermissionError(msg)
