@@ -82,6 +82,19 @@ class TestBootstrapGates:
         _git(remote, "cat-file", "-e", "main:session-old.md")
         assert _tracked_files(repo.captures_dir) == []
 
+    def test_fresh_shadow_can_switch_from_a_populated_to_an_empty_remote(
+        self, tmp_path: Path
+    ) -> None:
+        public = _public_repo(tmp_path)
+        populated = tmp_path / "populated.git"
+        empty = tmp_path / "empty.git"
+        for remote in (populated, empty):
+            _git(tmp_path, "init", "-b", "main", "--bare", str(remote))
+        _git(public, "push", str(populated), "main")
+
+        assert not _repo(public, str(populated)).bootstrap()
+        assert _repo(public, str(empty)).bootstrap()
+
     def test_refuses_when_not_ignored(self, tmp_path: Path) -> None:
         public = _public_repo(tmp_path, ignore_captures=False)
         repo = _repo(public)
