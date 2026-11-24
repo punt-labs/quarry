@@ -21,12 +21,18 @@ class CheckoutIgnore:
 
     @classmethod
     def project_root(cls, directory: Path) -> Path:
-        """Find the owning checkout for a session started in a subdirectory."""
+        """Find the nearest Quarry project within the owning checkout."""
         directory = directory.resolve()
         marker = cls._find_marker(directory, include_parents=True)
-        if marker is not None and (marker.is_file() or (marker / "HEAD").is_file()):
-            return marker.parent
-        return directory
+        if marker is None or not (marker.is_file() or (marker / "HEAD").is_file()):
+            return directory
+        root = marker.parent
+        while directory != root:
+            quarry = directory / ".punt-labs" / "quarry"
+            if (quarry / "config.md").is_file() or (quarry / "enabled").is_file():
+                return directory
+            directory = directory.parent
+        return root
 
     @classmethod
     def covers(

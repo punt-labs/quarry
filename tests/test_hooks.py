@@ -2430,6 +2430,48 @@ class TestCwdHardeningPreCompact:
         assert not (child / capture).exists()
         assert cap.call_args.args[0].cwd == str(child)
 
+    @pytest.mark.parametrize("nested_project", [False, True])
+    def test_subdirectory_uses_the_capture_projects_config(
+        self, tmp_path: Path, *, nested_project: bool
+    ) -> None:
+        root = tmp_path / "repo"
+        project = root / "package"
+        child = project / "src"
+        child.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+        root_config = root / ".punt-labs/quarry/config.md"
+        root_config.parent.mkdir(parents=True)
+        root_config.write_text("---\nauto_capture:\n  compaction: false\n---\n")
+        if nested_project:
+            config = project / ".punt-labs/quarry/config.md"
+            config.parent.mkdir(parents=True)
+            config.write_text("---\nauto_capture:\n  compaction: true\n---\n")
+            (project / ".gitignore").write_text(".punt-labs/local/\n")
+        else:
+            (root / ".gitignore").write_text(".punt-labs/local/\n")
+        transcript = _make_transcript(tmp_path, "Working in a checkout subdirectory")
+        home = tmp_path / "home"
+        with (
+            patch("quarry.session_transcript.Path.home", return_value=home),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=SendOutcome(sent=True),
+            ) as cap,
+        ):
+            handle_pre_compact(
+                {
+                    "cwd": str(child),
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        capture = ".punt-labs/local/quarry/captures/session-abc12345.md"
+        assert not (root / capture).exists()
+        assert (project / capture).is_file() is nested_project
+        assert cap.called is nested_project
+        assert home.exists() is nested_project
+
     def test_relative_cwd_skips_local_write(self, tmp_path: Path) -> None:
         transcript = _make_transcript(tmp_path, "Working somewhere")
         with (

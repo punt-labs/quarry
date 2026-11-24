@@ -46,6 +46,12 @@ class TranscriptSource:
     session_id: str
     transcript_path: Path
     label: str
+    project_dir: str = ""
+
+    @staticmethod
+    def resolve_project(cwd: str) -> str:
+        """Bind hook configuration and local storage to one project directory."""
+        return str(CheckoutIgnore.project_root(Path(cwd))) if cwd else ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,7 +203,7 @@ class SessionTranscriptCapture:
             return False
         return CaptureWriter().write(
             CaptureRequest(
-                project_dir=CheckoutIgnore.project_root(Path(self._source.cwd)),
+                project_dir=Path(self._source.project_dir or self._source.cwd),
                 session_id=self._source.session_id,
                 timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 artifacts=artifacts,
