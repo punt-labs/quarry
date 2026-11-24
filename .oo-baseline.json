@@ -5317,14 +5317,27 @@
     "future_annotations": 1.0
   },
   "src/quarry/service.py": {
-    "method_ratio": 0.15,
+    "method_ratio": 0.158,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.15,
+    "avg_params": 0.11,
     "max_complexity": 11.0,
-    "avg_complexity": 2.6,
-    "module_size": 311.0,
+    "avg_complexity": 2.58,
+    "module_size": 289.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/service_environment.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.75,
+    "max_complexity": 3.0,
+    "avg_complexity": 2.0,
+    "module_size": 35.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0

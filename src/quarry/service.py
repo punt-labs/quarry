@@ -23,11 +23,11 @@ from typing import Protocol, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
 from quarry.config import DEFAULT_PORT
-from quarry.env_file import EnvFile
 from quarry.fd_config import FdServiceLimits
 from quarry.home_paths import QuarryHome
 from quarry.net import LoopbackPolicy
 from quarry.private_write import PrivateWrite
+from quarry.service_environment import ServiceEnvironment
 from quarry.shutdown_policy import ShutdownPolicy
 from quarry.temp_sweep import TempSweep
 from quarry.tls import cert_fingerprint, write_tls_files
@@ -57,29 +57,6 @@ class ServiceBackend(Protocol):
 logger = logging.getLogger(__name__)
 
 _LABEL = "com.punt-labs.quarry"
-
-
-_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false"
-
-
-def _write_env_file(api_key: str = "") -> None:
-    """Write the daemon env file atomically with mode 0600, durably.
-
-    Always writes MALLOC_CONF (jemalloc tuning) and the teardown budget the unit's
-    stop timeout was computed from.  Writes QUARRY_API_KEY only when *api_key* is
-    non-empty.  How the file is written is :class:`~quarry.env_file.EnvFile`.
-
-    Args:
-        api_key: The API key value to store.  Empty string omits the line.
-    """
-    lines = [
-        f'MALLOC_CONF="{_MALLOC_CONF}"',
-        ShutdownPolicy.from_settings().env_line(),
-    ]
-    if api_key:
-        escaped = api_key.replace("\\", "\\\\").replace('"', '\\"')
-        lines.insert(0, f'QUARRY_API_KEY="{escaped}"')
-    EnvFile(QuarryHome.env_file()).write(lines)
 
 
 def _quarryd_exec_args() -> list[str]:
@@ -163,20 +140,8 @@ def _launchd_plist_content() -> str:
     # Do NOT use textwrap.dedent here — the outer dedent computes minimum
     # indent across ALL lines including the substituted env_vars_block.
     # A nested dedent produces 0-space lines, defeating the outer dedent.
-    escaped_malloc = _xml_escape(_MALLOC_CONF)
     policy = ShutdownPolicy.from_settings()
-    env_entries = (
-        "            <key>MALLOC_CONF</key>\n"
-        f"            <string>{escaped_malloc}</string>\n"
-        f"            <key>{policy.ENV_NAME}</key>\n"
-        f"            <string>{policy.total_s:g}</string>\n"
-    )
-    if api_key:
-        escaped_key = _xml_escape(api_key)
-        env_entries += (
-            "            <key>QUARRY_API_KEY</key>\n"
-            f"            <string>{escaped_key}</string>\n"
-        )
+    env_entries = ServiceEnvironment.launchd_entries(api_key, policy)
     env_vars_block = (
         "<key>EnvironmentVariables</key>\n"
         "        <dict>\n"
@@ -430,7 +395,7 @@ def install() -> str:
     # to stay out of ps output.
     # macOS: both API key and MALLOC_CONF are in the plist EnvironmentVariables.
     if plat == "linux":
-        _write_env_file(api_key)
+        ServiceEnvironment.write(api_key)
 
     # Generate TLS certificates before registering the service so that the
     # service file can include --tls in its exec args.

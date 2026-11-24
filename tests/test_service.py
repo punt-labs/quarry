@@ -19,7 +19,6 @@ from quarry.home_paths import QuarryHome
 from quarry.installed_stop_timeout import InstalledStopTimeout
 from quarry.service import (
     _LABEL,
-    _MALLOC_CONF,
     ServiceBackend,
     _get_tls_hostname,
     _launchd_install,
@@ -28,17 +27,18 @@ from quarry.service import (
     _systemd_escape,
     _systemd_install,
     _systemd_unit_content,
-    _write_env_file,
     detect_platform,
     install,
     uninstall,
 )
+from quarry.service_environment import MALLOC_CONF as _MALLOC_CONF, ServiceEnvironment
 from quarry.shutdown_policy import ShutdownPolicy
 
 # Patch write_tls_files across all install() calls to avoid writing to
 # ~/.punt-labs/quarry/tls/ during tests.
 _PATCH_TLS = patch("quarry.service.write_tls_files")
 _PATCH_CERT_FP = patch("quarry.service.cert_fingerprint", return_value="")
+_write_env_file = ServiceEnvironment.write
 
 
 def _make_local_bin_quarryd(home: Path) -> Path:
@@ -253,6 +253,24 @@ class TestQuarrydExecArgs:
 
 
 class TestWriteEnvFile:
+    def test_managed_services_forward_the_resolved_model_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+        monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "cache & models"))
+        env_file = tmp_path / "quarry.env"
+        cache = tmp_path / "cache & models" / "hub"
+        with (
+            patch.object(QuarryHome, "env_file", return_value=env_file),
+            patch("quarry.service._quarryd_exec_args", return_value=["quarryd"]),
+        ):
+            _write_env_file()
+            plist = plistlib.loads(_launchd_plist_content().encode())
+
+        assert f'HF_HUB_CACHE="{cache}"' in env_file.read_text().splitlines()
+        assert plist["EnvironmentVariables"]["HF_HUB_CACHE"] == str(cache)
+
     def test_writes_api_key_double_quoted(self, tmp_path: Path) -> None:
         """_write_env_file writes QUARRY_API_KEY="<value>" double-quoted.
 
