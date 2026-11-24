@@ -95,6 +95,21 @@ class TestBootstrapGates:
         assert not _repo(public, str(populated)).bootstrap()
         assert _repo(public, str(empty)).bootstrap()
 
+    def test_fetch_prunes_branches_without_pruning_local_tags(
+        self, tmp_path: Path
+    ) -> None:
+        public = _public_repo(tmp_path)
+        remote = tmp_path / "remote.git"
+        _git(tmp_path, "init", "-b", "main", "--bare", str(remote))
+        repo = _repo(public, str(remote))
+        assert repo.bootstrap()
+        _git(repo.captures_dir, "commit", "--allow-empty", "-m", "local")
+        _git(repo.captures_dir, "tag", "local-only")
+        _git(repo.captures_dir, "config", "fetch.pruneTags", "true")
+
+        assert repo.bootstrap()
+        _git(repo.captures_dir, "rev-parse", "--verify", "refs/tags/local-only")
+
     def test_refuses_when_not_ignored(self, tmp_path: Path) -> None:
         public = _public_repo(tmp_path, ignore_captures=False)
         repo = _repo(public)

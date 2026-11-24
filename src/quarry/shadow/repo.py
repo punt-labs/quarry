@@ -359,7 +359,7 @@ class ShadowRepo:
 
     def _can_stage(self) -> bool:
         """Refuse staging against remote files absent from a new working tree."""
-        self._repo_git.ok(["git", "fetch", "--prune", "origin"])
+        self._repo_git.ok(["git", "fetch", "--prune", "--no-prune-tags", "origin"])
         if self._repo_git.ok(["git", "rev-parse", "--verify", "HEAD"]):
             return True
         return not self._repo_git.ok(["git", "rev-parse", "--verify", "origin/main"])
