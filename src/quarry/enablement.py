@@ -60,13 +60,12 @@ class Enablement:
     another still-enabled repo depends on.
     """
 
-    __slots__ = ("_gitignore", "_guidance", "_import", "_marker", "_root")
+    __slots__ = ("_gitignore", "_guidance", "_import", "_marker")
 
     _guidance: Guidance
     _marker: EnabledMarker
     _import: ClaudeMdImport
     _gitignore: QuarryGitignore
-    _root: Path
 
     def __new__(cls, root: Path) -> Self:
         """Bind guidance, marker, import, and gitignore updates to one repo root."""
@@ -75,7 +74,6 @@ class Enablement:
         self._marker = EnabledMarker(root)
         self._import = ClaudeMdImport(root / "CLAUDE.md")
         self._gitignore = QuarryGitignore(root)
-        self._root = root
         return self
 
     def enable(self) -> EnablementResult:

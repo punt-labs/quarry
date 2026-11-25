@@ -20,8 +20,8 @@ class EnabledMarker:
     exists (tool-enable-disable.md § 2.7). ``enable`` writes it; ``disable``
     deletes it. This is a distinct signal from directory presence — the
     vendored guide persists after ``disable`` (the dormant state, § 2.9), so
-    directory presence cannot mean "enabled." Both hook gates and ``punt
-    audit`` read this one file. Per § 2.11 the marker is a commit point:
+    directory presence cannot mean "enabled." Hook gates and ``punt repo audit``
+    both read this file. Per § 2.11 the marker is a commit point:
     :class:`quarry.enablement.Enablement` writes it only after the repo
     ``@.punt-labs/quarry/CLAUDE.md`` import is effective, so marker present ⇒
     import present. The reverse can differ mid-operation (import written, marker
