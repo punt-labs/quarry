@@ -103,10 +103,39 @@ jobs:
           cd runtime-assets
           asset=quarry-handoff-linux-amd64.tar.gz
           sha256sum --check "$asset.sha256"
-          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
-          gh release create "$TAG" "$asset" "$asset.sha256" --repo "$GITHUB_REPOSITORY" \
-            --verify-tag --draft --prerelease --latest=false \
-            --title "Quarry handoff runtime $TAG" \
-            --notes 'Offline Linux amd64 toolchain for the Quarry Ethos handoff gate.'
+          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null; then
+            tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "Tag $TAG points to $tag_sha, not the build commit $GITHUB_SHA." >&2
+              exit 1
+            fi
+          fi
+
+          if ! draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft); then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --prerelease --latest=false \
+              --title "Quarry handoff runtime $TAG" \
+              --notes 'Offline Linux amd64 toolchain for the Quarry Ethos handoff gate.'
+          elif [[ "$draft" != true ]]; then
+            echo "Release $TAG is already published; use a new tag." >&2
+            exit 1
+          fi
+
+          release_digest() {
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq ".assets[] | select(.name == \"$1\") | (.digest // \"missing\")"
+          }
+          for file in "$asset" "$asset.sha256"; do
+            expected=$(sha256sum < "$file")
+            actual=$(release_digest "$file")
+            if [[ -z "$actual" ]]; then
+              gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
+              actual=$(release_digest "$file")
+            fi
+            if [[ "$actual" != "sha256:${expected%% *}" ]]; then
+              echo "Release asset $file differs from the build. Retry only the failed job to reuse the original artifact." >&2
+              exit 1
+            fi
+          done
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false

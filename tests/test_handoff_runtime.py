@@ -11,10 +11,10 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
-INSTALL_HANDOFF_RUNTIME = (
-    Path(__file__).resolve().parents[1] / "scripts" / "install-handoff-runtime.sh"
-)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+INSTALL_HANDOFF_RUNTIME = REPO_ROOT / "scripts" / "install-handoff-runtime.sh"
 
 
 @pytest.mark.skipif(
@@ -88,3 +88,72 @@ def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
         expected = "checksum mismatch" if case == "mismatch" else "No published"
         assert expected in result.stderr
         assert not installed.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the release job runs on Linux")
+@pytest.mark.parametrize("case", ["resume", "wrong-tag", "wrong-digest"])
+def test_publish_handoff_runtime_retries_safely(tmp_path: Path, case: str) -> None:
+    workflow = REPO_ROOT / ".github/workflows/handoff-runtime.yml"
+    steps = yaml.safe_load(workflow.read_text())["jobs"]["publish"]["steps"]
+    publisher = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Publish the verified runtime"
+    )
+    assets = tmp_path / "runtime-assets"
+    assets.mkdir()
+    archive = assets / "quarry-handoff-linux-amd64.tar.gz"
+    archive.write_bytes(b"published archive")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    checksum = f"{digest}  {archive.name}\n".encode()
+    archive.with_suffix(".gz.sha256").write_bytes(checksum)
+    gh = r"""
+gh() {
+  case "$1 $2" in
+    'api --method') return 1 ;;
+    'api repos/punt-labs/quarry/git/ref/tags/handoff-runtime-v1')
+      printf '%s\n' "$EXISTING_TAG_SHA" ;;
+    'release view')
+      if [[ "$*" == *isDraft* ]]; then
+        echo true
+      elif [[ "$*" != *tar.gz.sha256* ]]; then
+        printf '%s\n' "$EXISTING_DIGEST"
+      elif [[ -e checksum-uploaded ]]; then
+        printf '%s\n' "$CHECKSUM_DIGEST"
+      fi ;;
+    'release upload')
+      [[ "$4" == quarry-handoff-linux-amd64.tar.gz.sha256 ]] &&
+        touch checksum-uploaded ;;
+    'release edit') touch release-published ;;
+    *) return 99 ;;
+  esac
+}
+"""
+    existing_digest = "0" * 64 if case == "wrong-digest" else digest
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", gh + publisher],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "TAG": "handoff-runtime-v1",
+            "GITHUB_REPOSITORY": "punt-labs/quarry",
+            "GITHUB_SHA": "a" * 40,
+            "EXISTING_TAG_SHA": ("b" if case == "wrong-tag" else "a") * 40,
+            "EXISTING_DIGEST": f"sha256:{existing_digest}",
+            "CHECKSUM_DIGEST": f"sha256:{hashlib.sha256(checksum).hexdigest()}",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if case == "resume":
+        assert result.returncode == 0, result.stderr
+        assert (assets / "checksum-uploaded").exists()
+        assert (assets / "release-published").exists()
+    else:
+        assert result.returncode == 1, result.stderr
+        diagnostic = "not the build commit" if case == "wrong-tag" else "differs from"
+        assert diagnostic in result.stderr
+        assert not (assets / "checksum-uploaded").exists()
+        assert not (assets / "release-published").exists()
