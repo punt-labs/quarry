@@ -794,12 +794,25 @@ def test_every_quarry_module_imports_when_home_cannot_be_resolved() -> None:
     """Proves nothing resolves the home directory at import."""
     done = _run_without_a_home(
         """
-        import importlib, pkgutil
+        import importlib, pkgutil, platform
         import quarry
+        # watchdog's inotify backend raises UnsupportedLibcError on import
+        # off Linux; production guards that import in fs_watchdog, so only
+        # these two Linux-only modules are skipped, and only off Linux.
+        linux_only = (
+            set()
+            if platform.system() == "Linux"
+            else {
+                "quarry.daemon.inotify_prune",
+                "quarry.daemon.inotify_prune_chain",
+            }
+        )
         failures = []
         for info in pkgutil.walk_packages(quarry.__path__, "quarry."):
             if info.name.endswith(".__main__"):
                 continue  # the entry point's own module is covered above
+            if info.name in linux_only:
+                continue
             try:
                 importlib.import_module(info.name)
             except RuntimeError as exc:

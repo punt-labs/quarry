@@ -15,13 +15,21 @@ import contextlib
 import errno
 import itertools
 import os
-import sys
+import platform
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import pytest
+
+if platform.system() != "Linux":
+    pytest.skip(
+        f"inotify pruning is Linux-only (platform is {platform.system()}); "
+        "watchdog's inotify backend raises UnsupportedLibcError on import",
+        allow_module_level=True,
+    )
+
 import watchdog.observers.inotify_c as inotify_c
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.api import EventQueue, ObservedWatch
@@ -35,10 +43,6 @@ from quarry.daemon.inotify_prune_chain import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux", reason="inotify pruning is Linux-only"
-)
 
 
 class _FakeKernel:

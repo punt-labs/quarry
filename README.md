@@ -225,8 +225,9 @@ agents named identities and runs delegated tasks ("missions"); the
 `missions sync` commands only matter if you use it.
 
 A registered directory is indexed automatically: quarry watches it for changes
-and re-indexes as you work (honoring `.gitignore` and a root-level
-`.quarryignore`, so directories such as `node_modules` or `.venv` are skipped),
+and re-indexes as you work (honoring `.gitignore` and `.quarryignore` files at
+every directory level with git's rules, so directories such as `node_modules`
+or `.venv` are skipped),
 with a periodic sweep that catches anything the live watch misses. You rarely
 need `quarry sync`. `quarry list registrations` shows each directory's watch
 state (`watched`, `degraded`, or `scan-only`); a `scan-only` directory still

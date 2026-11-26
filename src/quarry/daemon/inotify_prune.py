@@ -233,10 +233,11 @@ class PrunedInotify(Inotify):
         PERMANENTLY while :meth:`~quarry.daemon.watch_loop.WatchLoop.
         watch_state` keeps reporting "watched". The
         ignore-spec layer is written to never raise for malformed ignore
-        FILES (:meth:`~quarry.ignore_spec.IgnoreRules._compile_lines`
+        FILES (:meth:`~quarry.ignore_pattern.IgnoreFile.from_lines`
         already skips invalid lines), so this is defense-in-depth against
-        anything that layer's contract does not cover -- a future pathspec
-        release, an unreadable filesystem object under a raced path, etc.
+        anything that layer's contract does not cover -- a future change to
+        the pattern language, an unreadable filesystem object under a raced
+        path, etc.
         Failing OPEN (watch it) is deliberate: an over-broad watch costs a
         few extra descriptors from the large ``max_user_watches`` budget;
         losing the buffer thread costs every watch on the whole tree.

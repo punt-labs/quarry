@@ -218,7 +218,7 @@ class WatchdogSource:
         Building a :class:`~quarry.sync_discovery.FileDiscovery` compiles
         the tree's ignore spec, which is written to never raise for a
         malformed ignore file
-        (:meth:`~quarry.ignore_spec.IgnoreRules._compile_lines`); this is
+        (:meth:`~quarry.ignore_pattern.IgnoreFile.from_lines`); this is
         caught anyway because this method's whole
         contract is "never crash the caller, return ``None`` instead" — a
         second layer here is cheap and this is the one boundary a
