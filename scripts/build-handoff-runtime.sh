@@ -101,6 +101,8 @@ rm -f -- "$runtime/cache/npm/_update-notifier-last-checked"
     printf 'markdownlint-cli2 %s\n' "$markdownlint_version"
 } > "$runtime/versions.txt"
 
+# Package-manager cache contents can change between builds despite normalized
+# archive headers. Pin the digest of the published asset, not a local rebuild.
 LC_ALL=C "$tar_tool" --sort=name --format=gnu --mtime=@0 --numeric-owner \
     --owner=0 --group=0 --hard-dereference -C "$runtime" -cf - bin cache licenses node python versions.txt \
     | gzip -n > "$work/runtime.tar.gz"

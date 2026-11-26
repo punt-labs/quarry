@@ -6,6 +6,11 @@ help: ## Show available targets
 test: ## Run the default credential-free suite
 	uv run --extra dev pytest
 
+.PHONY: handoff-runtime
+
+handoff-runtime: ## Install the pinned offline runtime for Ethos handoff checks
+	./scripts/install-handoff-runtime.sh
+
 .PHONY: hooks test-changed test-push test-subprocess-fast
 
 hooks: ## Install the repository's local test hooks

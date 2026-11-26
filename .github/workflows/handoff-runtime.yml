@@ -1,0 +1,110 @@
+name: Handoff runtime
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/handoff-runtime.yml
+      - .punt-labs/ethos/checks/snapshots/quarry-default.yaml
+      - Makefile
+      - pyproject.toml
+      - scripts/*handoff-runtime.sh
+      - uv.lock
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: New runtime release tag, e.g. handoff-runtime-v1
+        required: true
+        type: string
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Validate runtime release request
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main || ! "$TAG" =~ ^handoff-runtime-v[1-9][0-9]*$ ]]; then
+            echo 'Dispatch on main with a new handoff-runtime-vN tag.' >&2
+            exit 2
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.9"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.3"
+          package-manager-cache: false
+      - name: Package the offline runtime
+        run: |
+          uv python install 3.13.18
+          mkdir runtime-assets
+          archive=$(scripts/build-handoff-runtime.sh runtime-assets)
+          sha=$(basename "$archive" .tar.gz)
+          asset=quarry-handoff-linux-amd64.tar.gz
+          mv -- "$archive" "runtime-assets/$asset"
+          cd runtime-assets
+          printf '%s  %s\n' "$sha" "$asset" > "$asset.sha256"
+          sha256sum --check "$asset.sha256"
+      - name: Smoke-test the relocated toolchain offline
+        run: |
+          scratch=$(mktemp -d)
+          trap 'rm -rf -- "$scratch"' EXIT
+          runtime=$scratch/runtime
+          mkdir "$runtime" "$scratch/home" "$scratch/tmp"
+          tar -xzf runtime-assets/quarry-handoff-linux-amd64.tar.gz -C "$runtime"
+          cp -a "$runtime/cache/uv" "$scratch/uv-cache"
+          cp -a "$runtime/cache/npm" "$scratch/npm-cache"
+          sudo unshare --net --setgid "$(id -g)" --setuid "$(id -u)" -- \
+            env -i HOME="$scratch/home" TMPDIR="$scratch/tmp" \
+            PATH="$runtime/bin:$runtime/node/bin:/usr/bin:/bin" \
+            UV_PYTHON="$runtime/python/bin/python3.13" UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never \
+            UV_LINK_MODE=copy UV_CACHE_DIR="$scratch/uv-cache" UV_PROJECT_ENVIRONMENT="$scratch/venv" \
+            PYTHONDONTWRITEBYTECODE=1 npm_config_cache="$scratch/npm-cache" npm_config_offline=true \
+            bash -ec 'uv sync --offline --locked --extra dev && uv run --no-sync --extra dev pyright --version && make lint-docs'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-linux-amd64
+          path: runtime-assets/
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: build
+    concurrency: handoff-runtime-release
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-linux-amd64
+          path: runtime-assets
+      - name: Publish the verified runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          cd runtime-assets
+          asset=quarry-handoff-linux-amd64.tar.gz
+          sha256sum --check "$asset.sha256"
+          gh release create "$TAG" "$asset" "$asset.sha256" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --draft --prerelease --latest=false \
+            --title "Quarry handoff runtime $TAG" \
+            --notes 'Offline Linux amd64 toolchain for the Quarry Ethos handoff gate.'
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
