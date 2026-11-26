@@ -53,13 +53,23 @@ if TYPE_CHECKING:
 class _RecordingQueue:
     """Capture every submission; admit or shed per configuration."""
 
-    __slots__ = ("admit", "boom", "fail_index", "scan_result", "submitted")
+    __slots__ = (
+        "admit",
+        "admitted_index",
+        "boom",
+        "fail_index",
+        "index_limit",
+        "scan_result",
+        "submitted",
+    )
 
     submitted: list[tuple[RouteKey, IngestUnit]]
     boom: bool
     admit: bool
     fail_index: bool
     scan_result: dict[str, object]
+    index_limit: int | None
+    admitted_index: int
 
     def __new__(
         cls,
@@ -67,6 +77,7 @@ class _RecordingQueue:
         admit: bool = True,
         boom: bool = False,
         fail_index: bool = False,
+        index_limit: int | None = None,
         scan_result: dict[str, object] | None = None,
     ) -> Self:
         self = super().__new__(cls)
@@ -75,6 +86,8 @@ class _RecordingQueue:
         self.boom = boom
         self.fail_index = fail_index
         self.scan_result = scan_result or {}
+        self.index_limit = index_limit
+        self.admitted_index = 0
         return self
 
     def try_submit(self, key: RouteKey, job: IngestUnit, state: TaskState) -> bool:
@@ -82,9 +95,16 @@ class _RecordingQueue:
             msg = "queue boom"
             raise RuntimeError(msg)
         self.submitted.append((key, job))
-        if not self.admit:
+        capped = (
+            isinstance(job, FileIndexJob)
+            and self.index_limit is not None
+            and self.admitted_index >= self.index_limit
+        )
+        if not self.admit or capped:
             state.fail("queue refused")
             return False
+        if isinstance(job, FileIndexJob):
+            self.admitted_index += 1
         # Simulate the worker running the admitted job: a CollectionSyncJob
         # reports its injected per-file result; a FileIndexJob fails at run time
         # when fail_index is set (the admitted-then-failed case).
@@ -1816,3 +1836,28 @@ def test_shed_batch_with_a_filtered_path_still_skips_finalize(
         await loop.stop()
 
     asyncio.run(_run())
+
+
+def test_partly_shed_batch_finalizes_once_and_rearms_the_shed_event(
+    tmp_path: Path,
+) -> None:
+    """One admitted job and one shed job: finalize the admitted, re-arm the shed."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue(index_limit=1)
+        ctx, root = _build(tmp_path, queue=queue, optimize_interval=0.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        source.emit(root, _fs(_write(root, "a.md")))
+        source.emit(root, _fs(_write(root, "b.md")))
+        await asyncio.sleep(0.5)
+        assert queue.admitted_index == 1
+        assert len(queue.jobs(CollectionFinalizeJob)) == 1
+        # The shed file is re-fed through the debouncer for another attempt.
+        assert len(queue.jobs(FileIndexJob)) > 2
+        await loop.stop()
+
+    with patch("quarry.daemon.shed_rearm._BACKOFF_BASE_S", 0.02):
+        asyncio.run(_run())

@@ -111,11 +111,10 @@ class WatchSubmitter:
         outcome = self._submit_deltas(batch, db, settings, root)
         if outcome.shed:
             self._rearm.defer(batch.key, list(outcome.shed))
-            return
-        self._rearm.reset(batch.key)  # batch cleared — reset backoff
-        if not outcome.admitted:
-            return  # every path was filtered out: the table did not change
-        self._request_finalize(batch.key, db, settings)
+        else:
+            self._rearm.reset(batch.key)  # batch cleared — reset backoff
+        if outcome.admitted:
+            self._request_finalize(batch.key, db, settings)
 
     def sweep(self) -> ScanSweep:
         """Return a sweep that rescans collections, finalizing each database once.
