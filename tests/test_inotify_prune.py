@@ -495,7 +495,7 @@ def test_construction_survives_a_malformed_root_gitignore(
 ) -> None:
     """A malformed root .gitignore must not crash PrunedInotify construction.
 
-    IgnoreRules compiles valid lines independently so one malformed rule
+    IgnoreFile compiles valid lines independently so one malformed rule
     cannot prevent watch setup for the remaining tree.
     """
     del fake_kernel

@@ -2241,8 +2241,8 @@ addressed in DES-032; increases jemalloc retention (DES-027) and does not bound 
 **Status:** Accepted (2026-09-02) · **Beads:** quarry-0bej, quarry-ndrj
 
 **Context.** The watch layer and the scan layer disagreed about what is ignored.
-`FileDiscovery` pruned its bulk walk with full gitignore semantics (`pathspec`:
-`.gitignore` at every level, `.quarryignore` at the root, scratch defaults,
+`FileDiscovery` pruned its bulk walk with gitignore semantics (`.gitignore` at
+every level, `.quarryignore` at the root, scratch defaults,
 hidden-dir skip), but the fs watchdog handed the raw registered root to
 `observer.schedule(..., recursive=True)` — inotify allocated one watch descriptor
 per directory, junk included. The operator's workspace root holds 206k
@@ -2258,7 +2258,7 @@ the kernel cost for directories whose events would then be discarded.
 walks, watches, or filters registered-directory contents through it: the bulk
 scan (`discover()`), the watch layer (`iter_watchable_dirs()` /
 `is_watchable_dir()`), the post-debounce submitter filter, and file-level
-matching (`keeps_file` — `FileDiscovery` never calls `pathspec` directly).
+matching (`IgnoreRules.keeps`).
 Compiled specs are cached; the observer-thread hot path never re-reads ignore
 files per event. Paths that walk fixed, non-document directories (doctor's
 existence stat, shadow rescrub's captures glob, backfill/ethos-memory/transcript
@@ -2276,16 +2276,30 @@ at watch establishment, so filtering events cannot protect the descriptor
 budget. *A second pattern list for the watcher* — the exact drift bug class
 (remote/local divergence, bug class 3) transplanted into the ignore layer.
 
-**Amendment (2026-11-26).** The per-path live check, `FileDiscovery.is_indexable`,
-matched only the file's own relative path against the root spec, so a negation
-(`*` then `!AGENTS.md`) re-included a file under a directory the bulk walk never
-enters; the watcher indexed it and the scan deleted it. `is_indexable` now applies
-ancestor exclusion through `_chain_kept`, the same `keeps_dir` check on every
-directory segment that `is_watchable_dir` uses, so a file below an excluded
-directory is never indexable, as in git. `tests/test_sync_discovery_live.py` pins
-live == bulk: for every file in a generated tree, `is_indexable(path)` equals
-`path in discover()`. `is_deletable` stays lexical by design (a false accept is a
-no-op delete job).
+**Amendment (2026-11-26).** The first implementation of this seam diverged from
+git in ways the watcher and the scan shared, so an agreement test between them
+could not see them: nested ignore files matched only one directory level down,
+a file whose parent directory was excluded could be re-included by a negation,
+`.quarryignore` was read only at the root, and a symlink could reach ignored
+text. The decision is now one function, `IgnoreRules.keeps(rel, is_dir)`, with
+git's semantics. Every directory's `.gitignore` and `.quarryignore` (both
+apply; `.quarryignore` is read second) match the path relative to that
+directory with git's `wildmatch` pattern language (`ignore_pattern.py`); the
+deepest file with a matching pattern decides, and within a file the last match
+wins. A path is kept only when every ancestor directory is kept, so nothing
+below an excluded directory is re-included; hidden names and `ScratchGuard`
+directory names are dropped as before. A symlinked directory is never entered
+(walk) or accepted (live checks), and a symlinked file is kept only when its
+resolved target is inside the root and itself kept. `discover()`,
+`is_indexable()` and `is_watchable_dir()` all call `keeps`.
+`tests/test_ignore_git_reference.py` compares both live and bulk decisions with
+`git check-ignore` over generated trees, and `tests/test_sync_discovery_live.py`
+pins live == bulk including symlinks. Differences from git that remain:
+`.git/info/exclude` and the user's global excludes file are not read, patterns
+are case-sensitive (`core.ignorecase` is not modelled), and quarry also skips
+hidden names, scratch directory names and the built-in defaults, which git does
+not. `is_deletable` stays lexical by design (a false accept is a no-op delete
+job).
 
 ### DES-045e: Watch mechanism — one pruned recursive inotify instance per root
 
