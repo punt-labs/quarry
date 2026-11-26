@@ -86,29 +86,59 @@ class _Glob:
         negated = pos < len(self._text) and self._text[pos] in "!^"
         if negated:
             pos += 1
-        body: list[str] = []
-        first = True
+        tokens: list[tuple[str, str]] = []
         while pos < len(self._text):
-            char = self._text[pos]
-            if char == "]" and not first:
-                return f"(?!/)[{'^' if negated else ''}{''.join(body)}]", pos + 1
-            piece, pos = self._class_item(pos)
-            body.append(piece)
-            first = False
+            if self._text[pos] == "]" and tokens:
+                return self._class_regex(tokens, negated=negated), pos + 1
+            token, pos = self._class_token(pos)
+            tokens.append(token)
         return re.escape("["), index + 1
 
-    def _class_item(self, pos: int) -> tuple[str, int]:
-        """Return one class member (character, range endpoint or POSIX class)."""
+    def _class_token(self, pos: int) -> tuple[tuple[str, str], int]:
+        """Return one class token as ``(kind, text)`` and the next position.
+
+        The kind is ``class`` (a POSIX class name), ``dash`` (an unescaped
+        ``-``, a range operator when it sits between two characters) or
+        ``char`` (a literal, escaped or not).
+        """
         text = self._text
         if text.startswith("[:", pos):
             close = text.find(":]", pos + 2)
             if close != -1 and text[pos + 2 : close] in _POSIX_CLASSES:
-                return _POSIX_CLASSES[text[pos + 2 : close]], close + 2
+                return ("class", text[pos + 2 : close]), close + 2
         if text[pos] == "\\" and pos + 1 < len(text):
-            return re.escape(text[pos + 1]), pos + 2
-        if text[pos] == "-":
-            return "-", pos + 1
-        return re.escape(text[pos]), pos + 1
+            return ("char", text[pos + 1]), pos + 2
+        return ("dash" if text[pos] == "-" else "char", text[pos]), pos + 1
+
+    @staticmethod
+    def _class_regex(tokens: list[tuple[str, str]], *, negated: bool) -> str:
+        """Build the regex class for *tokens*, resolving ranges before POSIX classes.
+
+        A reversed range such as ``b-a`` matches only its low end, as in git.
+        """
+        parts: list[str] = []
+        index = 0
+        while index < len(tokens):
+            kind, text = tokens[index]
+            if kind == "class":
+                parts.append(_POSIX_CLASSES[text])
+            elif (
+                index + 2 < len(tokens)
+                and tokens[index + 1][0] == "dash"
+                and tokens[index + 2][0] != "class"
+            ):
+                high = tokens[index + 2][1]
+                # git matches the low end literally even when the range is empty.
+                parts.append(
+                    f"{re.escape(text)}-{re.escape(high)}"
+                    if text <= high
+                    else re.escape(text)
+                )
+                index += 2
+            else:
+                parts.append(re.escape(text))
+            index += 1
+        return f"(?!/)[{'^' if negated else ''}{''.join(parts)}]"
 
 
 @final
@@ -134,9 +164,9 @@ class IgnorePattern:
         """Return the pattern *line* defines, or ``None`` for a blank or comment line.
 
         Raises ``ValueError`` for a line git itself rejects (a trailing
-        backslash).
+        backslash) or that cannot be compiled.
         """
-        text = line.rstrip("\r\n")
+        text = cls._bytes_view(line.rstrip("\r\n"))
         while text.endswith(" ") and not text.endswith("\\ "):
             text = text[:-1]
         if not text or text.startswith("#"):
@@ -144,13 +174,23 @@ class IgnorePattern:
         negated = text.startswith("!")
         text = text.removeprefix("!")
         dir_only = text.endswith("/")
-        text = text.rstrip("/")
+        text = text.removesuffix("/")
         if not text:
             return None
         anchored = "/" in text
         body = _Glob(text.removeprefix("/")).regex()
         prefix = "" if anchored else "(?:.*/)?"
-        return cls(re.compile(prefix + body), negated=negated, dir_only=dir_only)
+        try:
+            regex = re.compile(prefix + body)
+        except re.error as exc:
+            msg = f"cannot compile {line!r}: {exc}"
+            raise ValueError(msg) from exc
+        return cls(regex, negated=negated, dir_only=dir_only)
+
+    @staticmethod
+    def _bytes_view(text: str) -> str:
+        """Return *text* as one character per UTF-8 byte, as git's wildmatch sees it."""
+        return text.encode("utf-8", "surrogateescape").decode("latin-1")
 
     @property
     def negated(self) -> bool:
@@ -161,7 +201,7 @@ class IgnorePattern:
         """Return whether the path *rel* itself (not a parent) matches."""
         if self._dir_only and not is_dir:
             return False
-        return self._regex.fullmatch(rel) is not None
+        return self._regex.fullmatch(self._bytes_view(rel)) is not None
 
 
 @final

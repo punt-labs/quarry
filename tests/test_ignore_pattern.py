@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings, strategies as st
 
 from quarry.ignore_pattern import IgnoreFile, IgnorePattern
 
@@ -16,7 +18,7 @@ def _hits(line: str, rel: str, *, is_dir: bool = False) -> bool:
 
 
 class TestParse:
-    @pytest.mark.parametrize("line", ["", "   ", "# comment", "/", "!", "//"])
+    @pytest.mark.parametrize("line", ["", "   ", "# comment", "/", "!"])
     def test_blank_comment_and_empty_lines_define_no_pattern(self, line: str):
         assert IgnorePattern.parse(line) is None
 
@@ -153,3 +155,107 @@ class TestLoad:
     def test_a_non_utf8_file_is_skipped(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_bytes(b"\xff\xfe*.log\n")
         assert IgnoreFile.load(tmp_path) is None
+
+
+class TestBracketExpressions:
+    @pytest.mark.parametrize(
+        ("line", "rel", "expected"),
+        [
+            ("[[:punct:]-0].md", "0.md", True),
+            ("[[:punct:]-0].md", "-.md", True),
+            ("[[:punct:]-0].md", "g.md", False),
+            ("[[:alpha:][:digit:]].md", "7.md", True),
+            ("[[:alpha:]-]x.md", "-x.md", True),
+            ("[b-a].md", "a.md", False),
+            ("[b-a].md", "b.md", True),
+            ("[!b-a].md", "z.md", True),
+            ("[-a].md", "-.md", True),
+            ("[a-].md", "-.md", True),
+            ("[a\\-c].md", "-.md", True),
+            ("[a\\-c].md", "b.md", False),
+            ("[a--].md", "a.md", True),
+            ("[a--].md", "+.md", False),
+        ],
+    )
+    def test_ranges_hyphens_and_classes(self, line: str, rel: str, *, expected: bool):
+        assert _hits(line, rel) is expected
+
+
+class TestBytes:
+    def test_question_mark_is_one_byte(self):
+        assert not _hits("n-?.md", "n-\u00e9.md")
+        assert _hits("n-??.md", "n-\u00e9.md")
+
+    def test_star_spans_multibyte_names(self):
+        assert _hits("n-*.md", "n-\u00e9\u00e9.md")
+
+    def test_a_non_ascii_literal_matches_itself(self):
+        assert _hits("\u00e9.md", "\u00e9.md")
+
+    def test_an_undecodable_file_name_does_not_raise(self):
+        assert not _hits("a.md", "a\udcff.md")
+
+
+class TestUncompilablePatterns:
+    def test_a_pattern_that_fails_to_compile_is_skipped_and_logged(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        real_compile = re.compile
+
+        def fake_compile(source: str, *args: int) -> re.Pattern[str]:
+            if "BOOM" in source:
+                msg = "forced failure"
+                raise re.error(msg)
+            return real_compile(source, *args)
+
+        monkeypatch.setattr(re, "compile", fake_compile)
+        file = IgnoreFile.from_lines(["a.md", "BOOM.md", "b.md"])
+        assert file.verdict("a.md", is_dir=False) is True
+        assert file.verdict("b.md", is_dir=False) is True
+        assert file.verdict("BOOM.md", is_dir=False) is None
+        assert any("BOOM.md" in r.message for r in caplog.records)
+
+    def test_parse_reports_a_compile_failure_as_value_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        def fail(source: str, *args: int) -> re.Pattern[str]:
+            raise re.error(source)
+
+        monkeypatch.setattr(re, "compile", fail)
+        with pytest.raises(ValueError) as caught:
+            IgnorePattern.parse("x.md")
+        assert "cannot compile" in str(caught.value)
+
+
+class TestFuzz:
+    @settings(max_examples=300, deadline=None)
+    @given(lines=st.lists(st.text(max_size=40), max_size=8))
+    def test_arbitrary_lines_never_raise(self, lines: list[str]):
+        file = IgnoreFile.from_lines(lines)
+        file.verdict("a/b.md", is_dir=False)
+        file.verdict("a", is_dir=True)
+
+    @settings(max_examples=300, deadline=None)
+    @given(
+        line=st.text(alphabet="[]!^-:\\*?/ab.alphpun", max_size=24),
+    )
+    def test_glob_metacharacter_soup_never_raises(self, line: str):
+        file = IgnoreFile.from_lines([line])
+        file.verdict("a.md", is_dir=False)
+
+    @pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+    def test_a_file_that_disappears_or_cannot_be_read_is_skipped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        error: type[OSError],
+    ):
+        (tmp_path / ".gitignore").write_text("*.log\n")
+
+        def raise_error(self: Path, *args: str, **kwargs: str) -> str:
+            raise error(self.name)
+
+        monkeypatch.setattr(Path, "read_text", raise_error)
+        assert IgnoreFile.load(tmp_path) is None
+        assert (error is FileNotFoundError) or "unreadable" in caplog.text
