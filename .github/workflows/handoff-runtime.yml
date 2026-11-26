@@ -103,8 +103,10 @@ jobs:
           cd runtime-assets
           asset=quarry-handoff-linux-amd64.tar.gz
           sha256sum --check "$asset.sha256"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
           gh release create "$TAG" "$asset" "$asset.sha256" --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" --draft --prerelease --latest=false \
+            --verify-tag --draft --prerelease --latest=false \
             --title "Quarry handoff runtime $TAG" \
             --notes 'Offline Linux amd64 toolchain for the Quarry Ethos handoff gate.'
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
