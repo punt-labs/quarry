@@ -42,7 +42,9 @@
       "Write",
       "Read",
       "Edit",
-      "Bash(vox:*)"
+      "Bash(vox:*)",
+      "Bash(biff:*)",
+      "Skill(biff:*)"
     ],
     "deny": [
       "Bash(curl:*)",
@@ -64,6 +66,26 @@
       "Bash(wget:*)",
       "Edit(.env)",
       "Edit(.envrc)"
+    ],
+    "ask": [
+      "Bash(biff install:*)",
+      "Bash(biff uninstall:*)",
+      "Bash(biff install-statusline:*)",
+      "Bash(biff uninstall-statusline:*)",
+      "Bash(biff enable:*)",
+      "Bash(biff disable:*)",
+      "Bash(biff serve:*)",
+      "Bash(biff mcp:*)",
+      "Bash(biff hook:*)",
+      "Bash(biff install)",
+      "Bash(biff uninstall)",
+      "Bash(biff install-statusline)",
+      "Bash(biff uninstall-statusline)",
+      "Bash(biff enable)",
+      "Bash(biff disable)",
+      "Bash(biff serve)",
+      "Bash(biff mcp)",
+      "Bash(biff hook)"
     ]
   }
 }
