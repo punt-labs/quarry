@@ -48,18 +48,16 @@ class CollectionResolver:
         that need the registration's own root directory (e.g. to check a marker
         file there, not just at *cwd*) use this over :meth:`covering_collection`.
         """
-        reg_map = {r.directory: r for r in self._conn.list_registrations()}
-        if not reg_map:
+        # A relative cwd is untrusted client input: resolve() would join it to
+        # the daemon's own working directory and could match the wrong checkout.
+        if not Path(cwd).is_absolute():
             return None
+        reg_map = {r.directory: r for r in self._conn.list_registrations()}
         current = Path(cwd).resolve()
-        while True:
-            found = reg_map.get(str(current))
-            if found is not None:
-                return found
-            parent = current.parent
-            if parent == current:
-                return None
-            current = parent
+        return next(
+            (reg_map[str(p)] for p in (current, *current.parents) if str(p) in reg_map),
+            None,
+        )
 
     def archived_collection_for(self, directory: Path) -> str | None:
         """Return the archived (keep-data) collection *directory* owns, else None.
