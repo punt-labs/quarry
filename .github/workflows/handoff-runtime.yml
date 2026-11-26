@@ -122,18 +122,22 @@ jobs:
             exit 1
           fi
 
-          release_digest() {
+          release_asset() {
             gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-              --jq ".assets[] | select(.name == \"$1\") | (.digest // \"missing\")"
+              --jq ".assets[] | select(.name == \"$1\") | [.state, (.digest // \"\")] | @tsv"
           }
           for file in "$asset" "$asset.sha256"; do
             expected=$(sha256sum < "$file")
-            actual=$(release_digest "$file")
+            actual=$(release_asset "$file")
+            if [[ ${actual%%$'\t'*} == starter ]]; then
+              gh release delete-asset "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --yes
+              actual=
+            fi
             if [[ -z "$actual" ]]; then
               gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
-              actual=$(release_digest "$file")
+              actual=$(release_asset "$file")
             fi
-            if [[ "$actual" != "sha256:${expected%% *}" ]]; then
+            if [[ "$actual" != $'uploaded\t'"sha256:${expected%% *}" ]]; then
               echo "Release asset $file differs from the build. Retry only the failed job to reuse the original artifact." >&2
               exit 1
             fi

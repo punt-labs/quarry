@@ -91,7 +91,7 @@ def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the release job runs on Linux")
-@pytest.mark.parametrize("case", ["resume", "wrong-tag", "wrong-digest"])
+@pytest.mark.parametrize("case", ["resume", "starter", "wrong-tag", "wrong-digest"])
 def test_publish_handoff_runtime_retries_safely(tmp_path: Path, case: str) -> None:
     workflow = REPO_ROOT / ".github/workflows/handoff-runtime.yml"
     steps = yaml.safe_load(workflow.read_text())["jobs"]["publish"]["steps"]
@@ -117,13 +117,24 @@ gh() {
       if [[ "$*" == *isDraft* ]]; then
         echo true
       elif [[ "$*" != *tar.gz.sha256* ]]; then
-        printf '%s\n' "$EXISTING_DIGEST"
+        if [[ -e archive-uploaded ]]; then
+          printf 'uploaded\t%s\n' "$ARCHIVE_DIGEST"
+        elif [[ ! -e starter-deleted ]]; then
+          printf '%s\t%s\n' "$EXISTING_STATE" "$EXISTING_DIGEST"
+        fi
       elif [[ -e checksum-uploaded ]]; then
-        printf '%s\n' "$CHECKSUM_DIGEST"
+        printf 'uploaded\t%s\n' "$CHECKSUM_DIGEST"
       fi ;;
+    'release delete-asset')
+      [[ "$4" == quarry-handoff-linux-amd64.tar.gz && "$EXISTING_STATE" == starter ]] &&
+        touch starter-deleted ;;
     'release upload')
-      [[ "$4" == quarry-handoff-linux-amd64.tar.gz.sha256 ]] &&
-        touch checksum-uploaded ;;
+      if [[ "$4" == quarry-handoff-linux-amd64.tar.gz ]]; then
+        [[ -e starter-deleted ]] && touch archive-uploaded
+      else
+        [[ "$4" == quarry-handoff-linux-amd64.tar.gz.sha256 ]] &&
+          touch checksum-uploaded
+      fi ;;
     'release edit') touch release-published ;;
     *) return 99 ;;
   esac
@@ -139,7 +150,9 @@ gh() {
             "GITHUB_REPOSITORY": "punt-labs/quarry",
             "GITHUB_SHA": "a" * 40,
             "EXISTING_TAG_SHA": ("b" if case == "wrong-tag" else "a") * 40,
-            "EXISTING_DIGEST": f"sha256:{existing_digest}",
+            "EXISTING_STATE": "starter" if case == "starter" else "uploaded",
+            "EXISTING_DIGEST": "" if case == "starter" else f"sha256:{existing_digest}",
+            "ARCHIVE_DIGEST": f"sha256:{digest}",
             "CHECKSUM_DIGEST": f"sha256:{hashlib.sha256(checksum).hexdigest()}",
         },
         capture_output=True,
@@ -147,7 +160,9 @@ gh() {
         timeout=15,
         check=False,
     )
-    if case == "resume":
+    assert (assets / "starter-deleted").exists() == (case == "starter")
+    assert (assets / "archive-uploaded").exists() == (case == "starter")
+    if case in {"resume", "starter"}:
         assert result.returncode == 0, result.stderr
         assert (assets / "checksum-uploaded").exists()
         assert (assets / "release-published").exists()
