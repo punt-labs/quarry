@@ -111,7 +111,7 @@ def test_publish_handoff_runtime_retries_safely(tmp_path: Path, case: str) -> No
 gh() {
   case "$1 $2" in
     'api --method') return 1 ;;
-    'api repos/punt-labs/quarry/git/ref/tags/handoff-runtime-v1')
+    'api repos/punt-labs/quarry/commits/refs/tags/handoff-runtime-v1')
       printf '%s\n' "$EXISTING_TAG_SHA" ;;
     'release view')
       if [[ "$*" == *isDraft* ]]; then

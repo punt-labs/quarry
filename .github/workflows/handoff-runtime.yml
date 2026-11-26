@@ -105,7 +105,7 @@ jobs:
           sha256sum --check "$asset.sha256"
           if ! gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
             -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null; then
-            tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)
+            tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$TAG" --jq .sha)
             if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
               echo "Tag $TAG points to $tag_sha, not the build commit $GITHUB_SHA." >&2
               exit 1
