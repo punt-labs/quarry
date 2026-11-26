@@ -1713,3 +1713,106 @@ def test_a_stop_between_the_none_check_and_the_feed_never_raises(
             loop._on_fs_event(key, FsEvent(root / "a.md", deleted=False))
 
     asyncio.run(_run())
+
+
+def _ignored_dir(root: Path) -> Path:
+    """Create a ``.gitignore``d directory under *root* and return it."""
+    (root / ".gitignore").write_text("scratch/\n")
+    scratch = root / "scratch"
+    scratch.mkdir()
+    return scratch
+
+
+def test_batch_with_every_path_filtered_out_requests_no_finalize(
+    tmp_path: Path,
+) -> None:
+    """A batch the post-debounce filter rejects entirely submits no job at all.
+
+    Edits under a gitignored directory pass the watcher's dot-segment and
+    suffix pre-filters and form a batch; with nothing indexed or deleted, a
+    finalize would rewrite the table for no change.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue, optimize_interval=0.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        scratch = _ignored_dir(root)
+        source.emit(root, _fs(_write(scratch, "a.md")))
+        source.emit(root, _fs(root / "gone.bin", deleted=True))
+        await asyncio.sleep(0.15)
+        assert queue.submitted == []
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_batch_with_an_index_job_requests_exactly_one_finalize(
+    tmp_path: Path,
+) -> None:
+    """A batch that submits an index job is followed by one finalize."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue, optimize_interval=0.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        scratch = _ignored_dir(root)
+        source.emit(root, _fs(_write(scratch, "ignored.md")))
+        source.emit(root, _fs(_write(root, "kept.md")))
+        await asyncio.sleep(0.15)
+        assert len(queue.jobs(FileIndexJob)) == 1
+        assert len(queue.jobs(CollectionFinalizeJob)) == 1
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_batch_with_only_a_delete_requests_exactly_one_finalize(
+    tmp_path: Path,
+) -> None:
+    """A batch that submits only a delete job is followed by one finalize."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue, optimize_interval=0.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        source.emit(root, _fs(root / "gone.md", deleted=True))
+        await asyncio.sleep(0.15)
+        assert len(queue.jobs(DocumentDeleteJob)) == 1
+        assert queue.jobs(FileIndexJob) == []
+        assert len(queue.jobs(CollectionFinalizeJob)) == 1
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_shed_batch_with_a_filtered_path_still_skips_finalize(
+    tmp_path: Path,
+) -> None:
+    """The shed path is unchanged: a failed submit re-arms and never finalizes."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue(admit=False)
+        ctx, root = _build(tmp_path, queue=queue, optimize_interval=0.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        scratch = _ignored_dir(root)
+        source.emit(root, _fs(_write(scratch, "ignored.md")))
+        source.emit(root, _fs(_write(root, "kept.md")))
+        await asyncio.sleep(0.15)
+        assert len(queue.jobs(FileIndexJob)) >= 1
+        assert queue.jobs(CollectionFinalizeJob) == []
+        await loop.stop()
+
+    asyncio.run(_run())

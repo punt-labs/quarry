@@ -13,6 +13,7 @@ disk-vs-registry reconcile, so no per-scan bookkeeping lives here.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.finalize_job import CollectionFinalizeJob
@@ -39,6 +40,15 @@ if TYPE_CHECKING:
     from quarry.db import Database
 
 logger = logging.getLogger(__name__)
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _DeltaOutcome:
+    """What one delta batch did: the jobs the queue admitted and the events it shed."""
+
+    admitted: int
+    shed: tuple[FsEvent, ...]
 
 
 @final
@@ -96,24 +106,16 @@ class WatchSubmitter:
             # would storm optimize+FTS and defeat the CPU envelope. Coalesce it
             # per database exactly like the delta path below.
             self.submit_scan_job(batch.key, root)
-            self._throttle.request(
-                batch.key.database,
-                lambda: self._admitted_finalize(batch.key, db, settings),
-            )
+            self._request_finalize(batch.key, db, settings)
             return
-        failed = self._submit_deltas(batch, db, settings, root)
-        if failed:
-            self._rearm.defer(batch.key, failed)
+        outcome = self._submit_deltas(batch, db, settings, root)
+        if outcome.shed:
+            self._rearm.defer(batch.key, list(outcome.shed))
             return
         self._rearm.reset(batch.key)  # batch cleared — reset backoff
-        # Rate-limit the heavy finalize: sustained churn coalesces into one
-        # optimize+FTS-rebuild per interval per database, not one per batch. The
-        # finalize is table-wide, so running under this batch's (possibly later
-        # deregistered) collection key is harmless — it is only the routing key.
-        self._throttle.request(
-            batch.key.database,
-            lambda: self._admitted_finalize(batch.key, db, settings),
-        )
+        if not outcome.admitted:
+            return  # every path was filtered out: the table did not change
+        self._request_finalize(batch.key, db, settings)
 
     def sweep(self) -> ScanSweep:
         """Return a sweep that rescans collections, finalizing each database once.
@@ -167,64 +169,26 @@ class WatchSubmitter:
         """
         self._throttle.mark_admitted(database)
 
-    def _admitted_finalize(
+    def _request_finalize(
         self, key: RouteKey, db: Database, settings: Settings
-    ) -> bool:
-        """Submit the coalesced finalize; return True iff the queue admitted it.
-
-        The throttle stamps its interval clock only on admission, so the return
-        must distinguish a shed finalize (queue full) from one that ran.
-        """
-        return self._submit_finalize(key, db, settings).status != "failed"
-
-    @staticmethod
-    def summarize_scan(
-        umbrella: TaskState,
-        children: list[TaskState],
-        collections: int,
-        *,
-        timed_out: bool,
     ) -> None:
-        """Roll the child scans' per-file failures + errors up into *umbrella*.
+        """Rate-limit the heavy finalize to one optimize+FTS rebuild per interval.
 
-        A ``CollectionSyncJob`` completes even when N files failed (it records
-        ``failed``/``errors`` in its own state), so counting only child *status*
-        would report silent success.  Aggregate both the shed-job count and the
-        per-file failure count/errors, and fail the umbrella if either is nonzero.
-
-        *collections* is reported by the sweep rather than derived from the child
-        count: children are N scans plus one finalize per database, so no fixed
-        arithmetic over ``children`` recovers it.
+        Sustained churn coalesces per database, not per batch.  The finalize is
+        table-wide, so running under this batch's (possibly later deregistered)
+        collection key is harmless — it is only the routing key.
         """
-        shed = sum(1 for child in children if child.status == "failed")
-        file_failures = 0
-        errors: list[str] = []
-        for child in children:
-            failed = child.results.get("failed", 0)
-            if isinstance(failed, int):
-                file_failures += failed
-            child_errors = child.results.get("errors")
-            if isinstance(child_errors, list):
-                errors.extend(str(error) for error in child_errors)
-        results: dict[str, object] = {
-            "collections": collections,
-            "failed": file_failures,
-            "shed": shed,
-            "errors": errors,
-        }
-        if timed_out:
-            umbrella.record(results)
-            umbrella.fail("scan timed out before all jobs completed")
-        elif shed or file_failures:
-            umbrella.record(results)
-            umbrella.fail(f"{shed} scan job(s) shed, {file_failures} file(s) failed")
-        else:
-            umbrella.complete(results)
+        # The throttle stamps its interval clock only on admission, so the thunk
+        # must distinguish a shed finalize (queue full) from one that ran.
+        self._throttle.request(
+            key.database,
+            lambda: self._submit_finalize(key, db, settings).status != "failed",
+        )
 
     def _submit_deltas(
         self, batch: FlushBatch, db: Database, settings: Settings, root: Path
-    ) -> list[FsEvent]:
-        """Submit each per-file index/delete job; return the events the queue shed.
+    ) -> _DeltaOutcome:
+        """Submit each per-file index/delete job; report what was admitted or shed.
 
         The authoritative filter runs here, post-debounce (once per distinct path
         per window, off the observer thread): ``is_indexable`` resolves the real
@@ -233,12 +197,15 @@ class WatchSubmitter:
         ``is_deletable``.  A rejected path is dropped, not re-armed.
         """
         discovery = FileDiscovery(root)
+        admitted = 0
         failed: list[FsEvent] = []
         for path in batch.modified:
             if not discovery.is_indexable(path, SUPPORTED_EXTENSIONS):
                 continue
             job = FileIndexJob(db, settings, batch.key.collection, root, path)
-            if not self._submit(batch.key, job, "index"):
+            if self._submit(batch.key, job, "index"):
+                admitted += 1
+            else:
                 failed.append(FsEvent(path, deleted=False))
         for path in batch.deleted:
             if not discovery.is_deletable(path, SUPPORTED_EXTENSIONS):
@@ -247,9 +214,11 @@ class WatchSubmitter:
             if name is None:
                 continue
             delete = DocumentDeleteJob(db, settings, batch.key.collection, (name,))
-            if not self._submit(batch.key, delete, "delete"):
+            if self._submit(batch.key, delete, "delete"):
+                admitted += 1
+            else:
                 failed.append(FsEvent(path, deleted=True))
-        return failed
+        return _DeltaOutcome(admitted, tuple(failed))
 
     def _submit_finalize(
         self, key: RouteKey, db: Database, settings: Settings

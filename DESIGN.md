@@ -2236,6 +2236,16 @@ every core; the cap is the ceiling, the throttle is the duty-cycle, and both are
 needed. *Raising `narenas` to reduce contention instead of capping threads* —
 addressed in DES-032; increases jemalloc retention (DES-027) and does not bound CPU.
 
+**Amendment (2026-11-26).** A debounced churn batch that submits no index job and
+no delete job requests no finalize. Edits under ignored paths pass the watcher's
+dot-segment and suffix pre-filters and form batches; the post-debounce filter then
+rejects every path, so the table is unchanged and the finalize would rewrite it for
+nothing. `WatchSubmitter._submit_deltas` now reports how many jobs the queue
+admitted, and `on_batch` requests the throttled finalize only when that count is
+nonzero. The reconcile sweep's and explicit sync's immediate finalize, the FTS
+self-heal backstop, is unchanged. The bulk branch is unchanged: its batch carries
+no paths, so whether the scan finds work is known only when the scan job runs.
+
 ### DES-045d: One ignore seam — watch, scan, and filter all consult IgnoreRules
 
 **Status:** Accepted (2026-09-02) · **Beads:** quarry-0bej, quarry-ndrj
