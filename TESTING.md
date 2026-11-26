@@ -40,7 +40,7 @@ for operator-level MCP, CLI, and install checks.
 
 | Suite | Selector | Prerequisites and scope |
 | --- | --- | --- |
-| Default | `make test` | Dev extra; unit, local component and deterministic domain guards |
+| Default | `make test` | Dev extra; `jq` on Linux for handoff release tests; unit, local component and deterministic domain guards |
 | Unit | `make test-unit` or an in-process pytest path | Fast client and target contract sample; no running daemon |
 | Subprocess | `make test-subprocess-fast`; `make test-subprocess` | Fast hook commands need no model; full hook suite uses the pinned ONNX model and test-owned daemon |
 | E2E | `make test-e2e` | Installed wheel and real CLI indexing/retrieval; public dependencies and the pinned ONNX model |
