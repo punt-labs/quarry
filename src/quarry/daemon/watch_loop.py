@@ -22,7 +22,7 @@ from quarry.daemon.debounce import DebouncedDispatcher
 from quarry.daemon.fs_events import NullFsEventSource
 from quarry.daemon.fs_watchdog import WatchdogSource
 from quarry.daemon.route_key import RouteKey
-from quarry.daemon.task_state import TERMINAL_STATUSES
+from quarry.daemon.scan_summary import ScanSummary
 from quarry.daemon.terminal import Terminal
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
@@ -256,10 +256,9 @@ class WatchLoop:
             sweep = self._sweep_all_scans()
             children = sweep.finish() if sweep is not None else []
             scanned = sweep.collections if sweep is not None else 0
-            timed_out = await self._await_children(children)
-            WatchSubmitter.summarize_scan(
-                umbrella, children, scanned, timed_out=timed_out
-            )
+            summary = ScanSummary(children, scanned)
+            timed_out = await self._await_children(summary)
+            summary.settle(umbrella, timed_out=timed_out)
 
     def _sweep_all_scans(self) -> ScanSweep | None:
         """Scan every active-DB registration; ``None`` when ``start()`` never ran.
@@ -372,7 +371,7 @@ class WatchLoop:
             return True
         return any(part.startswith(".") for part in relative.parts)
 
-    async def _await_children(self, children: list[TaskState]) -> bool:
+    async def _await_children(self, summary: ScanSummary) -> bool:
         """Poll children to a terminal status; return True if the deadline hit.
 
         A bounded deadline stops a wedged threadpool child from spinning the
@@ -380,7 +379,7 @@ class WatchLoop:
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _SCAN_DEADLINE_S
-        while any(child.status not in TERMINAL_STATUSES for child in children):
+        while summary.pending():
             if loop.time() >= deadline:
                 return True
             await asyncio.sleep(_SCAN_POLL_S)

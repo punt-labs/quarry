@@ -19,11 +19,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 from unittest.mock import patch
 
+import pytest
+
 from quarry.daemon import fs_watchdog
 from quarry.daemon.fs_watchdog import WatchdogSource
 
 if TYPE_CHECKING:
-    import pytest
     from watchdog.events import FileSystemEventHandler
     from watchdog.observers.api import ObservedWatch
 
@@ -241,6 +242,9 @@ def test_build_observer_polling_overrides_pruned_choice() -> None:
     assert isinstance(observer, PollingObserver)
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="the pruned inotify observer is Linux-only"
+)
 def test_build_observer_picks_pruned_inotify_observer_when_importable() -> None:
     """A non-polling build picks the pruned inotify observer when it imported
     successfully at module scope -- this suite runs on Linux, so
@@ -272,6 +276,9 @@ def test_build_observer_falls_back_when_the_pruned_observer_is_unavailable() -> 
         observer.stop()
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="the pruned inotify observer is Linux-only"
+)
 def test_module_load_logs_an_error_when_the_linux_import_fails(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
