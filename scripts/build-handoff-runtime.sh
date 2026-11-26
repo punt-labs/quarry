@@ -5,6 +5,10 @@ if [[ $# -ne 1 || ! -d $1 ]]; then
     printf 'usage: %s OUTPUT_DIRECTORY\n' "$0" >&2
     exit 2
 fi
+if [[ $(uname -s) != Linux || $(uname -m) != x86_64 ]]; then
+    printf 'The Quarry handoff runtime must be built on Linux x86_64.\n' >&2
+    exit 1
+fi
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 output=$(cd -- "$1" && pwd -P)
@@ -12,13 +16,14 @@ uv_version=0.13.9
 python_version=3.13.18
 node_version=v24.22.3
 markdownlint_version=0.24.2
+bundle=quarry-linux-amd64-v1.tar.gz
 
 require_tool() {
     command -v "$1" || { printf 'Required tool not found: %s\n' "$1" >&2; exit 1; }
 }
-tar_tool=$(command -v gtar || require_tool tar)
+tar_tool=$(require_tool tar)
 if [[ $("$tar_tool" --version) != *'GNU tar'* ]]; then
-    printf 'GNU tar is required (gtar on macOS).\n' >&2
+    printf 'GNU tar is required.\n' >&2
     exit 1
 fi
 uv_tool=$(require_tool uv)
@@ -75,6 +80,17 @@ uv_env=("${isolated[@]}" "UV_PYTHON=$python_tool" UV_PYTHON_DOWNLOADS=never
 "${isolated[@]}" "npm_config_cache=$runtime/cache/npm" npm_config_ignore_scripts=true \
     npm_config_audit=false npm_config_fund=false npm_config_update_notifier=false \
     npm install --global --prefix "$runtime/node" "markdownlint-cli2@$markdownlint_version" >&2
+
+# The locked Pyright wheel bundles its JS; verify the wrapper can run it with the pinned Node, without npm downloads.
+pyright_version=$("${isolated[@]}" "$work/venv/bin/python" -c 'import importlib.metadata; print(importlib.metadata.version("pyright"))')
+pyright_output=$("${isolated[@]}" "npm_config_cache=$runtime/cache/npm" npm_config_offline=true \
+    "PYRIGHT_PYTHON_FORCE_VERSION=$pyright_version" PYRIGHT_PYTHON_IGNORE_WARNINGS=true \
+    "$work/venv/bin/pyright" --version)
+if [[ $pyright_output != "pyright $pyright_version" ]]; then
+    printf 'Expected bundled pyright %s, got: %s\n' "$pyright_version" "$pyright_output" >&2
+    exit 1
+fi
+printf 'Offline checker verified: %s\n' "$pyright_output" >&2
 rm -rf -- "$runtime/cache/npm/_logs"
 rm -f -- "$runtime/cache/npm/_update-notifier-last-checked"
 {
@@ -94,4 +110,6 @@ sha=$(
 )
 archive=$output/$sha.tar.gz
 mv -- "$work/runtime.tar.gz" "$archive"
+printf 'Bundle %s is an Ethos display name. To install the digest-named archive:\n' "$bundle" >&2
+printf "  install -Dm644 -- %q \"\$HOME/.punt-labs/ethos/runtimes/%s.tar.gz\"\n" "$archive" "$sha" >&2
 printf '%s\n' "$archive"
