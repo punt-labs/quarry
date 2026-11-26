@@ -12,14 +12,13 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from typing import TYPE_CHECKING
+import tempfile
+from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings, strategies as st
 
 from quarry.sync_discovery import FileDiscovery
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 
@@ -30,7 +29,7 @@ _GIT_ENV = {
     "GIT_CONFIG_NOSYSTEM": "1",
 }
 
-_CASES: dict[str, dict[str, str]] = {
+_CASES: dict[str, dict[str, str | bytes]] = {
     "nested file applies at every depth below it": {
         "child/.gitignore": "secret.md\ndocs/private/\n**/star.md\n",
         "child/secret.md": "",
@@ -175,6 +174,42 @@ _CASES: dict[str, dict[str, str]] = {
         "bx.md": "",
         "\u00e9y.md": "",
     },
+    "range endpoint is the next raw character, even a bracket": {
+        ".gitignore": "[0-[:digit:]].md\n",
+        "5.md": "",
+        "0].md": "",
+        "0.md": "",
+    },
+    "posix class before a hyphen keeps the hyphen literal": {
+        ".gitignore": "[[:digit:]-0].md\n",
+        "5.md": "",
+        "-.md": "",
+        "a.md": "",
+    },
+    "unterminated bracket matches nothing": {
+        ".gitignore": "[abc.md\nkeep[.md\n",
+        "a.md": "",
+        "[abc.md": "",
+        "keep[.md": "",
+    },
+    "unknown posix class matches nothing": {
+        ".gitignore": "[[:nonsense:]].md\n",
+        "a.md": "",
+        ":.md": "",
+    },
+    "an invalid utf-8 byte does not disable the other rules": {
+        ".gitignore": b"caf\xff.md\nsecret.md\ndocs/\n",
+        "secret.md": "",
+        "docs/a.md": "",
+        "keep.md": "",
+        "caf.md": "",
+    },
+    "crlf line endings and a byte order mark": {
+        ".gitignore": b"\xef\xbb\xbfone.md\r\ntwo.md\r\n",
+        "one.md": "",
+        "two.md": "",
+        "three.md": "",
+    },
     "pattern with an inner slash is anchored": {
         ".gitignore": "docs/private.md\n",
         "docs/private.md": "",
@@ -184,19 +219,23 @@ _CASES: dict[str, dict[str, str]] = {
 }
 
 
-def _write_tree(root: Path, files: dict[str, str], ignore_name: str) -> None:
-    root.mkdir(parents=True)
+def _write_tree(root: Path, files: dict[str, str | bytes], ignore_name: str) -> None:
+    root.mkdir(parents=True, exist_ok=True)
     for rel, text in files.items():
         target = rel
         if rel.endswith(".gitignore"):
             target = rel.removesuffix(".gitignore") + ignore_name
         path = root / target
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        if isinstance(text, bytes):
+            path.write_bytes(text)
+        else:
+            path.write_text(text)
 
 
-def _git_ignored(root: Path, rels: list[str]) -> set[str]:
-    subprocess.run(["git", "init", "-q", str(root)], check=True, env=_GIT_ENV)
+def _git_ignored(root: Path, rels: list[str], *, init: bool = True) -> set[str]:
+    if init:
+        subprocess.run(["git", "init", "-q", str(root)], check=True, env=_GIT_ENV)
     done = subprocess.run(
         ["git", "-C", str(root), "check-ignore", "--stdin", "-z", "-n", "-v"],
         input="\0".join(rels) + "\0",
@@ -236,3 +275,91 @@ def test_quarry_ignores_exactly_what_git_ignores(
 
     assert scanned == expected, "discover() differs from git"
     assert live == expected, "is_indexable() differs from git"
+
+
+_TOKENS = [
+    "a",
+    "b",
+    "0",
+    "-",
+    ".",
+    "é",
+    "?",
+    "*",
+    "**",
+    "/",
+    "[",
+    "]",
+    "!",
+    "^",
+    ":",
+    "[:digit:]",
+    "[:alpha:]",
+    "[:punct:]",
+    "\\",
+]
+_LINE = st.tuples(
+    st.sampled_from(["", "!", "/", "!/"]),
+    st.lists(st.sampled_from(_TOKENS), min_size=1, max_size=7),
+    st.sampled_from(["", "", "/"]),
+).map(lambda parts: parts[0] + "".join(parts[1]) + parts[2])
+_STEM = st.text(alphabet="ab0-.é[]!^:", min_size=1, max_size=4).filter(
+    # A leading ":" would be read by check-ignore as pathspec magic.
+    lambda stem: not stem.startswith((".", ":"))
+)
+
+
+@pytest.fixture(scope="module")
+def property_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("property")
+    repo = root / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=_GIT_ENV)
+    return root
+
+
+@pytest.mark.timeout(180)
+@settings(
+    max_examples=150,
+    derandomize=True,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(
+    root_lines=st.lists(_LINE, min_size=1, max_size=3),
+    nested_lines=st.lists(_LINE, max_size=2),
+    stems=st.lists(_STEM, min_size=1, max_size=4, unique=True),
+)
+def test_generated_patterns_agree_with_git(
+    property_root: Path,
+    root_lines: list[str],
+    nested_lines: list[str],
+    stems: list[str],
+) -> None:
+    files: dict[str, str | bytes] = {
+        ".gitignore": "\n".join(root_lines) + "\n",
+        "d/.gitignore": "\n".join(nested_lines) + "\n",
+    }
+    for stem in stems:
+        for rel in (f"{stem}.md", f"d/{stem}.md", f"{stem}/in.md"):
+            files[rel] = ""
+    markdown = sorted(rel for rel in files if rel.endswith(".md"))
+    # One repository for every example; each example's tree is a directory
+    # inside it, so its ignore files anchor exactly as a repository root's do.
+    git_case = Path(tempfile.mkdtemp(dir=property_root / "repo"))
+    quarry_case = Path(tempfile.mkdtemp(dir=property_root))
+    try:
+        _write_tree(git_case, files, ".gitignore")
+        expected = set(markdown) - _git_ignored(git_case, markdown, init=False)
+        _write_tree(quarry_case, files, ".gitignore")
+        discovery = FileDiscovery(quarry_case)
+        scanned = {str(p.relative_to(quarry_case)) for p in discovery.discover(_EXTS)}
+        live = {
+            rel for rel in markdown if discovery.is_indexable(quarry_case / rel, _EXTS)
+        }
+    finally:
+        shutil.rmtree(git_case, ignore_errors=True)
+        shutil.rmtree(quarry_case, ignore_errors=True)
+    context = (root_lines, nested_lines)
+    assert scanned == expected, context
+    assert live == expected, context

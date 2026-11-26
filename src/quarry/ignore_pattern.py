@@ -81,64 +81,81 @@ class _Glob:
         return "[^/]*", end
 
     def _bracket(self, index: int) -> tuple[str, int]:
-        """Translate a ``[...]`` class; an unterminated ``[`` is a literal."""
-        pos = index + 1
-        negated = pos < len(self._text) and self._text[pos] in "!^"
-        if negated:
-            pos += 1
-        tokens: list[tuple[str, str]] = []
-        while pos < len(self._text):
-            if self._text[pos] == "]" and tokens:
-                return self._class_regex(tokens, negated=negated), pos + 1
-            token, pos = self._class_token(pos)
-            tokens.append(token)
-        return re.escape("["), index + 1
+        """Translate a ``[...]`` class the way git's ``wildmatch`` reads it.
 
-    def _class_token(self, pos: int) -> tuple[tuple[str, str], int]:
-        """Return one class token as ``(kind, text)`` and the next position.
-
-        The kind is ``class`` (a POSIX class name), ``dash`` (an unescaped
-        ``-``, a range operator when it sits between two characters) or
-        ``char`` (a literal, escaped or not).
+        An unescaped ``-`` after a plain character makes the next raw
+        character the range's high end (a ``[`` included); after a POSIX
+        class or a finished range it is a literal.  Raises ``ValueError`` for
+        a class git aborts the whole match on: unterminated, or an unknown
+        POSIX class name.
         """
         text = self._text
-        if text.startswith("[:", pos):
-            close = text.find(":]", pos + 2)
-            if close != -1 and text[pos + 2 : close] in _POSIX_CLASSES:
-                return ("class", text[pos + 2 : close]), close + 2
-        if text[pos] == "\\" and pos + 1 < len(text):
-            return ("char", text[pos + 1]), pos + 2
-        return ("dash" if text[pos] == "-" else "char", text[pos]), pos + 1
-
-    @staticmethod
-    def _class_regex(tokens: list[tuple[str, str]], *, negated: bool) -> str:
-        """Build the regex class for *tokens*, resolving ranges before POSIX classes.
-
-        A reversed range such as ``b-a`` matches only its low end, as in git.
-        """
+        pos = index + 1
+        negated = pos < len(text) and text[pos] in "!^"
+        if negated:
+            pos += 1
         parts: list[str] = []
-        index = 0
-        while index < len(tokens):
-            kind, text = tokens[index]
-            if kind == "class":
-                parts.append(_POSIX_CLASSES[text])
-            elif (
-                index + 2 < len(tokens)
-                and tokens[index + 1][0] == "dash"
-                and tokens[index + 2][0] != "class"
-            ):
-                high = tokens[index + 2][1]
-                # git matches the low end literally even when the range is empty.
-                parts.append(
-                    f"{re.escape(text)}-{re.escape(high)}"
-                    if text <= high
-                    else re.escape(text)
-                )
-                index += 2
-            else:
-                parts.append(re.escape(text))
-            index += 1
-        return f"(?!/)[{'^' if negated else ''}{''.join(parts)}]"
+        prev = ""
+        while True:
+            piece, pos, prev = self._class_item(pos, prev)
+            parts.append(piece)
+            if pos >= len(text):
+                raise self._unterminated()
+            if text[pos] == "]":
+                break
+        return f"(?!/)[{'^' if negated else ''}{''.join(parts)}]", pos + 1
+
+    def _class_item(self, pos: int, prev: str) -> tuple[str, int, str]:
+        """Translate the class member at *pos*; return ``(regex, next index, prev)``.
+
+        *prev* is the preceding plain character, or ``""`` after a POSIX
+        class or a finished range.
+        """
+        text = self._text
+        if pos >= len(text):
+            raise self._unterminated()
+        char = text[pos]
+        if char == "-" and prev and pos + 1 < len(text) and text[pos + 1] != "]":
+            high, pos = self._unescape(pos + 1)
+            # git matched the low end literally already, so a reversed range
+            # still matches it.
+            piece = f"{re.escape(prev)}-{re.escape(high)}" if prev <= high else ""
+            return piece, pos + 1, ""
+        if char == "[" and text.startswith(":", pos + 1):
+            return self._class_member(pos)
+        char, pos = self._unescape(pos)
+        return re.escape(char), pos + 1, char
+
+    def _unterminated(self) -> ValueError:
+        """Return the error for a bracket expression git aborts on."""
+        return ValueError(f"unterminated bracket expression: {self._text!r}")
+
+    def _unescape(self, pos: int) -> tuple[str, int]:
+        """Return the character at *pos* (unescaping a backslash) and its index."""
+        text = self._text
+        if text[pos] == "\\":
+            pos += 1
+            if pos >= len(text):
+                msg = f"pattern ends with a backslash: {text!r}"
+                raise ValueError(msg)
+        return text[pos], pos
+
+    def _class_member(self, pos: int) -> tuple[str, int, str]:
+        """Translate ``[:name:]`` at *pos*; return ``(regex, next index, prev)``.
+
+        Anything that is not a closed ``[:...:]`` is a plain ``[``.
+        """
+        text = self._text
+        close = text.find("]", pos + 2)
+        if close == -1:
+            raise self._unterminated()
+        if close == pos + 2 or text[close - 1] != ":":
+            return re.escape("["), pos + 1, "["
+        name = text[pos + 2 : close - 1]
+        if name not in _POSIX_CLASSES:
+            msg = f"unknown character class [:{name}:] in {text!r}"
+            raise ValueError(msg)
+        return _POSIX_CLASSES[name], close + 1, ""
 
 
 @final
@@ -249,25 +266,27 @@ class IgnoreFile:
     def _read_lines(path: Path) -> list[str]:
         """Return an ignore file's lines, or ``[]`` when absent/non-regular/unreadable.
 
+        Lines split on a line feed only, as in git, and a leading byte order mark
+        is dropped. Bytes that are not UTF-8 survive as surrogate escapes that
+        the matcher turns back into the same raw bytes, so one bad byte
+        costs only the line that holds it.
+
         ``is_file()`` inside the ``try`` (not before it) keeps a FIFO or a symlink
-        to a character device named ``.gitignore`` from blocking ``read_text()``
+        to a character device named ``.gitignore`` from blocking ``read_bytes()``
         forever, while the ``OSError`` guard keeps a raced deletion — present at
         the check, gone at the read — from aborting the whole caller's walk
-        (bug class 1/2).  ``UnicodeDecodeError`` (a non-UTF-8 ignore file) is a
-        ``ValueError``, not an ``OSError`` — caught here for the same reason.
+        (bug class 1/2).
         """
         try:
             if not path.is_file():
                 return []
-            return path.read_text(encoding="utf-8").splitlines()
+            raw = path.read_bytes()
         except FileNotFoundError:
             return []
         except OSError as exc:
             logger.warning("Skipping unreadable ignore file %s: %s", path, exc)
             return []
-        except UnicodeDecodeError as exc:
-            logger.warning("Skipping non-UTF-8 ignore file %s: %s", path, exc)
-            return []
+        return raw.decode("utf-8", "surrogateescape").removeprefix("\ufeff").split("\n")
 
     def verdict(self, rel: str, *, is_dir: bool) -> bool | None:
         """Return ``True`` to ignore *rel*, ``False`` to re-include it.

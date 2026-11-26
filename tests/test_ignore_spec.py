@@ -111,12 +111,12 @@ class TestMalformedInput:
             "Skipping invalid ignore pattern" in r.message for r in caplog.records
         )
 
-    def test_a_non_utf8_ignore_file_is_skipped_but_defaults_still_apply(
+    def test_a_non_utf8_line_does_not_disable_the_other_rules(
         self, tmp_path: Path
     ) -> None:
-        (tmp_path / ".gitignore").write_bytes(b"\xff\xfe*.log\n")
+        (tmp_path / ".gitignore").write_bytes(b"\xff\xfe\n*.log\n")
         rules = _rules(tmp_path)  # must not raise
-        assert rules.keeps(("debug.log",), is_dir=False)
+        assert not rules.keeps(("debug.log",), is_dir=False)
         assert not rules.keeps(("module.pyc",), is_dir=False)
 
     def test_a_nested_malformed_line_is_skipped_not_raised(

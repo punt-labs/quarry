@@ -100,7 +100,6 @@ class TestMatching:
             ("[]]x.md", "]x.md", True),
             ("[a\\]]x.md", "]x.md", True),
             ("[a-]x.md", "-x.md", True),
-            ("[unterminated.md", "[unterminated.md", True),
         ],
     )
     def test_character_classes(self, line: str, rel: str, *, expected: bool):
@@ -152,9 +151,49 @@ class TestLoad:
         (tmp_path / ".gitignore").mkdir()
         assert IgnoreFile.load(tmp_path) is None
 
-    def test_a_non_utf8_file_is_skipped(self, tmp_path: Path):
-        (tmp_path / ".gitignore").write_bytes(b"\xff\xfe*.log\n")
+    def test_a_non_utf8_file_still_yields_its_valid_patterns(self, tmp_path: Path):
+        (tmp_path / ".gitignore").write_bytes(b"caf\xff.md\nsecret.md\ndocs/\n")
+        loaded = IgnoreFile.load(tmp_path)
+        assert loaded is not None
+        assert loaded.verdict("secret.md", is_dir=False) is True
+        assert loaded.verdict("docs", is_dir=True) is True
+
+    def test_an_invalid_byte_matches_the_same_raw_byte_in_a_name(self, tmp_path: Path):
+        (tmp_path / ".gitignore").write_bytes(b"caf\xff.md\n")
+        loaded = IgnoreFile.load(tmp_path)
+        assert loaded is not None
+        assert loaded.verdict("caf\udcff.md", is_dir=False) is True
+        assert loaded.verdict("caf.md", is_dir=False) is None
+
+    def test_lines_split_only_on_newline(self, tmp_path: Path):
+        (tmp_path / ".gitignore").write_bytes(b"a.md\x0bb.md\r\nc.md\n")
+        loaded = IgnoreFile.load(tmp_path)
+        assert loaded is not None
+        assert loaded.verdict("c.md", is_dir=False) is True
+        assert loaded.verdict("a.md", is_dir=False) is None
+
+    def test_a_byte_order_mark_is_dropped(self, tmp_path: Path):
+        (tmp_path / ".gitignore").write_bytes(b"\xef\xbb\xbfone.md\n")
+        loaded = IgnoreFile.load(tmp_path)
+        assert loaded is not None
+        assert loaded.verdict("one.md", is_dir=False) is True
+
+    @pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+    def test_a_file_that_disappears_or_cannot_be_read_is_skipped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        error: type[OSError],
+    ):
+        (tmp_path / ".gitignore").write_text("*.log\n")
+
+        def raise_error(self: Path, *args: str, **kwargs: str) -> bytes:
+            raise error(self.name)
+
+        monkeypatch.setattr(Path, "read_bytes", raise_error)
         assert IgnoreFile.load(tmp_path) is None
+        assert (error is FileNotFoundError) or "unreadable" in caplog.text
 
 
 class TestBracketExpressions:
@@ -173,6 +212,10 @@ class TestBracketExpressions:
             ("[a-].md", "-.md", True),
             ("[a\\-c].md", "-.md", True),
             ("[a\\-c].md", "b.md", False),
+            ("[0-[:digit:]].md", "0].md", True),
+            ("[0-[:digit:]].md", "5.md", False),
+            ("[[:digit:]-0].md", "-.md", True),
+            ("[\\a-c].md", "b.md", True),
             ("[a--].md", "a.md", True),
             ("[a--].md", "+.md", False),
         ],
@@ -243,19 +286,9 @@ class TestFuzz:
         file = IgnoreFile.from_lines([line])
         file.verdict("a.md", is_dir=False)
 
-    @pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
-    def test_a_file_that_disappears_or_cannot_be_read_is_skipped(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-        error: type[OSError],
-    ):
-        (tmp_path / ".gitignore").write_text("*.log\n")
 
-        def raise_error(self: Path, *args: str, **kwargs: str) -> str:
-            raise error(self.name)
-
-        monkeypatch.setattr(Path, "read_text", raise_error)
-        assert IgnoreFile.load(tmp_path) is None
-        assert (error is FileNotFoundError) or "unreadable" in caplog.text
+class TestMalformedBrackets:
+    @pytest.mark.parametrize("line", ["[abc", "x[", "[[:nonsense:]]", "[a\\"])
+    def test_a_bracket_git_aborts_on_defines_no_pattern(self, line: str):
+        with pytest.raises(ValueError, match=r"bracket|class|backslash"):
+            IgnorePattern.parse(line)
