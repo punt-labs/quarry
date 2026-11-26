@@ -40,7 +40,7 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d \"\" -t 10 p; printf %s \"$p\" | ethos hook post-edit --agent \"$1\"; true' _ 'mdm' || true"
+          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; f=$(mktemp) || exit 0; trap 'rm -f \"$f\"; exit 0' 1 2 15; trap 'rm -f \"$f\"' 0; c= w= e=; exec 4>\"$f\" 5<\"$f\"; rm -f \"$f\" 4>&- 5<&- || exit 0; watchdog= k=; if ethos hook stdin-watchdog --probe --cancel </dev/null >/dev/null 2>&1 5<&-; then watchdog=1 k=1; elif ethos hook stdin-watchdog --probe </dev/null >/dev/null 2>&1 5<&-; then watchdog=1; fi; trap - 0 1 2 15; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 >&4 3<&- 4>&- 5<&-) & c=$!; exec 3<&- 4>&-; if [ -n \"$watchdog\" ]; then ethos hook stdin-watchdog \"$c\" </dev/null >/dev/null 2>&1 5<&- & w=$!; else (sleep 10; kill \"$c\" 2>/dev/null) </dev/null >/dev/null 2>&1 5<&- & w=$!; fi; trap 'if [ -n \"$w\" ]; then kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; fi; if [ -n \"$c\" ]; then kill \"$c\" 2>/dev/null; wait \"$c\" 2>/dev/null; fi; if [ -n \"$k\" ] && [ -n \"$e\" ]; then kill \"$e\" 2>/dev/null; wait \"$e\" 2>/dev/null; fi; exec 4>&- 5<&-; rm -f \"$f\"' 0; trap 'exit 0' 1 2 15; wait \"$c\" 2>/dev/null; c=; kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; w=; cat <&5 5<&- | ETHOS_HOOK_SHELL=$$ ethos hook post-edit --agent 'mdm' 5<&- & e=$!; exec 5<&-; wait \"$e\" 2>/dev/null; e="
           timeout: 70
 ---
 
