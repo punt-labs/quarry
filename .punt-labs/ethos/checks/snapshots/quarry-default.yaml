@@ -36,7 +36,7 @@
         ]
       },
       "scratch": {
-        "checkout": [".venv", ".pytest-work", ".pytest_cache", ".import_linter_cache"],
+        "checkout": [".venv", ".pytest-work", ".pytest_cache", ".import_linter_cache", ".hypothesis"],
         "files": ["install-constraints.txt.check.tmp"],
         "seed": {
           "{scratch}/uv-cache": "{runtime}/cache/uv",
