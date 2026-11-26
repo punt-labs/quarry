@@ -30,7 +30,7 @@
       "system": {
         "tools": [
           "awk", "basename", "bash", "cat", "cp", "cut", "diff", "dirname", "du", "env", "git", "grep",
-          "head", "id", "make", "mkdir", "mktemp", "mv", "nohup", "perl", "printf", "ps", "python3",
+          "head", "id", "jq", "make", "mkdir", "mktemp", "mv", "nohup", "perl", "printf", "ps", "python3",
           "rm", "sed", "setsid", "sh", "sha256sum", "shellcheck", "sleep", "sort", "tail", "tee",
           "touch", "uname"
         ]

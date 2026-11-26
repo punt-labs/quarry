@@ -110,6 +110,17 @@ def test_publish_handoff_runtime(tmp_path: Path, case: str) -> None:
     checksum = f"{digest}  {archive.name}\n".encode()
     archive.with_suffix(".gz.sha256").write_bytes(checksum)
     gh = r"""
+release_assets() {
+  if [[ -e archive-uploaded ]]; then
+    printf '%s\n' "$ARCHIVE_ASSET"
+  elif [[ "$CASE" != fresh && ! -e starter-deleted ]]; then
+    printf '%s\n' "$EXISTING_ASSET"
+  fi
+  if [[ -e checksum-uploaded ]]; then
+    printf '%s\n' "$CHECKSUM_ASSET"
+  fi
+}
+
 gh() {
   case "$1 $2" in
     'api --method')
@@ -122,17 +133,12 @@ gh() {
       [[ "$CASE" != fresh ]] || return 99
       printf '%s\n' "$EXISTING_TAG_SHA" ;;
     'release view')
-      if [[ "$*" == *isDraft* ]]; then
+      if [[ "$7" == isDraft ]]; then
         [[ "$CASE" != fresh || -e draft-created ]] || return 1
         echo true
-      elif [[ "$*" != *tar.gz.sha256* ]]; then
-        if [[ -e archive-uploaded ]]; then
-          printf 'uploaded\t%s\n' "$ARCHIVE_DIGEST"
-        elif [[ "$CASE" != fresh && ! -e starter-deleted ]]; then
-          printf '%s\t%s\n' "$EXISTING_STATE" "$EXISTING_DIGEST"
-        fi
-      elif [[ -e checksum-uploaded ]]; then
-        printf 'uploaded\t%s\n' "$CHECKSUM_DIGEST"
+      else
+        [[ "$6" == --json && "$7" == assets && "$8" == --jq ]] || return 99
+        release_assets | jq -s '{assets: .}' | jq -r "$9"
       fi ;;
     'release create')
       [[ -e tag-created && "$3" == "$TAG" &&
@@ -156,7 +162,8 @@ gh() {
   esac
 }
 """
-    existing_digest = "0" * 64 if case == "wrong-digest" else digest
+    existing_digest = f"sha256:{'0' * 64 if case == 'wrong-digest' else digest}"
+    existing_state = "starter" if case == "starter" else "uploaded"
     result = subprocess.run(
         ["bash", "-eo", "pipefail", "-c", gh + publisher],
         cwd=tmp_path,
@@ -167,10 +174,28 @@ gh() {
             "GITHUB_REPOSITORY": "punt-labs/quarry",
             "GITHUB_SHA": "a" * 40,
             "EXISTING_TAG_SHA": ("b" if case == "wrong-tag" else "a") * 40,
-            "EXISTING_STATE": "starter" if case == "starter" else "uploaded",
-            "EXISTING_DIGEST": "" if case == "starter" else f"sha256:{existing_digest}",
-            "ARCHIVE_DIGEST": f"sha256:{digest}",
-            "CHECKSUM_DIGEST": f"sha256:{hashlib.sha256(checksum).hexdigest()}",
+            "EXISTING_STATE": existing_state,
+            "EXISTING_ASSET": json.dumps(
+                {
+                    "name": archive.name,
+                    "state": existing_state,
+                    "digest": None if case == "starter" else existing_digest,
+                }
+            ),
+            "ARCHIVE_ASSET": json.dumps(
+                {
+                    "name": archive.name,
+                    "state": "uploaded",
+                    "digest": f"sha256:{digest}",
+                }
+            ),
+            "CHECKSUM_ASSET": json.dumps(
+                {
+                    "name": f"{archive.name}.sha256",
+                    "state": "uploaded",
+                    "digest": f"sha256:{hashlib.sha256(checksum).hexdigest()}",
+                }
+            ),
         },
         capture_output=True,
         text=True,
