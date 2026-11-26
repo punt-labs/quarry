@@ -1,0 +1,43 @@
+{
+  "checks": {
+    "full-gate": {
+      "profile": "linux-worktree-v1",
+      "epoch": "quarry-v1",
+      "sources": {"mode": "worktree"},
+      "runtime": {
+        "platforms": {
+          "linux-amd64": {
+            "bundle": "quarry-linux-amd64-v1.tar.gz",
+            "sha256": "117f4810699692a4e873649dcc4df199d4ce1324a70a2c70efe1c1d7dbc4b714",
+            "path": ["{runtime}/bin", "{runtime}/node/bin", "/usr/bin", "/bin"],
+            "env": {
+              "UV_PYTHON": "{runtime}/python/bin/python3.13",
+              "UV_PYTHON_DOWNLOADS": "never",
+              "UV_PROJECT_ENVIRONMENT": "{root}/.venv",
+              "UV_CACHE_DIR": "{scratch}/uv-cache",
+              "UV_LINK_MODE": "copy",
+              "UV_OFFLINE": "1",
+              "npm_config_cache": "{scratch}/npm-cache",
+              "npm_config_offline": "true",
+              "RUFF_CACHE_DIR": "{scratch}/ruff-cache",
+              "MYPY_CACHE_DIR": "{scratch}/mypy-cache",
+              "PYTHONDONTWRITEBYTECODE": "1"
+            }
+          }
+        }
+      },
+      "system": {"tools": ["sh", "bash", "env", "make", "git", "grep", "diff", "rm", "cat", "cp", "mktemp", "ps", "sleep", "nohup", "perl", "shellcheck", "head", "tail", "sed", "awk", "id", "printf", "basename", "dirname"]},
+      "scratch": {
+        "checkout": [".venv", ".pytest-work", ".pytest_cache", ".import_linter_cache"],
+        "files": ["install-constraints.txt.check.tmp"],
+        "seed": {
+          "{scratch}/uv-cache": "{runtime}/cache/uv",
+          "{scratch}/npm-cache": "{runtime}/cache/npm"
+        }
+      },
+      "git": {"base_ref": "refs/remotes/origin/main"},
+      "network": "loopback",
+      "prehydrate": {"run": ["uv", "sync", "--offline", "--locked", "--extra", "dev"]}
+    }
+  }
+}
