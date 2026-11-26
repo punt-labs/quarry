@@ -266,7 +266,6 @@ uv.toml
 # vendored registry itself is tracked.
 .punt-labs/ethos/missions/
 .punt-labs/ethos/missions.jsonl
-.punt-labs/ethos/sessions/
 .punt-labs/ethos/.biff
 
 # ethos: shared machine-local zone (never track)
