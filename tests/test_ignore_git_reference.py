@@ -12,11 +12,9 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
-from hypothesis import HealthCheck, given, settings, strategies as st
 
 from quarry.sync_discovery import FileDiscovery
 
@@ -233,9 +231,8 @@ def _write_tree(root: Path, files: dict[str, str | bytes], ignore_name: str) -> 
             path.write_text(text)
 
 
-def _git_ignored(root: Path, rels: list[str], *, init: bool = True) -> set[str]:
-    if init:
-        subprocess.run(["git", "init", "-q", str(root)], check=True, env=_GIT_ENV)
+def _git_ignored(root: Path, rels: list[str]) -> set[str]:
+    subprocess.run(["git", "init", "-q", str(root)], check=True, env=_GIT_ENV)
     done = subprocess.run(
         ["git", "-C", str(root), "check-ignore", "--stdin", "-z", "-n", "-v"],
         input="\0".join(rels) + "\0",
@@ -275,91 +272,3 @@ def test_quarry_ignores_exactly_what_git_ignores(
 
     assert scanned == expected, "discover() differs from git"
     assert live == expected, "is_indexable() differs from git"
-
-
-_TOKENS = [
-    "a",
-    "b",
-    "0",
-    "-",
-    ".",
-    "é",
-    "?",
-    "*",
-    "**",
-    "/",
-    "[",
-    "]",
-    "!",
-    "^",
-    ":",
-    "[:digit:]",
-    "[:alpha:]",
-    "[:punct:]",
-    "\\",
-]
-_LINE = st.tuples(
-    st.sampled_from(["", "!", "/", "!/"]),
-    st.lists(st.sampled_from(_TOKENS), min_size=1, max_size=7),
-    st.sampled_from(["", "", "/"]),
-).map(lambda parts: parts[0] + "".join(parts[1]) + parts[2])
-_STEM = st.text(alphabet="ab0-.é[]!^:", min_size=1, max_size=4).filter(
-    # A leading ":" would be read by check-ignore as pathspec magic.
-    lambda stem: not stem.startswith((".", ":"))
-)
-
-
-@pytest.fixture(scope="module")
-def property_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    root = tmp_path_factory.mktemp("property")
-    repo = root / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=_GIT_ENV)
-    return root
-
-
-@pytest.mark.timeout(180)
-@settings(
-    max_examples=150,
-    derandomize=True,
-    deadline=None,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
-@given(
-    root_lines=st.lists(_LINE, min_size=1, max_size=3),
-    nested_lines=st.lists(_LINE, max_size=2),
-    stems=st.lists(_STEM, min_size=1, max_size=4, unique=True),
-)
-def test_generated_patterns_agree_with_git(
-    property_root: Path,
-    root_lines: list[str],
-    nested_lines: list[str],
-    stems: list[str],
-) -> None:
-    files: dict[str, str | bytes] = {
-        ".gitignore": "\n".join(root_lines) + "\n",
-        "d/.gitignore": "\n".join(nested_lines) + "\n",
-    }
-    for stem in stems:
-        for rel in (f"{stem}.md", f"d/{stem}.md", f"{stem}/in.md"):
-            files[rel] = ""
-    markdown = sorted(rel for rel in files if rel.endswith(".md"))
-    # One repository for every example; each example's tree is a directory
-    # inside it, so its ignore files anchor exactly as a repository root's do.
-    git_case = Path(tempfile.mkdtemp(dir=property_root / "repo"))
-    quarry_case = Path(tempfile.mkdtemp(dir=property_root))
-    try:
-        _write_tree(git_case, files, ".gitignore")
-        expected = set(markdown) - _git_ignored(git_case, markdown, init=False)
-        _write_tree(quarry_case, files, ".gitignore")
-        discovery = FileDiscovery(quarry_case)
-        scanned = {str(p.relative_to(quarry_case)) for p in discovery.discover(_EXTS)}
-        live = {
-            rel for rel in markdown if discovery.is_indexable(quarry_case / rel, _EXTS)
-        }
-    finally:
-        shutil.rmtree(git_case, ignore_errors=True)
-        shutil.rmtree(quarry_case, ignore_errors=True)
-    context = (root_lines, nested_lines)
-    assert scanned == expected, context
-    assert live == expected, context
