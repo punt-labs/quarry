@@ -2276,6 +2276,17 @@ at watch establishment, so filtering events cannot protect the descriptor
 budget. *A second pattern list for the watcher* — the exact drift bug class
 (remote/local divergence, bug class 3) transplanted into the ignore layer.
 
+**Amendment (2026-11-26).** The per-path live check, `FileDiscovery.is_indexable`,
+matched only the file's own relative path against the root spec, so a negation
+(`*` then `!AGENTS.md`) re-included a file under a directory the bulk walk never
+enters; the watcher indexed it and the scan deleted it. `is_indexable` now applies
+ancestor exclusion through `_chain_kept`, the same `keeps_dir` check on every
+directory segment that `is_watchable_dir` uses, so a file below an excluded
+directory is never indexable, as in git. `tests/test_sync_discovery_live.py` pins
+live == bulk: for every file in a generated tree, `is_indexable(path)` equals
+`path in discover()`. `is_deletable` stays lexical by design (a false accept is a
+no-op delete job).
+
 ### DES-045e: Watch mechanism — one pruned recursive inotify instance per root
 
 **Status:** Accepted (2026-09-02) · **Beads:** quarry-0bej, quarry-ndrj
