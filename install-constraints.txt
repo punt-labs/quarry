@@ -76,7 +76,7 @@ referencing==0.37.0
 requests==2.33.0
 rich==14.3.2
 rpds-py==0.30.0
-shapely==2.1.2
+shapely==2.2.0
 shellingham==1.5.4
 six==1.17.0
 soupsieve==4.1
