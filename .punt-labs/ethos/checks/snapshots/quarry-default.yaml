@@ -26,7 +26,13 @@
           }
         }
       },
-      "system": {"tools": ["sh", "bash", "env", "make", "git", "grep", "diff", "rm", "cat", "cp", "mktemp", "ps", "sleep", "nohup", "perl", "shellcheck", "head", "tail", "sed", "awk", "id", "printf", "basename", "dirname"]},
+      "system": {
+        "tools": [
+          "awk", "basename", "bash", "cat", "cp", "cut", "diff", "dirname", "du", "env", "git", "grep",
+          "head", "id", "make", "mkdir", "mktemp", "nohup", "perl", "printf", "ps", "rm", "sed",
+          "setsid", "sh", "shellcheck", "sleep", "sort", "tail", "tee", "touch"
+        ]
+      },
       "scratch": {
         "checkout": [".venv", ".pytest-work", ".pytest_cache", ".import_linter_cache"],
         "files": ["install-constraints.txt.check.tmp"],
