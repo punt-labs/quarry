@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from quarry.collection_resolver import CollectionResolver
 from quarry.sync_registry import SyncRegistry
+
+if TYPE_CHECKING:
+    import pytest
 
 _NO_CHUNKS: frozenset[str] = frozenset()
 
@@ -252,4 +256,15 @@ class TestCoveringCollection:
         conn = SyncRegistry(tmp_path / "registry.db")
         resolver = CollectionResolver(conn)
         assert resolver.covering_collection(str(tmp_path / "unregistered")) is None
+        conn.close()
+
+    def test_relative_cwd_is_not_covered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "myproject"
+        (project / "src").mkdir(parents=True)
+        conn = SyncRegistry(tmp_path / "registry.db")
+        conn.register_directory(project, "myproject")
+        monkeypatch.chdir(project)
+        assert CollectionResolver(conn).covering_collection("src") is None
         conn.close()

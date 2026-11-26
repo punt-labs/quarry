@@ -1,6 +1,5 @@
 {
   "ignores": [
-    ".beads/",
     ".claude/",
     // The vendored ethos registry (DES-054) is copied verbatim from
     // punt-labs/team — upstream's markdown is not ours to lint.
