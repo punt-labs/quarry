@@ -8,7 +8,8 @@
         "platforms": {
           "linux-amd64": {
             "bundle": "quarry-linux-amd64-v1.tar.gz",
-            "sha256": "117f4810699692a4e873649dcc4df199d4ce1324a70a2c70efe1c1d7dbc4b714",
+            "url": "https://github.com/punt-labs/quarry/releases/download/handoff-runtime-v1/quarry-handoff-linux-amd64.tar.gz",
+            "sha256": "d4a209941efe34eebbdc0cc014bbbe978a3d9e5b6caf0ed73e92a2029e7541b3",
             "path": ["{runtime}/bin", "{runtime}/node/bin", "/usr/bin", "/bin"],
             "env": {
               "UV_PYTHON": "{runtime}/python/bin/python3.13",
