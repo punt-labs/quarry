@@ -22,7 +22,8 @@
               "npm_config_offline": "true",
               "RUFF_CACHE_DIR": "{scratch}/ruff-cache",
               "MYPY_CACHE_DIR": "{scratch}/mypy-cache",
-              "PYTHONDONTWRITEBYTECODE": "1"
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1"
             }
           }
         }
