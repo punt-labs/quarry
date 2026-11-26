@@ -15,7 +15,7 @@ on demand, close it when done.
    - **"No identity resolved"**: run `ethos setup` (below).
 
 Seed, enable and setup below can be re-run to refresh integration/content.
-The separately confirmed legacy repair is destructive, not a migration.
+Older storage layouts need no step here: ethos upgrades them itself.
 
 ## `ethos seed` — populate global starter content (once per machine)
 
@@ -73,12 +73,11 @@ ethos setup --file config.yaml     # non-interactive, from a config file
 The wizard's identity graph and configuration are intended for Git — stage
 and commit them explicitly so they are shared with the rest of the team.
 
-## Storage policy (DES-079; acceptance pending)
+## Storage policy (DES-079)
 
-DES-080 redaction shipped in v4.20.0. DES-079 storage-boundary behavior is a
-required repair contract, not yet a verified release guarantee. See the
+See the
 [storage and publication contract](https://github.com/punt-labs/ethos/blob/main/docs/storage-layout.md)
-for paths and outstanding acceptance.
+for paths and the test that proves each promise.
 
 Resolve the canonical store root **S** through Git's common directory,
 separately from the invoking checkout **C**. S owns shared source/blame records
@@ -113,54 +112,34 @@ record: blame   # default if omitted; full opts in prospectively
   chunks and unsealed tails without SessionEnd. Deleting S or its local data
   is not covered. Local retained history is not disposable scratch.
 - Worker artifacts, including `MISSION_ARTIFACTS_DIR`, must target local
-  scratch. Legacy misplaced agent-owned files require operator-directed
-  cleanup; Ethos does not silently move, export or redact them.
+  scratch. Ethos never moves, exports or redacts agent-owned files.
 
-### Bounded legacy repair
+### Automatic storage upgrade
 
-`ethos repair --dry-run` inventories known obsolete trace/runtime files without
-deleting. Destructive `ethos repair` lists those files, warns that old prompts,
-reflections, events/audit history and runtime residue will be permanently lost,
-then asks `Are you sure? [y/N]` in a terminal. Empty input, no and EOF delete
-nothing. `--yes` is explicit automation consent and an assertion that all old/new
-writers, hooks and MCP servers are stopped; busy locks refuse cleanup. Windows
-supports inventory, but destructive repair currently refuses: use a Unix host
-with all writers stopped.
+Ethos upgrades its own storage. Every CLI command, hook and MCP call first
+checks a stamp (`S/.punt-labs/local/ethos/layout.yaml` and
+`~/.punt-labs/ethos/layout.yaml`); when a stamp is missing, ethos converts
+older layouts into the shared local zone and appends what it did to
+`~/.punt-labs/ethos/logs/ethos.log`. The only output is one line, and only
+when something changed:
 
-No backup, lossless migration, backfill, lifecycle change, Git staging/commit or
-configuration rewrite is performed. Cleanup excludes shared identities,
-contracts, results, corrections, provenance and ADRs, private credentials and
-overlays, configuration, global data, arbitrary/agent-owned files and canonical
-local history. Current publications and flat current exports
-(`missions/<id>.contract.yaml` / `<id>.result.yaml`, with associated trace) are
-retained, including incomplete/ambiguous exports. Other intentional publications
-and exports are not blanket deletion targets. Historical shipped
-`ethos mission migrate` / `ethos audit migrate` commands are not expanded into a
-new storage-upgrade workflow.
+`ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/ethos.log)`
 
-Private legacy repository overlays require explicit operator handling: stop
-writers, reconcile each old
-`S/.punt-labs/ethos/identities/<handle>.ext/<ns>.local.yaml` into
-`S/.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml`, preserving all
-credentials and resolving any existing destination before removing the old copy.
-Do not overwrite divergent values, print credentials or write a merged identity
-into the tracked base. Legacy siblings are read-only compatibility inputs;
-local writes refuse while one remains and unequal copies refuse reads. Repair
-does not move/delete overlays, and global overlay layout is unchanged.
+No command is needed, and none exists. A busy lock defers the upgrade to the
+next run. Losses are logged, never fatal.
 
-Review the inventory before consenting. Deletions are incremental: after
-interruption, inspect a fresh inventory and confirm again; no rollback is
-promised. Old missions may need manual retirement; repair never invents shared
-authority. Review tracked deletions and stage/commit normally. Then run
-`ethos enable` to refresh repository integration and reconnect long-lived MCP
-servers. Re-running enable alone is not evidence of final storage acceptance.
+Shared identities, contracts, results, corrections, provenance and ADRs,
+private credentials, configuration, global data and agent-owned files are never
+moved or deleted. Ethos performs no Git staging or commit; review tracked
+changes and commit normally. Reconnect long-lived MCP servers after installing
+a new binary so they run it.
 
 ## Verify
 
 ```bash
 ethos doctor       # should report no missing state
 ethos whoami       # resolves your identity (session roster → git config → OS user)
-ethos session      # current session roster (empty until `ethos iam <handle>` is called)
+ethos session      # current session roster (empty until `ethos session iam <handle>` is called)
 ls .claude/agents/ # regenerated agent files, one per team member with kind: agent
 ```
 
@@ -172,7 +151,7 @@ re-run.
 Every session where you want the persona block injected:
 
 ```bash
-ethos iam <handle>          # e.g. ethos iam claude
+ethos session iam <handle>  # e.g. ethos session iam claude
 ```
 
 Then restart Claude Code (or trigger the SessionStart hook manually). The
@@ -191,14 +170,14 @@ DOES add the `@`-import so daily-use guidance auto-injects.
 
 ## Troubleshooting for the agent
 
-- **`ethos doctor` reports "hook missing"** → run `ethos enable` (it
-  chains the audit-seal and trailer git hooks again).
+- **`ethos doctor` reports "hook missing"** → the storage upgrade
+  reinstalls the audit-seal and trailer git hooks on the next ethos run.
 - **`ethos doctor` reports "stale binary version"** → the binary on PATH
   is older than the plugin. Ask the human to run `make install` from a
   shell (agent sessions cannot overwrite their own running binary on
   macOS).
 - **Persona block not appearing** → SessionStart hook only fires at
-  session start. Restart Claude Code. Also verify `ethos iam <handle>`
+  session start. Restart Claude Code. Also verify `ethos session iam <handle>`
   was called for this session.
 - **`.claude/agents/<handle>.md` regenerated with wrong content** → the
   source is `.punt-labs/ethos/identities/<handle>.yaml` +
