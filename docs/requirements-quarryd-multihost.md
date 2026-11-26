@@ -4,7 +4,8 @@
 **Date:** 2026-08-30
 **Tracking:** Epic quarry-dego
 **Provenance:** Operator rulings and research sessions of 2026-08-29/30.
-**Sibling documents:** `biff/docs/requirements-biffd-multihost.md` and
+**Sibling documents:** biff's daemon design, `biff/docs/design/biffd.md`
+(its requirements were retired into it), and
 `vox/docs/requirements-voxd-multihost.md` — one org program, three
 repos. The operator's stated goal: bring Punt Labs products to an
 architecture that enables multi-harness support, add opencode as a
