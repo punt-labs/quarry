@@ -91,8 +91,10 @@ def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the release job runs on Linux")
-@pytest.mark.parametrize("case", ["resume", "starter", "wrong-tag", "wrong-digest"])
-def test_publish_handoff_runtime_retries_safely(tmp_path: Path, case: str) -> None:
+@pytest.mark.parametrize(
+    "case", ["fresh", "resume", "starter", "wrong-tag", "wrong-digest"]
+)
+def test_publish_handoff_runtime(tmp_path: Path, case: str) -> None:
     workflow = REPO_ROOT / ".github/workflows/handoff-runtime.yml"
     steps = yaml.safe_load(workflow.read_text())["jobs"]["publish"]["steps"]
     publisher = next(
@@ -110,32 +112,46 @@ def test_publish_handoff_runtime_retries_safely(tmp_path: Path, case: str) -> No
     gh = r"""
 gh() {
   case "$1 $2" in
-    'api --method') return 1 ;;
+    'api --method')
+      [[ "$CASE" == fresh ]] || return 1
+      [[ "$3" == POST && "$4" == "repos/$GITHUB_REPOSITORY/git/refs" &&
+         "$5" == -f && "$6" == "ref=refs/tags/$TAG" &&
+         "$7" == -f && "$8" == "sha=$GITHUB_SHA" ]] &&
+        touch tag-created ;;
     'api repos/punt-labs/quarry/commits/refs/tags/handoff-runtime-v1')
+      [[ "$CASE" != fresh ]] || return 99
       printf '%s\n' "$EXISTING_TAG_SHA" ;;
     'release view')
       if [[ "$*" == *isDraft* ]]; then
+        [[ "$CASE" != fresh || -e draft-created ]] || return 1
         echo true
       elif [[ "$*" != *tar.gz.sha256* ]]; then
         if [[ -e archive-uploaded ]]; then
           printf 'uploaded\t%s\n' "$ARCHIVE_DIGEST"
-        elif [[ ! -e starter-deleted ]]; then
+        elif [[ "$CASE" != fresh && ! -e starter-deleted ]]; then
           printf '%s\t%s\n' "$EXISTING_STATE" "$EXISTING_DIGEST"
         fi
       elif [[ -e checksum-uploaded ]]; then
         printf 'uploaded\t%s\n' "$CHECKSUM_DIGEST"
       fi ;;
+    'release create')
+      [[ -e tag-created && "$3" == "$TAG" &&
+         "$*" == *'--verify-tag --draft --prerelease --latest=false'* ]] &&
+        touch draft-created ;;
     'release delete-asset')
       [[ "$4" == quarry-handoff-linux-amd64.tar.gz && "$EXISTING_STATE" == starter ]] &&
         touch starter-deleted ;;
     'release upload')
       if [[ "$4" == quarry-handoff-linux-amd64.tar.gz ]]; then
-        [[ -e starter-deleted ]] && touch archive-uploaded
+        [[ -e starter-deleted || -e draft-created ]] && touch archive-uploaded
       else
         [[ "$4" == quarry-handoff-linux-amd64.tar.gz.sha256 ]] &&
           touch checksum-uploaded
       fi ;;
-    'release edit') touch release-published ;;
+    'release edit')
+      [[ "$3" == "$TAG" && "$*" == *'--draft=false --latest=false'* &&
+         -e checksum-uploaded && ( "$CASE" != fresh || -e archive-uploaded ) ]] &&
+        touch release-published ;;
     *) return 99 ;;
   esac
 }
@@ -146,6 +162,7 @@ gh() {
         cwd=tmp_path,
         env={
             **os.environ,
+            "CASE": case,
             "TAG": "handoff-runtime-v1",
             "GITHUB_REPOSITORY": "punt-labs/quarry",
             "GITHUB_SHA": "a" * 40,
@@ -160,9 +177,11 @@ gh() {
         timeout=15,
         check=False,
     )
+    assert (assets / "tag-created").exists() == (case == "fresh")
+    assert (assets / "draft-created").exists() == (case == "fresh")
     assert (assets / "starter-deleted").exists() == (case == "starter")
-    assert (assets / "archive-uploaded").exists() == (case == "starter")
-    if case in {"resume", "starter"}:
+    assert (assets / "archive-uploaded").exists() == (case in {"fresh", "starter"})
+    if case in {"fresh", "resume", "starter"}:
         assert result.returncode == 0, result.stderr
         assert (assets / "checksum-uploaded").exists()
         assert (assets / "release-published").exists()
