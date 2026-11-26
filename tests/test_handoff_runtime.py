@@ -21,7 +21,9 @@ INSTALL_HANDOFF_RUNTIME = (
     sys.platform != "linux" or os.uname().machine != "x86_64",
     reason="the Quarry handoff runtime is Linux x86_64 only",
 )
-@pytest.mark.parametrize("case", ["download", "cached", "mismatch", "unpublished"])
+@pytest.mark.parametrize(
+    "case", ["download", "cached", "cached-no-url", "mismatch", "unpublished"]
+)
 def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -36,7 +38,7 @@ def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
         "https://github.com/punt-labs/quarry/releases/download/"
         "handoff-runtime-v1/quarry-handoff-linux-amd64.tar.gz"
     )
-    if case != "unpublished":
+    if case not in {"cached-no-url", "unpublished"}:
         pin["url"] = url
     profile.write_text(
         json.dumps(
@@ -47,7 +49,7 @@ def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
     home.mkdir()
     store = home / ".punt-labs/ethos/runtimes"
     installed = store / f"{digest}.tar.gz"
-    if case == "cached":
+    if case in {"cached", "cached-no-url"}:
         store.mkdir(parents=True)
         installed.write_bytes(archive)
     source = tmp_path / "release.tar.gz"
@@ -77,7 +79,7 @@ def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
     )
     assert marker.exists() == (case in {"download", "mismatch"})
     assert not list(store.glob(".quarry-runtime.*"))
-    if case in {"download", "cached"}:
+    if case in {"download", "cached", "cached-no-url"}:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == str(installed)
         assert installed.read_bytes() == archive

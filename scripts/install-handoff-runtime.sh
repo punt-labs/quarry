@@ -19,18 +19,16 @@ try:
     url, sha = entry.get("url"), entry["sha256"]
 except (AttributeError, OSError, KeyError, TypeError, ValueError):
     sys.exit("Invalid Quarry handoff runtime profile.")
-if url is None:
-    sys.exit("No published Quarry handoff runtime URL is pinned in this checkout.")
 expected = (r"https://github\.com/punt-labs/quarry/releases/download/"
             r"handoff-runtime-v[1-9][0-9]*/quarry-handoff-linux-amd64\.tar\.gz")
-if not isinstance(url, str) or not re.fullmatch(expected, url):
+if url is not None and (not isinstance(url, str) or not re.fullmatch(expected, url)):
     sys.exit("Invalid Quarry handoff runtime release URL.")
 if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha):
     sys.exit("Invalid Quarry handoff runtime SHA-256.")
-print(url, sha)
+print(sha, url or "")
 PY
 )
-read -r url sha <<< "$pin"
+read -r sha url <<< "$pin"
 
 root=${HOME:?}/.punt-labs
 store=$root/ethos/runtimes
@@ -55,6 +53,10 @@ verify() {
 if [[ -f $archive ]] && verify "$archive"; then
     printf '%s\n' "$archive"
     exit 0
+fi
+if [[ -z $url ]]; then
+    echo 'No published Quarry handoff runtime URL is pinned in this checkout.' >&2
+    exit 1
 fi
 
 download=$(mktemp "$store/.quarry-runtime.XXXXXX")
