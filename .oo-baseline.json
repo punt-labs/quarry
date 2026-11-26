@@ -5722,10 +5722,10 @@
   "src/quarry/sync_discovery.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.38,
+    "avg_params": 1.27,
     "max_complexity": 8.0,
-    "avg_complexity": 4.0,
-    "module_size": 202.0,
+    "avg_complexity": 3.73,
+    "module_size": 189.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

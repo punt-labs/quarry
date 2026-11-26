@@ -122,26 +122,10 @@ class FileDiscovery:
         """Return whether *dirpath* (a directory under the root) survives pruning.
 
         Ancestor-aware: a directory reached via watchdog's un-prunable
-        backfill walk (``_recursive_simulate``, which reports a newly-created
-        subtree's pre-existing contents) can be several levels below a
-        pruned ancestor whose own rejection does not stop that walk from
-        continuing to list -- and descend into -- its children on disk.  A
-        single-level check (only the immediate parent's rules) would wrongly
-        accept such a descendant. Every path segment from the root down is
-        checked (lexical first, cheapest, no disk I/O): a
-        :class:`~quarry.scratch_paths.ScratchGuard` skip-name or a
-        hidden-dot prefix (neither cascades to descendants the way a
-        ``.gitignore`` DIRECTORY pattern does — gitignore semantics already
-        make an ignored directory imply its whole subtree, so the cached
-        root spec matched against the FULL relative path gets that for
-        free). Only THEN does :meth:`_nested_local_spec_excludes` consult
-        each intermediate ancestor's own ``.gitignore`` (:meth:`~quarry.
-        ignore_spec.IgnoreRules.local_spec` caches per directory, so this is
-        O(depth) with each ancestor's file read at most once per
-        :class:`FileDiscovery` instance, not per call) — a burst-created
-        ``x/logs/deep`` must be pruned when ``x/.gitignore`` contains
-        ``logs/``, even though only ``x``, not ``x/logs/deep``'s own
-        immediate parent, names the pattern.
+        backfill walk (``_recursive_simulate``) can be several levels below a
+        pruned ancestor whose rejection does not stop that walk from
+        descending, so every segment from the root down is checked, exactly
+        as :meth:`discover`'s walk would have checked it.
         """
         if self._root_resolved is None or self._excluded:
             return False
@@ -149,33 +133,27 @@ class FileDiscovery:
             rel = dirpath.relative_to(self._directory)
         except ValueError:
             return False
-        root_spec = self._rules.root_spec()
-        if self._ancestor_excluded(rel, root_spec):
-            return False
-        local_spec = self._rules.local_spec(dirpath.parent)
-        return self._rules.keeps_dir(rel.parent, dirpath.name, root_spec, local_spec)
+        return self._chain_kept(rel)
 
-    def _ancestor_excluded(self, rel: Path, root_spec: IgnoreSpec) -> bool:
-        """Return whether any ANCESTOR segment of *rel* excludes it.
+    def _chain_kept(self, rel_dir: Path) -> bool:
+        """Return whether the bulk walk would enter *rel_dir*.
 
-        The ancestor-aware half of :meth:`is_watchable_dir`'s check, split
-        out so that method stays a single-level dispatcher. Cheapest checks
-        first: a hidden-dot prefix or a
-        :class:`~quarry.scratch_paths.ScratchGuard` skip-name at any
-        segment (lexical, no disk I/O), then a root-spec match against the
-        FULL relative path (gitignore directory-pattern semantics already
-        cascade to descendants, still no disk I/O — the root spec is
-        compiled once at construction), and finally each ancestor's own
-        NESTED ``.gitignore`` via :meth:`_nested_local_spec_excludes` (one
-        cached read per ancestor directory, not re-read per call).
+        The per-path twin of :meth:`_pruned_walk`: it applies
+        :meth:`~quarry.ignore_spec.IgnoreRules.keeps_dir` to each segment
+        from the root down, each against its parent's own ``.gitignore``.
+        Every segment must be kept because an excluded directory is never
+        entered, so nothing below it can be re-included by a negation.
         """
-        if any(part.startswith(".") for part in rel.parts):
-            return True
-        if self._guard.skips_below_root(rel):
-            return True
-        if self._rules.excludes(root_spec, str(rel), is_dir=True):
-            return True
-        return self._nested_local_spec_excludes(rel.parts, last_is_dir=True)
+        root_spec = self._rules.root_spec()
+        current = self._directory
+        rel_parent = Path()
+        for name in rel_dir.parts:
+            local_spec = self._rules.local_spec(current)
+            if not self._rules.keeps_dir(rel_parent, name, root_spec, local_spec):
+                return False
+            current /= name
+            rel_parent /= name
+        return True
 
     def _pruned_walk(
         self,
@@ -232,25 +210,27 @@ class FileDiscovery:
 
         Applies discover's rules to ONE path so a live watch edit and a bulk scan
         agree: the file's real path must resolve *inside* the real root (a symlink
-        whose target escapes the tree is rejected — never indexed, closing the
-        path-escape leak), the suffix must be supported, no path segment may be
-        hidden, and neither the root nor any per-directory ignore spec may match.
+        whose target escapes the tree is rejected, closing the path-escape leak),
+        the suffix must be supported, the file name must not be hidden, every
+        ancestor directory must survive the walk's pruning (:meth:`_chain_kept`),
+        and the file must survive its directory's ignore rules.
         """
         if self._root_resolved is None or self._excluded:
             return False
         if not self._resolves_inside(path, self._root_resolved):
             return False
-        if path.suffix.lower() not in extensions:
+        if path.suffix.lower() not in extensions or path.name.startswith("."):
             return False
         try:
             rel = path.relative_to(self._directory)
         except ValueError:
             return False
-        if self._hidden_or_skipped(rel):
+        if not self._chain_kept(rel.parent):
             return False
-        if self._rules.excludes(self._rules.root_spec(), str(rel), is_dir=False):
-            return False
-        return not self._nested_local_spec_excludes(rel.parts, last_is_dir=False)
+        local_spec = self._rules.local_spec(path.parent)
+        return self._rules.keeps_file(
+            rel.parent, path.name, self._rules.root_spec(), local_spec
+        )
 
     def _hidden_or_skipped(self, rel: Path) -> bool:
         """Whether any segment of *rel* is hidden or a ScratchGuard skip-name.
@@ -277,34 +257,6 @@ class FileDiscovery:
         except ValueError:
             return False
         return True
-
-    def _nested_local_spec_excludes(
-        self, parts: tuple[str, ...], *, last_is_dir: bool
-    ) -> bool:
-        """Whether a per-directory ``.gitignore`` along *parts* excludes it.
-
-        Mirrors :meth:`discover`'s walk: each intermediate directory's own
-        ``.gitignore`` governs its direct child. Shared by
-        :meth:`is_indexable` (*parts* names a FILE — only the final segment
-        is a file, ``last_is_dir=False``) and :meth:`_ancestor_excluded`
-        (*parts* names a DIRECTORY — every segment, including the last, is
-        itself a directory, ``last_is_dir=True``). The root is covered by
-        the root ignore spec, so it is skipped here; every other ancestor's
-        :meth:`~quarry.ignore_spec.IgnoreRules.local_spec` is read from
-        disk at most once per :class:`FileDiscovery` instance (cached
-        there per directory), regardless of how many descendants this
-        method is later called for.
-        """
-        current = self._directory
-        last = len(parts) - 1
-        for index, segment in enumerate(parts):
-            if current != self._directory:
-                local = self._rules.local_spec(current)
-                is_dir = last_is_dir or index != last
-                if self._rules.excludes(local, segment, is_dir=is_dir):
-                    return True
-            current = current / segment
-        return False
 
     def is_deletable(self, path: Path, extensions: frozenset[str]) -> bool:
         """Return whether a REMOVED *path* names a document worth a delete job.
