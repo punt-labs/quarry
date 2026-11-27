@@ -13,19 +13,19 @@ disk-vs-registry reconcile, so no per-scan bookkeeping lives here.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.daemon.finalize_job import CollectionFinalizeJob
-from quarry.daemon.finalize_throttle import FinalizeThrottle
-from quarry.daemon.fs_events import FsEvent
-from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
+from quarry.daemon.collection_finalize_job import CollectionFinalizeJob
+from quarry.daemon.delta_submit import DeltaSubmission
+from quarry.daemon.finalize_pacing import FinalizeThrottle
+from quarry.daemon.finalize_retry import FinalizeRetry
+from quarry.daemon.index_jobs import CollectionSyncJob
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.maintenance_key import MaintenanceKey
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.scan_sweep import ScanSweep
 from quarry.daemon.shed_rearm import ShedEventRearmer
-from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
-from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
     import asyncio
@@ -43,15 +43,6 @@ logger = logging.getLogger(__name__)
 
 
 @final
-@dataclass(frozen=True, slots=True)
-class _DeltaOutcome:
-    """What one delta batch did: the jobs the queue admitted and the events it shed."""
-
-    admitted: int
-    shed: tuple[FsEvent, ...]
-
-
-@final
 class WatchSubmitter:
     """Submit watch-derived IngestUnits to the queue, re-arming shed live events.
 
@@ -59,11 +50,13 @@ class WatchSubmitter:
     scan sweeping, and re-arming shed events.
     """
 
-    __slots__ = ("_ctx", "_rearm", "_roster", "_throttle")
+    __slots__ = ("_ctx", "_deltas", "_rearm", "_retries", "_roster", "_throttle")
 
     _ctx: DaemonContext
+    _deltas: DeltaSubmission
     _roster: WatchRoster
     _rearm: ShedEventRearmer
+    _retries: FinalizeRetry
     _throttle: FinalizeThrottle
 
     def __new__(
@@ -72,17 +65,20 @@ class WatchSubmitter:
         """Bind watch submissions to the roster, retry timers, and finalize throttle."""
         self = super().__new__(cls)
         self._ctx = ctx
+        self._deltas = DeltaSubmission(ctx)
         self._roster = roster
         self._rearm = ShedEventRearmer(loop)
+        self._retries = FinalizeRetry(loop)
         self._throttle = FinalizeThrottle(
             loop, ctx.settings.watch_optimize_min_interval_s
         )
         return self
 
     def cancel_pending(self) -> None:
-        """Cancel every outstanding backoff re-arm and trailing-finalize timer."""
+        """Cancel every outstanding re-arm, trailing-finalize and retry timer."""
         self._rearm.cancel_pending()
         self._throttle.cancel_all()
+        self._retries.cancel_all()
 
     def bind(self, dispatcher: DebouncedDispatcher) -> None:
         """Wire the debouncer used to re-arm shed events (sink is created first)."""
@@ -108,7 +104,7 @@ class WatchSubmitter:
             self.submit_scan_job(batch.key, root)
             self._request_finalize(batch.key, db, settings)
             return
-        outcome = self._submit_deltas(batch, db, settings, root)
+        outcome = self._deltas.submit(batch, db, settings, root)
         if outcome.shed:
             self._rearm.defer(batch.key, list(outcome.shed))
         else:
@@ -149,24 +145,65 @@ class WatchSubmitter:
         Immediate — not throttled — because every sweep is one-shot or the
         backstop: the initial watch scan, an explicit ``quarry sync`` whose
         umbrella awaits the finalize task, and the periodic reconcile (whose
-        finalize is the FTS self-heal and must always run, never coalesce away).
+        finalize is submitted immediately and never coalesced away, though it rewrites
+        the table only if the table changed).
         The high-frequency bulk-churn path (``on_batch``) throttles its finalize
         instead.  A scan shed by a full queue is recovered by the reconcile.
         """
         db = self._roster.database_of(key.database)
         settings = self._roster.settings_of(key.database)
-        return self._submit_finalize(key, db, settings)
+        job = CollectionFinalizeJob(
+            db,
+            settings,
+            key.collection,
+            partial(self.mark_finalized, key.database),
+            partial(self.retry_finalize, key),
+        )
+        return self._submit_finalize_job(key, job)
 
     def mark_finalized(self, database: str) -> None:
-        """Register an out-of-band finalize that was ADMITTED for *database*.
+        """Register an out-of-band finalize that is about to REWRITE *database*.
 
-        Cancels any trailing finalize already armed for it and resets the
-        interval clock — otherwise a sweep's finalize and an armed trailing
-        finalize would both run (a redundant double-compaction).  Callers
-        register ONLY on admission: a shed finalize never ran, so it must not
-        stamp and must leave a pending trailing timer to retry.
+        Stamps the interval clock, so the throttle's next in-window request
+        coalesces behind the rewrite that is running; a trailing finalize already
+        armed is left alone, because a write queued behind this finalize may have
+        armed it.  The finalize job calls this only when it decides to rewrite the
+        table: a finalize that skips, or one the queue shed, never ran and must
+        not stamp.
         """
         self._throttle.mark_admitted(database)
+
+    def retry_database(self, database: str, delay_s: float | None) -> None:
+        """Arm a finalize retry for *database*, which need not hold any directory.
+
+        The retry rides a registered collection's FIFO when there is one, else
+        the reserved maintenance collection's.
+        """
+        if delay_s is not None:
+            self.retry_finalize(MaintenanceKey(self._roster).of(database), delay_s)
+
+    def retry_finalize(self, key: RouteKey, delay_s: float) -> None:
+        """Arm a retry for a finalize that left *key*'s database dirty."""
+        self._retries.arm(key.database, delay_s, partial(self._retry_request, key))
+
+    def _retry_request(self, key: RouteKey) -> None:
+        """Request the retry through the throttle, which may keep another closure.
+
+        The throttle arms one trailing timer per database and keeps whichever
+        closure armed it, so a retry can run as a write's closure.  Re-arming a
+        shed finalize therefore lives in the submit every finalize goes through,
+        not in this closure.
+        """
+        try:
+            db = self._roster.database_of(key.database)
+            settings = self._roster.settings_of(key.database)
+        except KeyError:
+            logger.debug("retry dropped: database %s left the roster", key.database)
+            return
+        self._throttle.request(
+            key.database,
+            lambda: self._submit_finalize(key, db, settings).status != "failed",
+        )
 
     def _request_finalize(
         self, key: RouteKey, db: Database, settings: Settings
@@ -184,47 +221,29 @@ class WatchSubmitter:
             lambda: self._submit_finalize(key, db, settings).status != "failed",
         )
 
-    def _submit_deltas(
-        self, batch: FlushBatch, db: Database, settings: Settings, root: Path
-    ) -> _DeltaOutcome:
-        """Submit each per-file index/delete job; report what was admitted or shed.
-
-        The authoritative filter runs here, post-debounce (once per distinct path
-        per window, off the observer thread): ``is_indexable`` resolves the real
-        path and rejects a symlink escaping the tree (security) plus applies the
-        ignore rules BEFORE any content is read; a delete gets lexical
-        ``is_deletable``.  A rejected path is dropped, not re-armed.
-        """
-        discovery = FileDiscovery(root)
-        admitted = 0
-        failed: list[FsEvent] = []
-        for path in batch.modified:
-            if not discovery.is_indexable(path, SUPPORTED_EXTENSIONS):
-                continue
-            job = FileIndexJob(db, settings, batch.key.collection, root, path)
-            if self._submit(batch.key, job, "index"):
-                admitted += 1
-            else:
-                failed.append(FsEvent(path, deleted=False))
-        for path in batch.deleted:
-            if not discovery.is_deletable(path, SUPPORTED_EXTENSIONS):
-                continue
-            name = self._document_name(root, path)
-            if name is None:
-                continue
-            delete = DocumentDeleteJob(db, settings, batch.key.collection, (name,))
-            if self._submit(batch.key, delete, "delete"):
-                admitted += 1
-            else:
-                failed.append(FsEvent(path, deleted=True))
-        return _DeltaOutcome(admitted, tuple(failed))
-
     def _submit_finalize(
         self, key: RouteKey, db: Database, settings: Settings
     ) -> TaskState:
         """Submit the coalesced FTS-rebuild finalize for *key*."""
-        job = CollectionFinalizeJob(db, settings, key.collection)
-        return self._submit_tracked(key, job, "sync")
+        job = CollectionFinalizeJob(
+            db,
+            settings,
+            key.collection,
+            on_unsettled=partial(self.retry_finalize, key),
+        )
+        return self._submit_finalize_job(key, job)
+
+    def _submit_finalize_job(self, key: RouteKey, job: IngestUnit) -> TaskState:
+        """Submit a finalize job; if the queue sheds it, arm the database's retry.
+
+        Every finalize submit passes through here, so whichever request produced
+        it (a sweep, a write, a delta or bulk batch, a trailing timer, a retry), a
+        shed finalize is retried after ``SHED_RETRY_S`` and is never lost.
+        """
+        state = self._submit_tracked(key, job, "sync")
+        if state.status == "failed":
+            self._retries.arm_shed(key.database, partial(self._retry_request, key))
+        return state
 
     def _submit_tracked(self, key: RouteKey, job: IngestUnit, kind: str) -> TaskState:
         """Submit *job*, returning its task state (failed if the queue shed it)."""
@@ -232,19 +251,3 @@ class WatchSubmitter:
         if not self._ctx.ingest_queue.try_submit(key, job, state):
             JobLifecycle(state).settle_failed("ingest queue full")
         return state
-
-    def _submit(self, key: RouteKey, job: IngestUnit, kind: str) -> bool:
-        """Submit *job*; drop its task record and return False if the queue is full."""
-        state = self._ctx.tasks.begin(kind)
-        if self._ctx.ingest_queue.try_submit(key, job, state):
-            return True
-        self._ctx.tasks.drop(state)
-        return False
-
-    @staticmethod
-    def _document_name(root: Path, path: Path) -> str | None:
-        """Return *path*'s registry document name (relative to *root*), or None."""
-        try:
-            return str(path.relative_to(root))
-        except ValueError:
-            return None

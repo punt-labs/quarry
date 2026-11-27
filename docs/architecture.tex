@@ -194,7 +194,7 @@ Schema        & \modpath{db/schema.py}         & Chunks-table schema and
                 idempotent migration (agent-memory columns, FTS index). \\
 Storage       & \modpath{db/storage.py}        & LanceDB connection
                 management (discovery and size reporting removed --- DES-049). \\
-Connection    & \modpath{db/connection.py}     & Self-recycling LanceDB
+Connection    & \modpath{db/lance_connection.py}     & Self-recycling LanceDB
                 connection that bounds file-descriptor growth. \\
 Chunk table   & \modpath{db/chunk\_table.py}   & Chunks-table lifecycle:
                 open, migrate, create-on-demand. \\
@@ -558,10 +558,12 @@ Debounce    & \modpath{daemon/debounce.py}      & Per-path debounce window +
 Index jobs  & \modpath{daemon/index\_jobs.py}   & \texttt{FileIndexJob} /
               \texttt{DocumentDeleteJob} / \texttt{CollectionSyncJob}
               (\texttt{IngestUnit}s). \\
-Finalize    & \modpath{daemon/finalize\_job.py} & \texttt{CollectionFinalizeJob}
-              (\texttt{SyncFinalizer}): the lone post-quiescence
-              \texttt{optimize()} + FTS rebuild, coalesced by
-              \texttt{FinalizeThrottle} (DES-045c). \\
+Finalize    & \modpath{daemon/collection\_finalize\_job.py} & \texttt{CollectionFinalizeJob}
+              (\texttt{TableFinalizer}): the lone post-quiescence
+              \texttt{optimize()} + FTS rebuild, run only when the table
+              changed, coalesced by \texttt{FinalizeThrottle} (DES-045c). \\
+Purge       & \modpath{daemon/finalize\_job.py} & \texttt{CollectionPurgeJob}:
+              deletes a deregistered collection's chunks behind its FIFO. \\
 \bottomrule
 \end{tabular}
 \end{center}

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from functools import partial
 from pathlib import Path
 from typing import Self
 
 from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.chunk_search import ChunkSearch
 from quarry.db.chunk_store import ChunkStore
-from quarry.db.connection import LanceConnection
+from quarry.db.lance_connection import LanceConnection
 from quarry.db.name_prefix import NamePrefix
 from quarry.db.optimizer import TableOptimizer
 from quarry.db.schema import SchemaManager
@@ -81,5 +80,9 @@ class Database:
 
     @classmethod
     def connect(cls, path: Path) -> Database:
-        """Compose a Database over a self-recycling connection (see LanceConnection)."""
-        return cls(LanceConnection(partial(get_db, path)))
+        """Compose a Database over a self-recycling connection (see LanceConnection).
+
+        Every connection to *path* reports its writes to one shared record of that
+        physical database, which the finalize reads.
+        """
+        return cls(LanceConnection.shared(lambda: get_db(path), path))

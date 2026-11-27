@@ -30,6 +30,27 @@ across `transform`, `index`, and `connector`).
   new location while Quarry is idle and before the new directory exists. Keep the
   old ignore rule until no private files remain there.
 
+### Fixed
+
+- daemon: The daemon no longer rewrites a database's table and rebuilds its
+  full-text index on every 300 second safety scan, session-start sync or bulk
+  batch that changed nothing. A finalize now rewrites only a table written to
+  since its last successful finalize, plus once per database at daemon start.
+  In a 13 minute isolated run with the safety scan at 20 seconds, executed
+  finalizes fell from 44 to 4 and the table's size on disk from 2.9 MB to
+  0.9 MB. The old table versions of a quiet database are pruned by its next
+  rewrite, and the pages table is not compacted or pruned (PL-1682, PL-1706).
+
+- daemon: A failed full-text index rebuild now leaves the table marked as
+  changed and is retried after the failure backoff, including for unexpected
+  exception types, and a retry the ingest queue sheds is armed again. The task
+  result of a manual `quarry optimize` whose full-text rebuild fails reports
+  `fts_rebuilt: false` with a reason, and the next finalize rebuilds the index
+  (PL-1682).
+
+- daemon: A manual `quarry optimize` no longer runs at the same time as a
+  finalize on the same database (PL-1682).
+
 ## [3.9.1] - 2026-11-22
 
 ### Added

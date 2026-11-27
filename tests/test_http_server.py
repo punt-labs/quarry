@@ -36,8 +36,10 @@ from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.task_drain import TaskDrain
 from quarry.daemon.task_state import TaskState
 from quarry.daemon.tasks import TASK_TTL_SECONDS
+from quarry.db.optimizer import OptimizeOutcome
+from quarry.db.table_changes import TableChanges
 from quarry.fd_headroom import FdHeadroom
-from quarry.finalize_ledger import FinalizeLedgers
+from quarry.finalize_ledger import FinalizeLedger, FinalizeLedgers
 from quarry.http_url import HttpUrl
 from quarry.ingestion.fetched_body import FetchedBody
 from quarry.models import Chunk
@@ -4745,6 +4747,50 @@ class TestManualOptimizeClearsLedger:
             task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
             _poll_task_done(tc, task_id)
         assert ledger.health().consecutive_failures == 1
+
+
+class TestManualOptimizeReportsFtsFailure:
+    @staticmethod
+    def _run_optimize(
+        tmp_path: Path, outcome: OptimizeOutcome
+    ) -> tuple[dict[str, Any], MagicMock, TableChanges, FinalizeLedger]:
+        settings = _mock_settings(tmp_path)
+        changes = TableChanges.for_path(settings.lancedb_path)
+        changes.mark_clean(changes.snapshot())
+        ledger = FinalizeLedgers.for_database(
+            settings.lancedb_path, settings.quarry_root
+        )
+        ledger.clear()
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with (
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=outcome),
+            patch("quarry.daemon.watch_loop.WatchLoop.arm_finalize_retry") as arm,
+            TestClient(build_app(ctx)) as tc,
+        ):
+            task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
+            done = _poll_task_done(tc, task_id)
+        return done, arm, changes, ledger
+
+    def test_a_failed_full_text_rebuild_is_reported_and_retried(
+        self, tmp_path: Path
+    ) -> None:
+        ran = OptimizeOutcome(optimized=True, fragments=3, fts_rebuilt=False)
+        done, arm, changes, ledger = self._run_optimize(tmp_path, ran)
+        assert done["results"]["optimized"] is True
+        assert done["results"]["fts_rebuilt"] is False
+        assert "full-text" in done["results"]["reason"]
+        assert changes.needs_rewrite()
+        # The route hands the watch loop the ledger's back-off, not None.
+        (delay,) = arm.call_args.args
+        assert delay == pytest.approx(ledger.health().retry_in_seconds, abs=5.0)
+        assert delay >= 500.0
+
+    def test_a_clean_optimize_schedules_nothing(self, tmp_path: Path) -> None:
+        ran = OptimizeOutcome(optimized=True, fragments=3)
+        done, arm, _changes, _ledger = self._run_optimize(tmp_path, ran)
+        assert done["results"]["fts_rebuilt"] is True
+        arm.assert_called_once_with(None)
 
 
 class TestManualOptimizeKeepsIndexFailure:

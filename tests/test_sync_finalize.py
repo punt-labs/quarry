@@ -1,4 +1,4 @@
-"""Tests for SyncFinalizer's fail-open capture-shadow step and unpushed logging.
+"""Tests for TableFinalizer's fail-open capture-shadow step and unpushed logging.
 
 The sync tail must never let a shadow-push problem block index rebuild + GC
 (fail-open), and a committed-but-not-pushed shadow must be LOGGED, not swallowed.
@@ -8,14 +8,19 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
+import time
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+from quarry.db import Database, TableOptimizer, get_db
 from quarry.db.optimizer import OptimizeOutcome
+from quarry.db.table_changes import TableChanges
 from quarry.finalize_ledger import FinalizeLedgers
 from quarry.finalize_steps import ShadowPushStep
+from quarry.optimize_step import ManualOptimize, OptimizeStep
 from quarry.shadow import ShadowSyncResult
-from quarry.sync_finalize import SyncFinalizer
+from quarry.table_finalizer import TableFinalizer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -105,18 +110,19 @@ def _finalizer_at(path: Path, root: Path | None = None) -> _Stepper:
     settings = MagicMock(name="settings")
     settings.lancedb_path = path
     settings.quarry_root = root or path.parent.parent
-    return _Stepper(SyncFinalizer(MagicMock(name="db"), settings))
+    return _Stepper(MagicMock(name="db"), settings)
 
 
 class _Stepper:
-    def __init__(self, fin: SyncFinalizer) -> None:
-        self._fin = fin
+    def __init__(self, db: MagicMock, settings: MagicMock) -> None:
+        self._fin = TableFinalizer(db, settings, TableChanges())
+        self._step = OptimizeStep(db, settings)
 
     def run(self) -> None:
-        self._fin.run()
+        self._fin.run(lambda: None)
 
     def run_optimize_only(self) -> None:
-        self._fin._optimize()
+        self._step.run()
 
 
 class TestOptimizeFailureIsolation:
@@ -125,23 +131,23 @@ class TestOptimizeFailureIsolation:
     ) -> None:
         fin = _finalizer_at(tmp_path / "lancedb")
         with (
-            patch("quarry.finalize_steps.TableOptimizer") as optimizer,
-            patch("quarry.sync_finalize.ShadowPushStep") as push,
-            patch.object(SyncFinalizer, "_gc") as collect,
+            patch("quarry.optimize_step.TableOptimizer") as optimizer,
+            patch("quarry.table_finalizer.ShadowPushStep") as push,
+            patch("quarry.table_upkeep.PostSyncGc") as collect,
         ):
             optimizer.return_value.optimize.side_effect = RuntimeError(
                 "Offset overflow error"
             )
             fin.run()
         push.assert_called_once()
-        collect.assert_called_once()
+        collect.return_value.run.assert_called_once()
 
     def test_failure_is_recorded_by_exception_type(self, tmp_path: Path) -> None:
         path = tmp_path / "lancedb"
         with (
-            patch("quarry.finalize_steps.TableOptimizer") as optimizer,
-            patch("quarry.sync_finalize.ShadowPushStep"),
-            patch.object(SyncFinalizer, "_gc"),
+            patch("quarry.optimize_step.TableOptimizer") as optimizer,
+            patch("quarry.table_finalizer.ShadowPushStep"),
+            patch("quarry.table_upkeep.PostSyncGc"),
         ):
             optimizer.return_value.optimize.side_effect = RuntimeError(
                 "Offset overflow error"
@@ -158,16 +164,17 @@ class TestOptimizeFailureIsolation:
     ) -> None:
         fin = _finalizer_at(tmp_path / "lancedb")
         with (
-            patch("quarry.finalize_steps.TableOptimizer") as optimizer,
-            patch("quarry.sync_finalize.ShadowPushStep") as push,
-            patch.object(SyncFinalizer, "_gc") as collect,
+            patch("quarry.optimize_step.TableOptimizer") as optimizer,
+            patch("quarry.table_finalizer.ShadowPushStep") as push,
+            patch("quarry.table_upkeep.PostSyncGc") as collect,
         ):
             optimizer.return_value.optimize.side_effect = RuntimeError("boom")
             fin.run()
             fin.run()
         assert optimizer.return_value.optimize.call_count == 1
         assert push.call_count == 2
-        assert collect.call_count == 2
+        # The second run is a skip while backing off: no rewrite, no sweep, no GC.
+        assert collect.return_value.run.call_count == 1
 
 
 class TestOptimizeOutcomeIsInspected:
@@ -178,7 +185,7 @@ class TestOptimizeOutcomeIsInspected:
         ledger = FinalizeLedgers.for_database(path, tmp_path)
         ledger.clear()
         skip = OptimizeOutcome(optimized=False, fragments=20_000, reason="too many")
-        with patch("quarry.finalize_steps.TableOptimizer") as optimizer:
+        with patch("quarry.optimize_step.TableOptimizer") as optimizer:
             optimizer.return_value.optimize.return_value = skip
             _finalizer_at(path).run_optimize_only()
         (entry,) = (h for h in FinalizeLedgers.snapshot() if h.database == "skipdb")
@@ -191,7 +198,7 @@ class TestOptimizeOutcomeIsInspected:
         path = tmp_path / "notable" / "lancedb"
         FinalizeLedgers.for_database(path, tmp_path).clear()
         none = OptimizeOutcome(optimized=False, fragments=0, reason="no table")
-        with patch("quarry.finalize_steps.TableOptimizer") as optimizer:
+        with patch("quarry.optimize_step.TableOptimizer") as optimizer:
             optimizer.return_value.optimize.return_value = none
             _finalizer_at(path).run_optimize_only()
         (entry,) = (h for h in FinalizeLedgers.snapshot() if h.database == "notable")
@@ -203,9 +210,9 @@ class TestHealthIsCoarse:
         path = tmp_path / "secretuser" / "mydb" / "lancedb"
         root = tmp_path / "secretuser"
         with (
-            patch("quarry.finalize_steps.TableOptimizer") as optimizer,
-            patch.object(SyncFinalizer, "_push_shadows"),
-            patch.object(SyncFinalizer, "_gc"),
+            patch("quarry.optimize_step.TableOptimizer") as optimizer,
+            patch("quarry.table_finalizer.ShadowPushStep"),
+            patch("quarry.table_upkeep.PostSyncGc"),
         ):
             optimizer.return_value.optimize.side_effect = RuntimeError(
                 f"cannot read {path}/data/x.lance"
@@ -236,10 +243,10 @@ class TestOrphanPageSweepStep:
             return 0
 
         with (
-            patch("quarry.finalize_steps.TableOptimizer") as optimizer,
-            patch("quarry.sync_finalize.OrphanPageSweep") as sweep,
-            patch("quarry.sync_finalize.ShadowPushStep"),
-            patch.object(SyncFinalizer, "_gc"),
+            patch("quarry.optimize_step.TableOptimizer") as optimizer,
+            patch("quarry.table_upkeep.OrphanPageSweep") as sweep,
+            patch("quarry.table_finalizer.ShadowPushStep"),
+            patch("quarry.table_upkeep.PostSyncGc"),
         ):
             optimizer.return_value.optimize.side_effect = optimize
             sweep.return_value.run.side_effect = sweep_run
@@ -251,12 +258,85 @@ class TestOrphanPageSweepStep:
     ) -> None:
         fin = _finalizer_at(tmp_path / "lancedb")
         with (
-            patch("quarry.finalize_steps.TableOptimizer"),
-            patch("quarry.sync_finalize.OrphanPageSweep") as sweep,
-            patch("quarry.sync_finalize.ShadowPushStep") as push,
-            patch.object(SyncFinalizer, "_gc") as collect,
+            patch("quarry.optimize_step.TableOptimizer"),
+            patch("quarry.table_upkeep.OrphanPageSweep") as sweep,
+            patch("quarry.table_finalizer.ShadowPushStep") as push,
+            patch("quarry.table_upkeep.PostSyncGc") as collect,
         ):
             sweep.return_value.run.side_effect = OSError("disk")
             fin.run()
         push.assert_called_once()
-        collect.assert_called_once()
+        collect.return_value.run.assert_called_once()
+
+
+class TestManualOptimizeAndFinalizeDoNotOverlap:
+    def test_the_two_never_optimize_the_same_database_at_once(
+        self, tmp_path: Path
+    ) -> None:
+        settings = MagicMock(name="settings")
+        settings.lancedb_path = tmp_path / "overlap" / "lancedb"
+        settings.quarry_root = tmp_path
+        FinalizeLedgers.for_database(settings.lancedb_path, tmp_path).clear()
+        database = Database.connect(settings.lancedb_path)
+        active = 0
+        peak = 0
+        guard = threading.Lock()
+
+        def slow_optimize(**_: object) -> OptimizeOutcome:
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.15)
+            with guard:
+                active -= 1
+            return OptimizeOutcome(optimized=True, fragments=1)
+
+        with (
+            patch.object(TableOptimizer, "optimize", side_effect=slow_optimize),
+            patch.object(TableOptimizer, "create_collection_index"),
+        ):
+            manual = ManualOptimize(database, settings)
+            step = OptimizeStep(database.db, settings)
+            threads = [
+                threading.Thread(target=lambda: manual.run_manually(force=False)),
+                threading.Thread(target=step.run),
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        assert peak == 1
+
+
+class TestABareHandleSharesOneLock:
+    def test_a_manual_optimize_waits_for_the_finalize_steps_lock(
+        self, tmp_path: Path
+    ) -> None:
+        settings = MagicMock(name="settings")
+        settings.lancedb_path = tmp_path / "bare" / "lancedb"
+        settings.quarry_root = tmp_path
+        FinalizeLedgers.for_database(settings.lancedb_path, tmp_path).clear()
+        bare = get_db(settings.lancedb_path)  # not a LanceConnection
+        manual = ManualOptimize(Database(bare), settings)
+        step = OptimizeStep(bare, settings)
+        done = threading.Event()
+
+        def run_manual() -> None:
+            manual.run_manually(force=False)
+            done.set()
+
+        with (
+            patch.object(
+                TableOptimizer,
+                "optimize",
+                return_value=OptimizeOutcome(optimized=True, fragments=1),
+            ),
+            patch.object(TableOptimizer, "create_collection_index"),
+            step._lock,  # the finalize step is mid-optimize
+        ):
+            thread = threading.Thread(target=run_manual)
+            thread.start()
+            assert not done.wait(0.4)  # the manual optimize is held out
+        thread.join()
+        assert done.is_set()

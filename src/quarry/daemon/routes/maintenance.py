@@ -18,8 +18,8 @@ from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.task_state import TaskState
 from quarry.daemon.terminal import Terminal
-from quarry.finalize_steps import ManualOptimize
 from quarry.http_guards import RequestGuards
+from quarry.optimize_step import ManualOptimize
 
 # Both bodies carry only small option dicts.
 MAX_MAINTENANCE_BODY_BYTES = 16 * 1024
@@ -92,15 +92,9 @@ class MaintenanceRoutes(RouteGroup):
         the fragment count from the outcome so the table is scanned only once.
         """
         with Terminal.for_task(state).recording():
-            step = ManualOptimize(self.ctx.database.optimizer, self.ctx.settings)
-            outcome = await run_in_threadpool(lambda: step.run_manually(force=force))
-            results: dict[str, object] = {
-                "optimized": outcome.optimized,
-                "fragments_before": outcome.fragments,
-                "force": force,
-            }
-            if outcome.reason:
-                results["reason"] = outcome.reason
+            step = ManualOptimize(self.ctx.database, self.ctx.settings)
+            results = await run_in_threadpool(lambda: step.task_results(force=force))
+            self.ctx.watch_loop.arm_finalize_retry(step.finalize_retry_delay(results))
             state.complete(results)
 
     async def _run_backfill(self, state: TaskState, args: BackfillArgs) -> None:

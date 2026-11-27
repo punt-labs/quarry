@@ -41,12 +41,14 @@ from quarry.backfill import Backfill, BackfillConfig
 from quarry.backfill_mapping import ProjectMappingResolver
 from quarry.config import Settings
 from quarry.db import Database
-from quarry.db.connection import LanceConnection, RecyclingTable
+from quarry.db.lance_connection import LanceConnection
+from quarry.db.recycling_table import RecyclingTable
 from quarry.db.storage import get_db
+from quarry.db.table_changes import TableChanges
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.models import Chunk
-from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
+from quarry.table_finalizer import TableFinalizer
 from tests.fakes import FakeEmbeddingBackend
 from tests.transcript_writers import DirectWriter, runtime_over
 
@@ -170,7 +172,7 @@ def test_optimize_loop_does_not_leak_descriptors(tmp_path: Path) -> None:
     Stands in for the daemon, including its reclamation regime: recycling drops
     the superseded connection but the lancedb binding holds it in a reference
     cycle, so the descriptors are freed by cyclic GC, not refcounting. The daemon
-    gets that GC from ``SyncFinalizer.gc.collect(2)`` after every sync; this test
+    gets that GC from ``TableFinalizer.gc.collect(2)`` after every sync; this test
     calls raw ``optimize`` so it runs the collection itself each iteration. Without
     recycling (the leaking path) the readers stay pinned by the live connection
     and no GC can reclaim them, so the assertion still fails on unfixed code.
@@ -183,7 +185,7 @@ def test_optimize_loop_does_not_leak_descriptors(tmp_path: Path) -> None:
             _make_chunks(iteration), _random_vectors(_CHUNKS_PER_ITERATION)
         )
         database.optimizer.optimize(force=True)
-        gc.collect()  # model SyncFinalizer's post-sync collection (sync_finalize.py)
+        gc.collect()  # model TableFinalizer's post-sync collection (table_finalizer.py)
         trajectory.record(_open_fd_count())
 
     assert trajectory.plateaus(slack=_PLATEAU_SLACK), (
@@ -391,7 +393,7 @@ def test_watch_session_does_not_leak_descriptors(
     connections. If per-file indexing rebuilt the FTS, or the finalize ran per
     file, the trajectory would ramp; the coalesced design holds it flat.
 
-    The fd plateau alone is held partly by ``SyncFinalizer``'s ``gc.collect``, so
+    The fd plateau alone is held partly by ``TableFinalizer``'s ``gc.collect``, so
     it would still pass if a per-file FTS rebuild were reintroduced. To actually
     guard the coalescing invariant, the number of ``create_fts_index`` calls is
     asserted to equal the finalize count — once per quiescence, never per file.
@@ -427,7 +429,9 @@ def test_watch_session_does_not_leak_descriptors(
         _watch_index_one(db, settings, root, doc)
         # Coalesced FTS rebuild — once per quiescent batch, never per file.
         if edit % _FINALIZE_EVERY == 0:
-            SyncFinalizer(db.db, settings).run()
+            TableFinalizer(db.db, settings, LanceConnection.changes_of(db.db)).run(
+                lambda: None
+            )
             finalizes += 1
         trajectory.record(_open_fd_count())
 
@@ -486,7 +490,9 @@ _DAEMON_SCALE_SLACK = 40
 def _daemon_scale_connect(path: Path) -> Database:
     """Connect at the reduced recycle cap so N connections cover all phases."""
     conn = LanceConnection(
-        partial(get_db, path), recycle_after=_DAEMON_SCALE_RECYCLE_AFTER
+        partial(get_db, path),
+        changes=TableChanges.for_path(path),
+        recycle_after=_DAEMON_SCALE_RECYCLE_AFTER,
     )
     return Database(conn)
 
@@ -496,7 +502,7 @@ def _daemon_scale_rebuild(database: Database) -> None:
     # optimize(force=True) issues create_fts_index(replace=True) — one generation
     # rebuild, the reader-leak source the recycler exists to bound.
     database.optimizer.optimize(force=True)
-    gc.collect()  # model SyncFinalizer's post-sync collection (sync_finalize.py)
+    gc.collect()  # model TableFinalizer's post-sync collection (table_finalizer.py)
 
 
 @pytest.mark.timeout(180)

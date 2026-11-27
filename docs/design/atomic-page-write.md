@@ -900,7 +900,7 @@ Changed:
 | `src/quarry/db/chunk_table.py` | `build_records` takes the key and `K`; the sync path supplies `'sync'`/`0`; `get_or_create` becomes create-empty + FTS + add |
 | `src/quarry/sync_ingest.py`, `src/quarry/ingestion/file_flush_target.py`, `plain_flush_target.py` | sync's flush targets write the `'sync'` marker; sync's own deletes unchanged |
 | `src/quarry/db/chunk_store.py` | `add_generation(reader)` (under `_write_lock`, with the ownership re-check), `delete_generations(ref, keys, newest)` (every predicate carries `write_id <> 'sync'`); `insert_records` unchanged for the sync path |
-| `src/quarry/db/connection.py`, `src/quarry/types.py` | `RecyclingTable.add` and the `LanceTable` protocol accept a `RecordBatchReader`; `create_table` without rows |
+| `src/quarry/db/lance_connection.py`, `src/quarry/types.py` | `RecyclingTable.add` and the `LanceTable` protocol accept a `RecordBatchReader`; `create_table` without rows |
 | `src/quarry/db/chunk_catalog.py` | `document_exists` delegates to `StoredCopy.held` |
 | `src/quarry/ingestion/chunk_store_funnel.py` | `_embed_and_store` uses `AtomicPageWrite`; `_replace_prior` deleted; the stamp resolved once and given to the chunk labels |
 | `src/quarry/ingestion/existing_page.py`, `legacy_url_names.py` | held checks through `StoredCopy`; `replace_prior` deleted |

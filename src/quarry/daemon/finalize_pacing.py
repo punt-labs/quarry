@@ -43,6 +43,19 @@ class FinalizeThrottle:
     to vector-only for the lagging collection until the next finalize, never
     silently wrong.  With ``watch_safety_scan_s = 0`` the reconcile backstop is
     off and FTS lag clears only on that collection's next churn.
+
+    The reconcile's finalize is submitted immediately, but it rewrites the table
+    only if the table changed since its last successful finalize, so it is a
+    backstop for a dirty table, not an unconditional self-heal.  The throttle
+    stamps its clock when it ADMITS a throttled finalize (the trailing one, the
+    bulk-batch one, the delta-batch one and the retry one), before the job decides
+    to skip.  Such a finalize can fire, find the table clean, and consume the
+    pending trailing timer; a write in another collection that lands later then
+    waits for the next safety scan, and with ``watch_safety_scan_s = 0`` for the
+    next churn.  That lag existed before the change gate.  A sweep's finalize
+    stamps only when it rewrites (``mark_admitted``, called from the job) and
+    never cancels a pending trailing timer.  A finalize that leaves its table
+    dirty is retried by ``FinalizeRetry``.
     """
 
     __slots__ = ("_interval", "_last", "_loop", "_timers")
@@ -70,22 +83,14 @@ class FinalizeThrottle:
 
         ``submit`` is a no-argument thunk returning whether the finalize was
         ADMITTED (the DES-042 queue can shed it when full), so the throttle stays
-        ignorant of jobs and route keys.  A disabled interval (<= 0) runs every
-        request inline.
+        ignorant of jobs and route keys.  A request while a trailing timer is
+        pending coalesces into it.  A disabled interval (<= 0) runs every request
+        inline.
         """
         if self._interval <= 0:
             submit()
-            return
-        now = self._loop.time()
-        last = self._last.get(database)
-        if last is None or now - last >= self._interval:
+        elif database not in self._timers or self._remaining(database) <= 0:
             self._fire(database, submit)
-            return
-        if database not in self._timers:
-            delay = last + self._interval - now
-            self._timers[database] = self._loop.call_later(
-                delay, self._fire, database, submit
-            )
 
     def cancel_all(self) -> None:
         """Cancel every pending trailing finalize (loop shutdown)."""
@@ -94,23 +99,27 @@ class FinalizeThrottle:
         self._timers.clear()
 
     def mark_admitted(self, database: str) -> None:
-        """Record an admitted finalize and cancel any pending trailing timer.
+        """Stamp the interval clock for a finalize that is about to rewrite.
 
-        Callers that finalize a database OUTSIDE this throttle — the reconcile and
-        explicit-sync scans, which run an immediate finalize directly — call this
-        so their finalize and an already-armed trailing finalize for the same
-        database do not both run (a redundant double-compaction).  Cancelling,
-        not just dropping, de-queues an overdue timer callback; stamping ``_last``
-        makes the next in-window request coalesce behind the finalize that ran.
+        Called from the finalize job when it decides to rewrite, so the next
+        in-window request coalesces behind the rewrite that is running.  It does
+        NOT cancel a pending trailing finalize: a write may have armed that timer
+        for a job still queued behind this finalize, and cancelling it would
+        leave that write unfinalized.  Cancelling existed to stop a second
+        compaction; the finalize's change gate now makes a trailing finalize that
+        finds the table clean a cheap skip.
 
-        Call this ONLY when the finalize was admitted — a shed one must not stamp
-        (it never ran) and must leave any pending trailing timer intact to retry.
+        Call this ONLY when the finalize will rewrite — a shed one never ran.
         """
-        self._consume_timer(database)
         self._last[database] = self._loop.time()
 
     def _fire(self, database: str, submit: Callable[[], bool]) -> None:
         """Finalize *database* now: run submit, then stamp only if it was admitted.
+
+        A timer that fires after a rewrite stamped the clock (``mark_admitted``)
+        finds the interval not yet elapsed, so it arms the SAME pending submission
+        for the remainder instead of submitting: the work is kept, the minimum
+        interval holds, and there is still one timer for the database.
 
         Consume any pending trailing timer first: the immediate path fires exactly
         when a trailing timer is due (both at ``last + interval``), so a debounce
@@ -123,8 +132,18 @@ class FinalizeThrottle:
         (the reconcile at ``watch_safety_scan_s`` is the eventual backstop).
         """
         self._consume_timer(database)
+        if (remaining := self._remaining(database)) > 0:
+            self._timers[database] = self._loop.call_later(
+                remaining, self._fire, database, submit
+            )
+            return
         if submit():
             self._last[database] = self._loop.time()
+
+    def _remaining(self, database: str) -> float:
+        """Return the seconds left before *database* may finalize again (0 if none)."""
+        last = self._last.get(database)
+        return 0.0 if last is None else last + self._interval - self._loop.time()
 
     def _consume_timer(self, database: str) -> None:
         """Cancel and drop any pending or just-fired trailing timer for *database*."""

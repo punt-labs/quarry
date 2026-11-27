@@ -1956,7 +1956,7 @@ index writes use the daemon's persistent LanceDB connection, and
 `create_fts_index(replace=True)` pins deleted-file readers the LanceDB Rust core
 never evicts — so a per-file FTS rebuild would reopen the quarry-0dss fd leak.
 `FileIndexJob` therefore never rebuilds FTS; a lone `CollectionFinalizeJob`
-(`SyncFinalizer`) runs post-quiescence per `(database, collection)`, FIFO behind
+(`TableFinalizer`) runs post-quiescence per `(database, collection)`, FIFO behind
 the file jobs. `test_watch_session_does_not_leak_descriptors` proves the fd count
 plateaus over hundreds of edits across two databases — the 0dss shape.
 
@@ -2240,11 +2240,135 @@ addressed in DES-032; increases jemalloc retention (DES-027) and does not bound 
 no delete job requests no finalize. Edits under ignored paths pass the watcher's
 dot-segment and suffix pre-filters and form batches; the post-debounce filter then
 rejects every path, so the table is unchanged and the finalize would rewrite it for
-nothing. `WatchSubmitter._submit_deltas` now reports how many jobs the queue
-admitted, and `on_batch` requests the throttled finalize only when that count is
-nonzero. The reconcile sweep's and explicit sync's immediate finalize, the FTS
-self-heal backstop, is unchanged. The bulk branch is unchanged: its batch carries
-no paths, so whether the scan finds work is known only when the scan job runs.
+nothing. `WatchSubmitter` now reports how many jobs the queue admitted, and
+`on_batch` requests the throttled finalize only when that count is nonzero.
+
+**Amendment (2026-11-26, PL-1682): a finalize rewrites a table only when it changed.**
+Jim's ruling: the 300 s safety scan gates its finalize on "the scan changed
+something". This narrows the earlier rule that the scan's finalize always runs as
+the full-text self-heal: the scan still runs every interval, but the table-wide
+rewrite does not.
+
+*The rule.* A finalize rewrites the table (the collection index, compaction, the
+version prune, the full-text rebuild) iff the table changed since its last
+successful finalize, or it has never been finalized in this daemon process, and the
+database is not backing off after a failure. The decision is made once, on the
+store thread, when the finalize job runs in its FIFO slot behind the scan and index
+jobs queued ahead of it, never at submit time: a scan's outcome is unknown when
+`ScanSweep.finish` submits the finalize, so the submitter cannot gate it. A bulk
+batch carries no paths and is gated the same way.
+
+*The record.* `TableChanges` keeps one record per physical database, shared by
+every connection to its resolved path (`TableChanges.for_path`), not one per
+collection. The finalizer takes the record from the connection it is finalizing
+(`LanceConnection.changes_of`), the same object the writers report to. Every
+completed write bumps a generation counter: `RecyclingTable._recorded_write` bumps
+it in a `finally`, so a write that raised, and may have applied, counts, and
+`LanceConnection.create_table` does the same for table creation. Chunk insert and
+delete, collection purge, page write and column change all pass through those two
+points. The finalize reads the counter BEFORE it rewrites and marks the database
+clean only up to what it read, and only when this run's optimize succeeded. A failed
+finalize, including a failed full-text rebuild, leaves the database dirty, and a
+write that lands while a finalize runs leaves it dirty afterwards. The full-text
+rebuild is checked because compaction has already renumbered the fragments: a stale
+index on a table marked clean would never be repaired. The record is
+lock-protected because the store thread finalizes while the event loop and other
+store threads write. An orphan-page sweep that deletes pages is itself a write, so
+it dirties the record and costs one extra rewrite; that is safe, only one more
+finalize.
+
+*Retry.* A finalize that leaves the table dirty, by failure, back-off, a write
+during the run, or an unexpected exception (the job computes the delay and
+re-raises), tells the loop how long until a retry is allowed, and `FinalizeRetry`
+re-requests a finalize through the throttle after that delay, never sooner than one
+second (the ledger reports its back-off rounded to 0.1 s). Whenever the ingest queue sheds a finalize, whichever
+request produced it (a sweep, a write, a delta or bulk batch, the trailing timer or the
+retry itself), the database's retry is armed again after one second, because the shed
+handling sits in the one submit every finalize goes through. The throttle keeps the
+closure of whichever request armed its trailing timer, so the handling cannot live in
+the retry's own closure. This works with `watch_safety_scan_s = 0`. While the ledger is
+backing off, a finalize of a dirty table is a skip: a sweep's finalize does not
+stamp the throttle, and there is no GC. It still sweeps orphan pages when the slow
+clock is due, which is at most once per `MAINTENANCE_INTERVAL_S` (an hour) after a
+sweep that succeeded: a failed sweep makes the maintenance due again, even when an earlier sweep
+succeeded a minute ago, so the next finalize attempts it again; its DEBUG line says "backing off". Back-off doubles from 600 s to a 6 hour cap, and the retry
+fires once it has elapsed. An unexpected exception type is recorded in the ledger
+before it propagates, so it backs off and shows on `/health` like any other failure
+instead of repeating every throttle interval.
+
+*Crash window.* `CollectionFinalizeJob.spool_record()` is `None`, so a queued
+finalize does not survive a crash, and the write that wanted it is forgotten. The
+record therefore starts every database dirty in a new process: the first finalize
+after a daemon start rewrites each database's table, and the other registrations in
+that database find it clean and skip. When the start scans write nothing that is
+exactly one real finalize per database, however many directories are registered,
+where there had been one per directory back to back. When a scan at start does
+index files, it is one, plus one for each later finalize that follows a write. A
+first finalize that fails stays dirty and is retried.
+
+*Three classes of `TableFinalizer.run` work.* Write-gated, skipped on an unchanged
+table: the collection index, compaction, the version prune, the full-text rebuild
+(all inside `TableOptimizer.optimize`), and the post-sync GC that reclaims
+superseded index generations. Time-gated: the orphan-page sweep (24 hour grace),
+once per `TableChanges.MAINTENANCE_INTERVAL_S` (an hour) on a quiet table, and also
+after every rewrite. Unconditional: the capture-shadow push, which has no clock and
+runs on every finalize because it retries a deferred offline push; it also runs when
+the optimize raises an unexpected exception type. The old-version prune is not
+time-gated, and that is accepted: LanceDB has no prune separate from `optimize`
+(`cleanup_old_versions` needs the `pylance` package, and `optimize` also compacts
+and re-indexes; an optimize on a just-finalized table still wrote new files), so
+versions older than the one hour window are pruned by the next rewrite. The leftover
+on an idle database is the last finalize's superseded generation of the chunks
+table; it is bounded and does not grow, because an idle table writes no new
+versions. The pages table is not compacted or pruned by a finalize at all
+(PL-1706).
+
+*Throttle.* `FinalizeThrottle` and `WatchSubmitter.mark_finalized` keep their meaning
+for a finalize that runs. For a sweep's finalize, which is submitted immediately, a
+skip never touches the throttle: the job calls `mark_finalized` only when it decides
+to rewrite, and that stamps the interval clock but does NOT cancel an armed trailing
+finalize. The cancel moved from submit time to run time in an earlier draft and
+lost a write that was queued behind the sweep's finalize: the write armed the
+trailing timer, the rewrite cancelled it, and the write landed after the rewrite
+with nothing left to finalize it. The cancel existed to stop a second compaction,
+and the change gate now makes a trailing finalize that finds the table clean a cheap
+skip. Four finalizes are throttled: the trailing one, the bulk-batch one, the
+delta-batch one (`on_batch` to `_request_finalize`) and the retry one
+(`retry_finalize` to `_request_finalize`). The throttle stamps its clock when it
+admits each of them, before the job decides to skip. Such a finalize can fire, find
+the table clean, and consume the pending trailing timer; a write in another
+collection that lands later then waits for the next safety scan, and with
+`watch_safety_scan_s = 0` for the next churn. That lag existed before this change
+and is not bounded by one interval; a test pins it with two collections whose FIFOs
+run independently (the fake queue keeps one FIFO per route key). A trailing timer
+that fires after a sweep's rewrite stamped the clock rechecks the interval and arms
+the same pending submission for the remainder, so the minimum interval between
+finalizes holds and the pending work is kept (one timer per database). A skipped finalize logs one DEBUG line naming
+the database and the reason, unchanged table or backing off.
+
+*Manual optimize.* The HTTP optimize route runs outside the embed gate, so it could
+overlap a finalize on the same table and clear the ledger under it. The finalize
+rewrite and the manual optimize now both hold `TableChanges.optimizing()`, a
+per-database lock. The finalize takes the lock without waiting: it runs inside the
+global embed gate, and waiting there for a manual compaction would stall indexing of
+every other database. A finalize that finds the lock held leaves the table dirty,
+touches no ledger (that is not a failure), skips the sweep and GC, and arms a retry
+after `BUSY_RETRY_S` (30 s). A manual optimize whose full-text rebuild fails records the
+failure instead of clearing the ledger, dirties the record so the next finalize
+rebuilds the index, and reports `fts_rebuilt: false` with a reason in its task
+result. The route then arms that database's finalize retry through
+`WatchLoop.arm_finalize_retry`, because the safety scan finalizes only databases with
+a registered directory, and nothing else ever finalizes a database that holds only
+remembered text (no ingest or remember route requests a finalize). The retry rides a
+registered collection's FIFO when there is one and the reserved `__maintenance__`
+collection's otherwise, including when the directory registry cannot be read (that
+is logged at WARNING and the retry is still armed).
+
+*Not covered.* A write by a process other than the daemon bypasses the record; the
+daemon is the single writer (DES-042), and an offline `quarry repair` run while the
+daemon is stopped is healed by the first-finalize-in-process rule. A connection that
+is not a `LanceConnection` has no record, and the finalizer then treats it as always
+dirty, which is the safe direction.
 
 ### DES-045d: One ignore seam — watch, scan, and filter all consult IgnoreRules
 

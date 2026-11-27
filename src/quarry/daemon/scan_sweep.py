@@ -5,13 +5,15 @@ index — every collection's rows, in one pass.  Submitting one per collection
 therefore repeats identical table-wide work: six registered collections meant
 six back-to-back optimize+rebuild pairs on every safety scan, which is what the
 daemon's log showed.  The right granularity is the DATABASE, which is what
-:class:`~quarry.daemon.finalize_throttle.FinalizeThrottle` already assumes for
+:class:`~quarry.daemon.finalize_pacing.FinalizeThrottle` already assumes for
 the churn path; this applies it to the sweeps.
 
-The finalize stays IMMEDIATE rather than throttled.  Every sweep is one-shot or
-the backstop — the initial watch scan, an explicit ``quarry sync``, the periodic
-reconcile whose finalize is the FTS self-heal — so it must always run, never
-coalesce away.  Deduplication and rate-limiting are different mechanisms with
+The finalize is submitted IMMEDIATELY rather than throttled.  Every sweep is
+one-shot or the backstop — the initial watch scan, an explicit ``quarry sync``,
+the periodic reconcile — so its finalize is never coalesced away.  Whether it
+rewrites the table is decided when it runs: only a table that changed since its
+last successful finalize is rewritten, so a scan that found nothing costs no
+table-wide work.  Deduplication and rate-limiting are different mechanisms with
 different consequences: one drops repeated work, the other defers needed work.
 """
 
@@ -71,15 +73,13 @@ class ScanSweep:
     def finish(self) -> list[TaskState]:
         """Submit one finalize per database touched; return every task state.
 
-        Each finalize registers with the throttle on admission so it cancels a
-        trailing finalize already armed for that database and resets the
-        interval clock — otherwise this sweep's finalize and the armed one would
-        both run, the redundant double-compaction the throttle exists to avoid.
+        Each finalize decides when it runs, behind the scans queued ahead of it,
+        whether the table changed and so needs a rewrite.  One that rewrites
+        stamps the throttle's interval clock and leaves a trailing finalize
+        already armed for that database in place; one that skips leaves the
+        throttle alone.
         """
-        for database, key in self._databases.items():
-            state = self._submitter.submit_finalize_job(key)
-            if state.status != "failed":
-                self._submitter.mark_finalized(database)
-            self._states.append(state)
+        for key in self._databases.values():
+            self._states.append(self._submitter.submit_finalize_job(key))
         self._databases.clear()
         return self._states

@@ -6,12 +6,15 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
-from lancedb.index import FTS, Bitmap
+from lancedb.index import Bitmap
 
+from quarry.db.fts_rebuild import FtsRebuild
 from quarry.db.schema import TABLE_NAME
-from quarry.types import LanceDB
+
+if TYPE_CHECKING:
+    from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,8 @@ class OptimizeOutcome:
     optimized: bool
     fragments: int
     reason: str = ""
+    # False: compaction ran but the full-text rebuild failed, so the index is stale.
+    fts_rebuilt: bool = True
 
 
 class TableOptimizer:
@@ -109,20 +114,12 @@ class TableOptimizer:
         table.optimize(cleanup_older_than=timedelta(hours=1))
         logger.info("Optimized table %s (compacted + pruned versions >1h)", TABLE_NAME)
 
-        # Rebuild the FTS index -- compaction changes fragment IDs, so the old
-        # index has stale references.  This builds LanceDB's native (Rust) FTS
-        # index on lance's own runtime, bounded by LANCE_CPU_THREADS (DES-032);
-        # replace=True forces a full O(n) rebuild (the watch loop rate-limits it).
-        try:
-            table.create_index("text", config=FTS(), replace=True)
-            logger.info("Rebuilt FTS index after optimization")
-        except (OSError, RuntimeError, ValueError):
-            logger.warning(
-                "FTS index rebuild after optimize failed; "
-                "hybrid search may use vector-only until next sync",
-                exc_info=True,
-            )
-        return OptimizeOutcome(optimized=True, fragments=fragments)
+        # Compaction changes fragment IDs, so the old FTS index is stale until
+        # it is rebuilt; a failed rebuild is reported in the outcome.
+        fts_rebuilt = FtsRebuild(table).run()
+        return OptimizeOutcome(
+            optimized=True, fragments=fragments, fts_rebuilt=fts_rebuilt
+        )
 
     def create_collection_index(self) -> None:
         """Create a BITMAP scalar index on the collection column.
