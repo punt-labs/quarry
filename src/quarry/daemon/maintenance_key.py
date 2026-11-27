@@ -46,9 +46,10 @@ class MaintenanceKey:
         except (OSError, ValueError, sqlite3.Error) as exc:
             logger.warning(
                 "maintenance for %s: directory registry unreadable (%s); "
-                "using the maintenance queue",
+                "falling back to the %s queue",
                 database,
                 exc,
+                _MAINTENANCE_COLLECTION,
             )
             registered = []
         collection = registered[0][0] if registered else _MAINTENANCE_COLLECTION

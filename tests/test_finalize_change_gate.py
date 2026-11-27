@@ -1301,9 +1301,17 @@ def test_a_registry_that_will_not_open_still_arms_the_retry(
         d.write_chunk(name="dirty.md")  # something for the retry to rewrite
         before = d.rewrites.optimizes
         monkeypatch.setattr(WatchRoster, "registrations", broken)  # after the start
-        with caplog.at_level("WARNING", logger="quarry.daemon.watch_submit"):
+        with caplog.at_level("WARNING", logger="quarry.daemon.maintenance_key"):
             d.loop.arm_finalize_retry(0.05)  # must not raise
-        assert "registry" in caplog.text
+        fallback = [
+            record
+            for record in caplog.records
+            if record.name == "quarry.daemon.maintenance_key"
+            and record.levelname == "WARNING"
+            and "__maintenance__" in record.getMessage()
+        ]
+        assert len(fallback) == 1, caplog.text
+        assert "registry is locked" in fallback[0].getMessage()
         await _until(lambda: d.rewrites.optimizes > before)
         await d.queue.settled()
         assert d.rewrites.optimizes == before + 1  # the maintenance key still ran it
