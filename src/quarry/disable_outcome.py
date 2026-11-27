@@ -6,8 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
-from quarry.enable_report import EnableReport
-from quarry.parent_disable_command import ParentDisableCommand
+from quarry.disable_lines import DisableLines
 
 if TYPE_CHECKING:
     from quarry.enable import DisableResult
@@ -57,25 +56,11 @@ class DisableOutcome(ABC):
     def _body(self) -> list[str]:
         return [self.note(), *self._removed()]
 
-    def _flags(self) -> tuple[tuple[object, str], ...]:
-        r = self.result
-        return (
-            (r.config_removed, "  Config file removed"),
-            (
-                r.import_pruned,
-                "  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md",
-            ),
-            (r.enabled_marker_removed, "  Removed enabled marker (guide left dormant)"),
-            (
-                r.permissions.changed,
-                "".join(r.permissions.lines("Removed quarry tool permissions from")),
-            ),
-        )
+    def _changes(self) -> DisableLines:
+        return DisableLines(self.result)
 
     def _removed(self) -> list[str]:
-        p = self.result.permissions
-        error = p.lines("") if p.error else []
-        return EnableReport.flagged(self._flags()) + error
+        return self._changes().removed() + self._changes().problems()
 
 
 @final
@@ -113,14 +98,18 @@ class _CoveredChild(DisableOutcome):
     __slots__ = ()
 
     def _body(self) -> list[str]:
-        return [*self._removed(), self.note()]
+        # A kept config still governs capture here, so it is stated as plainly
+        # as a removal.
+        return [*self._removed(), *self._changes().kept(), self.note()]
 
     def heading(self) -> str:
         """Return what was removed from the child, or that nothing was."""
         where = self.result.directory
         # Real removals only: a permissions error renders a line but removes nothing.
-        if EnableReport.flagged(self._flags()):
+        if self._changes().removed():
             return f"Removed quarry's own settings from {where}"
+        if self.result.config_kept:
+            return f"Nothing removed from {where}"
         return f"Nothing of its own found in {where}"
 
 
@@ -136,7 +125,7 @@ class CoveredCaptured(_CoveredChild):
         r = self.result
         return (
             f"{r.directory} is still captured by the registration at "
-            f"{r.covered_by}; `{ParentDisableCommand(r.covered_by)}` stops it but "
+            f"{r.covered_by}; `{self._changes().parent_command()}` stops it but "
             f"deregisters {r.covered_by} and purges everything indexed for "
             f"{r.covered_by} (add --keep-data to keep the data)"
         )

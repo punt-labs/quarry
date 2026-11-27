@@ -13,12 +13,14 @@ from unittest.mock import patch
 
 import pytest
 
+from quarry._stdlib import load_hook_config
 from quarry.claude_permissions import QUARRY_RULES
 from quarry.disable_report import DisableReport
 from quarry.enable import DisableResult, EnableResult, disable_project, enable_project
 from quarry.enabled_marker import EnabledMarker
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
 from quarry.guidance import REPO_IMPORT_LINE
+from quarry.project_config import ProjectConfig
 from tests.conftest import FakeRegistryClient
 
 _NO_ETHOS = "quarry.home_paths.QuarryHome.ethos_identities"
@@ -537,6 +539,124 @@ class TestT15DisableCoveredChild:
         assert client.deregistered == []
         assert client.deleted == []
         assert client.collections == ["project"]
+
+
+def _own_checkout(directory: Path) -> Path:
+    """Make *directory* the root of its own git checkout without running git."""
+    git = directory / ".git"
+    git.mkdir()
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    return directory
+
+
+def _files(root: Path) -> set[str]:
+    """Return every path under *root* outside ``.git``, hidden files included."""
+    return {
+        str(p.relative_to(root))
+        for p in root.rglob("*")
+        if ".git" not in p.relative_to(root).parts
+    }
+
+
+class TestDisableNeverEnabledLeavesNoTrace:
+    """A disable with nothing to remove must not create the CLAUDE.md lock file."""
+
+    def test_covered_checkout_tree_is_unchanged(self, tmp_path: Path) -> None:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "app"
+        child.mkdir()
+        _own_checkout(child)
+        before = _files(child)
+
+        disable_project(child, FakeRegistryClient([("project", parent)]))
+
+        assert _files(child) == before
+
+    def test_uncovered_directory_tree_is_unchanged(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text("# rules\n")
+        before = _files(project)
+
+        disable_project(project, FakeRegistryClient())
+
+        assert _files(project) == before
+        assert (project / "CLAUDE.md").read_text() == "# rules\n"
+
+    def test_a_lone_import_without_the_marker_is_still_pruned(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        claude = project / "CLAUDE.md"
+        claude.write_text(f"# rules\n{REPO_IMPORT_LINE}\n")
+
+        result = disable_project(project, FakeRegistryClient())
+
+        assert result.import_pruned is True
+        assert claude.read_text() == "# rules\n"
+
+
+class TestDisableCoveredChildKeepsCaptureOptOuts:
+    """Disable must not turn an opt-out into capture the user declined."""
+
+    @staticmethod
+    def _enabled_child(tmp_path: Path) -> tuple[Path, FakeRegistryClient]:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "app"
+        child.mkdir()
+        _own_checkout(child)
+        client = FakeRegistryClient([("project", parent)])
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+        return child, client
+
+    def test_config_with_an_opt_out_survives_and_is_reported(
+        self, tmp_path: Path
+    ) -> None:
+        child, client = self._enabled_child(tmp_path)
+        config = child / ".punt-labs" / "quarry" / "config.md"
+        config.write_text(
+            config.read_text().replace("session_end: true", "session_end: false")
+        )
+
+        result = disable_project(child, client)
+
+        assert load_hook_config(str(child)).session_end is False
+        assert result.config_removed is False
+        assert result.config_kept is True
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+        assert "Config file kept" in text
+
+    def test_untouched_template_config_is_removed(self, tmp_path: Path) -> None:
+        child, client = self._enabled_child(tmp_path)
+
+        result = disable_project(child, client)
+
+        assert not (child / ".punt-labs" / "quarry" / "config.md").exists()
+        assert result.config_removed is True
+        assert result.config_kept is False
+
+    def test_uncovered_directory_always_removes_its_config(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        client = FakeRegistryClient()
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(project, client)
+        config = project / ".punt-labs" / "quarry" / "config.md"
+        assert config.read_text() == ProjectConfig().text
+        config.write_text(
+            config.read_text().replace("web_fetch: true", "web_fetch: false")
+        )
+
+        result = disable_project(project, client)
+
+        assert not config.exists()
+        assert result.config_removed is True
 
 
 class TestDisableCoveredChildReport:

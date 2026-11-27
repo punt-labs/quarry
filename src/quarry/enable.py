@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Protocol, Self, final
 from quarry.claude_permissions import PermissionChange, ProjectPermissions
 from quarry.ethos_memory import EthosMemoryBootstrap, EthosMemoryResult
 from quarry.home_paths import QuarryHome
+from quarry.local_disable import ConfigDisposal, GuardedDisable
 from quarry.project_config import ProjectConfig
-from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
     from quarry.api import (
@@ -97,7 +97,10 @@ class DisableResult:
     ``covered_by`` is the parent registration left in place when the directory
     was only covered by it (nothing of the parent's is deregistered or purged).
     ``parent_enabled`` is whether that parent's ``enabled`` marker is present,
-    which is what keeps capture live under the child.
+    which is what keeps capture live under the child.  ``config_kept`` is
+    whether the child's ``config.md`` was left because it differs from the
+    template: the parent's capture still reads it, and removing it would
+    discard the user's opt-outs.
     """
 
     directory: str
@@ -110,6 +113,7 @@ class DisableResult:
     permissions: PermissionChange = field(default_factory=PermissionChange)
     covered_by: str = ""
     parent_enabled: bool = False
+    config_kept: bool = False
 
 
 def enable_project(
@@ -240,7 +244,7 @@ class _DisableOrchestrator:
 
     def run(self) -> DisableResult:
         """Drive the ordered steps and assemble the result."""
-        config_removed = self._remove_config_file()
+        config = self._settle_config()
         claudemd, parent_enabled = self._disable_enablement()
         permissions = ProjectPermissions(self._directory).revoke()
         removed = self._deregister_covering()
@@ -251,7 +255,8 @@ class _DisableOrchestrator:
             collection=collection,
             captures_collection=f"{collection}-captures" if collection else "",
             removed=removed,
-            config_removed=config_removed,
+            config_removed=config.removed,
+            config_kept=config.kept,
             import_pruned=claudemd.import_pruned,
             enabled_marker_removed=claudemd.enabled_marker_removed,
             permissions=permissions,
@@ -259,21 +264,9 @@ class _DisableOrchestrator:
             parent_enabled=parent_enabled,
         )
 
-    def _remove_config_file(self) -> bool:
-        """Delete ``config.md`` via :class:`SafeRepoPath`; return whether removed.
-
-        A symlinked ``.punt-labs`` ancestor makes the unlink refuse; catching
-        that so it cannot abort before ``Enablement.disable`` prunes the
-        ``@``-import a prior teardown already acted on. A refused config is
-        not a real in-repo file, so treating it as absent and continuing is
-        correct.
-        """
-        try:
-            return SafeRepoPath(
-                self._directory, (".punt-labs", "quarry", "config.md")
-            ).remove()
-        except ValueError:
-            return False
+    def _settle_config(self) -> ConfigDisposal:
+        """Remove ``config.md``, or keep it when the covering parent still reads it."""
+        return ConfigDisposal.settle(self._directory, covered=bool(self._parent))
 
     def _disable_enablement(self) -> tuple[DisablementResult, bool]:
         """Remove the marker and prune the ``@``-import under one FileLock.
@@ -287,7 +280,7 @@ class _DisableOrchestrator:
         """
         from quarry.enablement import Enablement  # noqa: PLC0415
 
-        claudemd = Enablement(self._directory).disable()
+        claudemd = GuardedDisable(self._directory).run()
         parent = bool(self._parent) and Enablement(Path(self._parent)).is_enabled()
         return claudemd, parent
 

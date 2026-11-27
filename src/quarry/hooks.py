@@ -44,9 +44,10 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     without the marker gets one of two read-only nudges — the state machine
     is:
 
-    "Marker present" means at *cwd* itself OR at the root of the registration
-    covering *cwd* — a session opened in a subdirectory of an enabled repo
-    reads the marker the repo's own root carries, not one at the subdirectory.
+    "Marker present" means at *cwd*, at any ancestor of *cwd* up to the root of
+    the registration covering it, or at that root — a session opened in a
+    subdirectory of an enabled repo, or of a child enabled under a parent
+    registration, reads the marker the repo's own root carries.
 
     * marker present → Path A (active). No coverage becomes auto-register;
       a child of a parent registration reuses the parent; a subsumption is
@@ -125,20 +126,11 @@ class _SessionStartContext:
             self._conn.close()
 
     def _marker_present(self, registration: DirectoryRegistration | None) -> bool:
-        """Return whether the marker is present at cwd OR at the covering root.
+        """Return whether an enabled marker governs cwd, at it or above it."""
+        from quarry.marker_search import MarkerSearch  # noqa: PLC0415
 
-        A session opened in a subdirectory of an enabled repo has no marker of
-        its own — the marker lives at the repo root the registration names —
-        so ancestry, not just cwd, decides "enabled."
-        """
-        from quarry.enabled_marker import EnabledMarker  # noqa: PLC0415
-
-        if EnabledMarker(self._directory).is_present():
-            return True
-        return (
-            registration is not None
-            and EnabledMarker(Path(registration.directory)).is_present()
-        )
+        covering = registration.directory if registration else ""
+        return MarkerSearch(self._directory, covering).found()
 
     def _path_a(self, collection: str | None) -> SessionStartReply:
         """Marker present: run the active flow (auto-register if needed, sync)."""

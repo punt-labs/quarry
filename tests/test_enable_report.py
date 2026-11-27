@@ -406,3 +406,18 @@ def test_captured_note_command_quotes_a_path_with_spaces_and_a_quote() -> None:
 def test_captured_note_command_quotes_the_db_name() -> None:
     SELECTION.override("a b")
     assert _captured_command("/p") == ["quarry", "--db", "a b", "disable", "/p"]
+
+
+def test_disable_report_covered_child_kept_config_is_not_nothing_found() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        parent_enabled=True,
+        config_kept=True,
+    )
+    lines = DisableReport(result, keep_data=False).lines()
+    assert lines[0] == "Nothing removed from /p/src"
+    assert lines[1].startswith("  Config file kept")
+    assert lines[2] == _STILL_CAPTURED
