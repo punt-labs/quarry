@@ -2240,11 +2240,64 @@ addressed in DES-032; increases jemalloc retention (DES-027) and does not bound 
 no delete job requests no finalize. Edits under ignored paths pass the watcher's
 dot-segment and suffix pre-filters and form batches; the post-debounce filter then
 rejects every path, so the table is unchanged and the finalize would rewrite it for
-nothing. `WatchSubmitter._submit_deltas` now reports how many jobs the queue
-admitted, and `on_batch` requests the throttled finalize only when that count is
-nonzero. The reconcile sweep's and explicit sync's immediate finalize, the FTS
-self-heal backstop, is unchanged. The bulk branch is unchanged: its batch carries
-no paths, so whether the scan finds work is known only when the scan job runs.
+nothing. `WatchSubmitter` now reports how many jobs the queue admitted, and
+`on_batch` requests the throttled finalize only when that count is nonzero.
+
+**Amendment (2026-11-26, PL-1682): a finalize rewrites a table only when it changed.**
+Jim's ruling: the 300 s safety scan gates its finalize on "the scan changed
+something". This narrows the earlier rule that the scan's finalize always runs as
+the full-text self-heal: the scan still runs every interval, but the table-wide
+rewrite does not.
+
+*The rule.* A finalize rewrites the table (the collection index, compaction, the
+full-text rebuild) iff the table changed since its last successful finalize, or it
+has never been finalized in this daemon process. The decision is made when the
+finalize job runs, in its FIFO slot behind the scan and index jobs queued ahead of
+it, never at submit time: a scan's outcome is unknown when `ScanSweep.finish`
+submits the finalize, so the submitter cannot gate it. A bulk batch carries no
+paths and is gated the same way.
+
+*The record.* `TableChanges` keeps one record per physical database, shared by
+every connection to its path (`TableChanges.for_path`), not one per collection. Every
+completed write (chunk insert and delete, collection purge, page write, column
+change) bumps a generation counter at `RecyclingTable`, the one funnel every table
+write passes through. The finalize reads the counter BEFORE it rewrites and marks the
+database clean only up to what it read, and only when the optimize succeeded: a failed
+finalize leaves the database dirty, and a write that lands while a finalize runs
+leaves it dirty afterwards. The record is lock-protected because the store thread
+finalizes while the event loop and other store threads write.
+
+*Crash window.* `CollectionFinalizeJob.spool_record()` is `None`, so a queued finalize
+does not survive a crash, and the write that wanted it is forgotten. The record
+therefore starts every database dirty in a new process: the first finalize after a
+daemon start rewrites each database's table, and the other registrations in that
+database find it clean and skip. That is one real finalize per database at start,
+however many directories are registered, where there had been one per directory
+back to back. A first finalize that fails stays dirty and is retried by the next
+scan.
+
+*What each step of `SyncFinalizer.run` is gated by.* Write-gated, so skipped on an
+unchanged table: the collection index, compaction, version prune (all inside
+`TableOptimizer.optimize`), the full-text rebuild, and the post-sync GC that
+reclaims superseded index generations. Time-gated, so run on a quiet table too: the
+orphan-page sweep (24 hour grace), once per `TableChanges.MAINTENANCE_INTERVAL_S`
+(an hour), and the capture-shadow push, on every finalize, because it retries a
+deferred offline push. The old-version prune is the exception to "time-gated": LanceDB
+has no prune that is separate from `optimize` (`cleanup_old_versions` needs the
+`pylance` package, and `optimize` also compacts and re-indexes; an optimize on a
+just-finalized table still finds work), so versions older than the one hour window
+are pruned by the next rewrite, not on a clock.
+
+*Throttle.* `FinalizeThrottle` and `WatchSubmitter.mark_finalized` keep their meaning
+for a finalize that runs: a sweep's finalize registers with the throttle, cancelling an
+armed trailing finalize and stamping the interval clock, when it decides to rewrite. A
+finalize that skips never touches the throttle, so it cannot cancel or reset a
+trailing finalize that a write armed. A skipped finalize logs one DEBUG line naming
+the database and the reason.
+
+*Not covered.* A write by a process other than the daemon bypasses the record; the
+daemon is the single writer (DES-042), and an offline `quarry repair` run while the
+daemon is stopped is healed by the first-finalize-in-process rule.
 
 ### DES-045d: One ignore seam — watch, scan, and filter all consult IgnoreRules
 

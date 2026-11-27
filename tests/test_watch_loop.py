@@ -23,7 +23,8 @@ from unittest.mock import patch
 import pytest
 
 from quarry.config import Settings
-from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
+from quarry.daemon.collection_finalize_job import CollectionFinalizeJob
+from quarry.daemon.finalize_job import CollectionPurgeJob
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, DocumentDeleteJob, FileIndexJob
 from quarry.daemon.registration_lifecycle import RegistrationLifecycle
@@ -485,34 +486,6 @@ def test_sustained_bulk_churn_coalesces_finalize(tmp_path: Path) -> None:
         # After the interval, the single coalesced trailing finalize lands.
         await asyncio.sleep(0.6)
         assert len(queue.jobs(CollectionFinalizeJob)) == 2
-        await loop.stop()
-
-    asyncio.run(_run())
-
-
-def test_reconcile_finalize_cancels_armed_trailing(tmp_path: Path) -> None:
-    """A reconcile's immediate finalize cancels a trailing finalize already armed
-    for the same database — exactly one finalize, not a redundant double.
-    """
-
-    async def _run() -> None:
-        queue = _RecordingQueue()
-        ctx, root = _build(tmp_path, queue=queue, optimize_interval=0.3)
-        source = _FakeSource()
-        loop = WatchLoop(ctx, source=source)
-        await loop.start()  # initial scan finalizes + stamps the throttle clock
-        queue.submitted.clear()
-        # A delta inside the interval coalesces → arms a trailing finalize (~+0.3s).
-        source.emit(root, _fs(_write(root, "a.md")))
-        await asyncio.sleep(0.1)
-        assert queue.jobs(CollectionFinalizeJob) == []  # deferred, not yet fired
-        # The reconcile finalizes "col" immediately and must cancel that trailing.
-        await _reconciler(loop).run_once()
-        fin_after = len(queue.jobs(CollectionFinalizeJob))
-        assert fin_after >= 1  # the reconcile finalized
-        # Past the trailing's original due time: no extra (double) finalize appears.
-        await asyncio.sleep(0.35)
-        assert len(queue.jobs(CollectionFinalizeJob)) == fin_after
         await loop.stop()
 
     asyncio.run(_run())

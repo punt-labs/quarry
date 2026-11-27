@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from quarry.db.optimizer import OptimizeOutcome
 from quarry.finalize_ledger import FinalizeLedgers
-from quarry.finalize_steps import ShadowPushStep
+from quarry.finalize_steps import OptimizeStep, ShadowPushStep
 from quarry.shadow import ShadowSyncResult
 from quarry.sync_finalize import SyncFinalizer
 
@@ -105,18 +105,19 @@ def _finalizer_at(path: Path, root: Path | None = None) -> _Stepper:
     settings = MagicMock(name="settings")
     settings.lancedb_path = path
     settings.quarry_root = root or path.parent.parent
-    return _Stepper(SyncFinalizer(MagicMock(name="db"), settings))
+    return _Stepper(MagicMock(name="db"), settings)
 
 
 class _Stepper:
-    def __init__(self, fin: SyncFinalizer) -> None:
-        self._fin = fin
+    def __init__(self, db: MagicMock, settings: MagicMock) -> None:
+        self._fin = SyncFinalizer(db, settings)
+        self._step = OptimizeStep(db, settings)
 
     def run(self) -> None:
         self._fin.run()
 
     def run_optimize_only(self) -> None:
-        self._fin._optimize()
+        self._step.run()
 
 
 class TestOptimizeFailureIsolation:
@@ -127,21 +128,21 @@ class TestOptimizeFailureIsolation:
         with (
             patch("quarry.finalize_steps.TableOptimizer") as optimizer,
             patch("quarry.sync_finalize.ShadowPushStep") as push,
-            patch.object(SyncFinalizer, "_gc") as collect,
+            patch("quarry.table_upkeep.PostSyncGc") as collect,
         ):
             optimizer.return_value.optimize.side_effect = RuntimeError(
                 "Offset overflow error"
             )
             fin.run()
         push.assert_called_once()
-        collect.assert_called_once()
+        collect.return_value.run.assert_called_once()
 
     def test_failure_is_recorded_by_exception_type(self, tmp_path: Path) -> None:
         path = tmp_path / "lancedb"
         with (
             patch("quarry.finalize_steps.TableOptimizer") as optimizer,
             patch("quarry.sync_finalize.ShadowPushStep"),
-            patch.object(SyncFinalizer, "_gc"),
+            patch("quarry.table_upkeep.PostSyncGc"),
         ):
             optimizer.return_value.optimize.side_effect = RuntimeError(
                 "Offset overflow error"
@@ -160,14 +161,14 @@ class TestOptimizeFailureIsolation:
         with (
             patch("quarry.finalize_steps.TableOptimizer") as optimizer,
             patch("quarry.sync_finalize.ShadowPushStep") as push,
-            patch.object(SyncFinalizer, "_gc") as collect,
+            patch("quarry.table_upkeep.PostSyncGc") as collect,
         ):
             optimizer.return_value.optimize.side_effect = RuntimeError("boom")
             fin.run()
             fin.run()
         assert optimizer.return_value.optimize.call_count == 1
         assert push.call_count == 2
-        assert collect.call_count == 2
+        assert collect.return_value.run.call_count == 2
 
 
 class TestOptimizeOutcomeIsInspected:
@@ -204,8 +205,8 @@ class TestHealthIsCoarse:
         root = tmp_path / "secretuser"
         with (
             patch("quarry.finalize_steps.TableOptimizer") as optimizer,
-            patch.object(SyncFinalizer, "_push_shadows"),
-            patch.object(SyncFinalizer, "_gc"),
+            patch("quarry.sync_finalize.ShadowPushStep"),
+            patch("quarry.table_upkeep.PostSyncGc"),
         ):
             optimizer.return_value.optimize.side_effect = RuntimeError(
                 f"cannot read {path}/data/x.lance"
@@ -237,9 +238,9 @@ class TestOrphanPageSweepStep:
 
         with (
             patch("quarry.finalize_steps.TableOptimizer") as optimizer,
-            patch("quarry.sync_finalize.OrphanPageSweep") as sweep,
+            patch("quarry.table_upkeep.OrphanPageSweep") as sweep,
             patch("quarry.sync_finalize.ShadowPushStep"),
-            patch.object(SyncFinalizer, "_gc"),
+            patch("quarry.table_upkeep.PostSyncGc"),
         ):
             optimizer.return_value.optimize.side_effect = optimize
             sweep.return_value.run.side_effect = sweep_run
@@ -252,11 +253,11 @@ class TestOrphanPageSweepStep:
         fin = _finalizer_at(tmp_path / "lancedb")
         with (
             patch("quarry.finalize_steps.TableOptimizer"),
-            patch("quarry.sync_finalize.OrphanPageSweep") as sweep,
+            patch("quarry.table_upkeep.OrphanPageSweep") as sweep,
             patch("quarry.sync_finalize.ShadowPushStep") as push,
-            patch.object(SyncFinalizer, "_gc") as collect,
+            patch("quarry.table_upkeep.PostSyncGc") as collect,
         ):
             sweep.return_value.run.side_effect = OSError("disk")
             fin.run()
         push.assert_called_once()
-        collect.assert_called_once()
+        collect.return_value.run.assert_called_once()
