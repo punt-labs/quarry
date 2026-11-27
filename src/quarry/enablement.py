@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Self, final
 
@@ -15,8 +14,6 @@ from quarry.guidance import REPO_IMPORT_LINE, Guidance
 from quarry.skills_sync import SkillDeposit
 
 __all__ = ["DisablementResult", "Enablement", "EnablementResult"]
-
-logger = logging.getLogger(__name__)
 
 
 @final
@@ -75,6 +72,10 @@ class Enablement:
         self._import = ClaudeMdImport(root / "CLAUDE.md")
         self._gitignore = QuarryGitignore(root)
         return self
+
+    def is_enabled(self) -> bool:
+        """Return whether this repo's ``enabled`` marker is present."""
+        return self._marker.is_present()
 
     def enable(self) -> EnablementResult:
         """Ensure the ignore, deposit the guide, register the import, write the marker.

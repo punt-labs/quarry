@@ -26,6 +26,8 @@ from quarry.client import (
     QuarryConnectionError,
     QuarryError,
 )
+from quarry.disable_report import DisableReport
+from quarry.enable import disable_project
 from quarry.enabled_marker import EnabledMarker
 from quarry.hooks import (
     handle_post_web_fetch,
@@ -35,6 +37,7 @@ from quarry.hooks import (
 from quarry.refusal import RegistrationRefusedError
 from quarry.send_outcome import SendOutcome
 from quarry.sync_registry import SyncRegistry
+from tests.conftest import FakeRegistryClient
 
 
 def _opt_in(project: Path) -> Path:
@@ -2274,6 +2277,162 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         assert any("no opt-in marker" in rec.message for rec in caplog.records)
 
 
+class TestSessionStartCoveredChildMarker(_ReachableDaemonEmptyCatalog):
+    """A child enabled under a parent registration is enabled from any subdirectory.
+
+    ``quarry enable`` on a covered child writes the child's marker and no
+    registration of its own, so the marker is found by walking up from the
+    session's directory to the covering registration.
+    """
+
+    _ACTIVE = "Quarry semantic search is active for this project."
+
+    @staticmethod
+    def _tree(tmp_path: Path, *, parent_marker: bool, child_marker: bool) -> Path:
+        parent = tmp_path / "work"
+        child = parent / "app"
+        (child / "src" / "deep").mkdir(parents=True)
+        if parent_marker:
+            _opt_in(parent)
+        if child_marker:
+            _opt_in(child)
+        return parent
+
+    def _reply(self, tmp_path: Path, parent: Path, cwd: Path) -> str:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "work")
+        conn.close()
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
+        ):
+            result = handle_session_start({"cwd": str(cwd)})
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        return str(output["additionalContext"])
+
+    @pytest.mark.parametrize("sub", ["", "src", "src/deep"])
+    def test_enabled_child_is_active_from_its_root_and_subdirectories(
+        self, tmp_path: Path, sub: str
+    ) -> None:
+        parent = self._tree(tmp_path, parent_marker=False, child_marker=True)
+
+        ctx = self._reply(tmp_path, parent, parent / "app" / sub)
+
+        assert ctx.startswith(self._ACTIVE)
+        assert "Collection: 'work'" in ctx
+
+    @pytest.mark.parametrize("sub", ["", "src"])
+    def test_unmarked_child_under_an_unmarked_parent_surfaces_drift(
+        self, tmp_path: Path, sub: str
+    ) -> None:
+        parent = self._tree(tmp_path, parent_marker=False, child_marker=False)
+
+        ctx = self._reply(tmp_path, parent, parent / "app" / sub)
+
+        assert not ctx.startswith(self._ACTIVE)
+        assert "quarry deregister --keep-data -- work" in ctx
+
+    def test_marked_parent_covers_an_unmarked_child_subdirectory(
+        self, tmp_path: Path
+    ) -> None:
+        parent = self._tree(tmp_path, parent_marker=True, child_marker=False)
+
+        ctx = self._reply(tmp_path, parent, parent / "app" / "src")
+
+        assert ctx.startswith(self._ACTIVE)
+
+    @staticmethod
+    def _sync_config(directory: Path, *, on: bool) -> None:
+        config = directory / ".punt-labs" / "quarry" / "config.md"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(
+            f"---\nauto_capture:\n  session_sync: {'true' if on else 'false'}\n---\n"
+        )
+
+    def _sync_reply(
+        self, tmp_path: Path, parent: Path, cwd: Path
+    ) -> tuple[dict[str, object], MagicMock]:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "work")
+        conn.close()
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ) as launch,
+        ):
+            result = handle_session_start({"cwd": str(cwd)})
+        return result, launch
+
+    @pytest.mark.parametrize("sub", ["src", "src/deep"])
+    def test_child_opt_out_governs_a_nested_cwd_without_its_own_config(
+        self, tmp_path: Path, sub: str
+    ) -> None:
+        parent = self._tree(tmp_path, parent_marker=False, child_marker=True)
+        self._sync_config(parent / "app", on=False)
+
+        result, launch = self._sync_reply(tmp_path, parent, parent / "app" / sub)
+
+        assert result == {}
+        launch.assert_not_called()
+
+    def test_child_opt_in_still_syncs_from_a_nested_cwd(self, tmp_path: Path) -> None:
+        parent = self._tree(tmp_path, parent_marker=False, child_marker=True)
+        self._sync_config(parent / "app", on=True)
+
+        result, launch = self._sync_reply(tmp_path, parent, parent / "app" / "src")
+
+        assert result != {}
+        launch.assert_called_once()
+
+    def test_marker_at_cwd_keeps_its_own_config(self, tmp_path: Path) -> None:
+        parent = self._tree(tmp_path, parent_marker=False, child_marker=True)
+        self._sync_config(parent / "app", on=False)
+
+        result, launch = self._sync_reply(tmp_path, parent, parent / "app")
+
+        assert result == {}
+        launch.assert_not_called()
+
+    def test_marker_above_an_unregistered_cwd_is_not_consulted(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "proj"
+        (project / "src").mkdir(parents=True)
+        _opt_in(project)
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        SyncRegistry(settings.registry_path).close()
+
+        with patch(
+            "quarry.hooks._SessionStartContext._resolve_settings",
+            return_value=settings,
+        ):
+            result = handle_session_start({"cwd": str(project / "src")})
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        assert not str(output["additionalContext"]).startswith(self._ACTIVE)
+
+
 class TestPreCompactCaptureRedaction:
     """The PreCompact producer writes a PII-clean capture file (bug class 3)."""
 
@@ -2551,3 +2710,169 @@ class TestSessionCoverageFailure:
         assert record.levelno == logging.WARNING
         assert type(error).__name__ in record.getMessage()
         assert "SECRET" not in caplog.text
+
+
+class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
+    """``quarry disable`` says session start is inactive iff the hook does not sync."""
+
+    _ACTIVE = "Quarry semantic search is active for this project."
+
+    @staticmethod
+    def _tree(tmp_path: Path, markers: tuple[str, ...]) -> tuple[Path, Path]:
+        parent = tmp_path / "p"
+        svc = parent / "team" / "sub" / "svc"
+        svc.mkdir(parents=True)
+        for relative in markers:
+            _opt_in(parent / relative)
+        return parent, svc
+
+    def _session_captures(self, tmp_path: Path, parent: Path, cwd: Path) -> bool:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "p")
+        conn.close()
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
+        ):
+            result = handle_session_start({"cwd": str(cwd)})
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        return str(output["additionalContext"]).startswith(self._ACTIVE)
+
+    @pytest.mark.parametrize(
+        ("markers", "captured"),
+        [
+            ((), False),
+            (("",), True),
+            (("team",), True),
+            (("", "team"), True),
+            (("team", "team/sub"), True),
+            (("", "team", "team/sub"), True),
+        ],
+        ids=[
+            "no-marker",
+            "parent-marker",
+            "intermediate-marker",
+            "both",
+            "two-intermediates",
+            "parent-and-two-intermediates",
+        ],
+    )
+    def test_report_verdict_equals_session_start_verdict(
+        self, tmp_path: Path, markers: tuple[str, ...], *, captured: bool
+    ) -> None:
+        parent, svc = self._tree(tmp_path, markers)
+        client = FakeRegistryClient([("p", parent)])
+
+        result = disable_project(svc, client)
+        report = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert ("does not activate quarry" not in report) is captured
+        assert self._session_captures(tmp_path, parent, svc) is captured
+
+    @pytest.mark.parametrize(
+        ("markers", "opt_out"),
+        [
+            (("",), ""),
+            (("team",), "team"),
+            (("", "team"), "team"),
+            (("team",), "team/sub/svc"),
+            (("",), "team/sub/svc"),
+        ],
+        ids=[
+            "parent-marker-opted-out",
+            "intermediate-opted-out",
+            "nearest-of-two-opted-out",
+            "child-opted-out-under-intermediate",
+            "child-opted-out-under-parent",
+        ],
+    )
+    def test_opt_out_makes_report_and_hook_agree_it_is_not_active(
+        self, tmp_path: Path, markers: tuple[str, ...], opt_out: str
+    ) -> None:
+        parent, svc = self._tree(tmp_path, markers)
+        config = parent / opt_out / ".punt-labs/quarry/config.md"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
+        client = FakeRegistryClient([("p", parent)])
+
+        result = disable_project(svc, client)
+        report = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "sync runs there" not in report
+        assert "does not activate quarry" in report
+        assert self._session_syncs(tmp_path, parent, svc) is False
+
+    def test_farther_marker_opted_out_leaves_report_and_hook_agreeing_active(
+        self, tmp_path: Path
+    ) -> None:
+        parent, svc = self._tree(tmp_path, ("team", ""))
+        config = parent / ".punt-labs/quarry/config.md"
+        config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
+        client = FakeRegistryClient([("p", parent)])
+
+        result = disable_project(svc, client)
+        report = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "(session-start sync runs there)" in report
+        assert f"session_sync is false in the config at {parent}, so once" in report
+        assert self._session_syncs(tmp_path, parent, svc) is True
+
+    @staticmethod
+    def _session_syncs(tmp_path: Path, parent: Path, cwd: Path) -> bool:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "p")
+        conn.close()
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ) as launch,
+        ):
+            handle_session_start({"cwd": str(cwd)})
+        return launch.called
+
+
+class TestGoverningConfigSkipTrace(_ReachableDaemonEmptyCatalog):
+    """A skip decided by a governing directory's config names that directory."""
+
+    def test_nested_opt_out_logs_the_governing_directory(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        parent = tmp_path / "p"
+        child = parent / "team" / "svc"
+        child.mkdir(parents=True)
+        _opt_in(parent / "team")
+        config = parent / "team/.punt-labs/quarry/config.md"
+        config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "p")
+        conn.close()
+        caplog.set_level(logging.INFO, logger="quarry.hooks")
+        with patch(
+            "quarry.hooks._SessionStartContext._resolve_settings",
+            return_value=settings,
+        ):
+            reply = handle_session_start({"cwd": str(child)})
+        assert reply == {}
+        [line] = [m for m in caplog.messages if m.startswith("session-start:")]
+        assert line.endswith(f"-> skip:config@{parent / 'team'}")

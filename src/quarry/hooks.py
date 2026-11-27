@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
-from quarry._stdlib import load_hook_config
 from quarry.active_session_context import ActiveSessionContext
+from quarry.governing_marker import GoverningMarker
 from quarry.pre_compact_hook import PreCompactHook
 from quarry.session_start_reply import SessionStartReply
 
@@ -44,9 +44,10 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     without the marker gets one of two read-only nudges — the state machine
     is:
 
-    "Marker present" means at *cwd* itself OR at the root of the registration
-    covering *cwd* — a session opened in a subdirectory of an enabled repo
-    reads the marker the repo's own root carries, not one at the subdirectory.
+    "Marker present" means at *cwd*, at any ancestor of *cwd* up to the root of
+    the registration covering it, or at that root — a session opened in a
+    subdirectory of an enabled repo, or of a child enabled under a parent
+    registration, reads the marker the repo's own root carries.
 
     * marker present → Path A (active). No coverage becomes auto-register;
       a child of a parent registration reuses the parent; a subsumption is
@@ -63,7 +64,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     if not cwd:
         trace.reject()
         return {}
-    on = load_hook_config(cwd).session_sync
+    on = GoverningMarker.syncs_at(cwd)
     trace.mark_config(on=on)
     if not on:
         trace.skip("config")
@@ -116,29 +117,18 @@ class _SessionStartContext:
         try:
             registration = self._resolver.covering_registration(str(self._directory))
             collection = registration.collection if registration is not None else None
-            if self._marker_present(registration):
-                return self._path_a(collection)
+            marker = self._governing(registration)
+            if marker.present():
+                return marker.run(self._path_a, collection)
             if collection is not None:
                 return self._path_c(collection)
             return self._path_b()
         finally:
             self._conn.close()
 
-    def _marker_present(self, registration: DirectoryRegistration | None) -> bool:
-        """Return whether the marker is present at cwd OR at the covering root.
-
-        A session opened in a subdirectory of an enabled repo has no marker of
-        its own — the marker lives at the repo root the registration names —
-        so ancestry, not just cwd, decides "enabled."
-        """
-        from quarry.enabled_marker import EnabledMarker  # noqa: PLC0415
-
-        if EnabledMarker(self._directory).is_present():
-            return True
-        return (
-            registration is not None
-            and EnabledMarker(Path(registration.directory)).is_present()
-        )
+    def _governing(self, registration: DirectoryRegistration | None) -> GoverningMarker:
+        """Return the enabled marker that governs cwd, at it or above it."""
+        return GoverningMarker(self._directory, registration)
 
     def _path_a(self, collection: str | None) -> SessionStartReply:
         """Marker present: run the active flow (auto-register if needed, sync)."""

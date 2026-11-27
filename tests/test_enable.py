@@ -8,17 +8,24 @@ enable/disable drive the daemon's registry through a client port
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from quarry._stdlib import load_hook_config
 from quarry.claude_permissions import QUARRY_RULES
+from quarry.disable_report import DisableReport
 from quarry.enable import DisableResult, EnableResult, disable_project, enable_project
 from quarry.enabled_marker import EnabledMarker
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
 from quarry.guidance import REPO_IMPORT_LINE
+from quarry.marker_search import MarkerSearch
+from quarry.project_config import ProjectConfig
 from tests.conftest import FakeRegistryClient
+
+pytestmark = pytest.mark.usefixtures("confined_config_reads")
 
 _NO_ETHOS = "quarry.home_paths.QuarryHome.ethos_identities"
 
@@ -54,19 +61,80 @@ class TestT2EnableIdempotent:
         assert client.registered == []
 
 
-class TestT3EnableChildRaisesValueError:
-    def test_child_of_registered_parent_raises(self, tmp_path: Path) -> None:
+class TestT3EnableCoveredChild:
+    """A directory under a registered parent reuses the parent's collection."""
+
+    @staticmethod
+    def _covered(tmp_path: Path) -> tuple[Path, Path, FakeRegistryClient]:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
-        client = FakeRegistryClient([("project", parent)])
+        return parent, child, FakeRegistryClient([("project", parent)])
 
-        with (
-            patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"),
-            pytest.raises(ValueError, match="already covered by the registration at"),
-        ):
+    def test_reuses_parent_collection_without_registering(self, tmp_path: Path) -> None:
+        parent, child, client = self._covered(tmp_path)
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            result = enable_project(child, client)
+
+        assert result.collection == "project"
+        assert result.captures_collection == "project-captures"
+        assert result.created_registration is False
+        assert result.covered_by == str(parent)
+        assert client.registered == []
+
+    def test_writes_per_repo_files(self, tmp_path: Path) -> None:
+        _, child, client = self._covered(tmp_path)
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            result = enable_project(child, client)
+
+        config = child / ".punt-labs" / "quarry" / "config.md"
+        assert config.is_file()
+        assert result.config_path == str(config)
+        assert EnabledMarker(child).is_present()
+
+    def test_second_run_changes_nothing(self, tmp_path: Path) -> None:
+        _, child, client = self._covered(tmp_path)
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(child, client)
+            before = _tree_snapshot(child)
+            again = enable_project(child, client)
+
+        assert _tree_snapshot(child) == before
+        assert again.enabled_marker_written is False
+        assert again.import_registered is False
+        assert client.registered == []
+
+    def test_doctor_is_clean_after_enable(self, tmp_path: Path) -> None:
+        from quarry.doctor_sync import SyncDiagnostics
+        from quarry.sync_registry import SyncRegistry
+
+        parent, child, client = self._covered(tmp_path)
+        registry_path = tmp_path / "registry.db"
+        conn = SyncRegistry(registry_path)
+        conn.register_directory(parent, "project")
+        conn.close()
+
+        before = SyncDiagnostics.enable_status(registry_path, str(child))
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+        after = SyncDiagnostics.enable_status(registry_path, str(child))
+
+        assert before.passed is False
+        assert "run 'quarry enable'" in before.message
+        assert after.passed is True
+        assert "quarry enable" not in after.message
+        assert str(parent) in after.message
+
+
+def _tree_snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        str(p.relative_to(root)): p.read_bytes()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
 
 
 class TestT4EnableCollectionOverride:
@@ -301,6 +369,28 @@ class TestT11DisableRemovesConfig:
         assert result.config_removed is True
         assert not config_path.exists()
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+    def test_unremovable_config_fails_the_disable_before_any_other_step(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(project, client)
+            quarry_dir = project / ".punt-labs" / "quarry"
+            quarry_dir.chmod(0o555)
+            try:
+                with pytest.raises(PermissionError, match=r"config\.md"):
+                    disable_project(project, client)
+            finally:
+                quarry_dir.chmod(0o755)
+
+        assert (quarry_dir / "config.md").exists()
+        assert EnabledMarker(project).is_present()
+        assert client.deregistered == []
+
     def test_symlinked_ancestor_config_removal_does_not_strand_import(
         self, tmp_path: Path
     ) -> None:
@@ -432,24 +522,253 @@ class TestDisableIdempotentRetrySafe:
         assert "captures purge for myproject-captures was rejected" in caplog.text
 
 
-class TestT15DisableOnChildOfRegisteredParentRaises:
-    def test_disable_on_child_of_registered_parent_raises(self, tmp_path: Path) -> None:
+class TestT15DisableCoveredChild:
+    """Disabling a covered child undoes its own enable and spares the parent."""
+
+    def test_enable_then_disable_leaves_child_clean(self, tmp_path: Path) -> None:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "src"
+        child.mkdir()
+        (child / "CLAUDE.md").write_text("# rules\n")
+        settings = child / ".claude" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"permissions": {"allow": ["Bash(make:*)"]}}))
+        client = FakeRegistryClient([("project", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            result = disable_project(child, client)
+
+        assert not (child / ".punt-labs" / "quarry" / "config.md").exists()
+        assert not EnabledMarker(child).is_present()
+        assert REPO_IMPORT_LINE not in (child / "CLAUDE.md").read_text()
+        assert json.loads(settings.read_text()) == {
+            "permissions": {"allow": ["Bash(make:*)"], "ask": []}
+        }
+        assert result.config_removed is True
+        assert result.enabled_marker_removed is True
+        assert result.covered_by == str(parent)
+        assert result.collection == ""
+
+    def test_parent_registration_and_data_untouched(self, tmp_path: Path) -> None:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
         client = FakeRegistryClient([("project", parent)])
 
-        with pytest.raises(ValueError, match="covered by parent registration"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
             disable_project(child, client)
 
-        # The parent registration must NOT be deregistered.
         assert client.deregistered == []
+        assert client.deleted == []
         assert client.collections == ["project"]
 
 
+def _own_checkout(directory: Path) -> Path:
+    """Make *directory* the root of its own git checkout without running git."""
+    git = directory / ".git"
+    git.mkdir()
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    return directory
+
+
+def _files(root: Path) -> set[str]:
+    """Return every path under *root* outside ``.git``, hidden files included."""
+    return {
+        str(p.relative_to(root))
+        for p in root.rglob("*")
+        if ".git" not in p.relative_to(root).parts
+    }
+
+
+class TestDisableNeverEnabledLeavesNoTrace:
+    """A disable with nothing to remove must not create the CLAUDE.md lock file."""
+
+    def test_covered_checkout_tree_is_unchanged(self, tmp_path: Path) -> None:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "app"
+        child.mkdir()
+        _own_checkout(child)
+        before = _files(child)
+
+        disable_project(child, FakeRegistryClient([("project", parent)]))
+
+        assert _files(child) == before
+
+    def test_uncovered_directory_tree_is_unchanged(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text("# rules\n")
+        before = _files(project)
+
+        disable_project(project, FakeRegistryClient())
+
+        assert _files(project) == before
+        assert (project / "CLAUDE.md").read_text() == "# rules\n"
+
+    def test_a_lone_import_without_the_marker_is_still_pruned(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        claude = project / "CLAUDE.md"
+        claude.write_text(f"# rules\n{REPO_IMPORT_LINE}\n")
+
+        result = disable_project(project, FakeRegistryClient())
+
+        assert result.import_pruned is True
+        assert claude.read_text() == "# rules\n"
+
+
+class TestDisableCoveredChildKeepsCaptureOptOuts:
+    """Disable must not turn an opt-out into capture the user declined."""
+
+    @staticmethod
+    def _enabled_child(tmp_path: Path) -> tuple[Path, FakeRegistryClient]:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "app"
+        child.mkdir()
+        _own_checkout(child)
+        client = FakeRegistryClient([("project", parent)])
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+        return child, client
+
+    def test_config_with_an_opt_out_survives_and_is_reported(
+        self, tmp_path: Path
+    ) -> None:
+        child, client = self._enabled_child(tmp_path)
+        config = child / ".punt-labs" / "quarry" / "config.md"
+        config.write_text(
+            config.read_text().replace("session_end: true", "session_end: false")
+        )
+
+        result = disable_project(child, client)
+
+        assert load_hook_config(str(child)).session_end is False
+        assert result.config_removed is False
+        assert result.config_kept is True
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+        assert "Config file kept" in text
+
+    def test_untouched_template_config_is_removed(self, tmp_path: Path) -> None:
+        child, client = self._enabled_child(tmp_path)
+
+        result = disable_project(child, client)
+
+        assert not (child / ".punt-labs" / "quarry" / "config.md").exists()
+        assert result.config_removed is True
+        assert result.config_kept is False
+
+    def test_uncovered_directory_always_removes_its_config(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        client = FakeRegistryClient()
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(project, client)
+        config = project / ".punt-labs" / "quarry" / "config.md"
+        assert config.read_text() == ProjectConfig().text
+        config.write_text(
+            config.read_text().replace("web_fetch: true", "web_fetch: false")
+        )
+
+        result = disable_project(project, client)
+
+        assert not config.exists()
+        assert result.config_removed is True
+
+
+class TestDisableCoveredChildReport:
+    """The disable report for a covered child reflects the parent's marker."""
+
+    @staticmethod
+    def _parent_child(tmp_path: Path, *, parent_marker: bool) -> tuple[Path, Path]:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "src"
+        child.mkdir()
+        if parent_marker:
+            EnabledMarker(parent).write()
+        return parent, child
+
+    def test_never_enabled_child_removes_nothing_and_names_parent(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child = self._parent_child(tmp_path, parent_marker=True)
+        client = FakeRegistryClient([("project", parent)])
+
+        result = disable_project(child, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "Disabled" not in text
+        assert f"`quarry disable {parent}` ends it but deregisters" in text
+        assert f"purges everything indexed for {parent}" in text
+        assert "--keep-data" in text
+        assert client.deregistered == []
+        assert client.deleted == []
+
+    def test_enabled_then_disabled_child_lists_removals_and_still_active(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child = self._parent_child(tmp_path, parent_marker=True)
+        client = FakeRegistryClient([("project", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            result = disable_project(child, client)
+        lines = DisableReport(result, keep_data=False).lines()
+        text = "\n".join(lines)
+
+        assert "Config file removed" in text
+        assert "Removed enabled marker" in text
+        assert "Disabled" not in text
+        assert lines[-1].endswith("(add --keep-data to keep the data)")
+
+    def test_parent_registered_without_marker_does_not_activate_session_start(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child = self._parent_child(tmp_path, parent_marker=False)
+        client = FakeRegistryClient([("project", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            result = disable_project(child, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert result.capturing_marker == ""
+        assert (
+            f"registered under {parent} but session start does not activate quarry"
+            in text
+        )
+        assert f"quarry disable {parent}" not in text
+        assert "still active" not in text
+
+    def test_second_disable_converges_to_nothing_found(self, tmp_path: Path) -> None:
+        parent, child = self._parent_child(tmp_path, parent_marker=True)
+        client = FakeRegistryClient([("project", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            disable_project(child, client)
+            second = disable_project(child, client)
+        text = "\n".join(DisableReport(second, keep_data=False).lines())
+
+        assert "Nothing of its own found" in text
+        assert "Config file removed" not in text
+        assert f"`quarry disable {parent}` ends it but deregisters" in text
+        assert f"purges everything indexed for {parent}" in text
+        assert "--keep-data" in text
+
+
 class TestT17EnableWithOverrideOnChildRaises:
-    def test_override_does_not_bypass_parent_check(self, tmp_path: Path) -> None:
+    def test_conflicting_override_is_refused(self, tmp_path: Path) -> None:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
@@ -461,6 +780,8 @@ class TestT17EnableWithOverrideOnChildRaises:
             pytest.raises(ValueError, match="already covered by the registration"),
         ):
             enable_project(child, client, collection_override="custom")
+
+        assert not (child / ".punt-labs").exists()
 
 
 class TestT18EnableResolvesRelativePath:
@@ -545,6 +866,24 @@ class TestT20CheckEnableStatusConfigMissing:
 
         assert result.passed is True
         assert "config.md missing" not in result.message
+
+    def test_covered_directory_names_the_covering_registration(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.doctor_sync import SyncDiagnostics
+
+        parent = tmp_path / "myproject"
+        child = parent / "src"
+        (child / ".punt-labs" / "quarry").mkdir(parents=True)
+        (child / ".punt-labs" / "quarry" / "config.md").write_text("---\n---\n")
+        registry_path = tmp_path / "registry.db"
+        self._register(registry_path, parent)
+
+        result = SyncDiagnostics.enable_status(registry_path, str(child))
+
+        assert result.passed is True
+        assert f"registration: {parent}" in result.message
+        assert "collection: myproject" in result.message
 
 
 class TestEnableRegistersImportAndMarker:
@@ -754,3 +1093,140 @@ class TestEnableGrantsProjectPermissions:
 
         assert result.enabled_marker_written is True
         assert "not valid JSON" in result.permissions.error
+
+
+class TestDisableCoveredChildCapturedByIntermediateMarker:
+    """A marker between the child and the registration root still captures it."""
+
+    def test_intermediate_marker_is_named_and_command_targets_it(
+        self, tmp_path: Path
+    ) -> None:
+        parent = tmp_path / "p"
+        team = parent / "team"
+        svc = team / "svc"
+        svc.mkdir(parents=True)
+        client = FakeRegistryClient([("p", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(team, client)
+            enable_project(svc, client)
+            result = disable_project(svc, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "does not activate quarry" not in text
+        assert f"through the marker at {team}" in text
+        assert f"`quarry disable {team}`" in text
+        assert f"`quarry disable {parent}`" not in text
+        assert not EnabledMarker(svc).is_present()
+        assert EnabledMarker(team).is_present()
+
+
+class TestDisableCoveredChildCapturedByTwoMarkers:
+    """Disabling the nearest of two markers leaves the next one found."""
+
+    def test_intermediate_and_registration_markers_are_both_named(
+        self, tmp_path: Path
+    ) -> None:
+        parent = tmp_path / "p"
+        mid = parent / "a"
+        leaf = mid / "b"
+        leaf.mkdir(parents=True)
+        EnabledMarker(parent).write()
+        EnabledMarker(mid).write()
+        client = FakeRegistryClient([("p", parent)])
+
+        result = disable_project(leaf, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert result.capturing_marker == str(mid)
+        assert result.also_capturing == (str(parent),)
+        assert f"still active through the markers at {mid}, {parent}" in text
+        assert "until all of them are disabled" in text
+
+        disable_project(mid, client)
+        assert MarkerSearch(leaf, str(parent)).found_at() == parent
+
+
+class TestDisableCoveredChildConfigReport:
+    """What the disable report says about a covered child's config.md."""
+
+    @staticmethod
+    def _disable_with_config(tmp_path: Path, write: str | bytes | None) -> list[str]:
+        parent = tmp_path / "project"
+        child = parent / "src"
+        child.mkdir(parents=True)
+        EnabledMarker(parent).write()
+        client = FakeRegistryClient([("project", parent)])
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            config = child / ".punt-labs" / "quarry" / "config.md"
+            if isinstance(write, bytes):
+                config.write_bytes(write)
+            elif isinstance(write, str):
+                config.unlink()
+                config.symlink_to(write)
+            result = disable_project(child, client)
+        return DisableReport(result, keep_data=False).lines()
+
+    def test_untouched_config_written_by_an_older_template_is_removed(
+        self, tmp_path: Path
+    ) -> None:
+        old = (
+            ProjectConfig()
+            .text.replace("  session_end: true\n", "")
+            .replace("  web_search: true\n", "")
+            .replace("  read: false\n", "")
+            .replace("  subagent_stop: true\n", "")
+        )
+        lines = self._disable_with_config(tmp_path, old.encode())
+
+        assert lines[0] == f"Removed quarry's own settings from {tmp_path}/project/src"
+        assert "  Config file removed" in lines
+        assert not any("kept" in line for line in lines)
+
+    def test_unreadable_config_is_kept_and_said_to_be_unapplied(
+        self, tmp_path: Path
+    ) -> None:
+        lines = self._disable_with_config(tmp_path, b"\xff\xfe\x00bad")
+        text = "\n".join(lines)
+
+        assert "could not be read" in text
+        assert "not applied" in text
+        assert "has settings of yours" not in text
+        assert "still governs" not in text
+
+    def test_symlinked_config_is_reported_as_left_in_place(
+        self, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "shared.md"
+        target.write_text(ProjectConfig().text)
+        lines = self._disable_with_config(tmp_path, str(target))
+        text = "\n".join(lines)
+
+        assert (
+            "config.md is behind a symlink (the file or a parent directory) "
+            "and was left in place"
+        ) in text
+        assert "Nothing of its own found" not in text
+        assert target.exists()
+
+    def test_symlinked_parent_directory_is_reported_as_behind_a_symlink(
+        self, tmp_path: Path
+    ) -> None:
+        parent = tmp_path / "project"
+        child = parent / "src"
+        child.mkdir(parents=True)
+        EnabledMarker(parent).write()
+        shared = tmp_path / "shared" / "quarry"
+        shared.mkdir(parents=True)
+        (shared / "config.md").write_text(ProjectConfig().text)
+        (child / ".punt-labs").mkdir()
+        (child / ".punt-labs" / "quarry").symlink_to(shared)
+        client = FakeRegistryClient([("project", parent)])
+
+        result = disable_project(child, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "config.md is behind a symlink" in text
+        assert "config.md is a symlink" not in text
+        assert (shared / "config.md").exists()

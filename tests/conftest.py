@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
 from typing import Self, final
 from unittest.mock import patch
@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 from rich.console import Console
 
+from quarry._stdlib import load_hook_config
 from quarry.api import (
     DeleteCollectionRequest,
     DeregisterAccepted,
@@ -632,3 +633,48 @@ def png_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     draw.text((10, 40), "Hello OCR", fill="black")
     img.save(str(path))
     return path
+
+
+@pytest.fixture
+def confined_config_reads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> list[str]:
+    """Fail a test that renders a session note from a directory outside the sandbox.
+
+    The note reads real project configs; a fixed path such as ``/p`` would read
+    whatever a host keeps there.  Returns the directories read.
+    """
+    sandbox = tmp_path_factory.getbasetemp().resolve()
+    real = load_hook_config
+    seen: list[str] = []
+
+    def guarded(directory: str) -> object:
+        seen.append(directory)
+        inside = Path(directory).resolve().is_relative_to(sandbox)
+        assert inside, f"config read outside the test sandbox: {directory}"
+        return real(directory)
+
+    monkeypatch.setattr("quarry.governing_marker.load_hook_config", guarded)
+    return seen
+
+
+@pytest.fixture
+def p(tmp_path: Path) -> str:
+    """Return a project root under the test sandbox, never a fixed path."""
+    return str(tmp_path / "p")
+
+
+@pytest.fixture
+def opt_out() -> Callable[[Path], str]:
+    """Return a function that writes ``session_sync: false`` under a directory.
+
+    The function returns the directory as a string, the form markers take.
+    """
+
+    def write(directory: Path) -> str:
+        config = directory / ".punt-labs/quarry/config.md"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
+        return str(directory)
+
+    return write

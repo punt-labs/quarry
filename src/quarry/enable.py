@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Protocol, Self, final
 from quarry.claude_permissions import PermissionChange, ProjectPermissions
 from quarry.ethos_memory import EthosMemoryBootstrap, EthosMemoryResult
 from quarry.home_paths import QuarryHome
+from quarry.local_disable import ConfigDisposal, GuardedDisable
 from quarry.project_config import ProjectConfig
-from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
     from quarry.api import (
@@ -24,7 +24,6 @@ if TYPE_CHECKING:
         TaskAccepted,
     )
     from quarry.enablement_result import DisablementResult
-    from quarry.registrations import Registrations
     from quarry.skills_install import SkillOutcome
 
 logger = logging.getLogger(__name__)
@@ -65,7 +64,8 @@ class EnableResult:
     than flattened into parallel lists. ``permissions`` is the § 2.8 allow-rule
     grant in the repo's ``.claude/settings.json``. ``skills_deposited``
     is the cross-harness skill-deposit outcome, passed through from
-    ``Enablement.enable()`` unchanged.
+    ``Enablement.enable()`` unchanged.  ``covered_by`` is the parent
+    registration reused instead of registering this directory, else empty.
     """
 
     directory: str
@@ -73,6 +73,7 @@ class EnableResult:
     captures_collection: str
     config_path: str = ""
     created_registration: bool = False
+    covered_by: str = ""
     guide_deposited: bool = False
     enabled_marker_written: bool = False
     import_registered: bool = False
@@ -92,6 +93,19 @@ class DisableResult:
     ``disable`` is non-destructive of the vendored guide (§ 2.9): it prunes the
     ``@``-import line and deletes the ``enabled`` marker, leaving the deposited
     ``.punt-labs/quarry/CLAUDE.md`` dormant on disk.
+
+    ``covered_by`` is the parent registration left in place when the directory
+    was only covered by it (nothing of the parent's is deregistered or purged).
+    ``capturing_marker`` is the directory whose ``enabled`` marker still keeps
+    capture live under the child once its own marker is gone (empty when none
+    does); it is found by the session-start hook's own search.  ``also_capturing``
+    holds the markers beyond it, nearest first: disabling the nearest leaves the
+    next one still found.  ``config_kept`` is
+    whether the child's ``config.md`` was left in place: it changes what the
+    hooks do, so removing it would discard the user's opt-outs.
+    ``config_why`` refines a kept config: ``"unreadable"`` (the hooks cannot read
+    it and apply nothing from it) or ``"linked"`` (it, or a directory above it, is
+    a symlink).
     """
 
     directory: str
@@ -102,6 +116,11 @@ class DisableResult:
     import_pruned: bool = False
     enabled_marker_removed: bool = False
     permissions: PermissionChange = field(default_factory=PermissionChange)
+    covered_by: str = ""
+    capturing_marker: str = ""
+    also_capturing: tuple[str, ...] = ()
+    config_kept: bool = False
+    config_why: str = ""
 
 
 def enable_project(
@@ -126,9 +145,7 @@ def enable_project(
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
 
-    collection, created = Registrar(client).resolve(directory, collection_override)
-
-    captures_collection = f"{collection}-captures"
+    resolution = Registrar(client).resolve(directory, collection_override)
 
     # Global ext files are created and refreshed; the repo's vendored tree (a
     # repo-only identity's actual source layer) is refreshed, never created.
@@ -139,25 +156,23 @@ def enable_project(
     # writes live the moment it lands. This order keeps a mid-failure repo
     # "not yet enabled" rather than "enabled and unprotected".
     claudemd = Enablement(directory).enable()
-    if claudemd.import_registered:
-        logger.info("Registered quarry @-import in CLAUDE.md")
     config_path = ProjectConfig().write(directory)
-    # Running enable is the operator's consent to quarry's allow rules (#552);
-    # they land last, once the project is otherwise fully enabled.
-    permissions = ProjectPermissions(directory).grant()
-
     return EnableResult(
         directory=str(directory),
-        collection=collection,
-        captures_collection=captures_collection,
+        collection=resolution.collection,
+        captures_collection=f"{resolution.collection}-captures",
         config_path=config_path,
-        created_registration=created,
+        created_registration=resolution.created,
+        covered_by=resolution.covered_by,
         guide_deposited=claudemd.guide_deposited,
         enabled_marker_written=claudemd.enabled_marker_written,
         import_registered=claudemd.import_registered,
         gitignore_ensured=claudemd.gitignore_ensured,
         ethos=ethos,
-        permissions=permissions,
+        # Running enable is the user's consent to quarry's allow rules. They
+        # are granted last, once every other step has succeeded, so a failure
+        # earlier never leaves allow rules in a half-enabled project.
+        permissions=ProjectPermissions(directory).grant(),
         skills_deposited=claudemd.skills_deposited,
     )
 
@@ -186,11 +201,8 @@ def disable_project(
     runtime registration residue a retry converges — never the § 2.11
     forbidden marker-present-without-a-collection state if disabling raises.
     """
-    from quarry.registrations import Registrations  # noqa: PLC0415
-
     directory = QuarryHome.expanded(directory).resolve()
-    view = Registrations.from_list(client.list_registrations())
-    return _DisableOrchestrator(directory, client, view, keep_data=keep_data).run()
+    return _DisableOrchestrator(directory, client, keep_data=keep_data).run()
 
 
 @final
@@ -198,37 +210,39 @@ class _DisableOrchestrator:
     """Sequence the § 2.3 disable steps in the § 2.11 commit-point order.
 
     Instances are single-use. Owning the (directory, client, covering,
-    keep_data) state as slots lets each fallible step be a named method the
+    keep_data, parent) state as slots lets each fallible step be a named method the
     caller can drive in an explicit order — the same order § 5.4's regression
     test asserts against — and keeps the top-level ``disable_project``
     function a thin driver over one live class.
     """
 
-    __slots__ = ("_client", "_covering", "_directory", "_keep_data")
+    __slots__ = ("_client", "_covering", "_directory", "_keep_data", "_parent")
 
     _directory: Path
     _client: RegistryClient
     _covering: RegistrationInfo | None
     _keep_data: bool
+    _parent: str
 
     def __new__(
         cls,
         directory: Path,
         client: RegistryClient,
-        view: Registrations,
         *,
         keep_data: bool,
     ) -> Self:
-        covering = view.covering(directory)
-        # A CHILD of a registered parent is a real error — the parent covers it;
-        # never silently deregister the parent. This guard stays fatal.
+        from quarry.registrations import Registrations  # noqa: PLC0415
+
+        covering = Registrations.from_list(client.list_registrations()).covering(
+            directory
+        )
+        # A CHILD of a registered parent owns no registration: disable undoes
+        # its own files but never deregisters or purges the parent's collection.
+        parent = ""
         if covering is not None and covering.directory != str(directory):
-            msg = (
-                f"no registration for {directory}; "
-                f"it is covered by parent registration at {covering.directory}"
-            )
-            raise ValueError(msg)
+            parent, covering = covering.directory, None
         self = super().__new__(cls)
+        self._parent = parent
         self._directory = directory
         self._client = client
         self._covering = covering
@@ -237,8 +251,8 @@ class _DisableOrchestrator:
 
     def run(self) -> DisableResult:
         """Drive the ordered steps and assemble the result."""
-        config_removed = self._remove_config_file()
-        claudemd = self._disable_enablement()
+        config = self._settle_config()
+        claudemd, markers = self._disable_enablement()
         permissions = ProjectPermissions(self._directory).revoke()
         removed = self._deregister_covering()
         self._purge_captures()
@@ -248,41 +262,35 @@ class _DisableOrchestrator:
             collection=collection,
             captures_collection=f"{collection}-captures" if collection else "",
             removed=removed,
-            config_removed=config_removed,
+            config_removed=config.removed,
+            config_kept=config.kept,
+            config_why=config.why,
             import_pruned=claudemd.import_pruned,
             enabled_marker_removed=claudemd.enabled_marker_removed,
             permissions=permissions,
+            covered_by=self._parent,
+            capturing_marker=next(iter(markers), ""),
+            also_capturing=markers[1:],
         )
 
-    def _remove_config_file(self) -> bool:
-        """Delete ``config.md`` via :class:`SafeRepoPath`; return whether removed.
+    def _settle_config(self) -> ConfigDisposal:
+        """Remove ``config.md``, or keep it when the covering parent still reads it."""
+        return ConfigDisposal.settle(self._directory, covered=bool(self._parent))
 
-        A symlinked ``.punt-labs`` ancestor makes the unlink refuse; catching
-        that so it cannot abort before ``Enablement.disable`` prunes the
-        ``@``-import a prior teardown already acted on. A refused config is
-        not a real in-repo file, so treating it as absent and continuing is
-        correct.
-        """
-        try:
-            return SafeRepoPath(
-                self._directory, (".punt-labs", "quarry", "config.md")
-            ).remove()
-        except ValueError:
-            return False
-
-    def _disable_enablement(self) -> DisablementResult:
+    def _disable_enablement(self) -> tuple[DisablementResult, tuple[str, ...]]:
         """Remove the marker and prune the ``@``-import under one FileLock.
 
         The § 2.11 commit point: marker-absent + import-present is the only
         recoverable failure state; ``Enablement.disable`` guarantees the
         biconditional.
-        """
-        from quarry.enablement import Enablement  # noqa: PLC0415
 
-        claudemd = Enablement(self._directory).disable()
-        if claudemd.import_pruned:
-            logger.info("Removed quarry @-import from CLAUDE.md")
-        return claudemd
+        Also returns the directories whose markers still capture the child,
+        nearest first, or none. The search is the session-start hook's own, run
+        after this directory's marker is gone, so the report cannot disagree
+        with the hook.
+        """
+        guard = GuardedDisable(self._directory)
+        return guard.run(), guard.capturing_markers(self._parent)
 
     def _deregister_covering(self) -> int:
         """Deregister the covering collection via the daemon; return removed row count.
