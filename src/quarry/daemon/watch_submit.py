@@ -184,8 +184,12 @@ class WatchSubmitter:
         shed finalize therefore lives in the submit every finalize goes through,
         not in this closure.
         """
-        db = self._roster.database_of(key.database)
-        settings = self._roster.settings_of(key.database)
+        try:
+            db = self._roster.database_of(key.database)
+            settings = self._roster.settings_of(key.database)
+        except KeyError:
+            logger.debug("retry dropped: database %s left the roster", key.database)
+            return
         self._throttle.request(
             key.database,
             lambda: self._submit_finalize(key, db, settings).status != "failed",

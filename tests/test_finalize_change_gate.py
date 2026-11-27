@@ -24,6 +24,7 @@ from quarry.daemon.collection_finalize_job import CollectionFinalizeJob
 from quarry.daemon.finalize_throttle import FinalizeThrottle
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, FileIndexJob
+from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
 from quarry.db import Database, TableOptimizer
@@ -46,7 +47,6 @@ if TYPE_CHECKING:
 
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.ingest_unit import IngestUnit
-    from quarry.daemon.route_key import RouteKey
     from quarry.daemon.task_state import TaskState
 
 _DATABASE = "testdb"
@@ -304,8 +304,9 @@ class _Daemon:
         await self.queue.settled()
 
     async def stop(self) -> None:
-        await self.queue.settled()  # no finalize thread may outlive the test
-        await self.loop.stop()
+        await self.queue.settled()
+        await self.loop.stop()  # cancels the throttle and retry timers
+        await self.queue.settled()  # a timer that fired in between admitted a job
         await self.queue.stop()
 
     async def safety_scan(self) -> None:
@@ -1102,6 +1103,30 @@ def test_a_shed_retry_is_armed_again_when_a_write_armed_the_trailing_timer(
         await _until(lambda: d.rewrites.optimizes >= 2)
         await d.queue.settled()
         assert d.rewrites.optimizes == 2
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_retry_for_a_database_left_the_roster_is_dropped_quietly(
+    daemon: Callable[..., _Daemon],
+) -> None:
+    async def run() -> None:
+        d = daemon("col", interval=0.05)
+        await d.start()
+        problems: list[dict[str, object]] = []
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: problems.append(context)
+        )
+        submitter = d.loop._submitter
+        roster = d.loop._roster
+        assert submitter is not None
+        assert roster is not None
+        submitter._retry_finalize(RouteKey(_DATABASE, "col"), 0.05)
+        roster._conns.pop(_DATABASE)
+        roster._db_settings.pop(_DATABASE)
+        await asyncio.sleep(0.4)  # the retry timer fires
+        assert problems == []
         await d.stop()
 
     asyncio.run(run())
