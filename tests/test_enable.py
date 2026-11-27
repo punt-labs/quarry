@@ -562,7 +562,9 @@ class TestDisableCoveredChildReport:
         text = "\n".join(DisableReport(result, keep_data=False).lines())
 
         assert "Disabled" not in text
-        assert f"run 'quarry disable {parent}' to stop it" in text
+        assert f"'quarry disable {parent}' stops it but deregisters" in text
+        assert f"purges everything indexed for {parent}" in text
+        assert "--keep-data" in text
         assert client.deregistered == []
         assert client.deleted == []
 
@@ -581,7 +583,7 @@ class TestDisableCoveredChildReport:
         assert "Config file removed" in text
         assert "Removed enabled marker" in text
         assert "Disabled" not in text
-        assert lines[-1].endswith(f"run 'quarry disable {parent}' to stop it")
+        assert lines[-1].endswith("(add --keep-data to keep the data)")
 
     def test_parent_registered_without_marker_is_not_captured(
         self, tmp_path: Path
@@ -611,7 +613,9 @@ class TestDisableCoveredChildReport:
 
         assert "Nothing of its own found" in text
         assert "Config file removed" not in text
-        assert f"run 'quarry disable {parent}' to stop it" in text
+        assert f"'quarry disable {parent}' stops it but deregisters" in text
+        assert f"purges everything indexed for {parent}" in text
+        assert "--keep-data" in text
 
 
 class TestT17EnableWithOverrideOnChildRaises:

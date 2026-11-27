@@ -139,10 +139,11 @@ def test_disable_report_idempotent_noop() -> None:
 
 _STILL_CAPTURED = (
     "/p/src is still captured by the registration at /p; "
-    "run 'quarry disable /p' to stop it"
+    "'quarry disable /p' stops it but deregisters /p and purges everything "
+    "indexed for /p (add --keep-data to keep the data)"
 )
 _NOT_CAPTURED = (
-    "/p/src is registered under /p but not captured: no enabled marker at /p"
+    "/p/src is registered under /p but not captured: no readable enabled marker at /p"
 )
 
 
@@ -229,6 +230,53 @@ def test_disable_report_covered_child_nothing_own_says_so() -> None:
         "Nothing of its own found in /p/src",
         _STILL_CAPTURED,
     ]
+
+
+def test_disable_report_covered_child_permission_error_alone_is_nothing_removed() -> (
+    None
+):
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        parent_enabled=True,
+        permissions=PermissionChange(error="bad json"),
+    )
+    expected = [
+        "Nothing of its own found in /p/src",
+        "  Permissions not changed: bad json",
+        _STILL_CAPTURED,
+    ]
+    assert DisableReport(result, keep_data=False).lines() == expected
+    assert DisableReport(result, keep_data=False).lines() == expected
+
+
+def test_disable_report_covered_child_permission_change_is_a_removal() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        parent_enabled=True,
+        permissions=PermissionChange(changed=("Bash(quarry:*)",)),
+    )
+    assert DisableReport(result, keep_data=False).lines()[0] == (
+        "Removed quarry's own settings from /p/src"
+    )
+
+
+def test_disable_report_captured_note_names_the_purge_and_keep_data() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        parent_enabled=True,
+    )
+    note = DisableReport(result, keep_data=False).lines()[-1]
+    assert "purges everything indexed for /p" in note
+    assert "--keep-data" in note
 
 
 def test_enable_report_lists_granted_rules_and_scope() -> None:

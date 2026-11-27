@@ -98,7 +98,8 @@ class ProjectCli:
         # is a no-op success (result.collection == ""), not an error. A covered
         # child is handled too: its own files are removed, the parent's
         # registration and captures are kept, and the exit is 0 with a line
-        # naming the parent registration that still captures the directory.
+        # naming the parent registration and whether it still captures the
+        # directory.
         # Pass the raw path: disable_project owns normalization
         # (expanduser().resolve()). Resolving here would mangle "~/proj".
         from quarry.disable_report import DisableReport  # noqa: PLC0415

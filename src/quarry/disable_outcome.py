@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, final
+from typing import TYPE_CHECKING, final
 
 from quarry.enable_report import EnableReport
 
@@ -30,11 +30,10 @@ class DisableOutcome(ABC):
     __slots__ = ()
 
     result: DisableResult
-    _NOTE_LAST: ClassVar[bool] = False
 
-    @abstractmethod
     def heading(self) -> str:
         """Return the first line of the report."""
+        return f"Disabled quarry for {self.result.directory}"
 
     @abstractmethod
     def note(self) -> str:
@@ -52,27 +51,31 @@ class DisableOutcome(ABC):
         return AlreadyDisabled(result)
 
     def lines(self) -> list[str]:
-        """Return heading, note, and removal lines; the note last when asked."""
-        removed = self._removed()
-        if self._NOTE_LAST:
-            return [self.heading(), *removed, self.note()]
-        return [self.heading(), self.note(), *removed]
+        """Return the heading, then the note and removal lines in outcome order."""
+        return [self.heading(), *self._body()]
+
+    def _body(self) -> list[str]:
+        return [self.note(), *self._removed()]
+
+    def _flags(self) -> tuple[tuple[object, str], ...]:
+        r = self.result
+        return (
+            (r.config_removed, "  Config file removed"),
+            (
+                r.import_pruned,
+                "  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md",
+            ),
+            (r.enabled_marker_removed, "  Removed enabled marker (guide left dormant)"),
+            (
+                r.permissions.changed,
+                "".join(r.permissions.lines("Removed quarry tool permissions from")),
+            ),
+        )
 
     def _removed(self) -> list[str]:
-        r = self.result
-        return EnableReport.flagged(
-            (
-                (r.config_removed, "  Config file removed"),
-                (
-                    r.import_pruned,
-                    "  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md",
-                ),
-                (
-                    r.enabled_marker_removed,
-                    "  Removed enabled marker (guide left dormant)",
-                ),
-            )
-        ) + r.permissions.lines("Removed quarry tool permissions from")
+        p = self.result.permissions
+        error = p.lines("") if p.error else []
+        return EnableReport.flagged(self._flags()) + error
 
 
 @final
@@ -82,10 +85,6 @@ class Deregistered(DisableOutcome):
 
     result: DisableResult
     keep_data: bool
-
-    def heading(self) -> str:
-        """Return the disable heading."""
-        return f"Disabled quarry for {self.result.directory}"
 
     def note(self) -> str:
         """Return the deregistration and what became of its indexed data."""
@@ -103,10 +102,6 @@ class AlreadyDisabled(DisableOutcome):
 
     result: DisableResult
 
-    def heading(self) -> str:
-        """Return the disable heading."""
-        return f"Disabled quarry for {self.result.directory}"
-
     def note(self) -> str:
         """Return the idempotent no-op note."""
         return "  Already disabled (no registration)"
@@ -117,12 +112,14 @@ class _CoveredChild(DisableOutcome):
 
     __slots__ = ()
 
-    _NOTE_LAST: ClassVar[bool] = True
+    def _body(self) -> list[str]:
+        return [*self._removed(), self.note()]
 
     def heading(self) -> str:
         """Return what was removed from the child, or that nothing was."""
         where = self.result.directory
-        if self._removed():
+        # Real removals only: a permissions error renders a line but removes nothing.
+        if EnableReport.flagged(self._flags()):
             return f"Removed quarry's own settings from {where}"
         return f"Nothing of its own found in {where}"
 
@@ -139,7 +136,9 @@ class CoveredCaptured(_CoveredChild):
         r = self.result
         return (
             f"{r.directory} is still captured by the registration at "
-            f"{r.covered_by}; run 'quarry disable {r.covered_by}' to stop it"
+            f"{r.covered_by}; 'quarry disable {r.covered_by}' stops it but "
+            f"deregisters {r.covered_by} and purges everything indexed for "
+            f"{r.covered_by} (add --keep-data to keep the data)"
         )
 
 
@@ -155,5 +154,5 @@ class CoveredUncaptured(_CoveredChild):
         r = self.result
         return (
             f"{r.directory} is registered under {r.covered_by} but not captured: "
-            f"no enabled marker at {r.covered_by}"
+            f"no readable enabled marker at {r.covered_by}"
         )
