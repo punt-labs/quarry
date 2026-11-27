@@ -137,40 +137,98 @@ def test_disable_report_idempotent_noop() -> None:
     assert "Already disabled (no registration)" in joined
 
 
-def test_disable_report_covered_child_with_own_files_names_parent_command() -> None:
+_STILL_CAPTURED = (
+    "/p/src is still captured by the registration at /p; "
+    "run 'quarry disable /p' to stop it"
+)
+_NOT_CAPTURED = (
+    "/p/src is registered under /p but not captured: no enabled marker at /p"
+)
+
+
+def test_disable_report_deregistered_output_is_exact() -> None:
+    result = DisableResult(
+        directory="/p",
+        collection="p",
+        captures_collection="p-captures",
+        removed=3,
+        config_removed=True,
+        import_pruned=True,
+        enabled_marker_removed=True,
+        permissions=PermissionChange(changed=("Bash(quarry:*)",)),
+    )
+    assert DisableReport(result, keep_data=False).lines() == [
+        "Disabled quarry for /p",
+        "  Deregistered p (3 files); chunk purge queued",
+        "  Config file removed",
+        "  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md",
+        "  Removed enabled marker (guide left dormant)",
+        (
+            "  Removed quarry tool permissions from .claude/settings.json "
+            "(this project only): Bash(quarry:*)"
+        ),
+    ]
+    assert DisableReport(result, keep_data=True).lines()[1] == (
+        "  Deregistered p (3 files); kept indexed data"
+    )
+
+
+def test_disable_report_unregistered_output_is_exact() -> None:
+    result = DisableResult(directory="/p", collection="", captures_collection="")
+    assert DisableReport(result, keep_data=False).lines() == [
+        "Disabled quarry for /p",
+        "  Already disabled (no registration)",
+    ]
+
+
+def test_disable_report_covered_child_parent_capturing_names_parent_command() -> None:
     result = DisableResult(
         directory="/p/src",
         collection="",
         captures_collection="",
         covered_by="/p",
+        parent_enabled=True,
         config_removed=True,
         enabled_marker_removed=True,
     )
     lines = DisableReport(result, keep_data=False).lines()
-    joined = "\n".join(lines)
-    assert "Removed enabled marker (guide left dormant)" in joined
-    assert "Config file removed" in joined
-    assert lines[-1] == (
-        "/p/src is still captured by the registration at /p; "
-        "run 'quarry disable /p' to stop it"
-    )
-    assert "Disabled quarry" not in joined
-    assert "Already disabled" not in joined
-    assert "Deregistered" not in joined
+    assert lines == [
+        "Removed quarry's own settings from /p/src",
+        "  Config file removed",
+        "  Removed enabled marker (guide left dormant)",
+        _STILL_CAPTURED,
+    ]
 
 
-def test_disable_report_covered_child_with_nothing_own_says_so() -> None:
+def test_disable_report_covered_child_parent_not_capturing_does_not_suggest_it() -> (
+    None
+):
     result = DisableResult(
-        directory="/p/src", collection="", captures_collection="", covered_by="/p"
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        parent_enabled=False,
+        enabled_marker_removed=True,
     )
     lines = DisableReport(result, keep_data=False).lines()
-    joined = "\n".join(lines)
-    assert "Disabled" not in joined
-    assert "Nothing of its own found in /p/src" in joined
-    assert lines[-1] == (
-        "/p/src is still captured by the registration at /p; "
-        "run 'quarry disable /p' to stop it"
+    assert lines[-1] == _NOT_CAPTURED
+    assert "quarry disable /p" not in "\n".join(lines)
+    assert "still captured" not in "\n".join(lines)
+
+
+def test_disable_report_covered_child_nothing_own_says_so() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        parent_enabled=True,
     )
+    assert DisableReport(result, keep_data=False).lines() == [
+        "Nothing of its own found in /p/src",
+        _STILL_CAPTURED,
+    ]
 
 
 def test_enable_report_lists_granted_rules_and_scope() -> None:

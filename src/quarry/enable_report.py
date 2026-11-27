@@ -76,8 +76,8 @@ class EnableReport:
         (Claude Code, served by the plugin directly) are not, and a re-enable
         where every skill is already current (or no source tree/non-Claude
         harness exists at all) omits the line entirely — the same "visible by
-        its absence" convention :meth:`DisableReport.lines` uses for its own
-        marker line. A ``dict``'s insertion-ordered keys are the
+        its absence" convention :class:`~quarry.disable_outcome.DisableOutcome`
+        uses for its removal lines. A ``dict``'s insertion-ordered keys are the
         de-duplicating, order-preserving set this needs — a plain ``set``
         would scramble the display order.
         """

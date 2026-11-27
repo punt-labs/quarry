@@ -540,20 +540,22 @@ class TestT15DisableCoveredChild:
 
 
 class TestDisableCoveredChildReport:
-    """The disable report for a covered child says capture continues."""
+    """The disable report for a covered child reflects the parent's marker."""
 
     @staticmethod
-    def _parent_child(tmp_path: Path) -> tuple[Path, Path]:
+    def _parent_child(tmp_path: Path, *, parent_marker: bool) -> tuple[Path, Path]:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
+        if parent_marker:
+            EnabledMarker(parent).write()
         return parent, child
 
     def test_never_enabled_child_removes_nothing_and_names_parent(
         self, tmp_path: Path
     ) -> None:
-        parent, child = self._parent_child(tmp_path)
+        parent, child = self._parent_child(tmp_path, parent_marker=True)
         client = FakeRegistryClient([("project", parent)])
 
         result = disable_project(child, client)
@@ -567,7 +569,7 @@ class TestDisableCoveredChildReport:
     def test_enabled_then_disabled_child_lists_removals_and_still_captured(
         self, tmp_path: Path
     ) -> None:
-        parent, child = self._parent_child(tmp_path)
+        parent, child = self._parent_child(tmp_path, parent_marker=True)
         client = FakeRegistryClient([("project", parent)])
 
         with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
@@ -581,8 +583,24 @@ class TestDisableCoveredChildReport:
         assert "Disabled" not in text
         assert lines[-1].endswith(f"run 'quarry disable {parent}' to stop it")
 
+    def test_parent_registered_without_marker_is_not_captured(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child = self._parent_child(tmp_path, parent_marker=False)
+        client = FakeRegistryClient([("project", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            result = disable_project(child, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert result.parent_enabled is False
+        assert f"registered under {parent} but not captured" in text
+        assert f"quarry disable {parent}" not in text
+        assert "still captured" not in text
+
     def test_second_disable_converges_to_nothing_found(self, tmp_path: Path) -> None:
-        parent, child = self._parent_child(tmp_path)
+        parent, child = self._parent_child(tmp_path, parent_marker=True)
         client = FakeRegistryClient([("project", parent)])
 
         with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):

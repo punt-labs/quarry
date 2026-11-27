@@ -1019,3 +1019,4 @@
 {"ts":"2026-11-27T06:11:18Z","commit":"3a8cbfa","source":null,"files_scored":498,"files_improved":0,"files_regressed":1,"verdict":"fail","reason":null,"deltas":{},"backfilled":["src/quarry/covered_disable_note.py"]}
 {"ts":"2026-11-27T06:11:29Z","commit":"3a8cbfa","source":null,"files_scored":498,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{}}
 {"ts":"2026-11-27T06:11:46Z","commit":"3a8cbfa","source":null,"files_scored":498,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{},"backfilled":["src/quarry/disable_lines.py"]}
+{"ts":"2026-11-27T06:40:33Z","commit":"330a7d4","source":null,"files_scored":498,"files_improved":0,"files_regressed":0,"verdict":"pass","reason":null,"deltas":{},"backfilled":["src/quarry/disable_outcome.py"]}

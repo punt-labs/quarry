@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.client import TargetResolver
+from quarry.enabled_marker import EnabledMarker
 from tests.conftest import FakeRegistryClient
 
 if TYPE_CHECKING:
@@ -239,6 +240,7 @@ class TestEnableCLICoveredByParent:
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
+        EnabledMarker(parent).write()
         return parent, child, FakeRegistryClient([("project", parent)])
 
     def test_exits_0_naming_the_reused_registration(

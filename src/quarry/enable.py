@@ -96,6 +96,8 @@ class DisableResult:
 
     ``covered_by`` is the parent registration left in place when the directory
     was only covered by it (nothing of the parent's is deregistered or purged).
+    ``parent_enabled`` is whether that parent's ``enabled`` marker is present,
+    which is what keeps capture live under the child.
     """
 
     directory: str
@@ -107,6 +109,7 @@ class DisableResult:
     enabled_marker_removed: bool = False
     permissions: PermissionChange = field(default_factory=PermissionChange)
     covered_by: str = ""
+    parent_enabled: bool = False
 
 
 def enable_project(
@@ -142,8 +145,6 @@ def enable_project(
     # writes live the moment it lands. This order keeps a mid-failure repo
     # "not yet enabled" rather than "enabled and unprotected".
     claudemd = Enablement(directory).enable()
-    if claudemd.import_registered:
-        logger.info("Registered quarry @-import in CLAUDE.md")
     config_path = ProjectConfig().write(directory)
     return EnableResult(
         directory=str(directory),
@@ -157,8 +158,9 @@ def enable_project(
         import_registered=claudemd.import_registered,
         gitignore_ensured=claudemd.gitignore_ensured,
         ethos=ethos,
-        # Granted last, evaluated after every other step has succeeded, so a
-        # failure earlier never leaves allow rules in a half-enabled project.
+        # Running enable is the user's consent to quarry's allow rules. They
+        # are granted last, once every other step has succeeded, so a failure
+        # earlier never leaves allow rules in a half-enabled project.
         permissions=ProjectPermissions(directory).grant(),
         skills_deposited=claudemd.skills_deposited,
     )
@@ -239,7 +241,7 @@ class _DisableOrchestrator:
     def run(self) -> DisableResult:
         """Drive the ordered steps and assemble the result."""
         config_removed = self._remove_config_file()
-        claudemd = self._disable_enablement()
+        claudemd, parent_enabled = self._disable_enablement()
         permissions = ProjectPermissions(self._directory).revoke()
         removed = self._deregister_covering()
         self._purge_captures()
@@ -254,6 +256,7 @@ class _DisableOrchestrator:
             enabled_marker_removed=claudemd.enabled_marker_removed,
             permissions=permissions,
             covered_by=self._parent,
+            parent_enabled=parent_enabled,
         )
 
     def _remove_config_file(self) -> bool:
@@ -272,19 +275,21 @@ class _DisableOrchestrator:
         except ValueError:
             return False
 
-    def _disable_enablement(self) -> DisablementResult:
+    def _disable_enablement(self) -> tuple[DisablementResult, bool]:
         """Remove the marker and prune the ``@``-import under one FileLock.
 
         The § 2.11 commit point: marker-absent + import-present is the only
         recoverable failure state; ``Enablement.disable`` guarantees the
         biconditional.
+
+        Also returns whether the covering parent's marker is present: this
+        disable cannot reach it, and while it stays the child is still captured.
         """
         from quarry.enablement import Enablement  # noqa: PLC0415
 
         claudemd = Enablement(self._directory).disable()
-        if claudemd.import_pruned:
-            logger.info("Removed quarry @-import from CLAUDE.md")
-        return claudemd
+        parent = bool(self._parent) and Enablement(Path(self._parent)).is_enabled()
+        return claudemd, parent
 
     def _deregister_covering(self) -> int:
         """Deregister the covering collection via the daemon; return removed row count.
