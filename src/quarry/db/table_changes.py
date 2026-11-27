@@ -116,6 +116,11 @@ class TableChanges:
                 or self._clock() - self._maintained >= self.MAINTENANCE_INTERVAL_S
             )
 
+    def mark_maintenance_failed(self) -> None:
+        """Make the slow-clock maintenance due again, whatever succeeded before."""
+        with self._lock:
+            self._maintained = None
+
     def mark_maintained(self) -> None:
         """Record that the slow-clock maintenance just ran."""
         with self._lock:

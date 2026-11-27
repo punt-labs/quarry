@@ -594,6 +594,7 @@ application = [
     "quarry.daemon.late_outcome",
     "quarry.daemon.lifecycle",
     "quarry.daemon.loop_close",
+    "quarry.daemon.maintenance_key",
     "quarry.daemon.purge_recheck",
     "quarry.daemon.purge_service",
     "quarry.daemon.queue_abort",

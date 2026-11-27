@@ -22,6 +22,7 @@ from quarry.daemon.finalize_pacing import FinalizeThrottle
 from quarry.daemon.finalize_retry import FinalizeRetry
 from quarry.daemon.index_jobs import CollectionSyncJob
 from quarry.daemon.job_lifecycle import JobLifecycle
+from quarry.daemon.maintenance_key import MaintenanceKey
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.scan_sweep import ScanSweep
 from quarry.daemon.shed_rearm import ShedEventRearmer
@@ -39,9 +40,6 @@ if TYPE_CHECKING:
     from quarry.db import Database
 
 logger = logging.getLogger(__name__)
-
-# The routing key for finalize work on a database with no registered directory.
-_MAINTENANCE_COLLECTION = "__maintenance__"
 
 
 @final
@@ -181,12 +179,8 @@ class WatchSubmitter:
         The retry rides a registered collection's FIFO when there is one, else
         the reserved maintenance collection's.
         """
-        if delay_s is None:
-            return
-        self._roster.ensure_database(database)
-        registered = self._roster.registrations(database)
-        collection = registered[0][0] if registered else _MAINTENANCE_COLLECTION
-        self.retry_finalize(RouteKey(database, collection), delay_s)
+        if delay_s is not None:
+            self.retry_finalize(MaintenanceKey(self._roster).of(database), delay_s)
 
     def retry_finalize(self, key: RouteKey, delay_s: float) -> None:
         """Arm a retry for a finalize that left *key*'s database dirty."""

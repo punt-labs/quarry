@@ -117,12 +117,14 @@ class TableUpkeep:
     def _sweep_and_mark(self) -> None:
         """Sweep orphan pages; restart the slow clock only if the sweep succeeded.
 
-        A failed sweep leaves the clock where it was, so the next finalize tries
-        again instead of waiting out ``MAINTENANCE_INTERVAL_S``.
+        A failed sweep makes the maintenance due again, even when an earlier sweep
+        succeeded a minute ago, so the next finalize tries again instead of waiting
+        out ``MAINTENANCE_INTERVAL_S``.
         """
         try:
             OrphanPageSweep(self._db).run()
         except (OSError, RuntimeError, ValueError) as exc:
             logger.warning("sync: orphan page sweep failed: %s", exc, exc_info=True)
+            self._changes.mark_maintenance_failed()
             return
         self._changes.mark_maintained()

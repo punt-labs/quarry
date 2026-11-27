@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, NotRequired, Self, TypedDict, final
 
 from quarry.db import TableOptimizer
 from quarry.db.lance_connection import LanceConnection
@@ -23,6 +23,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _FTS_FAILED = "full-text index rebuild failed; the next finalize retries it"
+
+
+class OptimizeResults(TypedDict):
+    """The fields an optimize task reports, the same for the daemon and its clients."""
+
+    optimized: bool
+    fragments_before: int
+    force: bool
+    fts_rebuilt: NotRequired[bool]  # present only when the table was compacted
+    reason: NotRequired[str]  # why the run did less than asked
 
 
 @final
@@ -137,18 +147,18 @@ class ManualOptimize:
         )
         return self
 
-    def finalize_retry_delay(self, results: dict[str, object]) -> float | None:
+    def finalize_retry_delay(self, results: OptimizeResults) -> float | None:
         """Return when to retry the finalize after a failed rebuild, else ``None``.
 
         Only a run whose full-text rebuild failed owes one: the table is dirty and
         the old index stale.  The delay is the ledger's back-off, never under
         ``MIN_RETRY_S``.
         """
-        if results.get("fts_rebuilt") is not False:
+        if results.get("fts_rebuilt", True):
             return None
         return max(MIN_RETRY_S, self._ledger.health().retry_in_seconds)
 
-    def task_results(self, *, force: bool) -> dict[str, object]:
+    def task_results(self, *, force: bool) -> OptimizeResults:
         """Run the optimize and return the fields its task reports."""
         return OptimizeReport(self.run_manually(force=force), force=force).results()
 
@@ -189,10 +199,10 @@ class OptimizeReport:
         self._force = force
         return self
 
-    def results(self) -> dict[str, object]:
+    def results(self) -> OptimizeResults:
         """Return the task's result fields."""
         outcome = self._outcome
-        results: dict[str, object] = {
+        results: OptimizeResults = {
             "optimized": outcome.optimized,
             "fragments_before": outcome.fragments,
             "force": self._force,

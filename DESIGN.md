@@ -2290,8 +2290,8 @@ the retry's own closure. This works with `watch_safety_scan_s = 0`. While the le
 backing off, a finalize of a dirty table is a skip: a sweep's finalize does not
 stamp the throttle, and there is no GC. It still sweeps orphan pages when the slow
 clock is due, which is at most once per `MAINTENANCE_INTERVAL_S` (an hour) after a
-sweep that succeeded: a failed sweep does not restart the clock, so the next finalize
-attempts it again; its DEBUG line says "backing off". Back-off doubles from 600 s to a 6 hour cap, and the retry
+sweep that succeeded: a failed sweep makes the maintenance due again, even when an earlier sweep
+succeeded a minute ago, so the next finalize attempts it again; its DEBUG line says "backing off". Back-off doubles from 600 s to a 6 hour cap, and the retry
 fires once it has elapsed. An unexpected exception type is recorded in the ledger
 before it propagates, so it backs off and shows on `/health` like any other failure
 instead of repeating every throttle interval.
@@ -2361,7 +2361,8 @@ result. The route then arms that database's finalize retry through
 a registered directory, and nothing else ever finalizes a database that holds only
 remembered text (no ingest or remember route requests a finalize). The retry rides a
 registered collection's FIFO when there is one and the reserved `__maintenance__`
-collection's otherwise.
+collection's otherwise, including when the directory registry cannot be read (that
+is logged at WARNING and the retry is still armed).
 
 *Not covered.* A write by a process other than the daemon bypasses the record; the
 daemon is the single writer (DES-042), and an offline `quarry repair` run while the

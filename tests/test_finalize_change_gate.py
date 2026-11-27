@@ -14,6 +14,7 @@ duplicate that harness in each part.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from quarry.daemon.index_jobs import CollectionSyncJob, FileIndexJob
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
+from quarry.daemon.watch_roster import WatchRoster
 from quarry.db import Database, TableOptimizer
 from quarry.db.lance_connection import LanceConnection
 from quarry.db.optimizer import OptimizeOutcome
@@ -40,7 +42,7 @@ from quarry.db.table_changes import TableChanges
 from quarry.finalize_ledger import FinalizeLedgers
 from quarry.finalize_steps import ShadowPushStep
 from quarry.ingestion.pipeline import plan_file_chunks
-from quarry.optimize_step import ManualOptimize
+from quarry.optimize_step import ManualOptimize, OptimizeReport
 from quarry.post_sync_gc import PostSyncGc
 from quarry.sync_registry import SyncRegistry
 from quarry.table_upkeep import TableUpkeep
@@ -1240,7 +1242,7 @@ def test_a_failed_manual_rebuild_on_a_registrationless_database_is_retried(
         outcome = manual.run_manually(force=False)
         assert outcome.fts_rebuilt is False
         failing[0] = False
-        results: dict[str, object] = {"fts_rebuilt": False}
+        results = OptimizeReport(outcome, force=False).results()
         assert manual.finalize_retry_delay(results) is not None
         d.loop.arm_finalize_retry(0.05)
         await _until(lambda: d.rewrites.optimizes >= 2)
@@ -1278,6 +1280,33 @@ def test_a_finalize_on_another_collection_can_overtake_a_queued_index_job(
         assert d.rewrites.optimizes == base
         await d.safety_scan()
         assert d.rewrites.optimizes == base + 1
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_registry_that_will_not_open_still_arms_the_retry(
+    daemon: Callable[..., _Daemon],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def broken(_roster: WatchRoster, _name: str) -> list[tuple[str, Path]]:
+        msg = "registry is locked"
+        raise sqlite3.OperationalError(msg)
+
+    async def run() -> None:
+        d = daemon("col", interval=0.05)
+        d.prefill()
+        await d.start()
+        d.write_chunk(name="dirty.md")  # something for the retry to rewrite
+        before = d.rewrites.optimizes
+        monkeypatch.setattr(WatchRoster, "registrations", broken)  # after the start
+        with caplog.at_level("WARNING", logger="quarry.daemon.watch_submit"):
+            d.loop.arm_finalize_retry(0.05)  # must not raise
+        assert "registry" in caplog.text
+        await _until(lambda: d.rewrites.optimizes > before)
+        await d.queue.settled()
+        assert d.rewrites.optimizes == before + 1  # the maintenance key still ran it
         await d.stop()
 
     asyncio.run(run())
