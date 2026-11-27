@@ -43,14 +43,16 @@ class ConfigDisposal:
         a real in-repo config, so it counts as absent and the disable goes on to
         prune the ``@``-import a prior teardown already acted on.  A directory
         the process cannot search holds no config it can act on, so it is the
-        same.
+        same.  A config that is there but cannot be unlinked raises ``OSError``:
+        this is the first disable step, so nothing else has been undone and a
+        retry converges.
         """
         verdict = ConfigVerdict.of(directory) if covered else ConfigVerdict.ABSENT
         if verdict.left_in_place:
             return cls(removed=False, kept=True, why=verdict.value)
         try:
             return cls(removed=ConfigVerdict.discard(directory), kept=False)
-        except (OSError, ValueError):
+        except ValueError:
             return cls(removed=False, kept=False)
 
 

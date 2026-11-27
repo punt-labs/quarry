@@ -7,14 +7,12 @@ from typing import TYPE_CHECKING
 
 from quarry._frontmatter import Frontmatter
 from quarry._stdlib import HookConfig
-from quarry.safe_paths import SafeRepoPath
+from quarry.config_discard import ConfigDiscard
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["ConfigVerdict"]
-
-_RELATIVE = (".punt-labs", "quarry", "config.md")
 
 
 class ConfigVerdict(Enum):
@@ -49,7 +47,7 @@ class ConfigVerdict(Enum):
         be read or decoded is ``UNREADABLE``: the hook falls back to defaults
         for it, so it is neither applied nor ours to delete.
         """
-        config = SafeRepoPath(directory, _RELATIVE)
+        config = ConfigDiscard.handle(directory)
         if not config.is_regular_file():
             return cls.LINKED if cls._leads_to_file(config.path) else cls.ABSENT
         try:
@@ -70,10 +68,12 @@ class ConfigVerdict(Enum):
     def discard(directory: Path) -> bool:
         """Remove ``directory``'s config if it is a regular file; return whether it was.
 
-        Raises ``ValueError`` when a symlinked ``.punt-labs`` ancestor refuses
-        the unlink, and ``OSError`` when a directory on the path cannot be searched.
+        Raises ``ValueError`` when an ancestor is a symlink or cannot be entered
+        (an unsearchable directory on the path usually surfaces this way), and
+        ``OSError`` when a config that is still a regular file cannot be
+        unlinked.  See :class:`~quarry.config_discard.ConfigDiscard`.
         """
-        return SafeRepoPath(directory, _RELATIVE).remove()
+        return ConfigDiscard(directory).remove()
 
     @staticmethod
     def _changes_behaviour(text: str) -> bool:

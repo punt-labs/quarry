@@ -117,3 +117,16 @@ def test_discard_and_settle_never_raise_on_an_unsearchable_directory(
     locked(tmp_path / ".punt-labs" / "quarry", mode)
     disposal = ConfigDisposal.settle(tmp_path, covered=True)
     assert (disposal.removed, disposal.kept) == (False, False)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+@pytest.mark.parametrize("covered", [True, False], ids=["covered", "uncovered"])
+def test_a_failed_unlink_of_a_present_config_is_not_swallowed(
+    tmp_path: Path, locked: Callable[[Path, int], None], *, covered: bool
+) -> None:
+    path = _config(tmp_path)
+    path.write_text(ProjectConfig().text)
+    locked(path.parent, 0o555)
+    with pytest.raises(PermissionError):
+        ConfigDisposal.settle(tmp_path, covered=covered)
+    assert path.exists()

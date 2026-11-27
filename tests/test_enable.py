@@ -8,6 +8,7 @@ enable/disable drive the daemon's registry through a client port
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -365,6 +366,28 @@ class TestT11DisableRemovesConfig:
 
         assert result.config_removed is True
         assert not config_path.exists()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+    def test_unremovable_config_fails_the_disable_before_any_other_step(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(project, client)
+            quarry_dir = project / ".punt-labs" / "quarry"
+            quarry_dir.chmod(0o555)
+            try:
+                with pytest.raises(PermissionError, match=r"config\.md"):
+                    disable_project(project, client)
+            finally:
+                quarry_dir.chmod(0o755)
+
+        assert (quarry_dir / "config.md").exists()
+        assert EnabledMarker(project).is_present()
+        assert client.deregistered == []
 
     def test_symlinked_ancestor_config_removal_does_not_strand_import(
         self, tmp_path: Path
