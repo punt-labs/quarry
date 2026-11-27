@@ -1,6 +1,102 @@
 {
   "checks": {
-    "full-gate": {
+    "handoff-unit": {
+      "profile": "linux-worktree-v1",
+      "epoch": "quarry-v1",
+      "sources": {"mode": "worktree"},
+      "runtime": {
+        "platforms": {
+          "linux-amd64": {
+            "bundle": "quarry-linux-amd64-v1.tar.gz",
+            "url": "https://github.com/punt-labs/quarry/releases/download/handoff-runtime-v1/quarry-handoff-linux-amd64.tar.gz",
+            "sha256": "d4a209941efe34eebbdc0cc014bbbe978a3d9e5b6caf0ed73e92a2029e7541b3",
+            "path": ["{runtime}/bin", "{runtime}/node/bin", "/usr/bin", "/bin"],
+            "env": {
+              "UV_PYTHON": "{runtime}/python/bin/python3.13",
+              "UV_PYTHON_DOWNLOADS": "never",
+              "UV_PROJECT_ENVIRONMENT": "{root}/.venv",
+              "UV_CACHE_DIR": "{scratch}/uv-cache",
+              "UV_LINK_MODE": "copy",
+              "UV_OFFLINE": "1",
+              "npm_config_cache": "{scratch}/npm-cache",
+              "npm_config_offline": "true",
+              "RUFF_CACHE_DIR": "{scratch}/ruff-cache",
+              "MYPY_CACHE_DIR": "{scratch}/mypy-cache",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1"
+            }
+          }
+        }
+      },
+      "system": {
+        "tools": [
+          "awk", "basename", "bash", "cat", "cp", "cut", "diff", "dirname", "du", "env", "git", "grep",
+          "head", "id", "jq", "make", "mkdir", "mktemp", "mv", "nohup", "perl", "printf", "ps", "python3",
+          "rm", "sed", "setsid", "sh", "sha256sum", "shellcheck", "sleep", "sort", "tail", "tee",
+          "touch", "uname"
+        ]
+      },
+      "scratch": {
+        "checkout": [".venv", ".pytest-work", ".pytest_cache", ".import_linter_cache", ".hypothesis"],
+        "files": ["install-constraints.txt.check.tmp"],
+        "seed": {
+          "{scratch}/uv-cache": "{runtime}/cache/uv",
+          "{scratch}/npm-cache": "{runtime}/cache/npm"
+        }
+      },
+      "git": {"base_ref": "refs/remotes/origin/main"},
+      "network": "loopback",
+      "prehydrate": {"run": ["uv", "sync", "--offline", "--locked", "--extra", "dev"]}
+    },
+    "handoff-lint": {
+      "profile": "linux-worktree-v1",
+      "epoch": "quarry-v1",
+      "sources": {"mode": "worktree"},
+      "runtime": {
+        "platforms": {
+          "linux-amd64": {
+            "bundle": "quarry-linux-amd64-v1.tar.gz",
+            "url": "https://github.com/punt-labs/quarry/releases/download/handoff-runtime-v1/quarry-handoff-linux-amd64.tar.gz",
+            "sha256": "d4a209941efe34eebbdc0cc014bbbe978a3d9e5b6caf0ed73e92a2029e7541b3",
+            "path": ["{runtime}/bin", "{runtime}/node/bin", "/usr/bin", "/bin"],
+            "env": {
+              "UV_PYTHON": "{runtime}/python/bin/python3.13",
+              "UV_PYTHON_DOWNLOADS": "never",
+              "UV_PROJECT_ENVIRONMENT": "{root}/.venv",
+              "UV_CACHE_DIR": "{scratch}/uv-cache",
+              "UV_LINK_MODE": "copy",
+              "UV_OFFLINE": "1",
+              "npm_config_cache": "{scratch}/npm-cache",
+              "npm_config_offline": "true",
+              "RUFF_CACHE_DIR": "{scratch}/ruff-cache",
+              "MYPY_CACHE_DIR": "{scratch}/mypy-cache",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1"
+            }
+          }
+        }
+      },
+      "system": {
+        "tools": [
+          "awk", "basename", "bash", "cat", "cp", "cut", "diff", "dirname", "du", "env", "git", "grep",
+          "head", "id", "jq", "make", "mkdir", "mktemp", "mv", "nohup", "perl", "printf", "ps", "python3",
+          "rm", "sed", "setsid", "sh", "sha256sum", "shellcheck", "sleep", "sort", "tail", "tee",
+          "touch", "uname"
+        ]
+      },
+      "scratch": {
+        "checkout": [".venv", ".pytest-work", ".pytest_cache", ".import_linter_cache", ".hypothesis"],
+        "files": ["install-constraints.txt.check.tmp"],
+        "seed": {
+          "{scratch}/uv-cache": "{runtime}/cache/uv",
+          "{scratch}/npm-cache": "{runtime}/cache/npm"
+        }
+      },
+      "git": {"base_ref": "refs/remotes/origin/main"},
+      "network": "loopback",
+      "prehydrate": {"run": ["uv", "sync", "--offline", "--locked", "--extra", "dev"]}
+    },
+    "handoff-type": {
       "profile": "linux-worktree-v1",
       "epoch": "quarry-v1",
       "sources": {"mode": "worktree"},
