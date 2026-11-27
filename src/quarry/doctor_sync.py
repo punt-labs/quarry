@@ -76,32 +76,6 @@ class SyncDiagnostics:
     @staticmethod
     def enable_status(registry_path: Path, cwd: str) -> CheckResult:
         """Report whether *cwd* has quarry enabled and its config is present."""
-        from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
-        from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
+        from quarry.doctor_enable_status import EnableStatus  # noqa: PLC0415
 
-        conn = SyncRegistry(registry_path)
-        try:
-            collection = (
-                CollectionResolver(conn).covering_collection(cwd) if cwd else None
-            )
-        finally:
-            conn.close()
-        if collection is None:
-            return CheckResult(
-                name="Enable status",
-                passed=False,
-                message="not enabled -- run 'quarry enable'",
-                required=False,
-            )
-        captures = f"{collection}-captures"
-        config_path = Path(cwd) / ".punt-labs" / "quarry" / "config.md"
-        config_exists = config_path.is_file()
-        parts = [f"collection: {collection}, captures: {captures}"]
-        if not config_exists:
-            parts.append("config.md missing (run 'quarry enable')")
-        return CheckResult(
-            name="Enable status",
-            passed=config_exists,
-            message=", ".join(parts),
-            required=False,
-        )
+        return EnableStatus(registry_path, cwd).result()

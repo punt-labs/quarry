@@ -54,19 +54,80 @@ class TestT2EnableIdempotent:
         assert client.registered == []
 
 
-class TestT3EnableChildRaisesValueError:
-    def test_child_of_registered_parent_raises(self, tmp_path: Path) -> None:
+class TestT3EnableCoveredChild:
+    """A directory under a registered parent reuses the parent's collection."""
+
+    @staticmethod
+    def _covered(tmp_path: Path) -> tuple[Path, Path, FakeRegistryClient]:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
-        client = FakeRegistryClient([("project", parent)])
+        return parent, child, FakeRegistryClient([("project", parent)])
 
-        with (
-            patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"),
-            pytest.raises(ValueError, match="already covered by the registration at"),
-        ):
+    def test_reuses_parent_collection_without_registering(self, tmp_path: Path) -> None:
+        parent, child, client = self._covered(tmp_path)
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            result = enable_project(child, client)
+
+        assert result.collection == "project"
+        assert result.captures_collection == "project-captures"
+        assert result.created_registration is False
+        assert result.covered_by == str(parent)
+        assert client.registered == []
+
+    def test_writes_per_repo_files(self, tmp_path: Path) -> None:
+        _, child, client = self._covered(tmp_path)
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            result = enable_project(child, client)
+
+        config = child / ".punt-labs" / "quarry" / "config.md"
+        assert config.is_file()
+        assert result.config_path == str(config)
+        assert EnabledMarker(child).is_present()
+
+    def test_second_run_changes_nothing(self, tmp_path: Path) -> None:
+        _, child, client = self._covered(tmp_path)
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
             enable_project(child, client)
+            before = _tree_snapshot(child)
+            again = enable_project(child, client)
+
+        assert _tree_snapshot(child) == before
+        assert again.enabled_marker_written is False
+        assert again.import_registered is False
+        assert client.registered == []
+
+    def test_doctor_is_clean_after_enable(self, tmp_path: Path) -> None:
+        from quarry.doctor_sync import SyncDiagnostics
+        from quarry.sync_registry import SyncRegistry
+
+        parent, child, client = self._covered(tmp_path)
+        registry_path = tmp_path / "registry.db"
+        conn = SyncRegistry(registry_path)
+        conn.register_directory(parent, "project")
+        conn.close()
+
+        before = SyncDiagnostics.enable_status(registry_path, str(child))
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+        after = SyncDiagnostics.enable_status(registry_path, str(child))
+
+        assert before.passed is False
+        assert "run 'quarry enable'" in before.message
+        assert after.passed is True
+        assert "quarry enable" not in after.message
+        assert str(parent) in after.message
+
+
+def _tree_snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        str(p.relative_to(root)): p.read_bytes()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
 
 
 class TestT4EnableCollectionOverride:
@@ -449,7 +510,7 @@ class TestT15DisableOnChildOfRegisteredParentRaises:
 
 
 class TestT17EnableWithOverrideOnChildRaises:
-    def test_override_does_not_bypass_parent_check(self, tmp_path: Path) -> None:
+    def test_conflicting_override_is_refused(self, tmp_path: Path) -> None:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
@@ -461,6 +522,8 @@ class TestT17EnableWithOverrideOnChildRaises:
             pytest.raises(ValueError, match="already covered by the registration"),
         ):
             enable_project(child, client, collection_override="custom")
+
+        assert not (child / ".punt-labs").exists()
 
 
 class TestT18EnableResolvesRelativePath:
@@ -545,6 +608,24 @@ class TestT20CheckEnableStatusConfigMissing:
 
         assert result.passed is True
         assert "config.md missing" not in result.message
+
+    def test_covered_directory_names_the_covering_registration(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.doctor_sync import SyncDiagnostics
+
+        parent = tmp_path / "myproject"
+        child = parent / "src"
+        (child / ".punt-labs" / "quarry").mkdir(parents=True)
+        (child / ".punt-labs" / "quarry" / "config.md").write_text("---\n---\n")
+        registry_path = tmp_path / "registry.db"
+        self._register(registry_path, parent)
+
+        result = SyncDiagnostics.enable_status(registry_path, str(child))
+
+        assert result.passed is True
+        assert f"registration: {parent}" in result.message
+        assert "collection: myproject" in result.message
 
 
 class TestEnableRegistersImportAndMarker:

@@ -66,9 +66,10 @@ class ProjectCli:
         """Enable quarry knowledge capture for a project directory."""
         from quarry.enable import enable_project  # noqa: PLC0415
 
-        # A ValueError (e.g. parent-covered dir) propagates to the shared
-        # _cli_errors boundary: stdout stays empty (no spurious JSON error object
-        # under --json), the diagnostic goes to stderr, exit 1.
+        # A ValueError (e.g. a --collection that contradicts the covering
+        # registration) propagates to the shared _cli_errors boundary: stdout
+        # stays empty (no spurious JSON error object under --json), the
+        # diagnostic goes to stderr, exit 1.
         # Pass the raw path: enable_project owns normalization
         # (expanduser().resolve()). Resolving here would turn "~/proj" into
         # "./~/proj" before the tilde is ever expanded.

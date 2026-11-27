@@ -65,7 +65,8 @@ class EnableResult:
     than flattened into parallel lists. ``permissions`` is the § 2.8 allow-rule
     grant in the repo's ``.claude/settings.json``. ``skills_deposited``
     is the cross-harness skill-deposit outcome, passed through from
-    ``Enablement.enable()`` unchanged.
+    ``Enablement.enable()`` unchanged.  ``covered_by`` is the parent
+    registration reused instead of registering this directory, else empty.
     """
 
     directory: str
@@ -73,6 +74,7 @@ class EnableResult:
     captures_collection: str
     config_path: str = ""
     created_registration: bool = False
+    covered_by: str = ""
     guide_deposited: bool = False
     enabled_marker_written: bool = False
     import_registered: bool = False
@@ -126,9 +128,7 @@ def enable_project(
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
 
-    collection, created = Registrar(client).resolve(directory, collection_override)
-
-    captures_collection = f"{collection}-captures"
+    resolution = Registrar(client).resolve(directory, collection_override)
 
     # Global ext files are created and refreshed; the repo's vendored tree (a
     # repo-only identity's actual source layer) is refreshed, never created.
@@ -144,20 +144,19 @@ def enable_project(
     config_path = ProjectConfig().write(directory)
     # Running enable is the operator's consent to quarry's allow rules (#552);
     # they land last, once the project is otherwise fully enabled.
-    permissions = ProjectPermissions(directory).grant()
-
     return EnableResult(
         directory=str(directory),
-        collection=collection,
-        captures_collection=captures_collection,
+        collection=resolution.collection,
+        captures_collection=f"{resolution.collection}-captures",
         config_path=config_path,
-        created_registration=created,
+        created_registration=resolution.created,
+        covered_by=resolution.covered_by,
         guide_deposited=claudemd.guide_deposited,
         enabled_marker_written=claudemd.enabled_marker_written,
         import_registered=claudemd.import_registered,
         gitignore_ensured=claudemd.gitignore_ensured,
         ethos=ethos,
-        permissions=permissions,
+        permissions=ProjectPermissions(directory).grant(),
         skills_deposited=claudemd.skills_deposited,
     )
 

@@ -43,6 +43,7 @@ class EnableReport:
         ]
         lines += _flagged(
             (
+                (r.covered_by, f"  Reused registration at {r.covered_by}"),
                 (r.config_path, f"  Config: {r.config_path}"),
                 (
                     r.guide_deposited,
@@ -63,8 +64,7 @@ class EnableReport:
             "Added quarry permission rules to",
             unchanged="  Quarry permission rules already in .claude/settings.json",
         )
-        lines += self._skills_lines()
-        return lines + self._ethos_lines()
+        return lines + self._skills_lines() + self._ethos_lines()
 
     def _skills_lines(self) -> list[str]:
         """Return the cross-harness skill-deposit line, or none.
