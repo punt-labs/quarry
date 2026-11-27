@@ -3,8 +3,8 @@ annotated-types==0.7.0
 anyio==4.14.2
 attrs==25.4.0
 beautifulsoup4==4.15.0
-certifi==2026.10.23
-cffi==2.0.0 ; platform_python_implementation != 'PyPy'
+certifi==2026.11.20
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
 charset-normalizer==3.4.4
 click==8.5.1
 colorama==0.4.6 ; sys_platform == 'win32'
@@ -50,7 +50,7 @@ opentelemetry-semantic-conventions==0.66b2
 packaging==26.3
 pathspec==1.1.1
 pillow==13.0.0
-protobuf==6.33.5
+protobuf==7.36.2
 psutil==7.2.2
 punt-observe==0.1.1
 pyarrow==26.0.0
@@ -69,14 +69,14 @@ python-docx==1.2.0
 python-dotenv==1.2.2
 python-multipart==0.0.31
 python-pptx==1.0.2
-pywin32==311 ; sys_platform == 'win32'
+pywin32==312 ; sys_platform == 'win32'
 pyyaml==6.0.3
 rapidocr==3.9.2
 referencing==0.37.0
 requests==2.33.0
 rich==14.3.2
 rpds-py==0.30.0
-shapely==2.1.2
+shapely==2.2.0
 shellingham==1.5.4
 six==1.17.0
 soupsieve==4.1
