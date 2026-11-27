@@ -32,6 +32,21 @@ def test_opt_out_lists_only_commands_nearer_than_it(
     assert str(ParentDisableCommand(str(far))) not in text
 
 
+def test_opt_out_omits_commands_for_every_marker_beyond_it(
+    tmp_path: Path, opt_out: Callable[[Path], str]
+) -> None:
+    root = tmp_path / "q"
+    nearest, near = str(root / "p/a/b/c"), str(root / "p/a/b")
+    stop, farther = opt_out(root / "p/a"), str(root / "p")
+    text = str(SyncDuration((nearest, near, stop, farther, str(root)), str(root)))
+    assert (
+        f"(disabling each: `{ParentDisableCommand(nearest)}`, "
+        f"`{ParentDisableCommand(near)}`)"
+    ) in text
+    for omitted in (stop, farther, str(root)):
+        assert f"`{ParentDisableCommand(omitted)}`" not in text
+
+
 def test_nearest_marker_opt_out_is_not_this_clauses_concern(
     tmp_path: Path, opt_out: Callable[[Path], str]
 ) -> None:
