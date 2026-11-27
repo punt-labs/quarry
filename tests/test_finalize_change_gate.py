@@ -29,6 +29,7 @@ from lancedb.index import FTS, Bitmap, BTree
 from quarry.config import Settings
 from quarry.daemon.collection_finalize_job import CollectionFinalizeJob
 from quarry.daemon.finalize_pacing import FinalizeThrottle
+from quarry.daemon.finalize_retry import FinalizeRetry
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, FileIndexJob
 from quarry.daemon.route_key import RouteKey
@@ -284,12 +285,17 @@ class _Daemon:
         self = super().__new__(cls)
         self.clock = ManualLoop() if manual_clock else None
         if self.clock is not None:
-            # The throttle's interval and trailing timers run on this clock, so
-            # when a timer fires is the test's decision, not the scheduler's.
+            # The throttle's interval and trailing timers and the finalize retry
+            # run on this clock, so when a timer fires is the test's decision,
+            # not the scheduler's.
             clock = self.clock.as_loop
             monkeypatch.setattr(
                 "quarry.daemon.watch_submit.FinalizeThrottle",
                 lambda _loop, interval_s: FinalizeThrottle(clock, interval_s),
+            )
+            monkeypatch.setattr(
+                "quarry.daemon.watch_submit.FinalizeRetry",
+                lambda _loop: FinalizeRetry(clock),
             )
         data = tmp_path / "data"
         (data / _DATABASE).mkdir(parents=True)
@@ -1023,6 +1029,9 @@ def test_a_skipped_sweep_finalize_leaves_the_throttle_clock_and_trailing_alone(
         await _until(lambda: _armed_trailing(d))
         assert _armed_trailing(d)
         finalizes = d.queue.finalizes
+        # Move the clock first, so a stamp written by the skipped sweep reads 1.0
+        # and cannot be mistaken for the start finalize's 0.0.
+        d.clock.set_time(1.0)
         await d.safety_scan()  # a skipped sweep finalize
         assert d.queue.finalizes == finalizes + 1
         assert throttle._last[_DATABASE] == stamp
@@ -1322,7 +1331,10 @@ def test_a_finalize_on_another_collection_can_overtake_a_queued_index_job(
         await d.queue.settled()
         clock.advance(1.2)  # no timer is left to finalize x's write
         await d.queue.settled()
-        assert clock.live() == []
+        assert clock.live() == []  # the throttle's trailing and the retry timers
+        submitter = d.loop._submitter
+        assert submitter is not None
+        assert submitter._rearm._timers == set()  # no shed event waits to re-feed
         assert d.queue.finalizes == finalizes + 1
         assert d.rewrites.optimizes == base
         await d.safety_scan()
