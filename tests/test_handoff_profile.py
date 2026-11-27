@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -38,13 +38,48 @@ def test_handoff_stage_does_not_run_the_full_gate() -> None:
     assert offenders == []
 
 
-def test_handoff_checks_are_scoped_to_python_paths() -> None:
-    handoff = _handoff_checks()
-    assert handoff, "the profile must keep a handoff check"
-    for check in handoff:
-        files = check["files"]
-        assert isinstance(files, list), check["name"]
-        assert all(str(p).endswith((".py", ".pyi")) for p in files)
+def _matches(check: dict[str, object], path: str) -> bool:
+    files = check["files"]
+    assert isinstance(files, list), check["name"]
+    return any(PurePosixPath(path).full_match(str(glob)) for glob in files)
+
+
+def _matching(path: str) -> set[str]:
+    return {str(c["name"]) for c in _handoff_checks() if _matches(c, path)}
+
+
+def test_handoff_checks_list_their_files() -> None:
+    assert _handoff_checks(), "the profile must keep a handoff check"
+    for check in _handoff_checks():
+        assert isinstance(check["files"], list), check["name"]
+
+
+def test_docs_only_change_runs_lint_but_not_tests_or_types() -> None:
+    matched = _matching("README.md")
+    assert "handoff-lint" in matched
+    assert "handoff-unit" not in matched
+    assert "handoff-type" not in matched
+
+
+def test_python_change_runs_every_handoff_check() -> None:
+    assert _matching("src/quarry/client.py") == {
+        "handoff-unit",
+        "handoff-lint",
+        "handoff-type",
+    }
+
+
+def test_lint_inputs_outside_python_trigger_lint() -> None:
+    for path in (
+        "plugin/commands/find.md",
+        "plugin/hooks/hooks.json",
+        "pyproject.toml",
+    ):
+        assert "handoff-lint" in _matching(path), path
+
+
+def test_type_checker_settings_trigger_type() -> None:
+    assert "handoff-type" in _matching("pyproject.toml")
 
 
 def test_handoff_timeouts_are_bounded() -> None:
