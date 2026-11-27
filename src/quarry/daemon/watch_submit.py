@@ -177,25 +177,26 @@ class WatchSubmitter:
     ) -> None:
         """Arm a retry for a finalize that left *key*'s database dirty."""
         self._retries.arm(
-            key.database,
-            delay_s,
-            partial(self._retry_request, key, db, settings),
+            key.database, delay_s, partial(self._retry_request, key, db, settings)
         )
 
-    def _retry_request(self, key: RouteKey, db: Database, settings: Settings) -> bool:
-        """Request the retry through the throttle; return whether it was not shed.
+    def _retry_request(self, key: RouteKey, db: Database, settings: Settings) -> None:
+        """Request the retry through the throttle, re-arming it if the queue sheds it.
 
-        A request the throttle coalesces into its trailing timer counts as handled;
-        one it submits and the queue sheds does not, so the retry is armed again.
+        The shed handling lives in the submit callback, so it also covers a
+        request the throttle coalesces into its trailing timer: when that timer
+        fires and the finalize is shed, the retry is armed again rather than lost.
         """
-        admitted: list[bool] = []
 
         def submit() -> bool:
-            admitted.append(self._submit_finalize(key, db, settings).status != "failed")
-            return admitted[-1]
+            admitted = self._submit_finalize(key, db, settings).status != "failed"
+            if not admitted:
+                self._retries.arm_shed(
+                    key.database, partial(self._retry_request, key, db, settings)
+                )
+            return admitted
 
         self._throttle.request(key.database, submit)
-        return all(admitted)
 
     def _request_finalize(
         self, key: RouteKey, db: Database, settings: Settings

@@ -13,6 +13,7 @@ import time
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+from quarry.db import Database, TableOptimizer
 from quarry.db.optimizer import OptimizeOutcome
 from quarry.db.table_changes import TableChanges
 from quarry.finalize_ledger import FinalizeLedgers
@@ -276,6 +277,7 @@ class TestManualOptimizeAndFinalizeDoNotOverlap:
         settings.lancedb_path = tmp_path / "overlap" / "lancedb"
         settings.quarry_root = tmp_path
         FinalizeLedgers.for_database(settings.lancedb_path, tmp_path).clear()
+        database = Database.connect(settings.lancedb_path)
         active = 0
         peak = 0
         guard = threading.Lock()
@@ -290,10 +292,12 @@ class TestManualOptimizeAndFinalizeDoNotOverlap:
                 active -= 1
             return OptimizeOutcome(optimized=True, fragments=1)
 
-        with patch("quarry.optimize_step.TableOptimizer") as optimizer:
-            optimizer.return_value.optimize.side_effect = slow_optimize
-            manual = ManualOptimize(optimizer.return_value, settings)
-            step = OptimizeStep(MagicMock(name="db"), settings)
+        with (
+            patch.object(TableOptimizer, "optimize", side_effect=slow_optimize),
+            patch.object(TableOptimizer, "create_collection_index"),
+        ):
+            manual = ManualOptimize(database, settings)
+            step = OptimizeStep(database.db, settings)
             threads = [
                 threading.Thread(target=lambda: manual.run_manually(force=False)),
                 threading.Thread(target=step.run),

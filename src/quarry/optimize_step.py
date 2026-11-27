@@ -7,14 +7,16 @@ import time
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.db import TableOptimizer
-from quarry.db.table_changes import TableChanges
+from quarry.db.lance_connection import LanceConnection
 from quarry.finalize_ledger import FinalizeLedger, FinalizeLedgers
 
 if TYPE_CHECKING:
     import threading
 
     from quarry.config import Settings
+    from quarry.db import Database
     from quarry.db.optimizer import OptimizeOutcome
+    from quarry.db.table_changes import TableChanges
     from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
@@ -46,7 +48,7 @@ class OptimizeStep:
         self._ledger = FinalizeLedgers.for_database(
             settings.lancedb_path, settings.quarry_root
         )
-        self._lock = TableChanges.for_path(settings.lancedb_path).optimizing()
+        self._lock = LanceConnection.changes_of(db).optimizing()
         return self
 
     def run(self) -> bool:
@@ -68,6 +70,11 @@ class OptimizeStep:
                 self._ledger.record_failure(type(exc).__name__)
                 logger.warning("sync: optimize failed: %s", exc, exc_info=True)
                 return False
+            except Exception as exc:
+                # An unexpected type still counts: it backs off through the ledger
+                # and shows on /health instead of repeating every interval.
+                self._ledger.record_failure(type(exc).__name__)
+                raise
             return self._record(outcome)
 
     def _record(self, outcome: OptimizeOutcome) -> bool:
@@ -102,7 +109,10 @@ class ManualOptimize:
     """An operator-triggered optimize: index, compact, then settle the ledger.
 
     The ledger may hold an index-build failure, so only a run that did both
-    steps may clear it; a failure in either propagates and leaves it.
+    steps may clear it; a failure in either propagates and leaves it.  A run whose
+    full-text rebuild fails dirties the record, so the next finalize rebuilds the
+    index once the back-off elapses.  Nothing arms that finalize: it relies on the
+    periodic safety scan, and with ``watch_safety_scan_s = 0`` on the next write.
     """
 
     __slots__ = ("_changes", "_ledger", "_opt")
@@ -111,14 +121,14 @@ class ManualOptimize:
     _ledger: FinalizeLedger
     _changes: TableChanges
 
-    def __new__(cls, opt: TableOptimizer, settings: Settings) -> Self:
-        """Pair explicit optimization with the database's shared failure ledger."""
+    def __new__(cls, database: Database, settings: Settings) -> Self:
+        """Pair explicit optimization with the database's ledger and write record."""
         self = super().__new__(cls)
-        self._opt = opt
+        self._opt = database.optimizer
         self._ledger = FinalizeLedgers.for_database(
             settings.lancedb_path, settings.quarry_root
         )
-        self._changes = TableChanges.for_path(settings.lancedb_path)
+        self._changes = LanceConnection.changes_of(database.db)
         return self
 
     def task_results(self, *, force: bool) -> dict[str, object]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
     from quarry.daemon.job_spool import SpoolRecord
     from quarry.daemon.task_state import TaskState
     from quarry.db import Database
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,13 +105,13 @@ class CollectionFinalizeJob:
             retry_in = finalizer.run(announce)
         except Exception:
             # An unexpected failure left the table as the record says: if it is
-            # dirty, a retry is still owed.  Compute it here, so a failure of its
-            # own is chained to the original rather than replacing it.
+            # dirty, a retry is still owed.  Compute it here; a failure of this
+            # call alone is chained to the original rather than replacing it.
             retry_in = finalizer.retry_in_seconds()
             raise
         finally:
             if retry_in is not None and self.on_unsettled is not None:
-                loop.call_soon_threadsafe(self.on_unsettled, retry_in)
+                self._hand_off(loop, self.on_unsettled, retry_in)
 
     def _announcer(self, loop: asyncio.AbstractEventLoop) -> Callable[[], None]:
         """Return the call that tells the loop a rewrite is starting."""
@@ -115,6 +119,20 @@ class CollectionFinalizeJob:
 
         def announce() -> None:
             if hook is not None:
-                loop.call_soon_threadsafe(hook)
+                self._hand_off(loop, hook)
 
         return announce
+
+    @staticmethod
+    def _hand_off(
+        loop: asyncio.AbstractEventLoop, call: Callable[..., None], *args: float
+    ) -> None:
+        """Run *call* on the loop; at shutdown the loop is closed, and that is fine.
+
+        The hand-off sits in a ``finally``, so a ``RuntimeError`` from a closed
+        loop would replace the finalize's own exception or its normal return.
+        """
+        try:
+            loop.call_soon_threadsafe(call, *args)
+        except RuntimeError:
+            logger.debug("event loop closed; dropped a finalize hand-off")

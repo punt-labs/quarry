@@ -75,9 +75,9 @@ class ScanSweep:
 
         Each finalize decides when it runs, behind the scans queued ahead of it,
         whether the table changed and so needs a rewrite.  One that rewrites
-        registers with the throttle, cancelling a trailing finalize already
-        armed for that database and resetting the interval clock; one that skips
-        leaves the throttle alone.
+        stamps the throttle's interval clock and leaves a trailing finalize
+        already armed for that database in place; one that skips leaves the
+        throttle alone.
         """
         for key in self._databases.values():
             self._states.append(self._submitter.submit_finalize_job(key))

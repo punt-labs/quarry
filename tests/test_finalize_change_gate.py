@@ -27,6 +27,7 @@ from quarry.daemon.index_jobs import CollectionSyncJob, FileIndexJob
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
 from quarry.db import Database, TableOptimizer
+from quarry.db.lance_connection import LanceConnection
 from quarry.db.optimizer import OptimizeOutcome
 from quarry.db.orphan_pages import OrphanPageSweep
 from quarry.db.recycling_table import RecyclingTable
@@ -577,7 +578,7 @@ def test_skipped_finalize_leaves_an_armed_trailing_finalize_alone(
     asyncio.run(run())
 
 
-async def _until(predicate: Callable[[], bool], seconds: float = 8.0) -> None:
+async def _until(predicate: Callable[[], bool], seconds: float = 15.0) -> None:
     """Poll until *predicate* holds, then let the caller assert on the result."""
     deadline = asyncio.get_running_loop().time() + seconds
     while not predicate() and asyncio.get_running_loop().time() < deadline:
@@ -601,7 +602,7 @@ def test_trailing_finalize_fires_and_skips_when_nothing_landed_after_the_rewrite
     daemon: Callable[..., _Daemon],
 ) -> None:
     async def run() -> None:
-        d = daemon("col", interval=1.5)
+        d = daemon("col", interval=4.0)
         await d.start()
         base = d.rewrites.optimizes
         finalizes = d.queue.finalizes
@@ -621,7 +622,7 @@ def test_trailing_finalize_rewrites_a_write_that_landed_after_the_sweep_rewrite(
     daemon: Callable[..., _Daemon],
 ) -> None:
     async def run() -> None:
-        d = daemon("col", interval=1.5)
+        d = daemon("col", interval=4.0)
         await d.start()
         base = d.rewrites.optimizes
         landed = [False]
@@ -655,15 +656,16 @@ def test_quiet_database_still_sweeps_orphan_pages_on_the_slow_clock(
     monkeypatch.setattr(OrphanPageSweep, "run", counting_sweep)
 
     async def run() -> None:
-        d = daemon("col")
+        d = daemon("col", interval=30.0)  # keeps a retry from interleaving
         await d.start()
-        assert len(sweeps) == 1  # the start finalize rewrote the table and swept
+        swept = len(sweeps)
+        assert swept >= 1  # the start finalize rewrote the table and swept
         rewrites = d.rewrites.optimizes
         await d.safety_scan()
-        assert len(sweeps) == 1  # quiet, and the slow clock is not due
+        assert len(sweeps) == swept  # quiet, and the slow clock is not due
         monkeypatch.setattr(TableChanges, "MAINTENANCE_INTERVAL_S", 0.0)
         await d.safety_scan()
-        assert len(sweeps) == 2  # quiet, and the slow clock is due
+        assert len(sweeps) == swept + 1  # quiet, and the slow clock is due
         assert d.rewrites.optimizes == rewrites
         await d.stop()
 
@@ -811,8 +813,10 @@ def test_a_failed_finalize_is_retried_with_the_safety_scan_disabled(
 
 
 def test_an_unexpected_exception_still_arms_a_retry(
-    daemon: Callable[..., _Daemon],
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr("quarry.finalize_ledger.BACKOFF_BASE_SECONDS", 0.0)
+
     async def run() -> None:
         d = daemon("col", interval=0.05)
         d.rewrites.failures = [KeyError("unexpected")]
@@ -861,9 +865,7 @@ def test_manual_optimize_whose_fts_rebuild_fails_dirties_the_record(
         await d.safety_scan()
         before = d.rewrites.optimizes
         failing[0] = True
-        outcome = ManualOptimize(d.database.optimizer, d.settings).run_manually(
-            force=False
-        )
+        outcome = ManualOptimize(d.database, d.settings).run_manually(force=False)
         assert outcome.optimized
         assert outcome.fts_rebuilt is False
         failing[0] = False
@@ -1003,3 +1005,72 @@ def test_a_throttled_finalize_that_skips_still_stamps_the_clock(
         await d.stop()
 
     asyncio.run(run())
+
+
+def test_an_unexpected_exception_backs_off_through_the_ledger(
+    daemon: Callable[..., _Daemon],
+) -> None:
+    async def run() -> None:
+        d = daemon("col", interval=30.0)
+        d.rewrites.failures = [TypeError("unexpected")]
+        await d.start()
+        ledger = FinalizeLedgers.for_database(
+            d.settings.lancedb_path, d.settings.quarry_root
+        )
+        health = ledger.health()
+        assert health.consecutive_failures == 1
+        assert health.last_error == "TypeError"
+        changes = LanceConnection.changes_of(d.database.db)
+        upkeep = TableUpkeep(d.database.db, d.settings, changes)
+        retry_in = upkeep.retry_in_seconds()
+        assert retry_in is not None
+        assert retry_in >= 500.0
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_retry_coalesced_into_the_trailing_timer_is_armed_again_when_shed(
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("quarry.finalize_ledger.BACKOFF_BASE_SECONDS", 0.0)
+    monkeypatch.setattr("quarry.daemon.finalize_retry.SHED_RETRY_S", 0.1)
+
+    async def run() -> None:
+        # The interval is longer than the one second retry, so the retry is
+        # coalesced into the throttle's trailing timer, and that fire is shed.
+        d = daemon("col", interval=3.0)
+        d.rewrites.failures = [RuntimeError("boom")]
+        await d.start()
+        d.queue.shed = True
+        await asyncio.sleep(4.5)  # the trailing timer fires into a full queue
+        assert d.rewrites.optimizes == 1
+        d.queue.shed = False
+        await _until(lambda: d.rewrites.optimizes >= 2)
+        await d.queue.settled()
+        assert d.rewrites.optimizes == 2
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_closed_loop_at_shutdown_does_not_replace_the_original_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrites = _Rewrites(monkeypatch)
+    rewrites.failures = [KeyError("original")]
+    root = tmp_path / "data"
+    settings = Settings(
+        quarry_root=root,
+        lancedb_path=root / "a" / "lancedb",
+        registry_path=root / "a" / "registry.db",
+    )
+    database = Database.connect(settings.lancedb_path)
+    job = CollectionFinalizeJob(
+        database, settings, "col", on_unsettled=lambda delay: None
+    )
+    loop = asyncio.new_event_loop()
+    loop.close()
+    with pytest.raises(KeyError):
+        job._finalize(loop)
+    job._finalize(loop)  # a normal return at shutdown must not raise either

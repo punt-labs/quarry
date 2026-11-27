@@ -16,14 +16,15 @@ SHED_RETRY_S = 1.0
 class FinalizeRetry:
     """One pending retry per database for a finalize that did not settle clean.
 
-    A finalize that decided to rewrite cancels the armed trailing finalize, so if
-    it then fails or backs off nothing else is scheduled, and with the periodic
-    safety scan disabled nothing ever would be.  The retry waits out the
-    ledger's back-off, then calls *request*, which goes back through the
-    finalize throttle so it still honors the rate limit.  A retry that the
-    ingest queue sheds is armed again, so a full queue delays it but never drops
-    it.  A retry already pending for the database is kept.  State lives on the
-    event loop.
+    A sweep finalize that fails or backs off may have no trailing timer behind
+    it, so nothing else is scheduled, and with the periodic safety scan disabled
+    nothing ever would be.  The retry waits out the ledger's back-off, then calls
+    *request*, which goes back through the finalize throttle so it still honors
+    the rate limit.  *request* arms the retry again with :meth:`arm_shed` when
+    the finalize it submits is shed by a full ingest queue, whether it submits at
+    once or from the throttle's trailing timer, so a full queue delays a retry
+    but never drops it.  A retry already pending for the database is kept.  State
+    lives on the event loop.
     """
 
     __slots__ = ("_loop", "_timers")
@@ -38,7 +39,7 @@ class FinalizeRetry:
         self._timers = {}
         return self
 
-    def arm(self, database: str, delay_s: float, request: Callable[[], bool]) -> None:
+    def arm(self, database: str, delay_s: float, request: Callable[[], None]) -> None:
         """Schedule *request* in *delay_s* seconds unless a retry is pending."""
         if database not in self._timers:
             self._timers[database] = self._loop.call_later(
@@ -51,7 +52,10 @@ class FinalizeRetry:
             timer.cancel()
         self._timers.clear()
 
-    def _fire(self, database: str, request: Callable[[], bool]) -> None:
+    def _fire(self, database: str, request: Callable[[], None]) -> None:
         self._timers.pop(database, None)
-        if not request():
-            self.arm(database, SHED_RETRY_S, request)
+        request()
+
+    def arm_shed(self, database: str, request: Callable[[], None]) -> None:
+        """Arm *request* again shortly, after the ingest queue shed a retry."""
+        self.arm(database, SHED_RETRY_S, request)

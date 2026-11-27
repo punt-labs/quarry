@@ -92,7 +92,7 @@ class MaintenanceRoutes(RouteGroup):
         the fragment count from the outcome so the table is scanned only once.
         """
         with Terminal.for_task(state).recording():
-            step = ManualOptimize(self.ctx.database.optimizer, self.ctx.settings)
+            step = ManualOptimize(self.ctx.database, self.ctx.settings)
             results = await run_in_threadpool(lambda: step.task_results(force=force))
             state.complete(results)
 

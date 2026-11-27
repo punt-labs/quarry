@@ -2282,12 +2282,15 @@ during the run, or an unexpected exception (the job computes the delay and
 re-raises), tells the loop how long until a retry is allowed, and `FinalizeRetry`
 re-requests a finalize through the throttle after that delay, never sooner than one
 second (the ledger reports its back-off rounded to 0.1 s). A retry the ingest queue
-sheds is armed again. This works with `watch_safety_scan_s = 0`. While the ledger is
+sheds is armed again, whether it was submitted at once or from the throttle's trailing
+timer, because the shed handling sits in the submit callback. This works with `watch_safety_scan_s = 0`. While the ledger is
 backing off, a finalize of a dirty table is a skip: a sweep's finalize does not
 stamp the throttle, and there is no GC. It still sweeps orphan pages when the slow
-clock is due, which from the fourth consecutive failure, when the back-off has
-doubled past an hour, is every time; its DEBUG line says "backing off". Back-off
-doubles from 600 s to a 6 hour cap, and the retry fires once it has elapsed.
+clock is due, which is at most once per `MAINTENANCE_INTERVAL_S` (an hour); its DEBUG
+line says "backing off". Back-off doubles from 600 s to a 6 hour cap, and the retry
+fires once it has elapsed. An unexpected exception type is recorded in the ledger
+before it propagates, so it backs off and shows on `/health` like any other failure
+instead of repeating every throttle interval.
 
 *Crash window.* `CollectionFinalizeJob.spool_record()` is `None`, so a queued
 finalize does not survive a crash, and the write that wanted it is forgotten. The
@@ -2341,7 +2344,9 @@ rewrite and the manual optimize now both hold `TableChanges.optimizing()`, a
 per-database lock. A manual optimize whose full-text rebuild fails records the
 failure instead of clearing the ledger, dirties the record so the next finalize
 rebuilds the index, and reports `fts_rebuilt: false` with a reason in its task
-result.
+result. Nothing arms that finalize, so a manual optimize relies on the periodic
+safety scan; with `watch_safety_scan_s = 0` the stale index waits for the next
+write.
 
 *Not covered.* A write by a process other than the daemon bypasses the record; the
 daemon is the single writer (DES-042), and an offline `quarry repair` run while the
