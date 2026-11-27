@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +21,12 @@ from quarry.home_paths import QuarryHome
 from quarry.logging_config import LoggingConfig
 from quarry.url_admission import UrlAdmission
 from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
-from tests.hermetic_env import ENV, ProductionTreeGuard
+from tests.hermetic_env import (
+    ENV,
+    ProductionTreeGuard,
+    _drop_ambient_git_config,
+    _drop_ambient_plugin_root,
+)
 
 
 class TestHomeRedirect:
@@ -142,6 +148,66 @@ class TestAmbientGitConfig:
         """The count is the index; leaving the pairs behind would be half a job."""
         leftovers = [k for k in os.environ if k.startswith("GIT_CONFIG_")]
         assert leftovers == []
+
+
+class TestAmbientGitConfigScrub:
+    """The scrub does not depend on ``GIT_CONFIG_COUNT`` surviving to be read.
+
+    The ethos handoff gate launches ``make check`` with ``GIT_CONFIG_COUNT``
+    removed and every ``GIT_CONFIG_KEY_n``/``GIT_CONFIG_VALUE_n`` pair still
+    exported.  A scrub that walks indexes below the count finds no count and
+    leaves the pairs behind.
+    """
+
+    _AMBIENT: ClassVar[dict[str, str]] = {
+        "GIT_CONFIG_KEY_0": "commit.gpgsign",
+        "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_KEY_1": "user.signingkey",
+        "GIT_CONFIG_VALUE_1": "ABCD",
+        "GIT_CONFIG_PARAMETERS": "'commit.gpgsign=true'",
+        "GIT_CONFIG_GLOBAL": "/somewhere/gitconfig",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_DIR": "/somewhere/.git",
+        "HOME": "/kept",
+    }
+
+    def test_pairs_are_dropped_when_the_count_is_absent(self) -> None:
+        environ = dict(self._AMBIENT)
+        _drop_ambient_git_config(environ)
+        assert [k for k in environ if k.startswith("GIT_CONFIG_")] == []
+
+    def test_pairs_beyond_the_count_are_dropped(self) -> None:
+        environ = {**self._AMBIENT, "GIT_CONFIG_COUNT": "1"}
+        _drop_ambient_git_config(environ)
+        assert [k for k in environ if k.startswith("GIT_CONFIG_")] == []
+
+    def test_repository_local_variables_are_dropped(self) -> None:
+        environ = dict(self._AMBIENT)
+        _drop_ambient_git_config(environ)
+        assert "GIT_DIR" not in environ
+
+    def test_unrelated_variables_are_kept(self) -> None:
+        environ = dict(self._AMBIENT)
+        _drop_ambient_git_config(environ)
+        assert environ == {"HOME": "/kept"}
+
+
+class TestAmbientPluginRoot:
+    """A hook's ``CLAUDE_PLUGIN_ROOT`` does not follow the suite in.
+
+    Claude Code sets it for every plugin hook.  The ethos handoff gate runs
+    ``make check`` under that hook, and quarry's session-setup handler reads
+    the variable from the process environment, so a leaked value made the
+    no-home hook test run a real deploy and exit 1.
+    """
+
+    def test_plugin_root_is_dropped_from_this_process(self) -> None:
+        assert "CLAUDE_PLUGIN_ROOT" not in os.environ
+
+    def test_plugin_root_is_dropped_from_an_injected_environment(self) -> None:
+        environ = {"CLAUDE_PLUGIN_ROOT": "/plugins/ethos", "HOME": "/kept"}
+        _drop_ambient_plugin_root(environ)
+        assert environ == {"HOME": "/kept"}
 
 
 class TestAmbientCodexHome:
