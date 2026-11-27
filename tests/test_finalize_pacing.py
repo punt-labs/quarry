@@ -9,9 +9,9 @@ the queue, watchdog, or the filesystem.
 from __future__ import annotations
 
 import asyncio
-from typing import Self, final
+from typing import Self, cast, final
 
-from quarry.daemon.finalize_throttle import FinalizeThrottle
+from quarry.daemon.finalize_pacing import FinalizeThrottle
 
 _INTERVAL = 0.05
 
@@ -209,3 +209,84 @@ def test_admitted_finalize_stamps_and_coalesces() -> None:
         assert "db" in throttle._timers
 
     asyncio.run(_run())
+
+
+@final
+class _FakeTimer:
+    """A timer handle the test fires by hand."""
+
+    __slots__ = ("args", "callback", "cancelled_flag", "due")
+
+    args: tuple[object, ...]
+    callback: object
+    cancelled_flag: bool
+    due: float
+
+    def __new__(cls, due: float, callback: object, args: tuple[object, ...]) -> Self:
+        self = super().__new__(cls)
+        self.due = due
+        self.callback = callback
+        self.args = args
+        self.cancelled_flag = False
+        return self
+
+    def cancel(self) -> None:
+        self.cancelled_flag = True
+
+
+@final
+class _FakeLoop:
+    """A loop with a clock the test sets and timers the test fires."""
+
+    __slots__ = ("now", "timers")
+
+    now: float
+    timers: list[_FakeTimer]
+
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self.now = 0.0
+        self.timers = []
+        return self
+
+    def time(self) -> float:
+        return self.now
+
+    def call_later(self, delay: float, callback: object, *args: object) -> _FakeTimer:
+        timer = _FakeTimer(self.now + delay, callback, args)
+        self.timers.append(timer)
+        return timer
+
+    def live(self) -> list[_FakeTimer]:
+        return [t for t in self.timers if not t.cancelled_flag]
+
+    def fire(self, timer: _FakeTimer) -> None:
+        timer.cancelled_flag = True
+        assert callable(timer.callback)
+        timer.callback(*timer.args)
+
+
+def test_a_trailing_timer_rechecks_the_interval_after_a_rewrite_stamped_the_clock() -> (
+    None
+):
+    """A sweep rewrite at t=29 must push a trailing finalize armed for t=30 to t=59."""
+    loop = _FakeLoop()
+    throttle = FinalizeThrottle(cast("asyncio.AbstractEventLoop", loop), 30.0)
+    submit = _Submit()
+    throttle.request("db", submit)  # t=0: runs now, stamps 0
+    assert submit.calls == 1
+    loop.now = 5.0
+    throttle.request("db", submit)  # inside the interval: arms a timer for t=30
+    (timer,) = loop.live()
+    assert timer.due == 30.0
+    loop.now = 29.0
+    throttle.mark_admitted("db")  # a sweep rewrite stamps t=29
+    loop.now = 30.0
+    loop.fire(timer)  # the old deadline: the interval has not elapsed
+    assert submit.calls == 1
+    (rearmed,) = loop.live()  # exactly one timer, for the same pending work
+    assert rearmed.due == 59.0
+    loop.now = 59.0
+    loop.fire(rearmed)
+    assert submit.calls == 2
+    assert loop.live() == []

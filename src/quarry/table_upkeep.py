@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.db.lance_connection import LanceConnection
 from quarry.db.orphan_pages import OrphanPageSweep
 from quarry.finalize_ledger import FinalizeLedgers
 from quarry.post_sync_gc import PostSyncGc
 
 if TYPE_CHECKING:
+    import threading
+
     from quarry.config import Settings
     from quarry.db.table_changes import TableChanges
     from quarry.finalize_ledger import FinalizeLedger
@@ -41,12 +44,13 @@ class TableUpkeep:
     rides the rewrite, which already passes ``cleanup_older_than`` of one hour.
     """
 
-    __slots__ = ("_changes", "_db", "_label", "_ledger")
+    __slots__ = ("_changes", "_db", "_label", "_ledger", "_lock")
 
     _changes: TableChanges
     _db: LanceDB
     _label: str
     _ledger: FinalizeLedger
+    _lock: threading.RLock
 
     def __new__(cls, db: LanceDB, settings: Settings, changes: TableChanges) -> Self:
         """Bind the upkeep to a database, its write record and its failure ledger."""
@@ -57,6 +61,7 @@ class TableUpkeep:
         self._ledger = FinalizeLedgers.for_database(
             settings.lancedb_path, settings.quarry_root
         )
+        self._lock = LanceConnection.optimize_lock_of(db, settings.lancedb_path)
         return self
 
     def needs_rewrite(self) -> bool:
@@ -73,17 +78,29 @@ class TableUpkeep:
             return None
         return max(MIN_RETRY_S, self._ledger.health().retry_in_seconds)
 
+    def begin_rewrite(self) -> bool:
+        """Take the optimize lock without waiting; ``False`` if a manual run holds it.
+
+        A finalize runs inside the global embed gate, so waiting here for a manual
+        optimize that compacts for minutes would stall indexing of every other
+        database.  The caller leaves the table dirty and retries later.
+        """
+        return self._lock.acquire(blocking=False)
+
+    def end_rewrite(self) -> None:
+        """Release the optimize lock taken by :meth:`begin_rewrite`."""
+        self._lock.release()
+
     def settle_rewrite(self, snapshot: int, *, succeeded: bool) -> None:
         """Mark the table clean up to *snapshot* if this run's optimize succeeded.
 
         A failed optimize, including a failed full-text rebuild, leaves the table
         dirty, and so does a write after *snapshot*.  The orphan-page sweep
-        follows either way, and the slow clock restarts.
+        follows either way, and the slow clock restarts only if the sweep worked.
         """
         if succeeded:
             self._changes.mark_clean(snapshot)
-        self._sweep_pages()
-        self._changes.mark_maintained()
+        self._sweep_and_mark()
         PostSyncGc().run()
 
     def skip_rewrite(self) -> None:
@@ -95,11 +112,17 @@ class TableUpkeep:
         )
         logger.debug("sync: finalize skipped for %s: %s", self._label, reason)
         if self._changes.maintenance_due():
-            self._sweep_pages()
-            self._changes.mark_maintained()
+            self._sweep_and_mark()
 
-    def _sweep_pages(self) -> None:
+    def _sweep_and_mark(self) -> None:
+        """Sweep orphan pages; restart the slow clock only if the sweep succeeded.
+
+        A failed sweep leaves the clock where it was, so the next finalize tries
+        again instead of waiting out ``MAINTENANCE_INTERVAL_S``.
+        """
         try:
             OrphanPageSweep(self._db).run()
         except (OSError, RuntimeError, ValueError) as exc:
             logger.warning("sync: orphan page sweep failed: %s", exc, exc_info=True)
+            return
+        self._changes.mark_maintained()

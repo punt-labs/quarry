@@ -797,19 +797,19 @@
     "max_lcom": 0.0,
     "avg_lcom": 0.0
   },
+  "src/quarry/daemon/finalize_pacing.py": {
+    "efferent_coupling": 0.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.238,
+    "avg_lcom": 0.238
+  },
   "src/quarry/daemon/finalize_retry.py": {
     "efferent_coupling": 0.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
     "max_lcom": 0.4,
     "avg_lcom": 0.4
-  },
-  "src/quarry/daemon/finalize_throttle.py": {
-    "efferent_coupling": 0.0,
-    "public_names": 1.0,
-    "circular_imports": 0.0,
-    "max_lcom": 0.267,
-    "avg_lcom": 0.267
   },
   "src/quarry/daemon/fs_events.py": {
     "efferent_coupling": 0.0,
@@ -1312,8 +1312,8 @@
     "efferent_coupling": 11.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.467,
-    "avg_lcom": 0.467
+    "max_lcom": 0.45,
+    "avg_lcom": 0.45
   },
   "src/quarry/daemon/watch_reconcile.py": {
     "efferent_coupling": 4.0,
@@ -1347,8 +1347,8 @@
     "efferent_coupling": 9.0,
     "public_names": 2.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.717,
-    "avg_lcom": 0.717
+    "max_lcom": 0.713,
+    "avg_lcom": 0.713
   },
   "src/quarry/daemon_ca_error.py": {
     "avg_lcom": 0.0,
@@ -2646,11 +2646,11 @@
     "avg_lcom": 0.833
   },
   "src/quarry/optimize_step.py": {
-    "efferent_coupling": 3.0,
+    "efferent_coupling": 4.0,
     "public_names": 4.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.667,
-    "avg_lcom": 0.333
+    "max_lcom": 0.5,
+    "avg_lcom": 0.278
   },
   "src/quarry/own_checkout.py": {
     "efferent_coupling": 0.0,
@@ -3256,7 +3256,7 @@
   },
   "src/quarry/table_finalizer.py": {
     "efferent_coupling": 3.0,
-    "public_names": 1.0,
+    "public_names": 3.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
     "avg_lcom": 0.0
@@ -3269,11 +3269,11 @@
     "avg_lcom": 0.0
   },
   "src/quarry/table_upkeep.py": {
-    "efferent_coupling": 3.0,
+    "efferent_coupling": 4.0,
     "public_names": 3.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.238,
-    "avg_lcom": 0.238
+    "max_lcom": 0.333,
+    "avg_lcom": 0.333
   },
   "src/quarry/temp_sweep.py": {
     "efferent_coupling": 2.0,

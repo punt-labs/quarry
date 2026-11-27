@@ -94,6 +94,7 @@ class MaintenanceRoutes(RouteGroup):
         with Terminal.for_task(state).recording():
             step = ManualOptimize(self.ctx.database, self.ctx.settings)
             results = await run_in_threadpool(lambda: step.task_results(force=force))
+            self.ctx.watch_loop.arm_finalize_retry(step.finalize_retry_delay(results))
             state.complete(results)
 
     async def _run_backfill(self, state: TaskState, args: BackfillArgs) -> None:

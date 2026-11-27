@@ -5,7 +5,7 @@ index — every collection's rows, in one pass.  Submitting one per collection
 therefore repeats identical table-wide work: six registered collections meant
 six back-to-back optimize+rebuild pairs on every safety scan, which is what the
 daemon's log showed.  The right granularity is the DATABASE, which is what
-:class:`~quarry.daemon.finalize_throttle.FinalizeThrottle` already assumes for
+:class:`~quarry.daemon.finalize_pacing.FinalizeThrottle` already assumes for
 the churn path; this applies it to the sweeps.
 
 The finalize is submitted IMMEDIATELY rather than throttled.  Every sweep is

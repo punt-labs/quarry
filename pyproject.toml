@@ -752,7 +752,7 @@ domain = [
     "quarry.daemon.backfill_args",
     "quarry.daemon.bind_options",
     "quarry.daemon.debounce",
-    "quarry.daemon.finalize_throttle",
+    "quarry.daemon.finalize_pacing",
     "quarry.daemon.fs_events",
     "quarry.daemon.ingest_labels",
     "quarry.daemon.ingest_refusal",

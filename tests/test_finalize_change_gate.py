@@ -2,9 +2,13 @@
 
 Every test drives the real submit path (the safety-scan sweep, a watch batch, an
 explicit sync, a daemon start) into a queue that RUNS the admitted finalize jobs
-in FIFO order against a real LanceDB database.  "Table-wide work" is counted at
+in per-key FIFO order against a real LanceDB database.  "Table-wide work" is counted at
 the two calls that rewrite the table: ``TableOptimizer.optimize`` (compaction,
 cleanup, full-text rebuild) and ``TableOptimizer.create_collection_index``.
+
+The file is long by design: every test shares one fake queue and one fake daemon
+harness for one behavior, the change-gated finalize, and splitting it would
+duplicate that harness in each part.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ from lancedb.index import FTS, Bitmap, BTree
 
 from quarry.config import Settings
 from quarry.daemon.collection_finalize_job import CollectionFinalizeJob
-from quarry.daemon.finalize_throttle import FinalizeThrottle
+from quarry.daemon.finalize_pacing import FinalizeThrottle
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob, FileIndexJob
 from quarry.daemon.route_key import RouteKey
@@ -95,13 +99,20 @@ class _Rewrites:
 
 @final
 class _ExecutingQueue:
-    """Admit every job and run it FIFO: scans via a hook, finalizes for real."""
+    """Admit every job and run it: one FIFO per route key, as in production.
+
+    Each ``(database, collection)`` key gets its own worker task, so a job on one
+    key can overtake a queued job on another, which is what the real ingest queue
+    allows.  A global semaphore of one stands in for the embed gate that serializes
+    every job's run body.  Scans run via a hook, finalizes for real.
+    """
 
     __slots__ = (
         "_ctx",
+        "_gates",
         "_pending",
-        "_released",
-        "_worker",
+        "_serial",
+        "_workers",
         "finalizes",
         "on_index",
         "on_scan",
@@ -109,76 +120,83 @@ class _ExecutingQueue:
     )
 
     _ctx: DaemonContext | None
-    _pending: asyncio.Queue[tuple[IngestUnit, TaskState]] | None
-    _worker: asyncio.Task[None] | None
+    _pending: dict[RouteKey, asyncio.Queue[tuple[IngestUnit, TaskState]]]
+    _workers: list[asyncio.Task[None]]
+    _gates: dict[str | None, asyncio.Event]
+    _serial: asyncio.Semaphore
     on_scan: Callable[[], None]
     on_index: Callable[[], None]
     finalizes: int
     shed: bool
-    _released: asyncio.Event | None
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
         self.finalizes = 0
         self._ctx = None
-        self._pending = None
-        self._worker = None
+        self._pending = {}
+        self._workers = []
+        self._gates = {}
+        self._serial = asyncio.Semaphore(1)
         self.on_scan = lambda: None
         self.on_index = lambda: None
         self.shed = False
-        self._released = None
         return self
 
     def bind(self, ctx: DaemonContext) -> None:
         self._ctx = ctx
 
-    def hold(self) -> None:
-        """Queue admitted jobs without running them until :meth:`release`."""
-        self._released = asyncio.Event()
+    def hold(self, collection: str | None = None) -> None:
+        """Queue jobs without running them until :meth:`release`; ``None`` is all."""
+        self._gates[collection] = asyncio.Event()
 
-    def release(self) -> None:
-        assert self._released is not None
-        self._released.set()
+    def release(self, collection: str | None = None) -> None:
+        self._gates[collection].set()
 
     def try_submit(self, key: RouteKey, job: IngestUnit, state: TaskState) -> bool:
-        del key
         if self.shed:
             state.fail("ingest queue full")
             return False
-        if self._pending is None:
-            self._pending = asyncio.Queue()
-            self._worker = asyncio.get_running_loop().create_task(self._drain())
-        self._pending.put_nowait((job, state))
+        if key not in self._pending:
+            self._pending[key] = asyncio.Queue()
+            self._workers.append(
+                asyncio.get_running_loop().create_task(self._drain(key))
+            )
+        self._pending[key].put_nowait((job, state))
         return True
 
     async def settled(self) -> None:
         """Wait until every admitted job has run."""
-        if self._pending is not None:
-            await self._pending.join()
+        for pending in list(self._pending.values()):
+            await pending.join()
 
     async def stop(self) -> None:
-        if self._worker is not None:
-            self._worker.cancel()
+        for worker in self._workers:
+            worker.cancel()
 
-    async def _drain(self) -> None:
-        assert self._pending is not None
-        assert self._ctx is not None
+    async def _drain(self, key: RouteKey) -> None:
+        pending = self._pending[key]
         while True:
-            job, state = await self._pending.get()
-            if self._released is not None:
-                await self._released.wait()
+            job, state = await pending.get()
+            for gate in (self._gates.get(None), self._gates.get(key.collection)):
+                if gate is not None:
+                    await gate.wait()
             try:
-                if isinstance(job, CollectionFinalizeJob):
-                    self.finalizes += 1
-                    await job.run(self._ctx, state)
-                else:
-                    if isinstance(job, CollectionSyncJob):
-                        self.on_scan()
-                    elif isinstance(job, FileIndexJob):
-                        self.on_index()
-                    state.complete({})
+                async with self._serial:
+                    await self._run(job, state)
             finally:
-                self._pending.task_done()
+                pending.task_done()
+
+    async def _run(self, job: IngestUnit, state: TaskState) -> None:
+        assert self._ctx is not None
+        if isinstance(job, CollectionFinalizeJob):
+            self.finalizes += 1
+            await job.run(self._ctx, state)
+            return
+        if isinstance(job, CollectionSyncJob):
+            self.on_scan()
+        elif isinstance(job, FileIndexJob):
+            self.on_index()
+        state.complete({})
 
 
 @final
@@ -1122,11 +1140,144 @@ def test_a_retry_for_a_database_left_the_roster_is_dropped_quietly(
         roster = d.loop._roster
         assert submitter is not None
         assert roster is not None
-        submitter._retry_finalize(RouteKey(_DATABASE, "col"), 0.05)
+        submitter.retry_finalize(RouteKey(_DATABASE, "col"), 0.05)
         roster._conns.pop(_DATABASE)
         roster._db_settings.pop(_DATABASE)
         await asyncio.sleep(0.4)  # the retry timer fires
         assert problems == []
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_finalize_does_not_wait_inside_the_gate_for_a_manual_optimize(
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("quarry.table_finalizer.BUSY_RETRY_S", 0.3)
+
+    async def run() -> None:
+        d = daemon("col", interval=0.05)
+        d.prefill()
+        await d.start()
+        lock = LanceConnection.changes_of(d.database.db).optimizing()
+        held = threading.Event()
+        release = threading.Event()
+
+        def hold_lock() -> None:
+            with lock:
+                held.set()
+                release.wait(10)
+
+        holder = threading.Thread(target=hold_lock)
+        holder.start()
+        held.wait(5)
+        d.write_chunk(name="busy.md")  # the table is dirty
+        before = d.rewrites.optimizes
+        await asyncio.wait_for(d.safety_scan(), 5)  # returns promptly: no waiting
+        assert d.rewrites.optimizes == before
+        assert LanceConnection.changes_of(d.database.db).needs_rewrite()
+        ledger = FinalizeLedgers.for_database(
+            d.settings.lancedb_path, d.settings.quarry_root
+        )
+        assert ledger.health().consecutive_failures == 0  # busy is not a failure
+        release.set()
+        holder.join()
+        await _until(lambda: d.rewrites.optimizes > before)  # the retry rewrites
+        await d.queue.settled()
+        assert d.rewrites.optimizes == before + 1
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_failed_orphan_sweep_is_attempted_again_on_the_next_finalize(
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts: list[int] = []
+
+    def flaky_sweep(sweep: OrphanPageSweep, now: datetime | None = None) -> int:
+        del sweep, now
+        attempts.append(1)
+        if len(attempts) == 1:
+            msg = "disk"
+            raise OSError(msg)
+        return 0
+
+    monkeypatch.setattr(OrphanPageSweep, "run", flaky_sweep)
+
+    async def run() -> None:
+        d = daemon("col", interval=30.0)
+        await d.start()
+        assert len(attempts) == 1  # the rewrite's sweep failed
+        await d.safety_scan()
+        assert len(attempts) == 2  # not marked maintained, so due again
+        await d.safety_scan()
+        assert len(attempts) == 2  # the successful sweep restarted the clock
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_failed_manual_rebuild_on_a_registrationless_database_is_retried(
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failing = [False]
+    _fail_fts_while(monkeypatch, failing)
+    monkeypatch.setattr("quarry.finalize_ledger.BACKOFF_BASE_SECONDS", 0.0)
+
+    async def run() -> None:
+        d = daemon("col", interval=0.05)
+        d.prefill()
+        registry = SyncRegistry(d.settings.registry_path)
+        try:
+            registry.deregister_directory("col")
+        finally:
+            registry.close()
+        await d.start()  # no registration, so no finalize at start
+        assert d.rewrites.optimizes == 0
+        failing[0] = True
+        manual = ManualOptimize(d.database, d.settings)
+        outcome = manual.run_manually(force=False)
+        assert outcome.fts_rebuilt is False
+        failing[0] = False
+        results: dict[str, object] = {"fts_rebuilt": False}
+        assert manual.finalize_retry_delay(results) is not None
+        d.loop.arm_finalize_retry(0.05)
+        await _until(lambda: d.rewrites.optimizes >= 2)
+        await d.queue.settled()
+        assert d.rewrites.optimizes == 2  # the manual run, then the finalize
+        assert d.rewrites.outcomes[-1].fts_rebuilt is True
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_finalize_on_another_collection_can_overtake_a_queued_index_job(
+    daemon: Callable[..., _Daemon],
+) -> None:
+    """DES-045c: that write waits for the next safety scan; the lag is not new."""
+
+    async def run() -> None:
+        d = daemon("x", "y", interval=0.5)
+        await d.start()
+        base = d.rewrites.optimizes
+        d.queue.hold("x")
+        emitted = {"y": d.roots["y"] / "y.md", "x": d.roots["x"] / "x.md"}
+        for name, path in emitted.items():
+            path.write_text("body")
+            d.source.emit(d.roots[name], FsEvent(path, deleted=False))
+            await asyncio.sleep(0.15)  # y first: its edit arms the trailing timer
+        finalizes = d.queue.finalizes
+        d.queue.on_index = d.write_chunk  # x's job writes when it finally runs
+        await _until(lambda: d.queue.finalizes > finalizes)
+        assert d.rewrites.optimizes == base  # the finalize ran first and skipped
+        d.queue.release("x")
+        await d.queue.settled()
+        await asyncio.sleep(1.2)  # no timer is left to finalize x's write
+        await d.queue.settled()
+        assert d.rewrites.optimizes == base
+        await d.safety_scan()
+        assert d.rewrites.optimizes == base + 1
         await d.stop()
 
     asyncio.run(run())

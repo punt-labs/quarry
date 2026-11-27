@@ -83,22 +83,14 @@ class FinalizeThrottle:
 
         ``submit`` is a no-argument thunk returning whether the finalize was
         ADMITTED (the DES-042 queue can shed it when full), so the throttle stays
-        ignorant of jobs and route keys.  A disabled interval (<= 0) runs every
-        request inline.
+        ignorant of jobs and route keys.  A request while a trailing timer is
+        pending coalesces into it.  A disabled interval (<= 0) runs every request
+        inline.
         """
         if self._interval <= 0:
             submit()
-            return
-        now = self._loop.time()
-        last = self._last.get(database)
-        if last is None or now - last >= self._interval:
+        elif database not in self._timers or self._remaining(database) <= 0:
             self._fire(database, submit)
-            return
-        if database not in self._timers:
-            delay = last + self._interval - now
-            self._timers[database] = self._loop.call_later(
-                delay, self._fire, database, submit
-            )
 
     def cancel_all(self) -> None:
         """Cancel every pending trailing finalize (loop shutdown)."""
@@ -124,6 +116,11 @@ class FinalizeThrottle:
     def _fire(self, database: str, submit: Callable[[], bool]) -> None:
         """Finalize *database* now: run submit, then stamp only if it was admitted.
 
+        A timer that fires after a rewrite stamped the clock (``mark_admitted``)
+        finds the interval not yet elapsed, so it arms the SAME pending submission
+        for the remainder instead of submitting: the work is kept, the minimum
+        interval holds, and there is still one timer for the database.
+
         Consume any pending trailing timer first: the immediate path fires exactly
         when a trailing timer is due (both at ``last + interval``), so a debounce
         flush in that tick would otherwise run this finalize AND leave the overdue
@@ -135,8 +132,18 @@ class FinalizeThrottle:
         (the reconcile at ``watch_safety_scan_s`` is the eventual backstop).
         """
         self._consume_timer(database)
+        if (remaining := self._remaining(database)) > 0:
+            self._timers[database] = self._loop.call_later(
+                remaining, self._fire, database, submit
+            )
+            return
         if submit():
             self._last[database] = self._loop.time()
+
+    def _remaining(self, database: str) -> float:
+        """Return the seconds left before *database* may finalize again (0 if none)."""
+        last = self._last.get(database)
+        return 0.0 if last is None else last + self._interval - self._loop.time()
 
     def _consume_timer(self, database: str) -> None:
         """Cancel and drop any pending or just-fired trailing timer for *database*."""

@@ -216,13 +216,12 @@ class WatchLoop:
         """
         if not self._started or self._roster is None:
             return "scan-only"
-        key = RouteKey(self._ctx.database_name, collection)
-        present = self._roster.watch_handle_present(key)
-        if present is None:
+        alive = self._roster.watch_handle_alive(
+            RouteKey(self._ctx.database_name, collection)
+        )
+        if alive is None:
             return "scan-only"
-        if not present:
-            return "degraded"
-        return "watched" if self._roster.watch_handle_alive(key) else "degraded"
+        return "watched" if alive else "degraded"
 
     def _teardown(self, key: RouteKey) -> None:
         """Unwatch *key*'s tree and drop its pending + backoff state."""
@@ -260,6 +259,16 @@ class WatchLoop:
             timed_out = await self._await_children(summary)
             summary.settle(umbrella, timed_out=timed_out)
 
+    def arm_finalize_retry(self, delay_s: float | None) -> None:
+        """Arm a finalize retry for the active database; ``None`` or no start: no-op.
+
+        The safety scan finalizes only databases that have a registered
+        directory, so a database holding only remembered text is never finalized
+        on its own; this is how a failed manual rebuild on one gets repaired.
+        """
+        if self._submitter is not None:
+            self._submitter.retry_database(self._ctx.database_name, delay_s)
+
     def _sweep_all_scans(self) -> ScanSweep | None:
         """Scan every active-DB registration; ``None`` when ``start()`` never ran.
 
@@ -279,10 +288,8 @@ class WatchLoop:
         roster.ensure_database(name)
         sweep = submitter.sweep()
         for collection, root in roster.registrations(name):
-            resolved = self._resolve_watchable(root, collection)
-            if resolved is None:
-                continue
-            sweep.add(RouteKey(name, collection), resolved)
+            if (resolved := self._resolve_watchable(root, collection)) is not None:
+                sweep.add(RouteKey(name, collection), resolved)
         return sweep
 
     # -- internals ----------------------------------------------------------

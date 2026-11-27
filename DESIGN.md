@@ -2289,8 +2289,9 @@ closure of whichever request armed its trailing timer, so the handling cannot li
 the retry's own closure. This works with `watch_safety_scan_s = 0`. While the ledger is
 backing off, a finalize of a dirty table is a skip: a sweep's finalize does not
 stamp the throttle, and there is no GC. It still sweeps orphan pages when the slow
-clock is due, which is at most once per `MAINTENANCE_INTERVAL_S` (an hour); its DEBUG
-line says "backing off". Back-off doubles from 600 s to a 6 hour cap, and the retry
+clock is due, which is at most once per `MAINTENANCE_INTERVAL_S` (an hour) after a
+sweep that succeeded: a failed sweep does not restart the clock, so the next finalize
+attempts it again; its DEBUG line says "backing off". Back-off doubles from 600 s to a 6 hour cap, and the retry
 fires once it has elapsed. An unexpected exception type is recorded in the ledger
 before it propagates, so it backs off and shows on `/health` like any other failure
 instead of repeating every throttle interval.
@@ -2333,23 +2334,34 @@ with nothing left to finalize it. The cancel existed to stop a second compaction
 and the change gate now makes a trailing finalize that finds the table clean a cheap
 skip. Four finalizes are throttled: the trailing one, the bulk-batch one, the
 delta-batch one (`on_batch` to `_request_finalize`) and the retry one
-(`_retry_finalize` to `_request_finalize`). The throttle stamps its clock when it
+(`retry_finalize` to `_request_finalize`). The throttle stamps its clock when it
 admits each of them, before the job decides to skip. Such a finalize can fire, find
 the table clean, and consume the pending trailing timer; a write in another
 collection that lands later then waits for the next safety scan, and with
 `watch_safety_scan_s = 0` for the next churn. That lag existed before this change
-and is not bounded by one interval. A skipped finalize logs one DEBUG line naming
+and is not bounded by one interval; a test pins it with two collections whose FIFOs
+run independently (the fake queue keeps one FIFO per route key). A trailing timer
+that fires after a sweep's rewrite stamped the clock rechecks the interval and arms
+the same pending submission for the remainder, so the minimum interval between
+finalizes holds and the pending work is kept (one timer per database). A skipped finalize logs one DEBUG line naming
 the database and the reason, unchanged table or backing off.
 
 *Manual optimize.* The HTTP optimize route runs outside the embed gate, so it could
 overlap a finalize on the same table and clear the ledger under it. The finalize
 rewrite and the manual optimize now both hold `TableChanges.optimizing()`, a
-per-database lock. A manual optimize whose full-text rebuild fails records the
+per-database lock. The finalize takes the lock without waiting: it runs inside the
+global embed gate, and waiting there for a manual compaction would stall indexing of
+every other database. A finalize that finds the lock held leaves the table dirty,
+touches no ledger (that is not a failure), skips the sweep and GC, and arms a retry
+after `BUSY_RETRY_S` (30 s). A manual optimize whose full-text rebuild fails records the
 failure instead of clearing the ledger, dirties the record so the next finalize
 rebuilds the index, and reports `fts_rebuilt: false` with a reason in its task
-result. Nothing arms that finalize, so a manual optimize relies on the periodic
-safety scan; with `watch_safety_scan_s = 0` the stale index waits for the next
-write.
+result. The route then arms that database's finalize retry through
+`WatchLoop.arm_finalize_retry`, because the safety scan finalizes only databases with
+a registered directory, and nothing else ever finalizes a database that holds only
+remembered text (no ingest or remember route requests a finalize). The retry rides a
+registered collection's FIFO when there is one and the reserved `__maintenance__`
+collection's otherwise.
 
 *Not covered.* A write by a process other than the daemon bypasses the record; the
 daemon is the single writer (DES-042), and an offline `quarry repair` run while the

@@ -4762,6 +4762,7 @@ class TestManualOptimizeReportsFtsFailure:
         _inject_mocks(ctx)
         with (
             patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=ran),
+            patch("quarry.daemon.watch_loop.WatchLoop.arm_finalize_retry") as arm,
             TestClient(build_app(ctx)) as tc,
         ):
             task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
@@ -4770,6 +4771,7 @@ class TestManualOptimizeReportsFtsFailure:
         assert done["results"]["fts_rebuilt"] is False
         assert "full-text" in done["results"]["reason"]
         assert changes.needs_rewrite()
+        arm.assert_called_once()
 
 
 class TestManualOptimizeKeepsIndexFailure:

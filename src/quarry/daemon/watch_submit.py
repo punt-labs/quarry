@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.collection_finalize_job import CollectionFinalizeJob
 from quarry.daemon.delta_submit import DeltaSubmission
+from quarry.daemon.finalize_pacing import FinalizeThrottle
 from quarry.daemon.finalize_retry import FinalizeRetry
-from quarry.daemon.finalize_throttle import FinalizeThrottle
 from quarry.daemon.index_jobs import CollectionSyncJob
 from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.route_key import RouteKey
@@ -39,6 +39,9 @@ if TYPE_CHECKING:
     from quarry.db import Database
 
 logger = logging.getLogger(__name__)
+
+# The routing key for finalize work on a database with no registered directory.
+_MAINTENANCE_COLLECTION = "__maintenance__"
 
 
 @final
@@ -156,7 +159,7 @@ class WatchSubmitter:
             settings,
             key.collection,
             partial(self.mark_finalized, key.database),
-            partial(self._retry_finalize, key),
+            partial(self.retry_finalize, key),
         )
         return self._submit_finalize_job(key, job)
 
@@ -172,7 +175,20 @@ class WatchSubmitter:
         """
         self._throttle.mark_admitted(database)
 
-    def _retry_finalize(self, key: RouteKey, delay_s: float) -> None:
+    def retry_database(self, database: str, delay_s: float | None) -> None:
+        """Arm a finalize retry for *database*, which need not hold any directory.
+
+        The retry rides a registered collection's FIFO when there is one, else
+        the reserved maintenance collection's.
+        """
+        if delay_s is None:
+            return
+        self._roster.ensure_database(database)
+        registered = self._roster.registrations(database)
+        collection = registered[0][0] if registered else _MAINTENANCE_COLLECTION
+        self.retry_finalize(RouteKey(database, collection), delay_s)
+
+    def retry_finalize(self, key: RouteKey, delay_s: float) -> None:
         """Arm a retry for a finalize that left *key*'s database dirty."""
         self._retries.arm(key.database, delay_s, partial(self._retry_request, key))
 
@@ -219,7 +235,7 @@ class WatchSubmitter:
             db,
             settings,
             key.collection,
-            on_unsettled=partial(self._retry_finalize, key),
+            on_unsettled=partial(self.retry_finalize, key),
         )
         return self._submit_finalize_job(key, job)
 

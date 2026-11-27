@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Self, final
 from quarry.db import TableOptimizer
 from quarry.db.lance_connection import LanceConnection
 from quarry.finalize_ledger import FinalizeLedger, FinalizeLedgers
+from quarry.table_upkeep import MIN_RETRY_S
 
 if TYPE_CHECKING:
     import threading
@@ -111,8 +112,9 @@ class ManualOptimize:
     The ledger may hold an index-build failure, so only a run that did both
     steps may clear it; a failure in either propagates and leaves it.  A run whose
     full-text rebuild fails dirties the record, so the next finalize rebuilds the
-    index once the back-off elapses.  Nothing arms that finalize: it relies on the
-    periodic safety scan, and with ``watch_safety_scan_s = 0`` on the next write.
+    index once the back-off elapses.  The maintenance route arms that finalize
+    through the watch loop (:meth:`retry_in_seconds` is its delay), because a
+    database with no registered directory is never swept by the safety scan.
     """
 
     __slots__ = ("_changes", "_ledger", "_lock", "_opt")
@@ -134,6 +136,17 @@ class ManualOptimize:
             database.db, settings.lancedb_path
         )
         return self
+
+    def finalize_retry_delay(self, results: dict[str, object]) -> float | None:
+        """Return when to retry the finalize after a failed rebuild, else ``None``.
+
+        Only a run whose full-text rebuild failed owes one: the table is dirty and
+        the old index stale.  The delay is the ledger's back-off, never under
+        ``MIN_RETRY_S``.
+        """
+        if results.get("fts_rebuilt") is not False:
+            return None
+        return max(MIN_RETRY_S, self._ledger.health().retry_in_seconds)
 
     def task_results(self, *, force: bool) -> dict[str, object]:
         """Run the optimize and return the fields its task reports."""

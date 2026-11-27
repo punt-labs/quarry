@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.finalize_steps import ShadowPushStep
@@ -14,6 +15,11 @@ if TYPE_CHECKING:
     from quarry.config import Settings
     from quarry.db.table_changes import TableChanges
     from quarry.types import LanceDB
+
+logger = logging.getLogger(__name__)
+
+# How long a finalize deferred by a running manual optimize waits to try again.
+BUSY_RETRY_S = 30.0
 
 
 @final
@@ -46,18 +52,30 @@ class TableFinalizer:
     def run(self, announce: Callable[[], None]) -> float | None:
         """Rewrite if the table changed, else the cheap pass; always push shadows.
 
-        *announce* is called just before a rewrite starts.  Returns ``None`` when
-        the table is clean afterwards, else the seconds until a retry is allowed.
+        *announce* is called just before a rewrite starts.  A manual optimize that
+        holds the optimize lock defers the rewrite without waiting or recording a
+        failure.  Returns ``None`` when the table is clean afterwards, else the
+        seconds until a retry is allowed.
         """
+        busy = False
         try:
-            if self._upkeep.needs_rewrite():
-                announce()
-                self._rewrite()
-            else:
+            if not self._upkeep.needs_rewrite():
                 self._upkeep.skip_rewrite()
+            elif self._upkeep.begin_rewrite():
+                try:
+                    announce()
+                    self._rewrite()
+                finally:
+                    self._upkeep.end_rewrite()
+            else:
+                busy = True
+                logger.debug("sync: finalize deferred: a manual optimize is running")
         finally:
             ShadowPushStep(self._settings).run()
-        return self.retry_in_seconds()
+        retry_in = self.retry_in_seconds()
+        if busy and retry_in is not None:
+            return max(retry_in, BUSY_RETRY_S)
+        return retry_in
 
     def retry_in_seconds(self) -> float | None:
         """Return seconds until a dirty table may be rewritten, or ``None`` if clean."""
