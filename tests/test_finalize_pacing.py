@@ -1,17 +1,18 @@
 """Hermetic tests for FinalizeThrottle — per-database finalize rate-limiting.
 
-Driven on a real event loop with a tiny interval and a callable that records
-calls and reports admission, so the run-now / coalesce-into-trailing /
-per-database-independence / shed-does-not-stamp behaviours are asserted without
-the queue, watchdog, or the filesystem.
+Driven on a manual clock with a callable that records calls and reports
+admission, so the run-now / coalesce-into-trailing / per-database-independence /
+shed-does-not-stamp behaviours are asserted without the queue, watchdog, the
+filesystem, or any wait on the wall clock.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Self, cast, final
+from typing import Self, final
 
 from quarry.daemon.finalize_pacing import FinalizeThrottle
+from tests.manual_clock import ManualLoop
 
 _INTERVAL = 0.05
 
@@ -53,29 +54,24 @@ def test_first_request_runs_immediately() -> None:
 
 def test_burst_within_interval_coalesces_to_one_trailing() -> None:
     """First fires now; the rest inside the window collapse to one trailing run."""
-
-    async def _run() -> None:
-        submit = _Submit()
-        throttle = FinalizeThrottle(asyncio.get_running_loop(), _INTERVAL)
-        for _ in range(10):
-            throttle.request("db", submit)
-        assert submit.calls == 1  # only the first ran inline
-        await asyncio.sleep(_INTERVAL * 2)
-        assert submit.calls == 2  # exactly one trailing finalize, not ten
-
-    asyncio.run(_run())
+    loop = ManualLoop()
+    submit = _Submit()
+    throttle = FinalizeThrottle(loop.as_loop, _INTERVAL)
+    for _ in range(10):
+        throttle.request("db", submit)
+    assert submit.calls == 1  # only the first ran inline
+    loop.advance(_INTERVAL * 2)
+    assert submit.calls == 2  # exactly one trailing finalize, not ten
 
 
 def test_request_after_interval_runs_immediately_again() -> None:
-    async def _run() -> None:
-        submit = _Submit()
-        throttle = FinalizeThrottle(asyncio.get_running_loop(), _INTERVAL)
-        throttle.request("db", submit)
-        await asyncio.sleep(_INTERVAL * 2)
-        throttle.request("db", submit)
-        assert submit.calls == 2  # interval elapsed, so the second ran inline
-
-    asyncio.run(_run())
+    loop = ManualLoop()
+    submit = _Submit()
+    throttle = FinalizeThrottle(loop.as_loop, _INTERVAL)
+    throttle.request("db", submit)
+    loop.advance(_INTERVAL * 2)
+    throttle.request("db", submit)
+    assert submit.calls == 2  # interval elapsed, so the second ran inline
 
 
 def test_databases_are_independent() -> None:
@@ -102,16 +98,14 @@ def test_disabled_interval_runs_every_request() -> None:
 
 
 def test_cancel_all_drops_pending_trailing() -> None:
-    async def _run() -> None:
-        submit = _Submit()
-        throttle = FinalizeThrottle(asyncio.get_running_loop(), _INTERVAL)
-        throttle.request("db", submit)  # runs now
-        throttle.request("db", submit)  # arms a trailing timer
-        throttle.cancel_all()
-        await asyncio.sleep(_INTERVAL * 2)
-        assert submit.calls == 1  # the trailing finalize was cancelled
-
-    asyncio.run(_run())
+    loop = ManualLoop()
+    submit = _Submit()
+    throttle = FinalizeThrottle(loop.as_loop, _INTERVAL)
+    throttle.request("db", submit)  # runs now
+    throttle.request("db", submit)  # arms a trailing timer
+    throttle.cancel_all()
+    loop.advance(_INTERVAL * 2)
+    assert submit.calls == 1  # the trailing finalize was cancelled
 
 
 def test_immediate_path_cancels_pending_timer_no_double_fire() -> None:
@@ -149,23 +143,20 @@ def test_mark_admitted_stamps_but_leaves_a_pending_trailing_armed() -> None:
     timer, which a write queued behind that finalize may have armed.
     """
 
-    async def _run() -> None:
-        submit = _Submit()
-        loop = asyncio.get_running_loop()
-        throttle = FinalizeThrottle(loop, _INTERVAL)
-        throttle.request("db", submit)  # fires now (calls=1), stamps _last
-        throttle.request("db", submit)  # within interval → arms a trailing timer
-        pending = throttle._timers["db"]
-        before = throttle._last["db"]
-        await asyncio.sleep(0.01)
-        throttle.mark_admitted("db")
-        assert not pending.cancelled()
-        assert throttle._timers["db"] is pending
-        assert throttle._last["db"] > before
-        await asyncio.sleep(_INTERVAL * 2)  # the trailing fires: it skips when clean
-        assert submit.calls == 2
-
-    asyncio.run(_run())
+    clock = ManualLoop()
+    submit = _Submit()
+    throttle = FinalizeThrottle(clock.as_loop, _INTERVAL)
+    throttle.request("db", submit)  # fires now (calls=1), stamps _last
+    throttle.request("db", submit)  # within interval → arms a trailing timer
+    pending = throttle._timers["db"]
+    before = throttle._last["db"]
+    clock.advance(0.01)
+    throttle.mark_admitted("db")
+    assert not pending.cancelled()
+    assert throttle._timers["db"] is pending
+    assert throttle._last["db"] > before
+    clock.advance(_INTERVAL * 2)  # the trailing fires: it skips when clean
+    assert submit.calls == 2
 
 
 def test_shed_finalize_does_not_stamp_next_request_retries() -> None:
@@ -211,82 +202,27 @@ def test_admitted_finalize_stamps_and_coalesces() -> None:
     asyncio.run(_run())
 
 
-@final
-class _FakeTimer:
-    """A timer handle the test fires by hand."""
-
-    __slots__ = ("args", "callback", "cancelled_flag", "due")
-
-    args: tuple[object, ...]
-    callback: object
-    cancelled_flag: bool
-    due: float
-
-    def __new__(cls, due: float, callback: object, args: tuple[object, ...]) -> Self:
-        self = super().__new__(cls)
-        self.due = due
-        self.callback = callback
-        self.args = args
-        self.cancelled_flag = False
-        return self
-
-    def cancel(self) -> None:
-        self.cancelled_flag = True
-
-
-@final
-class _FakeLoop:
-    """A loop with a clock the test sets and timers the test fires."""
-
-    __slots__ = ("now", "timers")
-
-    now: float
-    timers: list[_FakeTimer]
-
-    def __new__(cls) -> Self:
-        self = super().__new__(cls)
-        self.now = 0.0
-        self.timers = []
-        return self
-
-    def time(self) -> float:
-        return self.now
-
-    def call_later(self, delay: float, callback: object, *args: object) -> _FakeTimer:
-        timer = _FakeTimer(self.now + delay, callback, args)
-        self.timers.append(timer)
-        return timer
-
-    def live(self) -> list[_FakeTimer]:
-        return [t for t in self.timers if not t.cancelled_flag]
-
-    def fire(self, timer: _FakeTimer) -> None:
-        timer.cancelled_flag = True
-        assert callable(timer.callback)
-        timer.callback(*timer.args)
-
-
 def test_a_trailing_timer_rechecks_the_interval_after_a_rewrite_stamped_the_clock() -> (
     None
 ):
     """A sweep rewrite at t=29 must push a trailing finalize armed for t=30 to t=59."""
-    loop = _FakeLoop()
-    throttle = FinalizeThrottle(cast("asyncio.AbstractEventLoop", loop), 30.0)
+    loop = ManualLoop()
+    throttle = FinalizeThrottle(loop.as_loop, 30.0)
     submit = _Submit()
     throttle.request("db", submit)  # t=0: runs now, stamps 0
     assert submit.calls == 1
-    loop.now = 5.0
+    loop.set_time(5.0)
     throttle.request("db", submit)  # inside the interval: arms a timer for t=30
     (timer,) = loop.live()
     assert timer.due == 30.0
-    loop.now = 29.0
+    loop.set_time(29.0)
     throttle.mark_admitted("db")  # a sweep rewrite stamps t=29
-    loop.now = 30.0
-    loop.fire(timer)  # the old deadline: the interval has not elapsed
+    loop.set_time(30.0)
+    timer.fire()  # the old deadline: the interval has not elapsed
     assert submit.calls == 1
     (rearmed,) = loop.live()  # exactly one timer, for the same pending work
     assert rearmed.due == 59.0
-    loop.now = 59.0
-    loop.fire(rearmed)
+    loop.set_time(59.0)
+    rearmed.fire()
     assert submit.calls == 2
     assert loop.live() == []

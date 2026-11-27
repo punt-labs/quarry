@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+from collections import Counter
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
@@ -46,6 +48,7 @@ from quarry.optimize_step import ManualOptimize, OptimizeReport
 from quarry.post_sync_gc import PostSyncGc
 from quarry.sync_registry import SyncRegistry
 from quarry.table_upkeep import TableUpkeep
+from tests.manual_clock import ManualLoop
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -115,6 +118,7 @@ class _ExecutingQueue:
         "_pending",
         "_serial",
         "_workers",
+        "file_jobs",
         "finalizes",
         "on_index",
         "on_scan",
@@ -129,11 +133,13 @@ class _ExecutingQueue:
     on_scan: Callable[[], None]
     on_index: Callable[[], None]
     finalizes: int
+    file_jobs: Counter[str]
     shed: bool
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
         self.finalizes = 0
+        self.file_jobs = Counter()
         self._ctx = None
         self._pending = {}
         self._workers = []
@@ -158,6 +164,8 @@ class _ExecutingQueue:
         if self.shed:
             state.fail("ingest queue full")
             return False
+        if isinstance(job, FileIndexJob):
+            self.file_jobs[key.collection] += 1
         if key not in self._pending:
             self._pending[key] = asyncio.Queue()
             self._workers.append(
@@ -165,6 +173,10 @@ class _ExecutingQueue:
             )
         self._pending[key].put_nowait((job, state))
         return True
+
+    def has_file_job(self, collection: str) -> bool:
+        """Return whether a file-index job was admitted for *collection*."""
+        return self.file_jobs[collection] >= 1
 
     async def settled(self) -> None:
         """Wait until every admitted job has run."""
@@ -238,8 +250,18 @@ class _FakeSource:
 class _Daemon:
     """A started WatchLoop over real databases and an executing queue."""
 
-    __slots__ = ("collections", "ctx", "loop", "queue", "rewrites", "roots", "source")
+    __slots__ = (
+        "clock",
+        "collections",
+        "ctx",
+        "loop",
+        "queue",
+        "rewrites",
+        "roots",
+        "source",
+    )
 
+    clock: ManualLoop | None
     ctx: DaemonContext
     loop: WatchLoop
     queue: _ExecutingQueue
@@ -257,8 +279,18 @@ class _Daemon:
         bulk: int = 50,
         interval: float = 0.0,
         siblings: tuple[str, ...] = (),
+        manual_clock: bool = False,
     ) -> Self:
         self = super().__new__(cls)
+        self.clock = ManualLoop() if manual_clock else None
+        if self.clock is not None:
+            # The throttle's interval and trailing timers run on this clock, so
+            # when a timer fires is the test's decision, not the scheduler's.
+            clock = self.clock.as_loop
+            monkeypatch.setattr(
+                "quarry.daemon.watch_submit.FinalizeThrottle",
+                lambda _loop, interval_s: FinalizeThrottle(clock, interval_s),
+            )
         data = tmp_path / "data"
         (data / _DATABASE).mkdir(parents=True)
         settings = Settings(
@@ -376,6 +408,7 @@ def daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Da
         bulk: int = 50,
         interval: float = 0.0,
         siblings: tuple[str, ...] = (),
+        manual_clock: bool = False,
     ) -> _Daemon:
         return _Daemon(
             tmp_path,
@@ -384,6 +417,7 @@ def daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Da
             bulk=bulk,
             interval=interval,
             siblings=siblings,
+            manual_clock=manual_clock,
         )
 
     return make
@@ -624,13 +658,15 @@ def test_trailing_finalize_fires_and_skips_when_nothing_landed_after_the_rewrite
     daemon: Callable[..., _Daemon],
 ) -> None:
     async def run() -> None:
-        d = daemon("col", interval=4.0)
+        d = daemon("col", interval=4.0, manual_clock=True)
+        assert d.clock is not None
         await d.start()
         base = d.rewrites.optimizes
         finalizes = d.queue.finalizes
         d.queue.on_scan = d.write_chunk
         await _sweep_finalize_ahead_of_an_edit(d)
         assert d.rewrites.optimizes == base + 1
+        d.clock.advance(4.0)  # the trailing timer comes due
         await _until(lambda: d.queue.finalizes >= finalizes + 2)
         await d.queue.settled()
         assert d.queue.finalizes == finalizes + 2  # the sweep's and the trailing one
@@ -644,7 +680,8 @@ def test_trailing_finalize_rewrites_a_write_that_landed_after_the_sweep_rewrite(
     daemon: Callable[..., _Daemon],
 ) -> None:
     async def run() -> None:
-        d = daemon("col", interval=4.0)
+        d = daemon("col", interval=4.0, manual_clock=True)
+        assert d.clock is not None
         await d.start()
         base = d.rewrites.optimizes
         landed = [False]
@@ -658,6 +695,7 @@ def test_trailing_finalize_rewrites_a_write_that_landed_after_the_sweep_rewrite(
         d.queue.on_index = late_write
         await _sweep_finalize_ahead_of_an_edit(d)
         assert landed[0]
+        d.clock.advance(4.0)  # the trailing timer comes due
         await _until(lambda: d.rewrites.optimizes >= base + 2)
         # The counter moves when optimize STARTS; wait for the finalize to end, or
         # its store thread outlives the test and sweeps under the next test's stub.
@@ -976,15 +1014,13 @@ def test_a_skipped_sweep_finalize_leaves_the_throttle_clock_and_trailing_alone(
     daemon: Callable[..., _Daemon],
 ) -> None:
     async def run() -> None:
-        d = daemon("col", interval=2.0)
+        d = daemon("col", interval=2.0, manual_clock=True)
+        assert d.clock is not None
         await d.start()
         throttle = _throttle(d)
         stamp = throttle._last[_DATABASE]
         _arm_trailing_finalize(d)
-        for _ in range(100):
-            if _armed_trailing(d):
-                break
-            await asyncio.sleep(0.02)
+        await _until(lambda: _armed_trailing(d))
         assert _armed_trailing(d)
         finalizes = d.queue.finalizes
         await d.safety_scan()  # a skipped sweep finalize
@@ -992,10 +1028,8 @@ def test_a_skipped_sweep_finalize_leaves_the_throttle_clock_and_trailing_alone(
         assert throttle._last[_DATABASE] == stamp
         assert _armed_trailing(d)
         # The armed trailing finalize still runs at its due time.
-        for _ in range(200):
-            if d.queue.finalizes == finalizes + 2:
-                break
-            await asyncio.sleep(0.05)
+        d.clock.advance(2.0)
+        await _until(lambda: d.queue.finalizes == finalizes + 2)
         await d.queue.settled()
         assert d.queue.finalizes == finalizes + 2
         await d.stop()
@@ -1257,26 +1291,39 @@ def test_a_failed_manual_rebuild_on_a_registrationless_database_is_retried(
 def test_a_finalize_on_another_collection_can_overtake_a_queued_index_job(
     daemon: Callable[..., _Daemon],
 ) -> None:
-    """DES-045c: that write waits for the next safety scan; the lag is not new."""
+    """DES-045c: that write waits for the next safety scan; the lag is not new.
+
+    The interval runs on a manual clock.  On the wall clock the start finalize,
+    which really rewrites, can outlast the interval on a loaded machine, and y's
+    edit then finalizes at once instead of arming the trailing timer under test.
+    """
 
     async def run() -> None:
-        d = daemon("x", "y", interval=0.5)
+        d = daemon("x", "y", interval=0.5, manual_clock=True)
+        clock = d.clock
+        assert clock is not None
         await d.start()
         base = d.rewrites.optimizes
         d.queue.hold("x")
-        emitted = {"y": d.roots["y"] / "y.md", "x": d.roots["x"] / "x.md"}
-        for name, path in emitted.items():
+        for name in ("y", "x"):  # y first: its edit arms the trailing timer
+            path = d.roots[name] / f"{name}.md"
             path.write_text("body")
             d.source.emit(d.roots[name], FsEvent(path, deleted=False))
-            await asyncio.sleep(0.15)  # y first: its edit arms the trailing timer
+            await _until(partial(d.queue.has_file_job, name))
+            assert d.queue.has_file_job(name)
+        assert len(clock.live()) == 1  # both edits coalesced into one timer
         finalizes = d.queue.finalizes
         d.queue.on_index = d.write_chunk  # x's job writes when it finally runs
+        clock.advance(0.5)  # the trailing timer fires, under y's key
         await _until(lambda: d.queue.finalizes > finalizes)
+        assert d.queue.finalizes == finalizes + 1
         assert d.rewrites.optimizes == base  # the finalize ran first and skipped
         d.queue.release("x")
         await d.queue.settled()
-        await asyncio.sleep(1.2)  # no timer is left to finalize x's write
+        clock.advance(1.2)  # no timer is left to finalize x's write
         await d.queue.settled()
+        assert clock.live() == []
+        assert d.queue.finalizes == finalizes + 1
         assert d.rewrites.optimizes == base
         await d.safety_scan()
         assert d.rewrites.optimizes == base + 1
