@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
 from typing import Self, final
 from unittest.mock import patch
@@ -662,3 +662,19 @@ def confined_config_reads(
 def p(tmp_path: Path) -> str:
     """Return a project root under the test sandbox, never a fixed path."""
     return str(tmp_path / "p")
+
+
+@pytest.fixture
+def opt_out() -> Callable[[Path], str]:
+    """Return a function that writes ``session_sync: false`` under a directory.
+
+    The function returns the directory as a string, the form markers take.
+    """
+
+    def write(directory: Path) -> str:
+        config = directory / ".punt-labs/quarry/config.md"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
+        return str(directory)
+
+    return write

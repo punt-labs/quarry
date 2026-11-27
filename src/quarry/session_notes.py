@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
-from quarry.marker_chain import MarkerChain
 from quarry.parent_disable_command import ParentDisableCommand
+from quarry.sync_duration import SyncDuration
 
 if TYPE_CHECKING:
     from quarry.enable import DisableResult
@@ -43,7 +43,7 @@ class SessionNote(ABC):
         The hook reads the session directory's config first, then the governing
         marker's, through the same fail-open loader, so this does too.
         """
-        return MarkerChain((result.directory, result.capturing_marker), "").opt_out()
+        return SyncDuration((result.directory, result.capturing_marker), "").opt_out()
 
     def _active(self, where: str) -> str:
         """Return the sentence saying what keeps the directory active through *where*.
@@ -140,12 +140,9 @@ class AtSeveralMarkers(SessionNote):
         """Return the note listing each marker and each way to end session start."""
         r = self.result
         markers = (r.capturing_marker, *r.also_capturing)
-        commands = ", ".join(
-            f"`{ParentDisableCommand(m)}`" for m in markers if m != r.covered_by
-        )
         return (
             f"{self._active(f'the markers at {", ".join(markers)}')}; "
-            f"{MarkerChain(markers, commands).duration()}; "
+            f"{SyncDuration(markers, r.covered_by)}; "
             f"`{ParentDisableCommand(r.covered_by)}` deregisters {r.covered_by} "
             f"and purges everything indexed for {r.covered_by} "
             f"(add --keep-data to keep the data)"

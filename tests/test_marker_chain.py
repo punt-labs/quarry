@@ -1,41 +1,30 @@
-"""Tests for the clause saying how long session start stays active."""
+"""Tests for the ordered markers the session-start hook reads."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from quarry.marker_chain import MarkerChain
 
 
-def _opt_out(directory: Path) -> str:
-    config = directory / ".punt-labs/quarry/config.md"
-    config.parent.mkdir(parents=True)
-    config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
-    return str(directory)
-
-
-def test_all_markers_syncing_stays_active_until_all_are_disabled(
-    tmp_path: Path,
+def test_opt_out_finds_the_first_marker_from_start_that_opts_out(
+    tmp_path: Path, opt_out: Callable[[Path], str]
 ) -> None:
-    markers = (str(tmp_path / "a"), str(tmp_path / "b"))
-    text = MarkerChain(markers, "`quarry disable a`").duration()
-    assert text == (
-        "it stays active until all of them are disabled (`quarry disable a`)"
-    )
+    near = opt_out(tmp_path / "a")
+    far = opt_out(tmp_path / "b")
+    chain = MarkerChain((near, far))
+    assert chain.opt_out() == near
+    assert chain.opt_out(1) == far
 
 
-def test_next_marker_opt_out_stops_it_whatever_a_farther_marker_allows(
-    tmp_path: Path,
-) -> None:
-    nearest, nxt, far = (tmp_path / n for n in ("a", "b", "c"))
-    stop = _opt_out(nxt)
-    text = MarkerChain((str(nearest), stop, str(far)), "`quarry disable a`").duration()
-    assert f"session_sync is false in the config at {stop}" in text
-    assert "whatever a farther marker allows" in text
-    assert "(disabling each: `quarry disable a`)" in text
+def test_opt_out_is_empty_when_every_marker_syncs(tmp_path: Path) -> None:
+    assert MarkerChain((str(tmp_path / "a"), str(tmp_path / "b"))).opt_out() == ""
 
 
-def test_nearest_marker_opt_out_is_not_this_chains_concern(tmp_path: Path) -> None:
-    nearest = _opt_out(tmp_path / "a")
-    text = MarkerChain((nearest, str(tmp_path / "b")), "").duration()
-    assert text == "it stays active until all of them are disabled"
+def test_until_returns_the_markers_nearer_than_the_stop() -> None:
+    assert MarkerChain(("a", "b", "c")).until("c") == ("a", "b")
+
+
+def test_until_an_empty_stop_returns_every_marker() -> None:
+    assert MarkerChain(("a", "b")).until("") == ("a", "b")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from quarry.claude_permissions import PermissionChange
 from quarry.disable_lines import DisableLines
 from quarry.enable import DisableResult
+from quarry.parent_disable_command import ParentDisableCommand
 from quarry.session_notes import SessionNote
 
 pytestmark = pytest.mark.usefixtures("confined_config_reads")
@@ -134,32 +136,17 @@ def test_captured_note_with_two_intermediates_lists_each_command(p: str) -> None
     assert "until all of them are disabled" in note
 
 
-def test_captured_note_names_the_marker_whose_opt_out_stops_it(p: str) -> None:
-    _opt_out(Path(p) / "b")
-    note = DisableLines(
-        _result(p, covered_by=p, capturing_marker=f"{p}/a", also_capturing=(f"{p}/b",))
-    ).captured()
-    assert f"session_sync is false in the config at {p}/b, so once" in note
-    assert "until all of them are disabled" not in note
-
-
 def test_captured_note_with_one_marker_is_unchanged(p: str) -> None:
     note = DisableLines(_result(p, covered_by=p, capturing_marker=f"{p}/a")).captured()
     assert f"still active through the marker at {p}/a" in note
     assert "until all" not in note
 
 
-def _opt_out(directory: Path) -> None:
-    config = directory / ".punt-labs/quarry/config.md"
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
-
-
 def _covered(
     tmp_path: Path, *markers: str, covered_by: str = ""
 ) -> tuple[Path, DisableResult]:
     parent = tmp_path / "p"
-    child = parent / "team" / "svc"
+    child = parent / "team" / "svc" / "leaf"
     child.mkdir(parents=True)
     paths = [str(parent / m) if m else str(parent) for m in markers]
     result = DisableResult(
@@ -179,9 +166,11 @@ def _covered(
     return parent, result
 
 
-def test_child_opted_out_of_session_sync_is_not_called_active(tmp_path: Path) -> None:
+def test_child_opted_out_of_session_sync_is_not_called_active(
+    tmp_path: Path, opt_out: Callable[[Path], str]
+) -> None:
     _, result = _covered(tmp_path, "")
-    _opt_out(Path(result.directory))
+    opt_out(Path(result.directory))
     note = str(SessionNote.of(result))
     assert "sync runs" not in note
     assert "still active" not in note
@@ -190,18 +179,22 @@ def test_child_opted_out_of_session_sync_is_not_called_active(tmp_path: Path) ->
     assert "deregisters" not in note
 
 
-def test_governing_marker_opted_out_is_not_called_active(tmp_path: Path) -> None:
+def test_governing_marker_opted_out_is_not_called_active(
+    tmp_path: Path, opt_out: Callable[[Path], str]
+) -> None:
     parent, result = _covered(tmp_path, "team", "")
-    _opt_out(parent / "team")
+    opt_out(parent / "team")
     note = str(SessionNote.of(result))
     assert "sync runs" not in note
     assert "does not activate quarry" in note
     assert f"session_sync is false in the config at {parent / 'team'}" in note
 
 
-def test_opted_out_note_keeps_the_destructive_warning_out(tmp_path: Path) -> None:
+def test_opted_out_note_keeps_the_destructive_warning_out(
+    tmp_path: Path, opt_out: Callable[[Path], str]
+) -> None:
     parent, result = _covered(tmp_path, "")
-    _opt_out(parent)
+    opt_out(parent)
     note = str(SessionNote.of(result))
     assert "purges" not in note
 
@@ -221,14 +214,25 @@ def test_several_markers_none_opted_out_names_every_marker(tmp_path: Path) -> No
 
 
 def test_next_marker_opt_out_ends_it_whatever_a_farther_marker_allows(
-    tmp_path: Path,
+    tmp_path: Path, opt_out: Callable[[Path], str]
 ) -> None:
     parent, result = _covered(tmp_path, "team/svc", "team", "")
-    _opt_out(parent / "team")
+    opt_out(parent / "team")
     note = str(SessionNote.of(result))
-    assert "while a marker with session_sync enabled remains" not in note
+    assert "until all of them are disabled" not in note
     assert f"session_sync is false in the config at {parent / 'team'}" in note
     assert "whatever a farther marker allows" in note
+
+
+def test_opt_out_note_lists_only_commands_for_markers_nearer_than_it(
+    tmp_path: Path, opt_out: Callable[[Path], str]
+) -> None:
+    parent, result = _covered(tmp_path, "team/svc", "team", "")
+    opt_out(parent / "team")
+    note = DisableLines(result).captured()
+    assert f"`{ParentDisableCommand(str(parent / 'team/svc'))}`" in note
+    assert f"`{ParentDisableCommand(str(parent / 'team'))}`" not in note
+    assert f"`{ParentDisableCommand(str(parent))}` deregisters" in note
 
 
 def test_unreadable_config_is_fail_open_and_sync_stays_on(tmp_path: Path) -> None:
