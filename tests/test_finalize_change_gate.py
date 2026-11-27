@@ -36,6 +36,7 @@ from quarry.daemon.route_key import RouteKey
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
 from quarry.daemon.watch_roster import WatchRoster
+from quarry.daemon.watch_submit import WatchSubmitter
 from quarry.db import Database, TableOptimizer
 from quarry.db.lance_connection import LanceConnection
 from quarry.db.optimizer import OptimizeOutcome
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from quarry.daemon.context import DaemonContext
+    from quarry.daemon.debounce import FlushBatch
     from quarry.daemon.ingest_unit import IngestUnit
     from quarry.daemon.task_state import TaskState
 
@@ -124,6 +126,7 @@ class _ExecutingQueue:
         "on_index",
         "on_scan",
         "shed",
+        "shed_count",
     )
 
     _ctx: DaemonContext | None
@@ -136,6 +139,7 @@ class _ExecutingQueue:
     finalizes: int
     file_jobs: Counter[str]
     shed: bool
+    shed_count: int
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
@@ -149,6 +153,7 @@ class _ExecutingQueue:
         self.on_scan = lambda: None
         self.on_index = lambda: None
         self.shed = False
+        self.shed_count = 0
         return self
 
     def bind(self, ctx: DaemonContext) -> None:
@@ -163,6 +168,7 @@ class _ExecutingQueue:
 
     def try_submit(self, key: RouteKey, job: IngestUnit, state: TaskState) -> bool:
         if self.shed:
+            self.shed_count += 1
             state.fail("ingest queue full")
             return False
         if isinstance(job, FileIndexJob):
@@ -456,9 +462,24 @@ def test_unchanged_safety_scan_rewrites_nothing(
     asyncio.run(run())
 
 
+def _count_batches(monkeypatch: pytest.MonkeyPatch) -> list[FlushBatch]:
+    """Record each batch the submitter has finished handling, in order."""
+    handled: list[FlushBatch] = []
+    real = WatchSubmitter.on_batch
+
+    def on_batch(submitter: WatchSubmitter, batch: FlushBatch) -> None:
+        real(submitter, batch)
+        handled.append(batch)
+
+    monkeypatch.setattr(WatchSubmitter, "on_batch", on_batch)
+    return handled
+
+
 def test_batch_that_admits_no_job_rewrites_nothing(
-    daemon: Callable[..., _Daemon],
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    handled = _count_batches(monkeypatch)
+
     async def run() -> None:
         d = daemon("col")
         await d.start()
@@ -467,8 +488,9 @@ def test_batch_that_admits_no_job_rewrites_nothing(
         ignored = root / "notes.unsupported"
         ignored.write_text("not indexable")
         d.source.emit(root, FsEvent(ignored, deleted=False))
-        await asyncio.sleep(0.15)
+        await _until(lambda: bool(handled))  # the debouncer flushed the batch
         await d.queue.settled()
+        assert len(handled) == 1
         assert d.rewrites.optimizes == before
         await d.stop()
 
@@ -482,13 +504,15 @@ def test_bulk_batch_over_unchanged_files_rewrites_nothing(
         d = daemon("col", bulk=2)
         await d.start()
         before = d.rewrites.optimizes
+        finalizes = d.queue.finalizes
         root = d.roots["col"]
         for i in range(3):
             path = root / f"f{i}.md"
             path.write_text("body")
             d.source.emit(root, FsEvent(path, deleted=False))
-        await asyncio.sleep(0.15)
+        await _until(lambda: d.queue.finalizes > finalizes)  # the bulk finalize ran
         await d.queue.settled()
+        assert d.queue.finalizes == finalizes + 1
         assert d.rewrites.optimizes == before
         await d.stop()
 
@@ -631,7 +655,7 @@ def test_skipped_finalize_leaves_an_armed_trailing_finalize_alone(
         d = daemon("col", interval=30.0)
         await d.start()
         _arm_trailing_finalize(d)
-        await asyncio.sleep(0.15)
+        await _until(lambda: _armed_trailing(d))
         assert _armed_trailing(d)
         await d.safety_scan()
         assert _armed_trailing(d)
@@ -908,7 +932,9 @@ def test_a_retry_shed_by_a_full_queue_is_armed_again(
         d.rewrites.failures = [RuntimeError("boom")]
         await d.start()
         d.queue.shed = True
-        await asyncio.sleep(1.5)  # the retry fires into a full queue
+        # The retry fires into a full queue, and again after each shed.
+        await _until(lambda: d.queue.shed_count >= 2)
+        assert d.queue.shed_count >= 2
         assert d.rewrites.optimizes == 1
         d.queue.shed = False
         await _until(lambda: d.rewrites.optimizes >= 2)
@@ -1106,15 +1132,19 @@ def test_a_retry_coalesced_into_the_trailing_timer_is_armed_again_when_shed(
     async def run() -> None:
         # The interval is longer than the one second retry, so the retry is
         # coalesced into the throttle's trailing timer, and that fire is shed.
-        d = daemon("col", interval=3.0)
+        d = daemon("col", interval=3.0, manual_clock=True)
+        assert d.clock is not None
         d.rewrites.failures = [RuntimeError("boom")]
         await d.start()
         d.queue.shed = True
-        await asyncio.sleep(1.5)
+        d.clock.advance(1.5)  # the retry comes due inside the interval
         assert _armed_trailing(d)  # the retry coalesced; no direct submit happened
-        await asyncio.sleep(3.0)  # the trailing timer fires into a full queue
+        assert d.queue.shed_count == 0
+        d.clock.advance(3.0)  # the trailing timer fires into a full queue
+        assert d.queue.shed_count >= 1
         assert d.rewrites.optimizes == 1
         d.queue.shed = False
+        d.clock.advance(0.2)  # the shed finalize's retry comes due
         await _until(lambda: d.rewrites.optimizes >= 2)
         await d.queue.settled()
         assert d.rewrites.optimizes == 2
@@ -1153,16 +1183,19 @@ def test_a_shed_retry_is_armed_again_when_a_write_armed_the_trailing_timer(
     monkeypatch.setattr("quarry.daemon.finalize_retry.SHED_RETRY_S", 0.1)
 
     async def run() -> None:
-        d = daemon("col", interval=3.0)
+        d = daemon("col", interval=3.0, manual_clock=True)
+        assert d.clock is not None
         d.rewrites.failures = [RuntimeError("boom")]
         await d.start()  # the failed finalize arms a retry for about a second
         _arm_trailing_finalize(d)  # a write arms the trailing timer first
         await _until(lambda: _armed_trailing(d))
         assert _armed_trailing(d)
         d.queue.shed = True
-        await asyncio.sleep(4.5)  # the retry coalesces; the trailing fire is shed
+        d.clock.advance(4.5)  # the retry coalesces; the trailing fire is shed
+        assert d.queue.shed_count >= 1
         assert d.rewrites.optimizes == 1
         d.queue.shed = False
+        d.clock.advance(0.2)  # the shed finalize's retry comes due
         await _until(lambda: d.rewrites.optimizes >= 2)
         await d.queue.settled()
         assert d.rewrites.optimizes == 2
