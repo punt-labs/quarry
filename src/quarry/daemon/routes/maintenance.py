@@ -93,14 +93,7 @@ class MaintenanceRoutes(RouteGroup):
         """
         with Terminal.for_task(state).recording():
             step = ManualOptimize(self.ctx.database.optimizer, self.ctx.settings)
-            outcome = await run_in_threadpool(lambda: step.run_manually(force=force))
-            results: dict[str, object] = {
-                "optimized": outcome.optimized,
-                "fragments_before": outcome.fragments,
-                "force": force,
-            }
-            if outcome.reason:
-                results["reason"] = outcome.reason
+            results = await run_in_threadpool(lambda: step.task_results(force=force))
             state.complete(results)
 
     async def _run_backfill(self, state: TaskState, args: BackfillArgs) -> None:

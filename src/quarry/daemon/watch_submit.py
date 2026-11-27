@@ -163,11 +163,12 @@ class WatchSubmitter:
     def mark_finalized(self, database: str) -> None:
         """Register an out-of-band finalize that is about to REWRITE *database*.
 
-        Cancels any trailing finalize already armed for it and resets the
-        interval clock, so the throttle's next in-window request coalesces behind
-        the rewrite that is running.  The finalize job calls this only when it
-        decides to rewrite the table: a finalize that skips, or one the queue
-        shed, never ran and must not stamp or cancel a trailing timer a write armed.
+        Stamps the interval clock, so the throttle's next in-window request
+        coalesces behind the rewrite that is running; a trailing finalize already
+        armed is left alone, because a write queued behind this finalize may have
+        armed it.  The finalize job calls this only when it decides to rewrite the
+        table: a finalize that skips, or one the queue shed, never ran and must
+        not stamp.
         """
         self._throttle.mark_admitted(database)
 
@@ -178,8 +179,23 @@ class WatchSubmitter:
         self._retries.arm(
             key.database,
             delay_s,
-            partial(self._request_finalize, key, db, settings),
+            partial(self._retry_request, key, db, settings),
         )
+
+    def _retry_request(self, key: RouteKey, db: Database, settings: Settings) -> bool:
+        """Request the retry through the throttle; return whether it was not shed.
+
+        A request the throttle coalesces into its trailing timer counts as handled;
+        one it submits and the queue sheds does not, so the retry is armed again.
+        """
+        admitted: list[bool] = []
+
+        def submit() -> bool:
+            admitted.append(self._submit_finalize(key, db, settings).status != "failed")
+            return admitted[-1]
+
+        self._throttle.request(key.database, submit)
+        return all(admitted)
 
     def _request_finalize(
         self, key: RouteKey, db: Database, settings: Settings

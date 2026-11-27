@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# A retry is never armed sooner: the ledger reports its back-off rounded to 0.1 s,
+# and a retry that fires at once would skip and ask again in a tight loop.
+MIN_RETRY_S = 1.0
+
 
 @final
 class TableUpkeep:
@@ -67,7 +71,7 @@ class TableUpkeep:
         """Return seconds until a dirty table may be rewritten, or ``None`` if clean."""
         if not self._changes.needs_rewrite():
             return None
-        return self._ledger.health().retry_in_seconds
+        return max(MIN_RETRY_S, self._ledger.health().retry_in_seconds)
 
     def settle_rewrite(self, snapshot: int, *, succeeded: bool) -> None:
         """Mark the table clean up to *snapshot* if this run's optimize succeeded.

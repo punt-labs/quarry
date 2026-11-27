@@ -2277,12 +2277,17 @@ store threads write. An orphan-page sweep that deletes pages is itself a write, 
 it dirties the record and costs one extra rewrite; that is safe, only one more
 finalize.
 
-*Retry.* A finalize that leaves the table dirty, by failure, back-off or a write
-during the run, tells the loop how long until a retry is allowed, and
-`FinalizeRetry` re-requests a finalize through the throttle after that delay. This
-works with `watch_safety_scan_s = 0`. While the ledger is backing off, a finalize
-of a dirty table is a skip, with no throttle stamp, no orphan sweep and no GC, and
-its DEBUG line says so; the retry fires once the back-off has elapsed.
+*Retry.* A finalize that leaves the table dirty, by failure, back-off, a write
+during the run, or an unexpected exception (the job computes the delay and
+re-raises), tells the loop how long until a retry is allowed, and `FinalizeRetry`
+re-requests a finalize through the throttle after that delay, never sooner than one
+second (the ledger reports its back-off rounded to 0.1 s). A retry the ingest queue
+sheds is armed again. This works with `watch_safety_scan_s = 0`. While the ledger is
+backing off, a finalize of a dirty table is a skip: a sweep's finalize does not
+stamp the throttle, and there is no GC. It still sweeps orphan pages when the slow
+clock is due, which from the fourth consecutive failure, when the back-off has
+doubled past an hour, is every time; its DEBUG line says "backing off". Back-off
+doubles from 600 s to a 6 hour cap, and the retry fires once it has elapsed.
 
 *Crash window.* `CollectionFinalizeJob.spool_record()` is `None`, so a queued
 finalize does not survive a crash, and the write that wanted it is forgotten. The
@@ -2306,25 +2311,37 @@ time-gated, and that is accepted: LanceDB has no prune separate from `optimize`
 (`cleanup_old_versions` needs the `pylance` package, and `optimize` also compacts
 and re-indexes; an optimize on a just-finalized table still wrote new files), so
 versions older than the one hour window are pruned by the next rewrite. The leftover
-on an idle database is the last finalize's superseded generation; it is bounded and
-does not grow, because an idle table writes no new versions.
+on an idle database is the last finalize's superseded generation of the chunks
+table; it is bounded and does not grow, because an idle table writes no new
+versions. The pages table is not compacted or pruned by a finalize at all
+(PL-1706).
 
 *Throttle.* `FinalizeThrottle` and `WatchSubmitter.mark_finalized` keep their meaning
 for a finalize that runs. For a sweep's finalize, which is submitted immediately, a
 skip never touches the throttle: the job calls `mark_finalized` only when it decides
-to rewrite, cancelling an armed trailing finalize and stamping the interval clock. A
-throttled finalize, the trailing one and the bulk-batch one, is different: the
-throttle stamps its clock when it admits the finalize, before the job decides to
-skip. A throttled finalize that finds the table clean therefore still moves the next
-request inside the interval into the trailing timer, delaying a real rewrite by at
-most one interval. A skipped finalize logs one DEBUG line naming the database and
-the reason, unchanged table or backing off.
+to rewrite, and that stamps the interval clock but does NOT cancel an armed trailing
+finalize. The cancel moved from submit time to run time in an earlier draft and
+lost a write that was queued behind the sweep's finalize: the write armed the
+trailing timer, the rewrite cancelled it, and the write landed after the rewrite
+with nothing left to finalize it. The cancel existed to stop a second compaction,
+and the change gate now makes a trailing finalize that finds the table clean a cheap
+skip. Four finalizes are throttled: the trailing one, the bulk-batch one, the
+delta-batch one (`on_batch` to `_request_finalize`) and the retry one
+(`_retry_finalize` to `_request_finalize`). The throttle stamps its clock when it
+admits each of them, before the job decides to skip. Such a finalize can fire, find
+the table clean, and consume the pending trailing timer; a write in another
+collection that lands later then waits for the next safety scan, and with
+`watch_safety_scan_s = 0` for the next churn. That lag existed before this change
+and is not bounded by one interval. A skipped finalize logs one DEBUG line naming
+the database and the reason, unchanged table or backing off.
 
 *Manual optimize.* The HTTP optimize route runs outside the embed gate, so it could
 overlap a finalize on the same table and clear the ledger under it. The finalize
 rewrite and the manual optimize now both hold `TableChanges.optimizing()`, a
 per-database lock. A manual optimize whose full-text rebuild fails records the
-failure instead of clearing the ledger.
+failure instead of clearing the ledger, dirties the record so the next finalize
+rebuilds the index, and reports `fts_rebuilt: false` with a reason in its task
+result.
 
 *Not covered.* A write by a process other than the daemon bypasses the record; the
 daemon is the single writer (DES-042), and an offline `quarry repair` run while the

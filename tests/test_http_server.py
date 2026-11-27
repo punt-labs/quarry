@@ -4747,6 +4747,31 @@ class TestManualOptimizeClearsLedger:
         assert ledger.health().consecutive_failures == 1
 
 
+class TestManualOptimizeReportsFtsFailure:
+    def test_a_failed_full_text_rebuild_is_reported_and_dirties_the_record(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.db.optimizer import OptimizeOutcome
+        from quarry.db.table_changes import TableChanges
+
+        settings = _mock_settings(tmp_path)
+        changes = TableChanges.for_path(settings.lancedb_path)
+        changes.mark_clean(changes.snapshot())
+        ran = OptimizeOutcome(optimized=True, fragments=3, fts_rebuilt=False)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        with (
+            patch("quarry.db.optimizer.TableOptimizer.optimize", return_value=ran),
+            TestClient(build_app(ctx)) as tc,
+        ):
+            task_id = tc.post("/v1/optimize", json={}).json()["task_id"]
+            done = _poll_task_done(tc, task_id)
+        assert done["results"]["optimized"] is True
+        assert done["results"]["fts_rebuilt"] is False
+        assert "full-text" in done["results"]["reason"]
+        assert changes.needs_rewrite()
+
+
 class TestManualOptimizeKeepsIndexFailure:
     def test_index_failure_is_not_cleared_by_a_compaction_alone(
         self, tmp_path: Path

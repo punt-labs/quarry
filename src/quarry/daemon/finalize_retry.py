@@ -8,6 +8,9 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Callable
 
+# How long to wait before trying again when the ingest queue shed the retry.
+SHED_RETRY_S = 1.0
+
 
 @final
 class FinalizeRetry:
@@ -17,8 +20,10 @@ class FinalizeRetry:
     it then fails or backs off nothing else is scheduled, and with the periodic
     safety scan disabled nothing ever would be.  The retry waits out the
     ledger's back-off, then calls *request*, which goes back through the
-    finalize throttle so it still honors the rate limit.  A retry already
-    pending for the database is kept.  State lives on the event loop.
+    finalize throttle so it still honors the rate limit.  A retry that the
+    ingest queue sheds is armed again, so a full queue delays it but never drops
+    it.  A retry already pending for the database is kept.  State lives on the
+    event loop.
     """
 
     __slots__ = ("_loop", "_timers")
@@ -33,7 +38,7 @@ class FinalizeRetry:
         self._timers = {}
         return self
 
-    def arm(self, database: str, delay_s: float, request: Callable[[], None]) -> None:
+    def arm(self, database: str, delay_s: float, request: Callable[[], bool]) -> None:
         """Schedule *request* in *delay_s* seconds unless a retry is pending."""
         if database not in self._timers:
             self._timers[database] = self._loop.call_later(
@@ -46,6 +51,7 @@ class FinalizeRetry:
             timer.cancel()
         self._timers.clear()
 
-    def _fire(self, database: str, request: Callable[[], None]) -> None:
+    def _fire(self, database: str, request: Callable[[], bool]) -> None:
         self._timers.pop(database, None)
-        request()
+        if not request():
+            self.arm(database, SHED_RETRY_S, request)

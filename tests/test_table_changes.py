@@ -18,7 +18,7 @@ from quarry.db.recycling_table import RecyclingTable
 from quarry.db.table_changes import TableChanges
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.page_record import PageRecord
-from quarry.types import LanceTable
+from quarry.types import LanceDB, LanceTable
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -268,3 +268,52 @@ def test_an_orphan_sweep_that_deletes_pages_dirties_the_record(tmp_path: Path) -
     later = datetime.now(UTC) + timedelta(days=2)
     assert OrphanPageSweep(database.db).run(now=later) == 1
     assert changes.needs_rewrite()
+
+
+_CONNECTION_NOT_WRITES = {"list_tables", "open_table"}
+_CONNECTION_SAMPLE_ARGS: dict[str, tuple[tuple[object, ...], dict[str, object]]] = {
+    "create_table": (("t",), {"data": [], "schema": None}),
+}
+
+
+class _FakeTables:
+    tables: tuple[str, ...] = ()
+
+
+class _FakeConnection:
+    """Implement every ``LanceDB`` method by doing nothing."""
+
+    def list_tables(self) -> _FakeTables:
+        return _FakeTables()
+
+    def open_table(self, name: str) -> _FakeTable:
+        return _FakeTable()
+
+    def create_table(
+        self, name: str, *, data: list[dict[str, object]], schema: object
+    ) -> _FakeTable:
+        return _FakeTable()
+
+
+class TestEveryConnectionWriteIsRecorded:
+    """A new ``LanceDB`` method must record itself or be named a non-write."""
+
+    def test_every_method_not_in_the_allow_list_bumps_the_record(self) -> None:
+        methods = sorted(
+            name
+            for name, member in vars(LanceDB).items()
+            if not name.startswith("_") and callable(member)
+        )
+        for name in methods:
+            if name in _CONNECTION_NOT_WRITES:
+                continue
+            assert name in _CONNECTION_SAMPLE_ARGS, f"{name}: add sample args"
+            args, kwargs = _CONNECTION_SAMPLE_ARGS[name]
+            changes = TableChanges()
+            conn = LanceConnection(lambda: cast("LanceDB", _FakeConnection()), changes)
+            before = changes.snapshot()
+            getattr(conn, name)(*args, **kwargs)
+            assert changes.snapshot() > before, f"{name} skips the write record"
+
+    def test_the_allow_list_names_only_real_protocol_members(self) -> None:
+        assert set(vars(LanceDB)) >= _CONNECTION_NOT_WRITES

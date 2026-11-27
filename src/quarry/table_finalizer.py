@@ -57,6 +57,10 @@ class TableFinalizer:
                 self._upkeep.skip_rewrite()
         finally:
             ShadowPushStep(self._settings).run()
+        return self.retry_in_seconds()
+
+    def retry_in_seconds(self) -> float | None:
+        """Return seconds until a dirty table may be rewritten, or ``None`` if clean."""
         return self._upkeep.retry_in_seconds()
 
     def _rewrite(self) -> None:

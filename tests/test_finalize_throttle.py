@@ -144,9 +144,9 @@ def test_immediate_path_cancels_pending_timer_no_double_fire() -> None:
     asyncio.run(_run())
 
 
-def test_mark_admitted_cancels_pending_trailing_and_stamps() -> None:
-    """An out-of-band ADMITTED finalize (reconcile/sync) must cancel an armed
-    trailing timer for the same db, so the two don't both run.
+def test_mark_admitted_stamps_but_leaves_a_pending_trailing_armed() -> None:
+    """A rewriting sweep finalize stamps the clock; it must not cancel a trailing
+    timer, which a write queued behind that finalize may have armed.
     """
 
     async def _run() -> None:
@@ -156,12 +156,14 @@ def test_mark_admitted_cancels_pending_trailing_and_stamps() -> None:
         throttle.request("db", submit)  # fires now (calls=1), stamps _last
         throttle.request("db", submit)  # within interval → arms a trailing timer
         pending = throttle._timers["db"]
-        # A reconcile/sync finalizes "db" directly (admitted), then registers it.
+        before = throttle._last["db"]
+        await asyncio.sleep(0.01)
         throttle.mark_admitted("db")
-        assert pending.cancelled()  # armed trailing timer de-queued
-        assert "db" not in throttle._timers
-        await asyncio.sleep(_INTERVAL * 2)  # the trailing would have fired by now
-        assert submit.calls == 1  # only the original fire; no redundant finalize
+        assert not pending.cancelled()
+        assert throttle._timers["db"] is pending
+        assert throttle._last["db"] > before
+        await asyncio.sleep(_INTERVAL * 2)  # the trailing fires: it skips when clean
+        assert submit.calls == 2
 
     asyncio.run(_run())
 

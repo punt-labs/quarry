@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_FTS_FAILED = "full-text index rebuild failed; the next finalize retries it"
+
 
 @final
 class OptimizeStep:
@@ -103,11 +105,11 @@ class ManualOptimize:
     steps may clear it; a failure in either propagates and leaves it.
     """
 
-    __slots__ = ("_ledger", "_lock", "_opt")
+    __slots__ = ("_changes", "_ledger", "_opt")
 
     _opt: TableOptimizer
     _ledger: FinalizeLedger
-    _lock: threading.RLock
+    _changes: TableChanges
 
     def __new__(cls, opt: TableOptimizer, settings: Settings) -> Self:
         """Pair explicit optimization with the database's shared failure ledger."""
@@ -116,16 +118,62 @@ class ManualOptimize:
         self._ledger = FinalizeLedgers.for_database(
             settings.lancedb_path, settings.quarry_root
         )
-        self._lock = TableChanges.for_path(settings.lancedb_path).optimizing()
+        self._changes = TableChanges.for_path(settings.lancedb_path)
         return self
+
+    def task_results(self, *, force: bool) -> dict[str, object]:
+        """Run the optimize and return the fields its task reports."""
+        return OptimizeReport(self.run_manually(force=force), force=force).results()
 
     def run_manually(self, *, force: bool) -> OptimizeOutcome:
         """Create the collection index, compact, and clear the ledger on success."""
-        with self._lock:
+        with self._changes.optimizing():
             self._opt.create_collection_index()
             outcome = self._opt.optimize(force=force)
             if outcome.optimized and outcome.fts_rebuilt:
                 self._ledger.clear()
             elif outcome.optimized:
+                # Compaction renumbered the fragments, so the old index is stale:
+                # dirty the record so the next finalize rebuilds it.
                 self._ledger.record_failure("full-text index rebuild failed")
+                self._changes.note_write()
             return outcome
+
+
+@final
+class OptimizeReport:
+    """Turn what the optimizer did into the optimize task's result fields.
+
+    ``optimized`` is whatever the optimizer did: a fragment-count skip is
+    ``False`` with a ``reason``, never a false success.  A run that compacted but
+    failed to rebuild the full-text index reports ``fts_rebuilt: false`` and says
+    so, because the old index is stale until the next finalize rebuilds it.
+    """
+
+    __slots__ = ("_force", "_outcome")
+
+    _force: bool
+    _outcome: OptimizeOutcome
+
+    def __new__(cls, outcome: OptimizeOutcome, *, force: bool) -> Self:
+        """Bind the optimizer's outcome and whether the run was forced."""
+        self = super().__new__(cls)
+        self._outcome = outcome
+        self._force = force
+        return self
+
+    def results(self) -> dict[str, object]:
+        """Return the task's result fields."""
+        outcome = self._outcome
+        results: dict[str, object] = {
+            "optimized": outcome.optimized,
+            "fragments_before": outcome.fragments,
+            "force": self._force,
+        }
+        if outcome.optimized:
+            results["fts_rebuilt"] = outcome.fts_rebuilt
+        if outcome.optimized and not outcome.fts_rebuilt:
+            results["reason"] = _FTS_FAILED
+        elif outcome.reason:
+            results["reason"] = outcome.reason
+        return results

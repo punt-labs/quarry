@@ -88,7 +88,7 @@ class CollectionFinalizeJob:
         # things serialize them.  EMBED_CONCURRENCY_CEILING == 1: the global embed
         # gate serializes every job's run() body, so no two finalizes overlap; if
         # that ceiling is ever raised, finalize must serialize per-DATABASE.  And
-        # the per-database optimize lock (FinalizeLedger.exclusive), which the
+        # the per-database optimize lock (TableChanges.optimizing()), which the
         # finalize rewrite and the operator's manual optimize route
         # (MaintenanceRoutes, which runs outside the embed gate) both take.
         # The decision is made here, on the store thread, once: the record is
@@ -96,9 +96,18 @@ class CollectionFinalizeJob:
         changes = LanceConnection.changes_of(self.database.db)
         finalizer = TableFinalizer(self.database.db, self.settings, changes)
         announce = self._announcer(loop)
-        retry_in = finalizer.run(announce)
-        if retry_in is not None and self.on_unsettled is not None:
-            loop.call_soon_threadsafe(self.on_unsettled, retry_in)
+        retry_in: float | None = None
+        try:
+            retry_in = finalizer.run(announce)
+        except Exception:
+            # An unexpected failure left the table as the record says: if it is
+            # dirty, a retry is still owed.  Compute it here, so a failure of its
+            # own is chained to the original rather than replacing it.
+            retry_in = finalizer.retry_in_seconds()
+            raise
+        finally:
+            if retry_in is not None and self.on_unsettled is not None:
+                loop.call_soon_threadsafe(self.on_unsettled, retry_in)
 
     def _announcer(self, loop: asyncio.AbstractEventLoop) -> Callable[[], None]:
         """Return the call that tells the loop a rewrite is starting."""
