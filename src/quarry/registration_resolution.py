@@ -26,9 +26,10 @@ class Resolution:
     covered_by: str = ""
 
     @classmethod
-    def under(cls, covering: RegistrationInfo, override: str) -> Self:
-        """Reuse the registration *covering* a child directory.
+    def reusing(cls, covering: RegistrationInfo, directory: str, override: str) -> Self:
+        """Reuse the registration *covering* *directory*, itself or a parent.
 
+        ``covered_by`` is set only when the covering registration is a parent's.
         Raises ValueError when *override* names a different collection than the
         covering registration's: the override cannot take effect there.
         """
@@ -39,4 +40,5 @@ class Resolution:
                 f"--collection {override} cannot apply here."
             )
             raise ValueError(msg)
-        return cls(covering.collection, created=False, covered_by=covering.directory)
+        parent = "" if covering.directory == directory else covering.directory
+        return cls(covering.collection, created=False, covered_by=parent)

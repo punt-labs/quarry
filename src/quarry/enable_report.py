@@ -5,18 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
-    from quarry.enable import DisableResult, EnableResult
+    from quarry.enable import EnableResult
 
-__all__ = ["DisableReport", "EnableReport"]
-
-
-def _flagged(pairs: tuple[tuple[object, str], ...]) -> list[str]:
-    """Return each message whose flag is truthy, preserving order.
-
-    Turns a run of ``if result.x: lines.append(...)`` branches into one
-    data-driven pass, so a report carries content, not control flow.
-    """
-    return [message for flag, message in pairs if flag]
+__all__ = ["EnableReport"]
 
 
 @final
@@ -33,6 +24,15 @@ class EnableReport:
         self._r = result
         return self
 
+    @staticmethod
+    def flagged(pairs: tuple[tuple[object, str], ...]) -> list[str]:
+        """Return each message whose flag is truthy, preserving order.
+
+        Turns a run of ``if result.x: lines.append(...)`` branches into one
+        data-driven pass, so a report carries content, not control flow.
+        """
+        return [message for flag, message in pairs if flag]
+
     def lines(self) -> list[str]:
         """Return the summary lines for the enable, in display order."""
         r = self._r
@@ -41,7 +41,7 @@ class EnableReport:
             f"  Collection: {r.collection}",
             f"  Captures: {r.captures_collection}",
         ]
-        lines += _flagged(
+        lines += self.flagged(
             (
                 (r.covered_by, f"  Reused registration at {r.covered_by}"),
                 (r.config_path, f"  Config: {r.config_path}"),
@@ -70,7 +70,7 @@ class EnableReport:
         """Return the cross-harness skill-deposit line, or none.
 
         A tuple of :class:`~quarry.skills_install.SkillOutcome` is not a flag
-        ``_flagged`` can branch on, so this names the harnesses directly.
+        ``flagged`` can branch on, so this names the harnesses directly.
         Only ``"deposited"`` and ``"upgraded"`` count as new content;
         ``"current"`` (unchanged on a re-enable) and ``"unsupported"``
         (Claude Code, served by the plugin directly) are not, and a re-enable
@@ -99,7 +99,7 @@ class EnableReport:
         as unqualified success.
         """
         e = self._r.ethos
-        return _flagged(
+        return self.flagged(
             (
                 (e.skipped, "  Ethos: not installed (agent memory skipped)"),
                 (e.created, f"  Ethos created: {', '.join(e.created)}"),
@@ -116,48 +116,3 @@ class EnableReport:
                 (e.failed, f"  Ethos FAILED: {', '.join(e.failed)}"),
             )
         )
-
-
-@final
-class DisableReport:
-    """Format a :class:`DisableResult` as the lines ``quarry disable`` prints."""
-
-    __slots__ = ("_keep_data", "_r")
-
-    _r: DisableResult
-    _keep_data: bool
-
-    def __new__(cls, result: DisableResult, *, keep_data: bool) -> Self:
-        """Pair a disable outcome with the caller's keep-data reporting policy."""
-        self = super().__new__(cls)
-        self._r = result
-        self._keep_data = keep_data
-        return self
-
-    def lines(self) -> list[str]:
-        """Return the summary lines for the disable, in display order."""
-        r = self._r
-        lines = [f"Disabled quarry for {r.directory}"]
-        if r.collection:
-            # Report the registration in both keep-data branches so --keep-data
-            # does not look like only local files were touched.
-            fate = "kept indexed data" if self._keep_data else "chunk purge queued"
-            lines.append(f"  Deregistered {r.collection} ({r.removed} files); {fate}")
-        else:
-            # Idempotent no-op: nothing was registered (never enabled, or a prior
-            # partial disable already deregistered it).
-            lines.append("  Already disabled (no registration)")
-        lines += _flagged(
-            (
-                (r.config_removed, "  Config file removed"),
-                (
-                    r.import_pruned,
-                    "  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md",
-                ),
-                (
-                    r.enabled_marker_removed,
-                    "  Removed enabled marker (guide left dormant)",
-                ),
-            )
-        )
-        return lines + r.permissions.lines("Removed quarry tool permissions from")

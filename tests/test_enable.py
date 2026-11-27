@@ -493,19 +493,48 @@ class TestDisableIdempotentRetrySafe:
         assert "captures purge for myproject-captures was rejected" in caplog.text
 
 
-class TestT15DisableOnChildOfRegisteredParentRaises:
-    def test_disable_on_child_of_registered_parent_raises(self, tmp_path: Path) -> None:
+class TestT15DisableCoveredChild:
+    """Disabling a covered child undoes its own enable and spares the parent."""
+
+    def test_enable_then_disable_leaves_child_clean(self, tmp_path: Path) -> None:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "src"
+        child.mkdir()
+        (child / "CLAUDE.md").write_text("# rules\n")
+        settings = child / ".claude" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"permissions": {"allow": ["Bash(make:*)"]}}))
+        client = FakeRegistryClient([("project", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            result = disable_project(child, client)
+
+        assert not (child / ".punt-labs" / "quarry" / "config.md").exists()
+        assert not EnabledMarker(child).is_present()
+        assert REPO_IMPORT_LINE not in (child / "CLAUDE.md").read_text()
+        assert json.loads(settings.read_text()) == {
+            "permissions": {"allow": ["Bash(make:*)"], "ask": []}
+        }
+        assert result.config_removed is True
+        assert result.enabled_marker_removed is True
+        assert result.covered_by == str(parent)
+        assert result.collection == ""
+
+    def test_parent_registration_and_data_untouched(self, tmp_path: Path) -> None:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
         client = FakeRegistryClient([("project", parent)])
 
-        with pytest.raises(ValueError, match="covered by parent registration"):
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
             disable_project(child, client)
 
-        # The parent registration must NOT be deregistered.
         assert client.deregistered == []
+        assert client.deleted == []
         assert client.collections == ["project"]
 
 

@@ -47,9 +47,7 @@ class Registrar:
         view = Registrations.from_list(self._client.list_registrations())
         covering = view.covering(directory)
         if covering is not None:
-            if covering.directory == str(directory):
-                return Resolution(covering.collection, created=False)
-            return Resolution.under(covering, collection_override)
+            return Resolution.reusing(covering, str(directory), collection_override)
 
         # Re-adopt: if THIS directory owns an archived (keep-data) collection,
         # reuse its name so the daemon's register re-adopts the kept chunks and

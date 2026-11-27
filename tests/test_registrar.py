@@ -54,3 +54,17 @@ def test_child_with_conflicting_override_raises() -> None:
     client = FakeRegistryClient([("proj", Path("/proj"))])
     with pytest.raises(ValueError, match="already covered by the registration"):
         Registrar(client).resolve(Path("/proj/src"), "other")
+
+
+def test_exact_match_with_conflicting_override_raises() -> None:
+    client = FakeRegistryClient([("proj", Path("/proj"))])
+    with pytest.raises(ValueError, match="already covered by the registration"):
+        Registrar(client).resolve(Path("/proj"), "other")
+    assert client._registered == []
+
+
+def test_exact_match_with_matching_override_is_accepted() -> None:
+    client = FakeRegistryClient([("proj", Path("/proj"))])
+    res = Registrar(client).resolve(Path("/proj"), "proj")
+    assert res.collection == "proj"
+    assert res.created is False

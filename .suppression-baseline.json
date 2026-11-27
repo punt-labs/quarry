@@ -1,7 +1,7 @@
 {
-  "total": 186,
+  "total": 185,
   "by_category": {
-    "noqa": 146,
+    "noqa": 145,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -14,16 +14,19 @@
       "type_ignore": 1,
       "per_file_ignores": 2
     },
+    "src/quarry/_hook_admission.py": {
+      "noqa": 3
+    },
     "src/quarry/_hook_entry.py": {
       "noqa": 8
-    },
-    "src/quarry/_hook_trace.py": {
-      "noqa": 3
     },
     "src/quarry/active_session_context.py": {
       "noqa": 1
     },
     "src/quarry/captures_collection.py": {
+      "noqa": 1
+    },
+    "src/quarry/checkout_ignore.py": {
       "noqa": 1
     },
     "src/quarry/cli_admin.py": {
@@ -89,14 +92,11 @@
     "src/quarry/doctor_model.py": {
       "noqa": 1
     },
-    "src/quarry/doctor_recall.py": {
-      "noqa": 1
-    },
     "src/quarry/doctor_sync.py": {
-      "noqa": 4
+      "noqa": 3
     },
     "src/quarry/embeddings.py": {
-      "noqa": 3
+      "noqa": 1
     },
     "src/quarry/enable.py": {
       "noqa": 7
@@ -165,6 +165,9 @@
     "src/quarry/lesson.py": {
       "noqa": 1
     },
+    "src/quarry/model_cache.py": {
+      "noqa": 1
+    },
     "src/quarry/onnx_session.py": {
       "noqa": 1
     },
@@ -172,7 +175,7 @@
       "noqa": 1
     },
     "src/quarry/registrar.py": {
-      "noqa": 2
+      "noqa": 3
     },
     "src/quarry/remote.py": {
       "noqa": 2
@@ -242,5 +245,5 @@
       "per_file_ignores": 1
     }
   },
-  "updated_at": "2026-11-19T03:32:42Z"
+  "updated_at": "2026-11-27T05:18:02Z"
 }

@@ -24,7 +24,6 @@ if TYPE_CHECKING:
         TaskAccepted,
     )
     from quarry.enablement_result import DisablementResult
-    from quarry.registrations import Registrations
     from quarry.skills_install import SkillOutcome
 
 logger = logging.getLogger(__name__)
@@ -94,6 +93,9 @@ class DisableResult:
     ``disable`` is non-destructive of the vendored guide (§ 2.9): it prunes the
     ``@``-import line and deletes the ``enabled`` marker, leaving the deposited
     ``.punt-labs/quarry/CLAUDE.md`` dormant on disk.
+
+    ``covered_by`` is the parent registration left in place when the directory
+    was only covered by it (nothing of the parent's is deregistered or purged).
     """
 
     directory: str
@@ -104,6 +106,7 @@ class DisableResult:
     import_pruned: bool = False
     enabled_marker_removed: bool = False
     permissions: PermissionChange = field(default_factory=PermissionChange)
+    covered_by: str = ""
 
 
 def enable_project(
@@ -185,11 +188,8 @@ def disable_project(
     runtime registration residue a retry converges — never the § 2.11
     forbidden marker-present-without-a-collection state if disabling raises.
     """
-    from quarry.registrations import Registrations  # noqa: PLC0415
-
     directory = QuarryHome.expanded(directory).resolve()
-    view = Registrations.from_list(client.list_registrations())
-    return _DisableOrchestrator(directory, client, view, keep_data=keep_data).run()
+    return _DisableOrchestrator(directory, client, keep_data=keep_data).run()
 
 
 @final
@@ -203,31 +203,33 @@ class _DisableOrchestrator:
     function a thin driver over one live class.
     """
 
-    __slots__ = ("_client", "_covering", "_directory", "_keep_data")
+    __slots__ = ("_client", "_covering", "_directory", "_keep_data", "_parent")
 
     _directory: Path
     _client: RegistryClient
     _covering: RegistrationInfo | None
     _keep_data: bool
+    _parent: str
 
     def __new__(
         cls,
         directory: Path,
         client: RegistryClient,
-        view: Registrations,
         *,
         keep_data: bool,
     ) -> Self:
-        covering = view.covering(directory)
-        # A CHILD of a registered parent is a real error — the parent covers it;
-        # never silently deregister the parent. This guard stays fatal.
+        from quarry.registrations import Registrations  # noqa: PLC0415
+
+        covering = Registrations.from_list(client.list_registrations()).covering(
+            directory
+        )
+        # A CHILD of a registered parent owns no registration: disable undoes
+        # its own files but never deregisters or purges the parent's collection.
+        parent = ""
         if covering is not None and covering.directory != str(directory):
-            msg = (
-                f"no registration for {directory}; "
-                f"it is covered by parent registration at {covering.directory}"
-            )
-            raise ValueError(msg)
+            parent, covering = covering.directory, None
         self = super().__new__(cls)
+        self._parent = parent
         self._directory = directory
         self._client = client
         self._covering = covering
@@ -251,6 +253,7 @@ class _DisableOrchestrator:
             import_pruned=claudemd.import_pruned,
             enabled_marker_removed=claudemd.enabled_marker_removed,
             permissions=permissions,
+            covered_by=self._parent,
         )
 
     def _remove_config_file(self) -> bool:

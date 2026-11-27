@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from quarry.claude_permissions import PermissionChange
+from quarry.disable_report import DisableReport
 from quarry.enable import DisableResult, EnableResult
-from quarry.enable_report import DisableReport, EnableReport
+from quarry.enable_report import EnableReport
 from quarry.ethos_memory import EthosMemoryResult
 from quarry.skills_install import Harness, SkillOutcome
 
@@ -134,6 +135,20 @@ def test_disable_report_idempotent_noop() -> None:
     result = DisableResult(directory="/p", collection="", captures_collection="")
     joined = "\n".join(DisableReport(result, keep_data=False).lines())
     assert "Already disabled (no registration)" in joined
+
+
+def test_disable_report_covered_child_keeps_parent_registration() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        enabled_marker_removed=True,
+    )
+    joined = "\n".join(DisableReport(result, keep_data=False).lines())
+    assert "Kept parent registration at /p" in joined
+    assert "Already disabled" not in joined
+    assert "Deregistered" not in joined
 
 
 def test_enable_report_lists_granted_rules_and_scope() -> None:

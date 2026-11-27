@@ -94,15 +94,14 @@ class ProjectCli:
         ] = False,
     ) -> None:
         """Disable quarry knowledge capture for a project directory."""
-        from quarry.enable import disable_project  # noqa: PLC0415
-
         # disable_project is idempotent: a directory with no covering registration
         # is a no-op success (result.collection == ""), not an error. Only the
         # child-of-registered-parent guard raises ValueError, which propagates to
         # the shared _cli_errors boundary (empty stdout under --json, exit 1).
         # Pass the raw path: disable_project owns normalization
         # (expanduser().resolve()). Resolving here would mangle "~/proj".
-        from quarry.enable_report import DisableReport  # noqa: PLC0415
+        from quarry.disable_report import DisableReport  # noqa: PLC0415
+        from quarry.enable import disable_project  # noqa: PLC0415
 
         result = disable_project(directory, self._p.client(), keep_data=keep_data)
         lines = DisableReport(result, keep_data=keep_data).lines()
