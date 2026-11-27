@@ -156,9 +156,9 @@ class WatchSubmitter:
             settings,
             key.collection,
             partial(self.mark_finalized, key.database),
-            partial(self._retry_finalize, key, db, settings),
+            partial(self._retry_finalize, key),
         )
-        return self._submit_tracked(key, job, "sync")
+        return self._submit_finalize_job(key, job)
 
     def mark_finalized(self, database: str) -> None:
         """Register an out-of-band finalize that is about to REWRITE *database*.
@@ -172,31 +172,24 @@ class WatchSubmitter:
         """
         self._throttle.mark_admitted(database)
 
-    def _retry_finalize(
-        self, key: RouteKey, db: Database, settings: Settings, delay_s: float
-    ) -> None:
+    def _retry_finalize(self, key: RouteKey, delay_s: float) -> None:
         """Arm a retry for a finalize that left *key*'s database dirty."""
-        self._retries.arm(
-            key.database, delay_s, partial(self._retry_request, key, db, settings)
-        )
+        self._retries.arm(key.database, delay_s, partial(self._retry_request, key))
 
-    def _retry_request(self, key: RouteKey, db: Database, settings: Settings) -> None:
-        """Request the retry through the throttle, re-arming it if the queue sheds it.
+    def _retry_request(self, key: RouteKey) -> None:
+        """Request the retry through the throttle, which may keep another closure.
 
-        The shed handling lives in the submit callback, so it also covers a
-        request the throttle coalesces into its trailing timer: when that timer
-        fires and the finalize is shed, the retry is armed again rather than lost.
+        The throttle arms one trailing timer per database and keeps whichever
+        closure armed it, so a retry can run as a write's closure.  Re-arming a
+        shed finalize therefore lives in the submit every finalize goes through,
+        not in this closure.
         """
-
-        def submit() -> bool:
-            admitted = self._submit_finalize(key, db, settings).status != "failed"
-            if not admitted:
-                self._retries.arm_shed(
-                    key.database, partial(self._retry_request, key, db, settings)
-                )
-            return admitted
-
-        self._throttle.request(key.database, submit)
+        db = self._roster.database_of(key.database)
+        settings = self._roster.settings_of(key.database)
+        self._throttle.request(
+            key.database,
+            lambda: self._submit_finalize(key, db, settings).status != "failed",
+        )
 
     def _request_finalize(
         self, key: RouteKey, db: Database, settings: Settings
@@ -222,9 +215,21 @@ class WatchSubmitter:
             db,
             settings,
             key.collection,
-            on_unsettled=partial(self._retry_finalize, key, db, settings),
+            on_unsettled=partial(self._retry_finalize, key),
         )
-        return self._submit_tracked(key, job, "sync")
+        return self._submit_finalize_job(key, job)
+
+    def _submit_finalize_job(self, key: RouteKey, job: IngestUnit) -> TaskState:
+        """Submit a finalize job; if the queue sheds it, arm the database's retry.
+
+        Every finalize submit passes through here, so whichever request produced
+        it (a sweep, a write, a delta or bulk batch, a trailing timer, a retry), a
+        shed finalize is retried after ``SHED_RETRY_S`` and is never lost.
+        """
+        state = self._submit_tracked(key, job, "sync")
+        if state.status == "failed":
+            self._retries.arm_shed(key.database, partial(self._retry_request, key))
+        return state
 
     def _submit_tracked(self, key: RouteKey, job: IngestUnit, kind: str) -> TaskState:
         """Submit *job*, returning its task state (failed if the queue shed it)."""

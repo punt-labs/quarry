@@ -13,7 +13,7 @@ import time
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
-from quarry.db import Database, TableOptimizer
+from quarry.db import Database, TableOptimizer, get_db
 from quarry.db.optimizer import OptimizeOutcome
 from quarry.db.table_changes import TableChanges
 from quarry.finalize_ledger import FinalizeLedgers
@@ -307,3 +307,36 @@ class TestManualOptimizeAndFinalizeDoNotOverlap:
             for t in threads:
                 t.join()
         assert peak == 1
+
+
+class TestABareHandleSharesOneLock:
+    def test_a_manual_optimize_waits_for_the_finalize_steps_lock(
+        self, tmp_path: Path
+    ) -> None:
+        settings = MagicMock(name="settings")
+        settings.lancedb_path = tmp_path / "bare" / "lancedb"
+        settings.quarry_root = tmp_path
+        FinalizeLedgers.for_database(settings.lancedb_path, tmp_path).clear()
+        bare = get_db(settings.lancedb_path)  # not a LanceConnection
+        manual = ManualOptimize(Database(bare), settings)
+        step = OptimizeStep(bare, settings)
+        done = threading.Event()
+
+        def run_manual() -> None:
+            manual.run_manually(force=False)
+            done.set()
+
+        with (
+            patch.object(
+                TableOptimizer,
+                "optimize",
+                return_value=OptimizeOutcome(optimized=True, fragments=1),
+            ),
+            patch.object(TableOptimizer, "create_collection_index"),
+            step._lock,  # the finalize step is mid-optimize
+        ):
+            thread = threading.Thread(target=run_manual)
+            thread.start()
+            assert not done.wait(0.4)  # the manual optimize is held out
+        thread.join()
+        assert done.is_set()

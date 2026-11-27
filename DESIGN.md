@@ -2281,9 +2281,12 @@ finalize.
 during the run, or an unexpected exception (the job computes the delay and
 re-raises), tells the loop how long until a retry is allowed, and `FinalizeRetry`
 re-requests a finalize through the throttle after that delay, never sooner than one
-second (the ledger reports its back-off rounded to 0.1 s). A retry the ingest queue
-sheds is armed again, whether it was submitted at once or from the throttle's trailing
-timer, because the shed handling sits in the submit callback. This works with `watch_safety_scan_s = 0`. While the ledger is
+second (the ledger reports its back-off rounded to 0.1 s). Whenever the ingest queue sheds a finalize, whichever
+request produced it (a sweep, a write, a delta or bulk batch, the trailing timer or the
+retry itself), the database's retry is armed again after one second, because the shed
+handling sits in the one submit every finalize goes through. The throttle keeps the
+closure of whichever request armed its trailing timer, so the handling cannot live in
+the retry's own closure. This works with `watch_safety_scan_s = 0`. While the ledger is
 backing off, a finalize of a dirty table is a skip: a sweep's finalize does not
 stamp the throttle, and there is no GC. It still sweeps orphan pages when the slow
 clock is due, which is at most once per `MAINTENANCE_INTERVAL_S` (an hour); its DEBUG

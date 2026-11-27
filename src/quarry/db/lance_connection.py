@@ -34,6 +34,7 @@ from quarry.db.recycling_table import RecyclingTable
 from quarry.db.table_changes import TableChanges
 
 if TYPE_CHECKING:
+    import threading
     from collections.abc import Callable
     from pathlib import Path
 
@@ -119,6 +120,20 @@ class LanceConnection:
         That is the safe default when the gate cannot know.
         """
         return db.changes if isinstance(db, cls) else TableChanges()
+
+    @classmethod
+    def optimize_lock_of(cls, db: LanceDB, lancedb_path: Path) -> threading.RLock:
+        """Return the one optimize lock of the physical database *db* opens.
+
+        A connection takes it from its own record.  A bare handle has no record to
+        share, so it takes the lock of the record at *lancedb_path*, which every
+        other bare handle on that path takes too: two optimizes of one table never
+        hold different locks.  Only the lock is shared that way; the write gate
+        still treats a bare handle as always dirty (:meth:`changes_of`).
+        """
+        if isinstance(db, cls):
+            return db.changes.optimizing()
+        return TableChanges.for_path(lancedb_path).optimizing()
 
     @property
     def changes(self) -> TableChanges:

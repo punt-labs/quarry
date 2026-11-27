@@ -304,6 +304,7 @@ class _Daemon:
         await self.queue.settled()
 
     async def stop(self) -> None:
+        await self.queue.settled()  # no finalize thread may outlive the test
         await self.loop.stop()
         await self.queue.stop()
 
@@ -637,6 +638,9 @@ def test_trailing_finalize_rewrites_a_write_that_landed_after_the_sweep_rewrite(
         await _sweep_finalize_ahead_of_an_edit(d)
         assert landed[0]
         await _until(lambda: d.rewrites.optimizes >= base + 2)
+        # The counter moves when optimize STARTS; wait for the finalize to end, or
+        # its store thread outlives the test and sweeps under the next test's stub.
+        await d.queue.settled()
         assert d.rewrites.optimizes == base + 2  # the sweep's, then the trailing one
         await d.stop()
 
@@ -656,16 +660,15 @@ def test_quiet_database_still_sweeps_orphan_pages_on_the_slow_clock(
     monkeypatch.setattr(OrphanPageSweep, "run", counting_sweep)
 
     async def run() -> None:
-        d = daemon("col", interval=30.0)  # keeps a retry from interleaving
+        d = daemon("col")
         await d.start()
-        swept = len(sweeps)
-        assert swept >= 1  # the start finalize rewrote the table and swept
+        assert len(sweeps) == 1  # the start finalize rewrote the table and swept
         rewrites = d.rewrites.optimizes
         await d.safety_scan()
-        assert len(sweeps) == swept  # quiet, and the slow clock is not due
+        assert len(sweeps) == 1  # quiet, and the slow clock is not due
         monkeypatch.setattr(TableChanges, "MAINTENANCE_INTERVAL_S", 0.0)
         await d.safety_scan()
-        assert len(sweeps) == swept + 1  # quiet, and the slow clock is due
+        assert len(sweeps) == 2  # quiet, and the slow clock is due
         assert d.rewrites.optimizes == rewrites
         await d.stop()
 
@@ -1043,7 +1046,9 @@ def test_a_retry_coalesced_into_the_trailing_timer_is_armed_again_when_shed(
         d.rewrites.failures = [RuntimeError("boom")]
         await d.start()
         d.queue.shed = True
-        await asyncio.sleep(4.5)  # the trailing timer fires into a full queue
+        await asyncio.sleep(1.5)
+        assert _armed_trailing(d)  # the retry coalesced; no direct submit happened
+        await asyncio.sleep(3.0)  # the trailing timer fires into a full queue
         assert d.rewrites.optimizes == 1
         d.queue.shed = False
         await _until(lambda: d.rewrites.optimizes >= 2)
@@ -1074,3 +1079,29 @@ def test_a_closed_loop_at_shutdown_does_not_replace_the_original_exception(
     with pytest.raises(KeyError):
         job._finalize(loop)
     job._finalize(loop)  # a normal return at shutdown must not raise either
+
+
+def test_a_shed_retry_is_armed_again_when_a_write_armed_the_trailing_timer(
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The throttle keeps the write's closure; the shed must still re-arm the retry."""
+    monkeypatch.setattr("quarry.finalize_ledger.BACKOFF_BASE_SECONDS", 0.0)
+    monkeypatch.setattr("quarry.daemon.finalize_retry.SHED_RETRY_S", 0.1)
+
+    async def run() -> None:
+        d = daemon("col", interval=3.0)
+        d.rewrites.failures = [RuntimeError("boom")]
+        await d.start()  # the failed finalize arms a retry for about a second
+        _arm_trailing_finalize(d)  # a write arms the trailing timer first
+        await _until(lambda: _armed_trailing(d))
+        assert _armed_trailing(d)
+        d.queue.shed = True
+        await asyncio.sleep(4.5)  # the retry coalesces; the trailing fire is shed
+        assert d.rewrites.optimizes == 1
+        d.queue.shed = False
+        await _until(lambda: d.rewrites.optimizes >= 2)
+        await d.queue.settled()
+        assert d.rewrites.optimizes == 2
+        await d.stop()
+
+    asyncio.run(run())

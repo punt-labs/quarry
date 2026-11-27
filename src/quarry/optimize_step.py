@@ -48,7 +48,7 @@ class OptimizeStep:
         self._ledger = FinalizeLedgers.for_database(
             settings.lancedb_path, settings.quarry_root
         )
-        self._lock = LanceConnection.changes_of(db).optimizing()
+        self._lock = LanceConnection.optimize_lock_of(db, settings.lancedb_path)
         return self
 
     def run(self) -> bool:
@@ -115,11 +115,12 @@ class ManualOptimize:
     periodic safety scan, and with ``watch_safety_scan_s = 0`` on the next write.
     """
 
-    __slots__ = ("_changes", "_ledger", "_opt")
+    __slots__ = ("_changes", "_ledger", "_lock", "_opt")
 
     _opt: TableOptimizer
     _ledger: FinalizeLedger
     _changes: TableChanges
+    _lock: threading.RLock
 
     def __new__(cls, database: Database, settings: Settings) -> Self:
         """Pair explicit optimization with the database's ledger and write record."""
@@ -129,6 +130,9 @@ class ManualOptimize:
             settings.lancedb_path, settings.quarry_root
         )
         self._changes = LanceConnection.changes_of(database.db)
+        self._lock = LanceConnection.optimize_lock_of(
+            database.db, settings.lancedb_path
+        )
         return self
 
     def task_results(self, *, force: bool) -> dict[str, object]:
@@ -137,7 +141,7 @@ class ManualOptimize:
 
     def run_manually(self, *, force: bool) -> OptimizeOutcome:
         """Create the collection index, compact, and clear the ledger on success."""
-        with self._changes.optimizing():
+        with self._lock:
             self._opt.create_collection_index()
             outcome = self._opt.optimize(force=force)
             if outcome.optimized and outcome.fts_rebuilt:

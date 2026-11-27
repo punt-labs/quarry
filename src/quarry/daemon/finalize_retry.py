@@ -20,11 +20,13 @@ class FinalizeRetry:
     it, so nothing else is scheduled, and with the periodic safety scan disabled
     nothing ever would be.  The retry waits out the ledger's back-off, then calls
     *request*, which goes back through the finalize throttle so it still honors
-    the rate limit.  *request* arms the retry again with :meth:`arm_shed` when
-    the finalize it submits is shed by a full ingest queue, whether it submits at
-    once or from the throttle's trailing timer, so a full queue delays a retry
-    but never drops it.  A retry already pending for the database is kept.  State
-    lives on the event loop.
+    the rate limit.  The throttle keeps one trailing timer per database and its
+    closure, so a retry may run as another request's closure.  Shed handling
+    therefore lives where every finalize is submitted
+    (``WatchSubmitter._submit_finalize_job``): whenever the ingest queue sheds a
+    finalize, whichever request produced it, that database's retry is armed again
+    with :meth:`arm_shed`.  A full queue delays a retry but never drops it.  A
+    retry already pending for the database is kept.  State lives on the event loop.
     """
 
     __slots__ = ("_loop", "_timers")
