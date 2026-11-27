@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -9,7 +10,8 @@ from quarry.daemon.job_lifecycle import JobLifecycle
 from quarry.daemon.settlement import Settlement
 from quarry.daemon.store_run import StoreRun
 from quarry.daemon.terminal import Terminal
-from quarry.sync_finalize import SyncFinalizer
+from quarry.db.lance_connection import LanceConnection
+from quarry.table_finalizer import TableFinalizer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -31,7 +33,7 @@ class CollectionFinalizeJob:
     not when it is submitted: a scan's outcome is unknown at submission, and by
     the time this job reaches the head of the queue every job ahead of it has
     written whatever it was going to write.  A table nobody wrote to since its
-    last successful finalize is left alone (``SyncFinalizer``).
+    last successful finalize is left alone (``TableFinalizer``).
 
     Freshness is therefore DB-granularity, not per-collection: the watch loop
     rate-limits this finalize per database (``FinalizeThrottle``), so a
@@ -41,8 +43,11 @@ class CollectionFinalizeJob:
     reconcile that re-scans every registered collection.
 
     ``on_rewrite`` is called on the event loop when this run is going to rewrite
-    the table, never when it skips, so a skipped finalize cannot cancel or reset
-    a trailing finalize that a write armed.
+    the table, never when it skips, so a skipped sweep finalize cannot cancel or
+    reset a trailing finalize that a write armed.  ``on_unsettled`` is called on
+    the loop, with the seconds until a retry is allowed, when the table is still
+    dirty afterwards (a failure, a back-off, or a write during the run), so a
+    retry is scheduled even with the periodic safety scan disabled.
     """
 
     database: Database
@@ -50,16 +55,19 @@ class CollectionFinalizeJob:
     collection: str
     # None: no throttle needs to hear about this finalize (its own trailing run).
     on_rewrite: Callable[[], None] | None = None
+    # None: nothing retries this finalize if it leaves the table dirty.
+    on_unsettled: Callable[[float], None] | None = None
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
-        """Rewrite-or-tidy off-thread; announce a rewrite before it starts."""
+        """Rewrite-or-tidy off-thread; the store thread decides, then reports back."""
         del ctx  # this job carries its own database; the queue's ctx is unused
-        finalizer = SyncFinalizer(self.database.db, self.settings)
-        if self.on_rewrite is not None and finalizer.is_rewrite_due():
-            self.on_rewrite()
+        loop = asyncio.get_running_loop()
         with Terminal.for_job(state).recording():
             store = StoreRun.start(
-                self, state, self._finalize(finalizer), lambda _: Settlement.done({})
+                self,
+                state,
+                lambda: self._finalize(loop),
+                lambda _: Settlement.done({}),
             )
             JobLifecycle(state).settle(await store.wait())
 
@@ -72,16 +80,32 @@ class CollectionFinalizeJob:
         """
         return None
 
-    @staticmethod
-    def _finalize(finalizer: SyncFinalizer) -> Callable[[], None]:
-        """Return the store-thread body running *finalizer* (see SAFETY below)."""
+    def _finalize(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Run the finalizer on the store thread, reporting to the loop (see SAFETY)."""
         # SAFETY: create_fts_index / optimize touch the shared physical table
         # WITHOUT _write_lock, so per-(database, collection) FIFO ordering is NOT
-        # enough — two collections in one database would race their rebuilds. It
-        # is safe only because EMBED_CONCURRENCY_CEILING == 1: the global embed
-        # gate serializes every job's run() body, so no two finalizes overlap. If
-        # that ceiling is ever raised for embed parallelism, finalize must
-        # serialize per-DATABASE (per physical table), not per-(database, collection).
-        # The changed-since-last-finalize record is itself lock-safe, so a second
-        # concurrent finalize would only repeat a rewrite, never lose a write.
-        return finalizer.run
+        # enough — two collections in one database would race their rebuilds. Two
+        # things serialize them.  EMBED_CONCURRENCY_CEILING == 1: the global embed
+        # gate serializes every job's run() body, so no two finalizes overlap; if
+        # that ceiling is ever raised, finalize must serialize per-DATABASE.  And
+        # the per-database optimize lock (FinalizeLedger.exclusive), which the
+        # finalize rewrite and the operator's manual optimize route
+        # (MaintenanceRoutes, which runs outside the embed gate) both take.
+        # The decision is made here, on the store thread, once: the record is
+        # lock-safe, so a second concurrent finalize would only repeat a rewrite.
+        changes = LanceConnection.changes_of(self.database.db)
+        finalizer = TableFinalizer(self.database.db, self.settings, changes)
+        announce = self._announcer(loop)
+        retry_in = finalizer.run(announce)
+        if retry_in is not None and self.on_unsettled is not None:
+            loop.call_soon_threadsafe(self.on_unsettled, retry_in)
+
+    def _announcer(self, loop: asyncio.AbstractEventLoop) -> Callable[[], None]:
+        """Return the call that tells the loop a rewrite is starting."""
+        hook = self.on_rewrite
+
+        def announce() -> None:
+            if hook is not None:
+                loop.call_soon_threadsafe(hook)
+
+        return announce

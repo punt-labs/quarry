@@ -18,8 +18,8 @@ from quarry.daemon.backfill_args import BackfillArgs
 from quarry.daemon.routes.base import RouteGroup
 from quarry.daemon.task_state import TaskState
 from quarry.daemon.terminal import Terminal
-from quarry.finalize_steps import ManualOptimize
 from quarry.http_guards import RequestGuards
+from quarry.optimize_step import ManualOptimize
 
 # Both bodies carry only small option dicts.
 MAX_MAINTENANCE_BODY_BYTES = 16 * 1024

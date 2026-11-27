@@ -17,19 +17,24 @@ from typing import TYPE_CHECKING, Self, cast, final
 
 import numpy as np
 import pytest
+from lancedb.index import FTS, Bitmap, BTree
 
 from quarry.config import Settings
 from quarry.daemon.collection_finalize_job import CollectionFinalizeJob
+from quarry.daemon.finalize_throttle import FinalizeThrottle
 from quarry.daemon.fs_events import FsEvent
 from quarry.daemon.index_jobs import CollectionSyncJob
 from quarry.daemon.tasks import TaskRegistry
 from quarry.daemon.watch_loop import WatchLoop
 from quarry.db import Database, TableOptimizer
+from quarry.db.optimizer import OptimizeOutcome
 from quarry.db.orphan_pages import OrphanPageSweep
+from quarry.db.recycling_table import RecyclingTable
 from quarry.db.table_changes import TableChanges
 from quarry.finalize_ledger import FinalizeLedgers
 from quarry.finalize_steps import ShadowPushStep
 from quarry.ingestion.pipeline import plan_file_chunks
+from quarry.post_sync_gc import PostSyncGc
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
@@ -48,29 +53,33 @@ _DATABASE = "testdb"
 class _Rewrites:
     """Count the calls that rewrite the table, and run a hook inside the rewrite."""
 
-    __slots__ = ("during", "failure", "optimizes", "scalar_indexes")
+    __slots__ = ("during", "failures", "optimizes", "outcomes", "scalar_indexes")
 
     optimizes: int
     scalar_indexes: int
-    failure: Exception | None
+    failures: list[Exception]
+    outcomes: list[OptimizeOutcome]
     during: Callable[[], None] | None
 
     def __new__(cls, monkeypatch: pytest.MonkeyPatch) -> Self:
         self = super().__new__(cls)
         self.optimizes = 0
         self.scalar_indexes = 0
-        self.failure = None
+        self.failures = []
+        self.outcomes = []
         self.during = None
         real_optimize = TableOptimizer.optimize
         real_index = TableOptimizer.create_collection_index
 
-        def optimize(opt: TableOptimizer, *, force: bool = False) -> object:
+        def optimize(opt: TableOptimizer, *, force: bool = False) -> OptimizeOutcome:
             self.optimizes += 1
             if self.during is not None:
                 self.during()
-            if self.failure is not None:
-                raise self.failure
-            return real_optimize(opt, force=force)
+            if self.failures:
+                raise self.failures.pop(0)
+            outcome = real_optimize(opt, force=force)
+            self.outcomes.append(outcome)
+            return outcome
 
         def index(opt: TableOptimizer) -> None:
             self.scalar_indexes += 1
@@ -85,15 +94,17 @@ class _Rewrites:
 class _ExecutingQueue:
     """Admit every job and run it FIFO: scans via a hook, finalizes for real."""
 
-    __slots__ = ("_ctx", "_pending", "_worker", "on_scan")
+    __slots__ = ("_ctx", "_pending", "_worker", "finalizes", "on_scan")
 
     _ctx: DaemonContext | None
     _pending: asyncio.Queue[tuple[IngestUnit, TaskState]] | None
     _worker: asyncio.Task[None] | None
     on_scan: Callable[[], None]
+    finalizes: int
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
+        self.finalizes = 0
         self._ctx = None
         self._pending = None
         self._worker = None
@@ -127,6 +138,7 @@ class _ExecutingQueue:
             job, state = await self._pending.get()
             try:
                 if isinstance(job, CollectionFinalizeJob):
+                    self.finalizes += 1
                     await job.run(self._ctx, state)
                 else:
                     if isinstance(job, CollectionSyncJob):
@@ -191,6 +203,7 @@ class _Daemon:
         *,
         bulk: int = 50,
         interval: float = 0.0,
+        siblings: tuple[str, ...] = (),
     ) -> Self:
         self = super().__new__(cls)
         data = tmp_path / "data"
@@ -216,6 +229,15 @@ class _Daemon:
                 registry.register_directory(root.resolve(), name)
         finally:
             registry.close()
+        for sibling in siblings:
+            (data / sibling).mkdir()
+            other = SyncRegistry(data / sibling / "registry.db")
+            try:
+                root = tmp_path / f"root-{sibling}"
+                root.mkdir()
+                other.register_directory(root.resolve(), "o")
+            finally:
+                other.close()
         self.queue = _ExecutingQueue()
         self.ctx = cast(
             "DaemonContext",
@@ -264,7 +286,16 @@ class _Daemon:
         await self.queue.settled()
         assert umbrella.status == "completed"
 
-    def write_chunk(self, collection: str = "", name: str = "doc.md") -> None:
+    def prefill(self) -> None:
+        """Put a chunk in the table before the daemon starts."""
+        self.write_chunk(database=self.ctx.database)
+
+    def write_chunk(
+        self,
+        collection: str = "",
+        name: str = "doc.md",
+        database: Database | None = None,
+    ) -> None:
         """Index one document into *collection* through the real chunk store."""
         collection = collection or self.collections[0]
         path = self.roots[collection] / f".{name}"
@@ -272,16 +303,32 @@ class _Daemon:
         chunks, _ = plan_file_chunks(
             path, self.settings, collection=collection, document_name=name
         )
-        self.database.store.insert(
+        (database or self.database).store.insert(
             chunks, np.zeros((len(chunks), 768), dtype=np.float32)
         )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_ledgers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ledgers are keyed by database name, so every test starts with none."""
+    monkeypatch.setattr(FinalizeLedgers, "_ledgers", {})
+
+
 @pytest.fixture
 def daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Daemon]:
-    def make(*collections: str, bulk: int = 50, interval: float = 0.0) -> _Daemon:
+    def make(
+        *collections: str,
+        bulk: int = 50,
+        interval: float = 0.0,
+        siblings: tuple[str, ...] = (),
+    ) -> _Daemon:
         return _Daemon(
-            tmp_path, monkeypatch, collections or ("col",), bulk=bulk, interval=interval
+            tmp_path,
+            monkeypatch,
+            collections or ("col",),
+            bulk=bulk,
+            interval=interval,
+            siblings=siblings,
         )
 
     return make
@@ -402,11 +449,10 @@ def test_failed_finalize_leaves_the_database_dirty(
     daemon: Callable[..., _Daemon],
 ) -> None:
     async def run() -> None:
-        d = daemon("col")
-        d.rewrites.failure = RuntimeError("compaction failed")
+        d = daemon("col", interval=30.0)
+        d.rewrites.failures = [RuntimeError("compaction failed")]
         await d.start()
         assert d.rewrites.optimizes == 1
-        d.rewrites.failure = None
         FinalizeLedgers.for_database(
             d.settings.lancedb_path, d.settings.quarry_root
         ).clear()
@@ -423,7 +469,7 @@ def test_write_during_a_finalize_leaves_the_database_dirty(
     daemon: Callable[..., _Daemon],
 ) -> None:
     async def run() -> None:
-        d = daemon("col")
+        d = daemon("col", interval=30.0)
         await d.start()
         d.write_chunk()
         landed = threading.Event()
@@ -466,10 +512,14 @@ def test_skipped_finalize_logs_database_and_reason(
     assert "unchanged" in skipped[0]
 
 
-def _armed_trailing(d: _Daemon) -> bool:
+def _throttle(d: _Daemon) -> FinalizeThrottle:
     submitter = d.loop._submitter
     assert submitter is not None
-    return bool(submitter._throttle._timers)
+    return submitter._throttle
+
+
+def _armed_trailing(d: _Daemon) -> bool:
+    return bool(_throttle(d)._timers)
 
 
 def _arm_trailing_finalize(d: _Daemon) -> None:
@@ -554,6 +604,216 @@ def test_shadow_push_runs_on_a_skipped_finalize(
         await d.safety_scan()
         assert len(pushes) == before + 1
         assert d.rewrites.optimizes == rewrites
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def _fail_fts_while(monkeypatch: pytest.MonkeyPatch, failing: list[bool]) -> None:
+    """Make only the full-text rebuild raise while ``failing[0]`` is true."""
+    real = RecyclingTable.create_index
+
+    def create_index(
+        table: RecyclingTable,
+        column: str,
+        *,
+        config: FTS | Bitmap | BTree,
+        replace: bool = False,
+    ) -> None:
+        if failing[0] and isinstance(config, FTS):
+            msg = "full-text rebuild failed"
+            raise RuntimeError(msg)
+        real(table, column, config=config, replace=replace)
+
+    monkeypatch.setattr(RecyclingTable, "create_index", create_index)
+
+
+def test_failed_fts_rebuild_leaves_the_table_dirty_and_the_next_scan_rewrites(
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failing = [True]
+    _fail_fts_while(monkeypatch, failing)
+    monkeypatch.setattr("quarry.finalize_ledger.BACKOFF_BASE_SECONDS", 0.0)
+
+    async def run() -> None:
+        d = daemon("col", interval=30.0)
+        d.prefill()
+        await d.start()
+        before = d.rewrites.optimizes
+        failing[0] = False
+        await d.safety_scan()
+        assert d.rewrites.optimizes == before + 1
+        await d.safety_scan()
+        assert d.rewrites.optimizes == before + 1
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_failed_fts_rebuild_is_recorded_in_the_ledger(
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fail_fts_while(monkeypatch, [True])
+
+    async def run() -> None:
+        d = daemon("col", interval=30.0)
+        d.prefill()
+        await d.start()
+        ledger = FinalizeLedgers.for_database(
+            d.settings.lancedb_path, d.settings.quarry_root
+        )
+        assert ledger.health().consecutive_failures == 1
+        assert d.rewrites.outcomes[-1].fts_rebuilt is False
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_backing_off_finalize_is_a_skip_until_the_backoff_elapses(
+    daemon: Callable[..., _Daemon],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sweeps: list[int] = []
+    collections: list[int] = []
+
+    def counting_sweep(sweep: OrphanPageSweep, now: datetime | None = None) -> int:
+        del sweep, now
+        sweeps.append(1)
+        return 0
+
+    def counting_gc(gc: PostSyncGc) -> None:
+        del gc
+        collections.append(1)
+
+    monkeypatch.setattr(OrphanPageSweep, "run", counting_sweep)
+    monkeypatch.setattr(PostSyncGc, "run", counting_gc)
+
+    async def run() -> None:
+        now = [1000.0]
+        d = daemon("col", interval=30.0)
+        ledger = FinalizeLedgers.for_database(
+            d.settings.lancedb_path, d.settings.quarry_root
+        )
+        ledger._clock = lambda: now[0]
+        d.rewrites.failures = [RuntimeError("boom")]
+        await d.start()
+        assert d.rewrites.optimizes == 1
+        swept, collected = len(sweeps), len(collections)
+        with caplog.at_level("DEBUG", logger="quarry.table_upkeep"):
+            await d.safety_scan()
+        assert d.rewrites.optimizes == 1
+        assert (len(sweeps), len(collections)) == (swept, collected)
+        assert any("backing off" in r.getMessage() for r in caplog.records)
+        now[0] += 10_000.0
+        await d.safety_scan()
+        assert d.rewrites.optimizes == 2
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_failed_finalize_is_retried_with_the_safety_scan_disabled(
+    daemon: Callable[..., _Daemon], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("quarry.finalize_ledger.BACKOFF_BASE_SECONDS", 0.0)
+
+    async def run() -> None:
+        d = daemon("col", interval=0.05)
+        d.rewrites.failures = [RuntimeError("boom")]
+        await d.start()
+        await asyncio.sleep(0.4)
+        await d.queue.settled()
+        assert d.rewrites.optimizes == 2
+        await asyncio.sleep(0.2)
+        assert d.rewrites.optimizes == 2
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_start_with_data_runs_one_real_compaction_per_database(
+    daemon: Callable[..., _Daemon],
+) -> None:
+    async def run() -> None:
+        d = daemon("a", "b", "c")
+        d.prefill()
+        await d.start()
+        assert d.rewrites.optimizes == 1
+        assert d.rewrites.outcomes[0].optimized is True
+        assert d.rewrites.outcomes[0].fts_rebuilt is True
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_two_databases_keep_independent_records(
+    daemon: Callable[..., _Daemon],
+) -> None:
+    async def run() -> None:
+        d = daemon("a", "b", siblings=("other",))
+        await d.start()
+        assert d.rewrites.optimizes == 2  # one real finalize per database
+        d.write_chunk("a")
+        await d.safety_scan()
+        assert d.rewrites.optimizes == 3  # only the written database rewrote
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_skipped_sweep_finalize_leaves_the_throttle_clock_and_trailing_alone(
+    daemon: Callable[..., _Daemon],
+) -> None:
+    async def run() -> None:
+        d = daemon("col", interval=2.0)
+        await d.start()
+        throttle = _throttle(d)
+        stamp = throttle._last[_DATABASE]
+        _arm_trailing_finalize(d)
+        for _ in range(100):
+            if _armed_trailing(d):
+                break
+            await asyncio.sleep(0.02)
+        assert _armed_trailing(d)
+        finalizes = d.queue.finalizes
+        await d.safety_scan()  # a skipped sweep finalize
+        assert d.queue.finalizes == finalizes + 1
+        assert throttle._last[_DATABASE] == stamp
+        assert _armed_trailing(d)
+        # The armed trailing finalize still runs at its due time.
+        for _ in range(200):
+            if d.queue.finalizes == finalizes + 2:
+                break
+            await asyncio.sleep(0.05)
+        await d.queue.settled()
+        assert d.queue.finalizes == finalizes + 2
+        await d.stop()
+
+    asyncio.run(run())
+
+
+def test_a_throttled_finalize_that_skips_still_stamps_the_clock(
+    daemon: Callable[..., _Daemon],
+) -> None:
+    """The throttle stamps when it ADMITS a finalize, before the job decides to skip.
+
+    The cost is bounded: a write inside the next interval is coalesced behind the
+    skipped finalize's stamp, so its rewrite is delayed by at most one interval.
+    """
+
+    async def run() -> None:
+        d = daemon("col", interval=0.3)
+        await d.start()
+        throttle = _throttle(d)
+        stamp = throttle._last[_DATABASE]  # the start finalize's rewrite stamped it
+        _arm_trailing_finalize(d)
+        for _ in range(100):  # the trailing finalize fires and skips
+            if throttle._last[_DATABASE] > stamp:
+                break
+            await asyncio.sleep(0.05)
+        await d.queue.settled()
+        assert throttle._last[_DATABASE] > stamp
         await d.stop()
 
     asyncio.run(run())

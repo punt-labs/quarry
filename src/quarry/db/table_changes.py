@@ -17,15 +17,18 @@ class TableChanges:
 
     Every write bumps a generation counter.  A finalize reads the counter
     *before* it rewrites the table and marks the database clean only up to what
-    it read, and only once the rewrite succeeded.  So a failed finalize leaves
-    the database dirty, and a write that lands while a finalize runs leaves it
-    dirty afterwards.  A database no finalize has covered in this process is dirty
-    too: a finalize is not persisted, so after a crash nothing else knows whether
-    the table still needs one.
+    it read, and only once the rewrite succeeded, including its full-text
+    rebuild.  So a failed finalize leaves the database dirty, and a write that
+    lands while a finalize runs leaves it dirty afterwards.  The write is counted
+    after it ends, even when it raised, because a failed write may have applied.
+    A database no finalize has covered in this process is dirty too: a finalize is
+    not persisted, so after a crash nothing else knows whether the table still
+    needs one.
 
-    The record also keeps when the slow-clock maintenance last ran (cleanup of
-    old table versions, the orphan-page sweep), which a quiet database still owes
-    on a schedule.
+    The record also keeps when the slow-clock maintenance last ran (the orphan-page
+    sweep), which a quiet database still owes on a schedule.  The sweep's own
+    page deletes are writes, so a sweep that deletes pages dirties the record and
+    costs one extra rewrite.
 
     The store thread finalizes while the event loop and other store threads write,
     so every transition holds the lock.  One record exists per physical database,
@@ -34,13 +37,21 @@ class TableChanges:
 
     MAINTENANCE_INTERVAL_S: ClassVar[float] = 3600.0
 
-    __slots__ = ("_clean", "_clock", "_generation", "_lock", "_maintained")
+    __slots__ = (
+        "_clean",
+        "_clock",
+        "_generation",
+        "_lock",
+        "_maintained",
+        "_optimizing",
+    )
 
     _records: ClassVar[dict[Path, TableChanges]] = {}
     _guard: ClassVar[threading.Lock] = threading.Lock()
 
     _clock: Callable[[], float]
     _lock: threading.Lock
+    _optimizing: threading.RLock
     _generation: int
     _clean: int | None  # None: no finalize has covered this database in this process
     _maintained: float | None  # None: slow-clock maintenance has not run yet
@@ -50,6 +61,7 @@ class TableChanges:
         self = super().__new__(cls)
         self._clock = clock
         self._lock = threading.Lock()
+        self._optimizing = threading.RLock()
         self._generation = 0
         self._clean = None
         self._maintained = None
@@ -65,6 +77,15 @@ class TableChanges:
         key = lancedb_path.resolve()
         with cls._guard:
             return cls._records.setdefault(key, cls())
+
+    def optimizing(self) -> threading.RLock:
+        """Return the lock that keeps two optimizes of this database from overlapping.
+
+        The finalize rewrite and the operator's manual optimize both take it, so
+        neither compacts or rebuilds the index under the other, and neither
+        clears or records a failure in the middle of the other's run.
+        """
+        return self._optimizing
 
     def note_write(self) -> None:
         """Record a write that has completed (insert, delete, purge, page write)."""

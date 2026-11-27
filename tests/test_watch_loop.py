@@ -491,28 +491,6 @@ def test_sustained_bulk_churn_coalesces_finalize(tmp_path: Path) -> None:
     asyncio.run(_run())
 
 
-def test_reconcile_refinalizes_for_fts_self_heal(tmp_path: Path) -> None:
-    """The periodic reconcile re-finalizes every collection (the FTS self-heal).
-
-    The throttle can route a trailing finalize before a collection's file jobs,
-    leaving its FTS briefly stale; the reconcile's IMMEDIATE (un-throttled)
-    finalize is the bounded backstop that clears it. Prove that backstop is real.
-    """
-
-    async def _run() -> None:
-        queue = _RecordingQueue()
-        ctx, _root = _build(tmp_path, queue=queue)
-        source = _FakeSource()
-        loop = WatchLoop(ctx, source=source)
-        await loop.start()
-        queue.submitted.clear()
-        await _reconciler(loop).run_once()
-        assert len(queue.jobs(CollectionFinalizeJob)) >= 1
-        await loop.stop()
-
-    asyncio.run(_run())
-
-
 def test_delete_event_submits_document_delete_job(tmp_path: Path) -> None:
     """A removed file submits a DocumentDeleteJob for its registry document name."""
 

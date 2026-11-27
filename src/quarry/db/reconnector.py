@@ -54,9 +54,9 @@ class Reconnector:
         the freeing).
 
         No explicit ``gc.collect()`` is forced here: on the daemon, the recycle
-        fires during ``sync``'s optimize, and ``SyncFinalizer`` already runs
+        fires during ``sync``'s optimize, and ``TableFinalizer`` already runs
         ``gc.collect(2)`` at the end of every rewriting finalize
-        (sync_finalize.py), so the superseded connection is reclaimed on that
+        (table_finalizer.py), so the superseded connection is reclaimed on that
         pass. Elsewhere Python's automatic gen-2 collection bounds it. A
         per-recycle full-heap collection would be redundant work on the hot sync
         path.

@@ -43,6 +43,16 @@ class FinalizeThrottle:
     to vector-only for the lagging collection until the next finalize, never
     silently wrong.  With ``watch_safety_scan_s = 0`` the reconcile backstop is
     off and FTS lag clears only on that collection's next churn.
+
+    The reconcile's finalize is submitted immediately, but it rewrites the table
+    only if the table changed since its last successful finalize, so it is a
+    backstop for a dirty table, not an unconditional self-heal.  The throttle
+    stamps its clock when it ADMITS a finalize, before the job decides to skip: a
+    throttled finalize that finds the table clean still pushes the next request
+    inside the interval into the trailing timer, delaying a real rewrite by at
+    most one interval.  A sweep's finalize stamps only when it rewrites
+    (``mark_admitted``, called from the job).  A finalize that leaves its table
+    dirty is retried by ``FinalizeRetry``.
     """
 
     __slots__ = ("_interval", "_last", "_loop", "_timers")

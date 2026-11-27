@@ -341,7 +341,7 @@ class TestVersionChurnGrowsWithRepeatedReingest:
     ) -> None:
         """Confirms b9c4's optimize-overflow is additive to this defect, not it.
 
-        ``SyncFinalizer._optimize`` (``sync_finalize.py``) calls
+        ``TableFinalizer._optimize`` (``table_finalizer.py``) calls
         ``TableOptimizer.optimize()`` with its DEFAULT ``cleanup_older_than``
         (1 hour, ``db/optimizer.py: 108``). A churn produced and reclaimed
         within the same test run (seconds, not hours) is NOT pruned by that

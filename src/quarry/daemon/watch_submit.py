@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Self, final
 
 from quarry.daemon.collection_finalize_job import CollectionFinalizeJob
 from quarry.daemon.delta_submit import DeltaSubmission
+from quarry.daemon.finalize_retry import FinalizeRetry
 from quarry.daemon.finalize_throttle import FinalizeThrottle
 from quarry.daemon.index_jobs import CollectionSyncJob
 from quarry.daemon.job_lifecycle import JobLifecycle
@@ -48,12 +49,13 @@ class WatchSubmitter:
     scan sweeping, and re-arming shed events.
     """
 
-    __slots__ = ("_ctx", "_deltas", "_rearm", "_roster", "_throttle")
+    __slots__ = ("_ctx", "_deltas", "_rearm", "_retries", "_roster", "_throttle")
 
     _ctx: DaemonContext
     _deltas: DeltaSubmission
     _roster: WatchRoster
     _rearm: ShedEventRearmer
+    _retries: FinalizeRetry
     _throttle: FinalizeThrottle
 
     def __new__(
@@ -65,15 +67,17 @@ class WatchSubmitter:
         self._deltas = DeltaSubmission(ctx)
         self._roster = roster
         self._rearm = ShedEventRearmer(loop)
+        self._retries = FinalizeRetry(loop)
         self._throttle = FinalizeThrottle(
             loop, ctx.settings.watch_optimize_min_interval_s
         )
         return self
 
     def cancel_pending(self) -> None:
-        """Cancel every outstanding backoff re-arm and trailing-finalize timer."""
+        """Cancel every outstanding re-arm, trailing-finalize and retry timer."""
         self._rearm.cancel_pending()
         self._throttle.cancel_all()
+        self._retries.cancel_all()
 
     def bind(self, dispatcher: DebouncedDispatcher) -> None:
         """Wire the debouncer used to re-arm shed events (sink is created first)."""
@@ -140,14 +144,19 @@ class WatchSubmitter:
         Immediate — not throttled — because every sweep is one-shot or the
         backstop: the initial watch scan, an explicit ``quarry sync`` whose
         umbrella awaits the finalize task, and the periodic reconcile (whose
-        finalize is the FTS self-heal and must always run, never coalesce away).
+        finalize is submitted immediately and never coalesced away, though it rewrites
+        the table only if the table changed).
         The high-frequency bulk-churn path (``on_batch``) throttles its finalize
         instead.  A scan shed by a full queue is recovered by the reconcile.
         """
         db = self._roster.database_of(key.database)
         settings = self._roster.settings_of(key.database)
         job = CollectionFinalizeJob(
-            db, settings, key.collection, partial(self.mark_finalized, key.database)
+            db,
+            settings,
+            key.collection,
+            partial(self.mark_finalized, key.database),
+            partial(self._retry_finalize, key, db, settings),
         )
         return self._submit_tracked(key, job, "sync")
 
@@ -161,6 +170,16 @@ class WatchSubmitter:
         shed, never ran and must not stamp or cancel a trailing timer a write armed.
         """
         self._throttle.mark_admitted(database)
+
+    def _retry_finalize(
+        self, key: RouteKey, db: Database, settings: Settings, delay_s: float
+    ) -> None:
+        """Arm a retry for a finalize that left *key*'s database dirty."""
+        self._retries.arm(
+            key.database,
+            delay_s,
+            partial(self._request_finalize, key, db, settings),
+        )
 
     def _request_finalize(
         self, key: RouteKey, db: Database, settings: Settings
@@ -182,7 +201,12 @@ class WatchSubmitter:
         self, key: RouteKey, db: Database, settings: Settings
     ) -> TaskState:
         """Submit the coalesced FTS-rebuild finalize for *key*."""
-        job = CollectionFinalizeJob(db, settings, key.collection)
+        job = CollectionFinalizeJob(
+            db,
+            settings,
+            key.collection,
+            on_unsettled=partial(self._retry_finalize, key, db, settings),
+        )
         return self._submit_tracked(key, job, "sync")
 
     def _submit_tracked(self, key: RouteKey, job: IngestUnit, kind: str) -> TaskState:

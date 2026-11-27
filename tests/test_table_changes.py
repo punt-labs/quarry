@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
+import pytest
 
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.db.document_ref import DocumentRef
 from quarry.db.lance_connection import LanceConnection
+from quarry.db.orphan_pages import OrphanPageSweep
+from quarry.db.recycling_table import RecyclingTable
 from quarry.db.table_changes import TableChanges
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.page_record import PageRecord
+from quarry.types import LanceTable
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -167,3 +172,99 @@ class TestWriteFunnel:
         changes.mark_clean(changes.snapshot())
         database.optimizer.optimize(force=True)
         assert not changes.needs_rewrite()
+
+
+_NOT_WRITES = {
+    "search",
+    "count_rows",
+    "stats",
+    "optimize",
+    "create_index",
+    "schema",
+    "uri",
+}
+_SAMPLE_ARGS: dict[str, tuple[object, ...]] = {
+    "add": ([],),
+    "delete": ("x = 1",),
+    "add_columns": ({},),
+    "drop_columns": ([],),
+}
+
+
+class _FakeTable:
+    """Implement every ``LanceTable`` method by doing nothing."""
+
+    uri = "fake"
+    schema = None
+
+    def add(self, data: list[dict[str, object]]) -> None: ...
+
+    def delete(self, predicate: str) -> None: ...
+
+    def add_columns(self, transforms: dict[str, str]) -> None: ...
+
+    def drop_columns(self, columns: list[str]) -> None: ...
+
+
+class _Owner:
+    def __init__(self) -> None:
+        self.changes = TableChanges()
+
+    def note_index_rebuild(self) -> None: ...
+
+
+class TestEveryWriteMethodIsRecorded:
+    """A new ``LanceTable`` method must either record itself or be named a non-write."""
+
+    @staticmethod
+    def _protocol_methods() -> list[str]:
+        return sorted(
+            name
+            for name, member in vars(LanceTable).items()
+            if not name.startswith("_") and callable(member)
+        )
+
+    def test_every_method_not_in_the_allow_list_bumps_the_record(self) -> None:
+        for name in self._protocol_methods():
+            if name in _NOT_WRITES:
+                continue
+            assert name in _SAMPLE_ARGS, f"{name}: add sample args or allow-list it"
+            owner = _Owner()
+            table = RecyclingTable(cast("LanceTable", _FakeTable()), owner)
+            before = owner.changes.snapshot()
+            getattr(table, name)(*_SAMPLE_ARGS[name])
+            assert owner.changes.snapshot() > before, f"{name} skips the write record"
+
+    def test_the_allow_list_names_only_real_protocol_members(self) -> None:
+        members = set(vars(LanceTable))
+        assert members >= _NOT_WRITES
+
+    def test_a_failing_write_still_bumps_the_record(self) -> None:
+        class Failing(_FakeTable):
+            def delete(self, predicate: str) -> None:
+                raise RuntimeError(predicate)
+
+        owner = _Owner()
+        table = RecyclingTable(cast("LanceTable", Failing()), owner)
+        before = owner.changes.snapshot()
+        with pytest.raises(RuntimeError):
+            table.delete("x")
+        assert owner.changes.snapshot() > before
+
+
+def test_an_alias_of_the_database_path_shares_its_record(tmp_path: Path) -> None:
+    real = tmp_path / "real" / "lancedb"
+    real.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(real.parent)
+    assert TableChanges.for_path(alias / "lancedb") is TableChanges.for_path(real)
+
+
+def test_an_orphan_sweep_that_deletes_pages_dirties_the_record(tmp_path: Path) -> None:
+    database = Database.connect(tmp_path / "lancedb")
+    changes = TableChanges.for_path(tmp_path / "lancedb")
+    database.store.pages.put([PageRecord("c", "orphan.md", 1, "orphan page")])
+    changes.mark_clean(changes.snapshot())
+    later = datetime.now(UTC) + timedelta(days=2)
+    assert OrphanPageSweep(database.db).run(now=later) == 1
+    assert changes.needs_rewrite()

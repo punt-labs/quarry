@@ -110,6 +110,16 @@ class LanceConnection:
         """Open *connect*, sharing the write record of the database at *path*."""
         return cls(connect, TableChanges.for_path(path))
 
+    @classmethod
+    def changes_of(cls, db: LanceDB) -> TableChanges:
+        """Return the write record of *db*, or a fresh one if it is not a connection.
+
+        A fresh record is dirty and never finalized, so a database whose writes
+        nothing reports (a bare LanceDB handle) is rewritten on every finalize.
+        That is the safe default when the gate cannot know.
+        """
+        return db.changes if isinstance(db, cls) else TableChanges()
+
     @property
     def changes(self) -> TableChanges:
         """The record of writes made through this connection's tables."""
@@ -134,8 +144,10 @@ class LanceConnection:
     ) -> LanceTable:
         """Recycle if due, then create *name* as a rebuild-reporting table."""
         self._maybe_recycle()
-        table = self._inner.create_table(name, data=data, schema=schema)
-        self._changes.note_write()
+        try:
+            table = self._inner.create_table(name, data=data, schema=schema)
+        finally:
+            self._changes.note_write()
         return RecyclingTable(table, self)
 
     def note_index_rebuild(self) -> None:

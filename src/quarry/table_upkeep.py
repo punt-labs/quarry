@@ -6,12 +6,12 @@ import logging
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.db.orphan_pages import OrphanPageSweep
-from quarry.db.table_changes import TableChanges
 from quarry.finalize_ledger import FinalizeLedgers
 from quarry.post_sync_gc import PostSyncGc
 
 if TYPE_CHECKING:
     from quarry.config import Settings
+    from quarry.db.table_changes import TableChanges
     from quarry.finalize_ledger import FinalizeLedger
     from quarry.types import LanceDB
 
@@ -22,12 +22,14 @@ logger = logging.getLogger(__name__)
 class TableUpkeep:
     """Decide between rewriting a table and the cheap pass, and do the cheap pass.
 
-    The rewrite (compaction, the collection index and the full-text rebuild) is
-    gated on writes: it is owed only when the table changed since the last
-    successful finalize (``TableChanges``).  The cheap pass is gated on the clock:
-    sweeping orphan pages (a 24 hour grace) is owed on a quiet database too, once
-    per ``TableChanges.MAINTENANCE_INTERVAL_S``.  Neither rewrites a table or
-    rebuilds an index.
+    Three classes of work follow a finalize.  The rewrite (compaction, the
+    collection index, the version prune inside ``optimize``, the full-text
+    rebuild, and the post-sync GC) is write-gated: it is owed only when the table
+    changed since the last successful finalize (``TableChanges``) and the
+    database is not backing off after a failure.  The orphan-page sweep is
+    time-gated: once per ``TableChanges.MAINTENANCE_INTERVAL_S`` on a quiet table,
+    and after every rewrite.  The capture-shadow push is unconditional and lives
+    in ``TableFinalizer``.  The cheap pass writes no table and builds no index.
 
     Pruning old table versions is not part of the cheap pass.  LanceDB prunes only
     inside ``optimize``, which also compacts and re-indexes, and an optimize on a
@@ -42,10 +44,10 @@ class TableUpkeep:
     _label: str
     _ledger: FinalizeLedger
 
-    def __new__(cls, db: LanceDB, settings: Settings) -> Self:
+    def __new__(cls, db: LanceDB, settings: Settings, changes: TableChanges) -> Self:
         """Bind the upkeep to a database, its write record and its failure ledger."""
         self = super().__new__(cls)
-        self._changes = TableChanges.for_path(settings.lancedb_path)
+        self._changes = changes
         self._db = db
         self._label = settings.lancedb_path.parent.name
         self._ledger = FinalizeLedgers.for_database(
@@ -54,23 +56,27 @@ class TableUpkeep:
         return self
 
     def needs_rewrite(self) -> bool:
-        """Return whether the table changed since the last successful finalize."""
-        return self._changes.needs_rewrite()
+        """Return whether the table changed and the database is not backing off."""
+        return self._changes.needs_rewrite() and not self._ledger.is_backed_off()
 
     def snapshot(self) -> int:
         """Return the write generation a rewrite about to start will cover."""
         return self._changes.snapshot()
 
-    def settle_rewrite(self, snapshot: int) -> None:
-        """Mark the table clean up to *snapshot* if its optimize left no failure.
+    def retry_in_seconds(self) -> float | None:
+        """Return seconds until a dirty table may be rewritten, or ``None`` if clean."""
+        if not self._changes.needs_rewrite():
+            return None
+        return self._ledger.health().retry_in_seconds
 
-        The optimize step records any failure it hit, a refused compaction or a
-        back-off in the database's ledger and clears the ledger when it
-        succeeds, so a ledger with no failures means the table is rewritten.  A
-        write after *snapshot* keeps the table dirty either way.  The orphan-page
-        sweep follows, and the slow clock restarts.
+    def settle_rewrite(self, snapshot: int, *, succeeded: bool) -> None:
+        """Mark the table clean up to *snapshot* if this run's optimize succeeded.
+
+        A failed optimize, including a failed full-text rebuild, leaves the table
+        dirty, and so does a write after *snapshot*.  The orphan-page sweep
+        follows either way, and the slow clock restarts.
         """
-        if self._ledger.health().consecutive_failures == 0:
+        if succeeded:
             self._changes.mark_clean(snapshot)
         self._sweep_pages()
         self._changes.mark_maintained()
@@ -78,10 +84,12 @@ class TableUpkeep:
 
     def skip_rewrite(self) -> None:
         """Log the skipped rewrite, then run the slow-clock upkeep if it is due."""
-        logger.debug(
-            "sync: finalize skipped for %s: table unchanged since its last finalize",
-            self._label,
+        reason = (
+            "backing off after failures"
+            if self._changes.needs_rewrite()
+            else "table unchanged since its last finalize"
         )
+        logger.debug("sync: finalize skipped for %s: %s", self._label, reason)
         if self._changes.maintenance_due():
             self._sweep_pages()
             self._changes.mark_maintained()
