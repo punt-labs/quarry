@@ -137,18 +137,40 @@ def test_disable_report_idempotent_noop() -> None:
     assert "Already disabled (no registration)" in joined
 
 
-def test_disable_report_covered_child_keeps_parent_registration() -> None:
+def test_disable_report_covered_child_with_own_files_names_parent_command() -> None:
     result = DisableResult(
         directory="/p/src",
         collection="",
         captures_collection="",
         covered_by="/p",
+        config_removed=True,
         enabled_marker_removed=True,
     )
-    joined = "\n".join(DisableReport(result, keep_data=False).lines())
-    assert "Kept parent registration at /p" in joined
+    lines = DisableReport(result, keep_data=False).lines()
+    joined = "\n".join(lines)
+    assert "Removed enabled marker (guide left dormant)" in joined
+    assert "Config file removed" in joined
+    assert lines[-1] == (
+        "/p/src is still captured by the registration at /p; "
+        "run 'quarry disable /p' to stop it"
+    )
+    assert "Disabled quarry" not in joined
     assert "Already disabled" not in joined
     assert "Deregistered" not in joined
+
+
+def test_disable_report_covered_child_with_nothing_own_says_so() -> None:
+    result = DisableResult(
+        directory="/p/src", collection="", captures_collection="", covered_by="/p"
+    )
+    lines = DisableReport(result, keep_data=False).lines()
+    joined = "\n".join(lines)
+    assert "Disabled" not in joined
+    assert "Nothing of its own found in /p/src" in joined
+    assert lines[-1] == (
+        "/p/src is still captured by the registration at /p; "
+        "run 'quarry disable /p' to stop it"
+    )
 
 
 def test_enable_report_lists_granted_rules_and_scope() -> None:

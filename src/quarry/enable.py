@@ -145,8 +145,6 @@ def enable_project(
     if claudemd.import_registered:
         logger.info("Registered quarry @-import in CLAUDE.md")
     config_path = ProjectConfig().write(directory)
-    # Running enable is the operator's consent to quarry's allow rules (#552);
-    # they land last, once the project is otherwise fully enabled.
     return EnableResult(
         directory=str(directory),
         collection=resolution.collection,
@@ -159,6 +157,8 @@ def enable_project(
         import_registered=claudemd.import_registered,
         gitignore_ensured=claudemd.gitignore_ensured,
         ethos=ethos,
+        # Granted last, evaluated after every other step has succeeded, so a
+        # failure earlier never leaves allow rules in a half-enabled project.
         permissions=ProjectPermissions(directory).grant(),
         skills_deposited=claudemd.skills_deposited,
     )
@@ -197,7 +197,7 @@ class _DisableOrchestrator:
     """Sequence the § 2.3 disable steps in the § 2.11 commit-point order.
 
     Instances are single-use. Owning the (directory, client, covering,
-    keep_data) state as slots lets each fallible step be a named method the
+    keep_data, parent) state as slots lets each fallible step be a named method the
     caller can drive in an explicit order — the same order § 5.4's regression
     test asserts against — and keeps the top-level ``disable_project``
     function a thin driver over one live class.

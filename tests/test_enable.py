@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from quarry.claude_permissions import QUARRY_RULES
+from quarry.disable_report import DisableReport
 from quarry.enable import DisableResult, EnableResult, disable_project, enable_project
 from quarry.enabled_marker import EnabledMarker
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
@@ -536,6 +537,63 @@ class TestT15DisableCoveredChild:
         assert client.deregistered == []
         assert client.deleted == []
         assert client.collections == ["project"]
+
+
+class TestDisableCoveredChildReport:
+    """The disable report for a covered child says capture continues."""
+
+    @staticmethod
+    def _parent_child(tmp_path: Path) -> tuple[Path, Path]:
+        parent = tmp_path / "project"
+        parent.mkdir()
+        child = parent / "src"
+        child.mkdir()
+        return parent, child
+
+    def test_never_enabled_child_removes_nothing_and_names_parent(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child = self._parent_child(tmp_path)
+        client = FakeRegistryClient([("project", parent)])
+
+        result = disable_project(child, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "Disabled" not in text
+        assert f"run 'quarry disable {parent}' to stop it" in text
+        assert client.deregistered == []
+        assert client.deleted == []
+
+    def test_enabled_then_disabled_child_lists_removals_and_still_captured(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child = self._parent_child(tmp_path)
+        client = FakeRegistryClient([("project", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            result = disable_project(child, client)
+        lines = DisableReport(result, keep_data=False).lines()
+        text = "\n".join(lines)
+
+        assert "Config file removed" in text
+        assert "Removed enabled marker" in text
+        assert "Disabled" not in text
+        assert lines[-1].endswith(f"run 'quarry disable {parent}' to stop it")
+
+    def test_second_disable_converges_to_nothing_found(self, tmp_path: Path) -> None:
+        parent, child = self._parent_child(tmp_path)
+        client = FakeRegistryClient([("project", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            disable_project(child, client)
+            second = disable_project(child, client)
+        text = "\n".join(DisableReport(second, keep_data=False).lines())
+
+        assert "Nothing of its own found" in text
+        assert "Config file removed" not in text
+        assert f"run 'quarry disable {parent}' to stop it" in text
 
 
 class TestT17EnableWithOverrideOnChildRaises:

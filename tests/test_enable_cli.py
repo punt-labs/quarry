@@ -268,3 +268,26 @@ class TestEnableCLICoveredByParent:
         assert data["covered_by"] == str(parent)
         assert data["collection"] == "project"
         assert data["created_registration"] is False
+
+    def test_disable_child_names_parent_command_and_spares_registration(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child, seeded = self._seeded(tmp_path)
+
+        with _patch_for_cli(tmp_path, seeded):
+            result = runner.invoke(app, ["disable", str(child)])
+
+        assert result.exit_code == 0, result.output
+        assert "Disabled" not in result.output
+        assert f"run 'quarry disable {parent}' to stop it" in result.output
+        assert seeded.deregistered == []
+
+    def test_disable_child_json_carries_covered_by(self, tmp_path: Path) -> None:
+        parent, child, seeded = self._seeded(tmp_path)
+
+        with _patch_for_cli(tmp_path, seeded):
+            result = runner.invoke(app, ["--json", "disable", str(child)])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["covered_by"] == str(parent)
+        assert seeded.deregistered == []

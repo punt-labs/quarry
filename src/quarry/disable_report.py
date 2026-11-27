@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.enable_report import EnableReport
+from quarry.disable_lines import CoveredDisableNote, RemovedItems
 
 if TYPE_CHECKING:
     from quarry.enable import DisableResult
@@ -31,29 +31,16 @@ class DisableReport:
     def lines(self) -> list[str]:
         """Return the summary lines for the disable, in display order."""
         r = self._r
-        lines = [f"Disabled quarry for {r.directory}"]
+        removed = RemovedItems(r).lines()
         if r.covered_by:
-            lines.append(f"  Kept parent registration at {r.covered_by}")
-        elif r.collection:
+            return CoveredDisableNote(r.directory, r.covered_by, removed).lines()
+        if r.collection:
             # Report the registration in both keep-data branches so --keep-data
             # does not look like only local files were touched.
             fate = "kept indexed data" if self._keep_data else "chunk purge queued"
-            lines.append(f"  Deregistered {r.collection} ({r.removed} files); {fate}")
+            note = f"  Deregistered {r.collection} ({r.removed} files); {fate}"
         else:
             # Idempotent no-op: nothing was registered (never enabled, or a prior
             # partial disable already deregistered it).
-            lines.append("  Already disabled (no registration)")
-        lines += EnableReport.flagged(
-            (
-                (r.config_removed, "  Config file removed"),
-                (
-                    r.import_pruned,
-                    "  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md",
-                ),
-                (
-                    r.enabled_marker_removed,
-                    "  Removed enabled marker (guide left dormant)",
-                ),
-            )
-        )
-        return lines + r.permissions.lines("Removed quarry tool permissions from")
+            note = "  Already disabled (no registration)"
+        return [f"Disabled quarry for {r.directory}", note, *removed]
