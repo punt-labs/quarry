@@ -2253,7 +2253,7 @@ wheels = [
 
 [[package]]
 name = "punt-quarry"
-version = "3.9.1"
+version = "4.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
