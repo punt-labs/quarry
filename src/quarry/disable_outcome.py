@@ -43,7 +43,7 @@ class DisableOutcome(ABC):
     def of(result: DisableResult, *, keep_data: bool) -> DisableOutcome:
         """Pick the outcome a disable ended in."""
         if result.covered_by:
-            covered = CoveredCaptured if result.parent_enabled else CoveredUncaptured
+            covered = CoveredCaptured if result.capturing_marker else CoveredUncaptured
             return covered(result)
         if result.collection:
             return Deregistered(result, keep_data)
@@ -98,8 +98,7 @@ class _CoveredChild(DisableOutcome):
     __slots__ = ()
 
     def _body(self) -> list[str]:
-        # A kept config still governs capture here, so it is stated as plainly
-        # as a removal.
+        # A config left in place is stated as plainly as a removal.
         return [*self._removed(), *self._changes().kept(), self.note()]
 
     def heading(self) -> str:
@@ -116,19 +115,13 @@ class _CoveredChild(DisableOutcome):
 @final
 @dataclass(frozen=True, slots=True)
 class CoveredCaptured(_CoveredChild):
-    """The parent's marker keeps capture live under the child."""
+    """An enabled marker, at the registration or below it, keeps capture live."""
 
     result: DisableResult
 
     def note(self) -> str:
-        """Return the command that stops the capture still running here."""
-        r = self.result
-        return (
-            f"{r.directory} is still captured by the registration at "
-            f"{r.covered_by}; `{self._changes().parent_command()}` stops it but "
-            f"deregisters {r.covered_by} and purges everything indexed for "
-            f"{r.covered_by} (add --keep-data to keep the data)"
-        )
+        """Return the marker that still captures here and the command that stops it."""
+        return self._changes().captured()
 
 
 @final
@@ -143,5 +136,5 @@ class CoveredUncaptured(_CoveredChild):
         r = self.result
         return (
             f"{r.directory} is registered under {r.covered_by} but not captured: "
-            f"no readable enabled marker at {r.covered_by}"
+            f"no readable enabled marker from {r.directory} up to {r.covered_by}"
         )

@@ -56,6 +56,31 @@ class HookConfig:
     read: bool = False
     subagent_stop: bool = True
 
+    @classmethod
+    def parse(cls, text: str) -> HookConfig:
+        """Return the hook config the ``auto_capture`` block of *text* describes.
+
+        Defaults apply for an absent block or field.  ``load_hook_config`` and
+        every caller that must judge a config file by what the hooks will do
+        with it go through this one parse.
+        """
+        auto = Frontmatter(text).block("auto_capture")
+        if auto is None:
+            return cls()
+        # session_end and subagent_stop both capture the transcript, same as
+        # compaction — an operator who disables compaction to turn off
+        # transcript capture expects both to follow unless explicitly overridden.
+        compaction = _bool_field(auto, "compaction", default=True)
+        return cls(
+            session_sync=_bool_field(auto, "session_sync", default=True),
+            web_fetch=_bool_field(auto, "web_fetch", default=True),
+            compaction=compaction,
+            session_end=_bool_field(auto, "session_end", default=compaction),
+            web_search=_bool_field(auto, "web_search", default=True),
+            read=_bool_field(auto, "read", default=False),
+            subagent_stop=_bool_field(auto, "subagent_stop", default=compaction),
+        )
+
 
 def load_hook_config(cwd: str) -> HookConfig:
     """Load hook config from YAML-style frontmatter in the project's config file.
@@ -65,32 +90,10 @@ def load_hook_config(cwd: str) -> HookConfig:
     depend on PyYAML or support arbitrary YAML.  Returns defaults if the file
     is missing, malformed, or the expected structure is absent.
     """
-    path = Path(cwd) / _CONFIG_FILENAME
-    if not path.is_file():
-        return HookConfig()
-
     try:
-        text = path.read_text()
+        return HookConfig.parse((Path(cwd) / _CONFIG_FILENAME).read_text())
     except (OSError, UnicodeDecodeError):
         return HookConfig()
-
-    auto = Frontmatter(text).block("auto_capture")
-    if auto is None:
-        return HookConfig()
-
-    # session_end and subagent_stop both capture the transcript, same as
-    # compaction — an operator who disables compaction to turn off transcript
-    # capture expects both to follow unless explicitly overridden.
-    compaction = _bool_field(auto, "compaction", default=True)
-    return HookConfig(
-        session_sync=_bool_field(auto, "session_sync", default=True),
-        web_fetch=_bool_field(auto, "web_fetch", default=True),
-        compaction=compaction,
-        session_end=_bool_field(auto, "session_end", default=compaction),
-        web_search=_bool_field(auto, "web_search", default=True),
-        read=_bool_field(auto, "read", default=False),
-        subagent_stop=_bool_field(auto, "subagent_stop", default=compaction),
-    )
 
 
 # YAML 1.1 boolean aliases (case-insensitive).

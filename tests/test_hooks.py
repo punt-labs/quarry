@@ -26,6 +26,8 @@ from quarry.client import (
     QuarryConnectionError,
     QuarryError,
 )
+from quarry.disable_report import DisableReport
+from quarry.enable import disable_project
 from quarry.enabled_marker import EnabledMarker
 from quarry.hooks import (
     handle_post_web_fetch,
@@ -35,6 +37,7 @@ from quarry.hooks import (
 from quarry.refusal import RegistrationRefusedError
 from quarry.send_outcome import SendOutcome
 from quarry.sync_registry import SyncRegistry
+from tests.conftest import FakeRegistryClient
 
 
 def _opt_in(project: Path) -> Path:
@@ -2647,3 +2650,62 @@ class TestSessionCoverageFailure:
         assert record.levelno == logging.WARNING
         assert type(error).__name__ in record.getMessage()
         assert "SECRET" not in caplog.text
+
+
+class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
+    """``quarry disable`` on a covered child says "captured" iff session-start syncs."""
+
+    _ACTIVE = "Quarry semantic search is active for this project."
+
+    @staticmethod
+    def _tree(tmp_path: Path, markers: tuple[str, ...]) -> tuple[Path, Path]:
+        parent = tmp_path / "p"
+        svc = parent / "team" / "svc"
+        svc.mkdir(parents=True)
+        for relative in markers:
+            _opt_in(parent / relative)
+        return parent, svc
+
+    def _session_captures(self, tmp_path: Path, parent: Path, cwd: Path) -> bool:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "p")
+        conn.close()
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ),
+        ):
+            result = handle_session_start({"cwd": str(cwd)})
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        return str(output["additionalContext"]).startswith(self._ACTIVE)
+
+    @pytest.mark.parametrize(
+        ("markers", "captured"),
+        [
+            ((), False),
+            (("",), True),
+            (("team",), True),
+            (("", "team"), True),
+        ],
+        ids=["no-marker", "parent-marker", "intermediate-marker", "both"],
+    )
+    def test_report_verdict_equals_session_start_verdict(
+        self, tmp_path: Path, markers: tuple[str, ...], *, captured: bool
+    ) -> None:
+        parent, svc = self._tree(tmp_path, markers)
+        client = FakeRegistryClient([("p", parent)])
+
+        result = disable_project(svc, client)
+        report = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert ("not captured" not in report) is captured
+        assert self._session_captures(tmp_path, parent, svc) is captured

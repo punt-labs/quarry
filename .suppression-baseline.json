@@ -1,7 +1,7 @@
 {
-  "total": 185,
+  "total": 184,
   "by_category": {
-    "noqa": 145,
+    "noqa": 144,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -99,7 +99,7 @@
       "noqa": 1
     },
     "src/quarry/enable.py": {
-      "noqa": 7
+      "noqa": 6
     },
     "src/quarry/extractors/image_extractor.py": {
       "noqa": 1
@@ -245,5 +245,5 @@
       "per_file_ignores": 1
     }
   },
-  "updated_at": "2026-11-27T07:07:35Z"
+  "updated_at": "2026-11-27T07:56:33Z"
 }

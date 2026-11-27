@@ -148,7 +148,8 @@ _STILL_CAPTURED = (
     "indexed for /p (add --keep-data to keep the data)"
 )
 _NOT_CAPTURED = (
-    "/p/src is registered under /p but not captured: no readable enabled marker at /p"
+    "/p/src is registered under /p but not captured: "
+    "no readable enabled marker from /p/src up to /p"
 )
 
 
@@ -193,7 +194,7 @@ def test_disable_report_covered_child_parent_capturing_names_parent_command() ->
         collection="",
         captures_collection="",
         covered_by="/p",
-        parent_enabled=True,
+        capturing_marker="/p",
         config_removed=True,
         enabled_marker_removed=True,
     )
@@ -214,7 +215,6 @@ def test_disable_report_covered_child_parent_not_capturing_does_not_suggest_it()
         collection="",
         captures_collection="",
         covered_by="/p",
-        parent_enabled=False,
         enabled_marker_removed=True,
     )
     lines = DisableReport(result, keep_data=False).lines()
@@ -223,13 +223,29 @@ def test_disable_report_covered_child_parent_not_capturing_does_not_suggest_it()
     assert "still captured" not in "\n".join(lines)
 
 
+def test_disable_report_covered_child_nested_marker_names_it() -> None:
+    result = DisableResult(
+        directory="/p/team/svc",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        capturing_marker="/p/team",
+        enabled_marker_removed=True,
+    )
+    assert DisableReport(result, keep_data=False).lines()[-1] == (
+        "/p/team/svc is still captured by the registration at /p because of "
+        "the enabled marker at /p/team; `quarry disable /p/team` stops it, "
+        "as does disabling /p"
+    )
+
+
 def test_disable_report_covered_child_nothing_own_says_so() -> None:
     result = DisableResult(
         directory="/p/src",
         collection="",
         captures_collection="",
         covered_by="/p",
-        parent_enabled=True,
+        capturing_marker="/p",
     )
     assert DisableReport(result, keep_data=False).lines() == [
         "Nothing of its own found in /p/src",
@@ -245,7 +261,7 @@ def test_disable_report_covered_child_permission_error_alone_is_nothing_removed(
         collection="",
         captures_collection="",
         covered_by="/p",
-        parent_enabled=True,
+        capturing_marker="/p",
         permissions=PermissionChange(error="bad json"),
     )
     expected = [
@@ -263,7 +279,7 @@ def test_disable_report_covered_child_permission_change_is_a_removal() -> None:
         collection="",
         captures_collection="",
         covered_by="/p",
-        parent_enabled=True,
+        capturing_marker="/p",
         permissions=PermissionChange(changed=("Bash(quarry:*)",)),
     )
     assert DisableReport(result, keep_data=False).lines()[0] == (
@@ -277,7 +293,7 @@ def test_disable_report_captured_note_names_the_purge_and_keep_data() -> None:
         collection="",
         captures_collection="",
         covered_by="/p",
-        parent_enabled=True,
+        capturing_marker="/p",
     )
     note = DisableReport(result, keep_data=False).lines()[-1]
     assert "purges everything indexed for /p" in note
@@ -381,7 +397,7 @@ def _captured_command(parent: str, *, keep_data: bool = False) -> list[str]:
         collection="",
         captures_collection="",
         covered_by=parent,
-        parent_enabled=True,
+        capturing_marker=parent,
     )
     note = DisableReport(result, keep_data=keep_data).lines()[-1]
     return shlex.split(note.split("`")[1])
@@ -414,7 +430,7 @@ def test_disable_report_covered_child_kept_config_is_not_nothing_found() -> None
         collection="",
         captures_collection="",
         covered_by="/p",
-        parent_enabled=True,
+        capturing_marker="/p",
         config_kept=True,
     )
     lines = DisableReport(result, keep_data=False).lines()

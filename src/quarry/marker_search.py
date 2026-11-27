@@ -33,9 +33,12 @@ class MarkerSearch:
         self._root = Path(registered) if registered else None
         return self
 
-    def found(self) -> bool:
-        """Return whether any directory on the search path holds the marker."""
-        return any(EnabledMarker(d).is_present() for d in self._path())
+    def found_at(self) -> Path | None:
+        """Return the nearest directory on the search path holding the marker.
+
+        None is the contract for "no marker anywhere on the path".
+        """
+        return next(filter(lambda d: EnabledMarker(d).is_present(), self._path()), None)
 
     def _path(self) -> tuple[Path, ...]:
         """Return the directories to check, nearest first."""

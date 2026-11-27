@@ -4,15 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.disable_notes import CapturedNote, KeptConfigNote
 from quarry.enable_report import EnableReport
-from quarry.parent_disable_command import ParentDisableCommand
 
 if TYPE_CHECKING:
     from quarry.enable import DisableResult
 
 __all__ = ["DisableLines"]
-
-_KEPT = "  Config file kept (it has settings of yours; delete it to drop them)"
 
 
 @final
@@ -58,9 +56,9 @@ class DisableLines:
         return p.lines("") if p.error else []
 
     def kept(self) -> list[str]:
-        """Return the line saying the config stayed, if it did."""
-        return [_KEPT] if self._r.config_kept else []
+        """Return the line saying the config stayed, and why, if it did."""
+        return KeptConfigNote(self._r).lines()
 
-    def parent_command(self) -> str:
-        """Return the shell command that disables the covering parent."""
-        return str(ParentDisableCommand(self._r.covered_by))
+    def captured(self) -> str:
+        """Return the note naming the marker that still captures the directory."""
+        return str(CapturedNote(self._r))

@@ -12,6 +12,8 @@ def _result(
     covered_by: str = "",
     config_removed: bool = False,
     config_kept: bool = False,
+    config_why: str = "",
+    capturing_marker: str = "",
     import_pruned: bool = False,
     marker: bool = False,
     permissions: PermissionChange | None = None,
@@ -23,6 +25,8 @@ def _result(
         covered_by=covered_by,
         config_removed=config_removed,
         config_kept=config_kept,
+        config_why=config_why,
+        capturing_marker=capturing_marker,
         import_pruned=import_pruned,
         enabled_marker_removed=marker,
         permissions=permissions or PermissionChange(),
@@ -59,8 +63,30 @@ def test_kept_config_has_a_line() -> None:
     ]
 
 
-def test_parent_command_names_the_covering_directory() -> None:
-    assert (
-        DisableLines(_result(covered_by="/my p")).parent_command()
-        == "quarry disable '/my p'"
-    )
+def test_unreadable_kept_config_says_it_is_not_applied() -> None:
+    [line] = DisableLines(_result(config_kept=True, config_why="unreadable")).kept()
+    assert "could not be read" in line
+    assert "not applied" in line
+    assert "settings of yours" not in line
+
+
+def test_linked_config_says_it_was_left_in_place() -> None:
+    assert DisableLines(_result(config_kept=True, config_why="linked")).kept() == [
+        "  config.md is a symlink and was left in place"
+    ]
+
+
+def test_captured_note_at_the_registration_names_its_disable_command() -> None:
+    note = DisableLines(
+        _result(covered_by="/my p", capturing_marker="/my p")
+    ).captured()
+    assert "`quarry disable '/my p'` stops it but deregisters" in note
+
+
+def test_captured_note_at_an_intermediate_marker_names_that_directory() -> None:
+    note = DisableLines(
+        _result(covered_by="/p", capturing_marker="/p/my team")
+    ).captured()
+    assert "because of the enabled marker at /p/my team" in note
+    assert "`quarry disable '/p/my team'` stops it" in note
+    assert "purges" not in note

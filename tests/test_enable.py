@@ -716,7 +716,7 @@ class TestDisableCoveredChildReport:
             result = disable_project(child, client)
         text = "\n".join(DisableReport(result, keep_data=False).lines())
 
-        assert result.parent_enabled is False
+        assert result.capturing_marker == ""
         assert f"registered under {parent} but not captured" in text
         assert f"quarry disable {parent}" not in text
         assert "still captured" not in text
@@ -1064,3 +1064,90 @@ class TestEnableGrantsProjectPermissions:
 
         assert result.enabled_marker_written is True
         assert "not valid JSON" in result.permissions.error
+
+
+class TestDisableCoveredChildCapturedByIntermediateMarker:
+    """A marker between the child and the registration root still captures it."""
+
+    def test_intermediate_marker_is_named_and_command_targets_it(
+        self, tmp_path: Path
+    ) -> None:
+        parent = tmp_path / "p"
+        team = parent / "team"
+        svc = team / "svc"
+        svc.mkdir(parents=True)
+        client = FakeRegistryClient([("p", parent)])
+
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(team, client)
+            enable_project(svc, client)
+            result = disable_project(svc, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "not captured" not in text
+        assert f"because of the enabled marker at {team}" in text
+        assert f"`quarry disable {team}`" in text
+        assert f"`quarry disable {parent}`" not in text
+        assert not EnabledMarker(svc).is_present()
+        assert EnabledMarker(team).is_present()
+
+
+class TestDisableCoveredChildConfigReport:
+    """What the disable report says about a covered child's config.md."""
+
+    @staticmethod
+    def _disable_with_config(tmp_path: Path, write: str | bytes | None) -> list[str]:
+        parent = tmp_path / "project"
+        child = parent / "src"
+        child.mkdir(parents=True)
+        EnabledMarker(parent).write()
+        client = FakeRegistryClient([("project", parent)])
+        with patch(_NO_ETHOS, return_value=tmp_path / "no-ethos"):
+            enable_project(child, client)
+            config = child / ".punt-labs" / "quarry" / "config.md"
+            if isinstance(write, bytes):
+                config.write_bytes(write)
+            elif isinstance(write, str):
+                config.unlink()
+                config.symlink_to(write)
+            result = disable_project(child, client)
+        return DisableReport(result, keep_data=False).lines()
+
+    def test_untouched_config_written_by_an_older_template_is_removed(
+        self, tmp_path: Path
+    ) -> None:
+        old = (
+            ProjectConfig()
+            .text.replace("  session_end: true\n", "")
+            .replace("  web_search: true\n", "")
+            .replace("  read: false\n", "")
+            .replace("  subagent_stop: true\n", "")
+        )
+        lines = self._disable_with_config(tmp_path, old.encode())
+
+        assert lines[0] == f"Removed quarry's own settings from {tmp_path}/project/src"
+        assert "  Config file removed" in lines
+        assert not any("kept" in line for line in lines)
+
+    def test_unreadable_config_is_kept_and_said_to_be_unapplied(
+        self, tmp_path: Path
+    ) -> None:
+        lines = self._disable_with_config(tmp_path, b"\xff\xfe\x00bad")
+        text = "\n".join(lines)
+
+        assert "could not be read" in text
+        assert "not applied" in text
+        assert "has settings of yours" not in text
+        assert "still governs" not in text
+
+    def test_symlinked_config_is_reported_as_left_in_place(
+        self, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "shared.md"
+        target.write_text(ProjectConfig().text)
+        lines = self._disable_with_config(tmp_path, str(target))
+        text = "\n".join(lines)
+
+        assert "config.md is a symlink and was left in place" in text
+        assert "Nothing of its own found" not in text
+        assert target.exists()

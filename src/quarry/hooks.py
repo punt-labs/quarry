@@ -130,7 +130,7 @@ class _SessionStartContext:
         from quarry.marker_search import MarkerSearch  # noqa: PLC0415
 
         covering = registration.directory if registration else ""
-        return MarkerSearch(self._directory, covering).found()
+        return MarkerSearch(self._directory, covering).found_at() is not None
 
     def _path_a(self, collection: str | None) -> SessionStartReply:
         """Marker present: run the active flow (auto-register if needed, sync)."""
