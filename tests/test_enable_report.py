@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import shlex
+from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
+
 from quarry.claude_permissions import PermissionChange
+from quarry.db_pointer import SELECTION
+from quarry.disable_report import DisableReport
 from quarry.enable import DisableResult, EnableResult
-from quarry.enable_report import DisableReport, EnableReport
+from quarry.enable_report import EnableReport
 from quarry.ethos_memory import EthosMemoryResult
 from quarry.skills_install import Harness, SkillOutcome
 
@@ -136,6 +142,164 @@ def test_disable_report_idempotent_noop() -> None:
     assert "Already disabled (no registration)" in joined
 
 
+_STILL_CAPTURED = (
+    "/p/src is still captured by the registration at /p; "
+    "`quarry disable /p` stops it but deregisters /p and purges everything "
+    "indexed for /p (add --keep-data to keep the data)"
+)
+_NOT_CAPTURED = (
+    "/p/src is registered under /p but not captured: "
+    "no readable enabled marker from /p/src up to /p"
+)
+
+
+def test_disable_report_deregistered_output_is_exact() -> None:
+    result = DisableResult(
+        directory="/p",
+        collection="p",
+        captures_collection="p-captures",
+        removed=3,
+        config_removed=True,
+        import_pruned=True,
+        enabled_marker_removed=True,
+        permissions=PermissionChange(changed=("Bash(quarry:*)",)),
+    )
+    assert DisableReport(result, keep_data=False).lines() == [
+        "Disabled quarry for /p",
+        "  Deregistered p (3 files); chunk purge queued",
+        "  Config file removed",
+        "  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md",
+        "  Removed enabled marker (guide left dormant)",
+        (
+            "  Removed quarry tool permissions from .claude/settings.json "
+            "(this project only): Bash(quarry:*)"
+        ),
+    ]
+    assert DisableReport(result, keep_data=True).lines()[1] == (
+        "  Deregistered p (3 files); kept indexed data"
+    )
+
+
+def test_disable_report_unregistered_output_is_exact() -> None:
+    result = DisableResult(directory="/p", collection="", captures_collection="")
+    assert DisableReport(result, keep_data=False).lines() == [
+        "Disabled quarry for /p",
+        "  Already disabled (no registration)",
+    ]
+
+
+def test_disable_report_covered_child_parent_capturing_names_parent_command() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        capturing_marker="/p",
+        config_removed=True,
+        enabled_marker_removed=True,
+    )
+    lines = DisableReport(result, keep_data=False).lines()
+    assert lines == [
+        "Removed quarry's own settings from /p/src",
+        "  Config file removed",
+        "  Removed enabled marker (guide left dormant)",
+        _STILL_CAPTURED,
+    ]
+
+
+def test_disable_report_covered_child_parent_not_capturing_does_not_suggest_it() -> (
+    None
+):
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        enabled_marker_removed=True,
+    )
+    lines = DisableReport(result, keep_data=False).lines()
+    assert lines[-1] == _NOT_CAPTURED
+    assert "quarry disable /p" not in "\n".join(lines)
+    assert "still captured" not in "\n".join(lines)
+
+
+def test_disable_report_covered_child_nested_marker_names_it() -> None:
+    result = DisableResult(
+        directory="/p/team/svc",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        capturing_marker="/p/team",
+        enabled_marker_removed=True,
+    )
+    assert DisableReport(result, keep_data=False).lines()[-1] == (
+        "/p/team/svc is still captured by the registration at /p because of "
+        "the enabled marker at /p/team; `quarry disable /p/team` stops it, "
+        "as does disabling /p"
+    )
+
+
+def test_disable_report_covered_child_nothing_own_says_so() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        capturing_marker="/p",
+    )
+    assert DisableReport(result, keep_data=False).lines() == [
+        "Nothing of its own found in /p/src",
+        _STILL_CAPTURED,
+    ]
+
+
+def test_disable_report_covered_child_permission_error_alone_is_nothing_removed() -> (
+    None
+):
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        capturing_marker="/p",
+        permissions=PermissionChange(error="bad json"),
+    )
+    expected = [
+        "Nothing of its own found in /p/src",
+        "  Permissions not changed: bad json",
+        _STILL_CAPTURED,
+    ]
+    assert DisableReport(result, keep_data=False).lines() == expected
+    assert DisableReport(result, keep_data=False).lines() == expected
+
+
+def test_disable_report_covered_child_permission_change_is_a_removal() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        capturing_marker="/p",
+        permissions=PermissionChange(changed=("Bash(quarry:*)",)),
+    )
+    assert DisableReport(result, keep_data=False).lines()[0] == (
+        "Removed quarry's own settings from /p/src"
+    )
+
+
+def test_disable_report_captured_note_names_the_purge_and_keep_data() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        capturing_marker="/p",
+    )
+    note = DisableReport(result, keep_data=False).lines()[-1]
+    assert "purges everything indexed for /p" in note
+    assert "--keep-data" in note
+
+
 def test_enable_report_lists_granted_rules_and_scope() -> None:
     result = EnableResult(
         directory="/p",
@@ -217,3 +381,59 @@ def test_disable_report_lists_removed_rules_and_omits_noop() -> None:
     assert not any(
         "settings.json" in line for line in DisableReport(noop, keep_data=False).lines()
     )
+
+
+@pytest.fixture
+def db_override() -> Iterator[None]:
+    """Leave the process-wide ``--db`` override cleared after a test sets it."""
+    yield
+    SELECTION.override("")
+
+
+def _captured_command(parent: str, *, keep_data: bool = False) -> list[str]:
+    """Return the argv of the parent-disable command the covered-child note offers."""
+    result = DisableResult(
+        directory=f"{parent}/src",
+        collection="",
+        captures_collection="",
+        covered_by=parent,
+        capturing_marker=parent,
+    )
+    note = DisableReport(result, keep_data=keep_data).lines()[-1]
+    return shlex.split(note.split("`")[1])
+
+
+def test_captured_note_command_is_plain_without_a_db_override() -> None:
+    assert _captured_command("/p") == ["quarry", "disable", "/p"]
+
+
+@pytest.mark.usefixtures("db_override")
+def test_captured_note_command_carries_the_db_override() -> None:
+    SELECTION.override("work")
+    assert _captured_command("/p") == ["quarry", "--db", "work", "disable", "/p"]
+
+
+def test_captured_note_command_quotes_a_path_with_spaces_and_a_quote() -> None:
+    parent = "/my proj/it's"
+    assert _captured_command(parent) == ["quarry", "disable", parent]
+
+
+@pytest.mark.usefixtures("db_override")
+def test_captured_note_command_quotes_the_db_name() -> None:
+    SELECTION.override("a b")
+    assert _captured_command("/p") == ["quarry", "--db", "a b", "disable", "/p"]
+
+
+def test_disable_report_covered_child_kept_config_is_not_nothing_found() -> None:
+    result = DisableResult(
+        directory="/p/src",
+        collection="",
+        captures_collection="",
+        covered_by="/p",
+        capturing_marker="/p",
+        config_kept=True,
+    )
+    lines = DisableReport(result, keep_data=False).lines()
+    assert lines[0] == "Nothing removed from /p/src"
+    assert lines[1].startswith("  Config file kept")
+    assert lines[2] == _STILL_CAPTURED

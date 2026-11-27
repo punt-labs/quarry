@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
+import logging
 from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +22,8 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.client import TargetResolver
+from quarry.db_pointer import SELECTION
+from quarry.enabled_marker import EnabledMarker
 from tests.conftest import FakeRegistryClient
 
 if TYPE_CHECKING:
@@ -229,19 +232,81 @@ class TestSkillsDepositedJsonSerializable:
         ]
 
 
-class TestT3bEnableCLIChildExits1:
-    def test_child_of_parent_exits_1(self, tmp_path: Path) -> None:
+class TestEnableCLICoveredByParent:
+    """A new repo under a registered parent enables with the parent's collection."""
+
+    @staticmethod
+    def _seeded(tmp_path: Path) -> tuple[Path, Path, FakeRegistryClient]:
         parent = tmp_path / "project"
         parent.mkdir()
         child = parent / "src"
         child.mkdir()
+        EnabledMarker(parent).write()
+        return parent, child, FakeRegistryClient([("project", parent)])
 
-        # Seed the daemon view so the parent covers the child: enabling the child
-        # must refuse (the child uses the parent's collection automatically).
-        seeded = FakeRegistryClient([("project", parent)])
-        with _patch_for_cli(tmp_path, seeded):
+    def test_exits_0_naming_the_reused_registration(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        parent, child, seeded = self._seeded(tmp_path)
+
+        with caplog.at_level(logging.ERROR), _patch_for_cli(tmp_path, seeded):
             result = runner.invoke(app, ["enable", str(child)])
 
-        assert result.exit_code == 1
-        assert "already covered" in result.output
+        assert result.exit_code == 0, result.output
+        assert f"Reused registration at {parent}" in result.output
+        assert "Collection: project" in result.output
+        assert "Traceback" not in result.output
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
         assert seeded.registered == []
+        assert (child / ".punt-labs" / "quarry" / "config.md").is_file()
+
+    def test_json_carries_covered_by(self, tmp_path: Path) -> None:
+        parent, child, seeded = self._seeded(tmp_path)
+
+        with _patch_for_cli(tmp_path, seeded):
+            result = runner.invoke(app, ["--json", "enable", str(child)])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)
+        assert data["covered_by"] == str(parent)
+        assert data["collection"] == "project"
+        assert data["created_registration"] is False
+
+    def test_disable_child_names_parent_command_and_spares_registration(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child, seeded = self._seeded(tmp_path)
+
+        with _patch_for_cli(tmp_path, seeded):
+            result = runner.invoke(app, ["disable", str(child)])
+
+        assert result.exit_code == 0, result.output
+        assert "Disabled" not in result.output
+        assert f"`quarry disable {parent}` stops it but deregisters" in result.output
+        assert f"purges everything indexed for {parent}" in result.output
+        assert "--keep-data" in result.output
+        assert seeded.deregistered == []
+
+    def test_disable_child_under_db_names_parent_command_with_that_db(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child, seeded = self._seeded(tmp_path)
+
+        try:
+            with _patch_for_cli(tmp_path, seeded):
+                result = runner.invoke(app, ["--db", "work", "disable", str(child)])
+        finally:
+            SELECTION.override("")
+
+        assert result.exit_code == 0, result.output
+        assert f"`quarry --db work disable {parent}` stops it" in result.output
+
+    def test_disable_child_json_carries_covered_by(self, tmp_path: Path) -> None:
+        parent, child, seeded = self._seeded(tmp_path)
+
+        with _patch_for_cli(tmp_path, seeded):
+            result = runner.invoke(app, ["--json", "disable", str(child)])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["covered_by"] == str(parent)
+        assert seeded.deregistered == []

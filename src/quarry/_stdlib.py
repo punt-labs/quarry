@@ -56,6 +56,31 @@ class HookConfig:
     read: bool = False
     subagent_stop: bool = True
 
+    @classmethod
+    def parse(cls, text: str) -> HookConfig:
+        """Return the hook config the ``auto_capture`` block of *text* describes.
+
+        Defaults apply for an absent block or field.  ``load_hook_config`` and
+        every caller that must judge a config file by what the hooks will do
+        with it go through this one parse.
+        """
+        auto = Frontmatter(text).block("auto_capture")
+        if auto is None:
+            return cls()
+        # session_end and subagent_stop both capture the transcript, same as
+        # compaction — an operator who disables compaction to turn off
+        # transcript capture expects both to follow unless explicitly overridden.
+        compaction = _bool_field(auto, "compaction", default=True)
+        return cls(
+            session_sync=_bool_field(auto, "session_sync", default=True),
+            web_fetch=_bool_field(auto, "web_fetch", default=True),
+            compaction=compaction,
+            session_end=_bool_field(auto, "session_end", default=compaction),
+            web_search=_bool_field(auto, "web_search", default=True),
+            read=_bool_field(auto, "read", default=False),
+            subagent_stop=_bool_field(auto, "subagent_stop", default=compaction),
+        )
+
 
 def load_hook_config(cwd: str) -> HookConfig:
     """Load hook config from YAML-style frontmatter in the project's config file.
@@ -66,36 +91,21 @@ def load_hook_config(cwd: str) -> HookConfig:
     is missing, malformed, or the expected structure is absent.
     """
     path = Path(cwd) / _CONFIG_FILENAME
-    if not path.is_file():
-        return HookConfig()
-
     try:
-        text = path.read_text()
+        # A FIFO or device would block or never end; is_file raises on an
+        # unsearchable parent, which is the same "no config" to a hook.
+        if not path.is_file():
+            return HookConfig()
+        return HookConfig.parse(path.read_text())
     except (OSError, UnicodeDecodeError):
         return HookConfig()
 
-    auto = Frontmatter(text).block("auto_capture")
-    if auto is None:
-        return HookConfig()
-
-    # session_end and subagent_stop both capture the transcript, same as
-    # compaction — an operator who disables compaction to turn off transcript
-    # capture expects both to follow unless explicitly overridden.
-    compaction = _bool_field(auto, "compaction", default=True)
-    return HookConfig(
-        session_sync=_bool_field(auto, "session_sync", default=True),
-        web_fetch=_bool_field(auto, "web_fetch", default=True),
-        compaction=compaction,
-        session_end=_bool_field(auto, "session_end", default=compaction),
-        web_search=_bool_field(auto, "web_search", default=True),
-        read=_bool_field(auto, "read", default=False),
-        subagent_stop=_bool_field(auto, "subagent_stop", default=compaction),
-    )
-
 
 # YAML 1.1 boolean aliases (case-insensitive).
-_YAML_TRUE = frozenset({"true", "yes", "on"})
-_YAML_FALSE = frozenset({"false", "no", "off"})
+_YAML_BOOLEANS: dict[str, bool] = {
+    **dict.fromkeys(("true", "yes", "on"), True),
+    **dict.fromkeys(("false", "no", "off"), False),
+}
 
 
 def _bool_field(data: dict[str, str], key: str, *, default: bool) -> bool:
@@ -110,11 +120,8 @@ def _bool_field(data: dict[str, str], key: str, *, default: bool) -> bool:
     val = data.get(key)
     if val is None:
         return default
-    normalized = val.lower()
-    if normalized in _YAML_TRUE:
-        return True
-    if normalized in _YAML_FALSE:
-        return False
+    if (parsed := _YAML_BOOLEANS.get(val.lower())) is not None:
+        return parsed
     # Present but unrecognized — fail closed to respect user intent.
     logger.warning(
         "hook-config: unrecognized boolean %r for %s, defaulting to False",
@@ -290,12 +297,9 @@ class _SessionSetup:
         plugin_json = plugin_root / ".claude-plugin" / "plugin.json"
         with plugin_json.open() as f:
             data = json.load(f)
-        if not isinstance(data, dict):
-            msg = f"plugin.json top-level is not an object: {plugin_json}"
-            raise ValueError(msg)
-        name = data.get("name")
+        name = data.get("name") if isinstance(data, dict) else None
         if not isinstance(name, str):
-            msg = f"plugin.json 'name' is not a string: {plugin_json}"
+            msg = f"plugin.json is not an object with a string 'name': {plugin_json}"
             raise ValueError(msg)
         if not _PLUGIN_NAME_PATTERN.fullmatch(name):
             msg = f"plugin.json 'name' is not a safe slug: {name!r}"

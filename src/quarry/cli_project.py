@@ -66,9 +66,10 @@ class ProjectCli:
         """Enable quarry knowledge capture for a project directory."""
         from quarry.enable import enable_project  # noqa: PLC0415
 
-        # A ValueError (e.g. parent-covered dir) propagates to the shared
-        # _cli_errors boundary: stdout stays empty (no spurious JSON error object
-        # under --json), the diagnostic goes to stderr, exit 1.
+        # A ValueError (e.g. a --collection that contradicts the covering
+        # registration) propagates to the shared _cli_errors boundary: stdout
+        # stays empty (no spurious JSON error object under --json), the
+        # diagnostic goes to stderr, exit 1.
         # Pass the raw path: enable_project owns normalization
         # (expanduser().resolve()). Resolving here would turn "~/proj" into
         # "./~/proj" before the tilde is ever expanded.
@@ -93,15 +94,16 @@ class ProjectCli:
         ] = False,
     ) -> None:
         """Disable quarry knowledge capture for a project directory."""
-        from quarry.enable import disable_project  # noqa: PLC0415
-
         # disable_project is idempotent: a directory with no covering registration
-        # is a no-op success (result.collection == ""), not an error. Only the
-        # child-of-registered-parent guard raises ValueError, which propagates to
-        # the shared _cli_errors boundary (empty stdout under --json, exit 1).
+        # is a no-op success (result.collection == ""), not an error. A covered
+        # child is handled too: its own files are removed, the parent's
+        # registration and captures are kept, and the exit is 0 with a line
+        # naming the parent registration and whether it still captures the
+        # directory.
         # Pass the raw path: disable_project owns normalization
         # (expanduser().resolve()). Resolving here would mangle "~/proj".
-        from quarry.enable_report import DisableReport  # noqa: PLC0415
+        from quarry.disable_report import DisableReport  # noqa: PLC0415
+        from quarry.enable import disable_project  # noqa: PLC0415
 
         result = disable_project(directory, self._p.client(), keep_data=keep_data)
         lines = DisableReport(result, keep_data=keep_data).lines()

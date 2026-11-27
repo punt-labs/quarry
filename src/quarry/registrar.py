@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from quarry.enable import RegistryClient
+    from quarry.registration_resolution import Resolution
 
 __all__ = ["Registrar"]
 
@@ -31,27 +32,22 @@ class Registrar:
         self._client = client
         return self
 
-    def resolve(self, directory: Path, collection_override: str) -> tuple[str, bool]:
+    def resolve(self, directory: Path, collection_override: str) -> Resolution:
         """Reuse the covering registration, or dispatch a new one to the daemon.
 
-        Returns (collection_name, created).  Raises ValueError when *directory*
-        is a child of an existing registration (sessions there use the parent's
-        collection automatically).
+        A directory under a registered parent resolves to the parent's
+        collection with ``covered_by`` set and nothing registered.  Raises
+        ValueError when *collection_override* names a different collection than
+        the covering registration's: the override cannot take effect there.
         """
         from quarry.api import RegisterRequest  # noqa: PLC0415
+        from quarry.registration_resolution import Resolution  # noqa: PLC0415
         from quarry.registrations import Registrations  # noqa: PLC0415
 
         view = Registrations.from_list(self._client.list_registrations())
         covering = view.covering(directory)
         if covering is not None:
-            if covering.directory == str(directory):
-                return covering.collection, False
-            msg = (
-                f"This directory is already covered by the registration at "
-                f"{covering.directory} (collection: {covering.collection}). "
-                f"Sessions here use that collection automatically. No action needed."
-            )
-            raise ValueError(msg)
+            return Resolution.reusing(covering, str(directory), collection_override)
 
         # Re-adopt: if THIS directory owns an archived (keep-data) collection,
         # reuse its name so the daemon's register re-adopts the kept chunks and
@@ -65,4 +61,4 @@ class Registrar:
         self._client.register(
             RegisterRequest(directory=str(directory), collection=name)
         )
-        return name, True
+        return Resolution(name, created=True)
