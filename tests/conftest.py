@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 from rich.console import Console
 
+from quarry._stdlib import load_hook_config
 from quarry.api import (
     DeleteCollectionRequest,
     DeregisterAccepted,
@@ -632,3 +633,26 @@ def png_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     draw.text((10, 40), "Hello OCR", fill="black")
     img.save(str(path))
     return path
+
+
+@pytest.fixture
+def confined_config_reads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> list[str]:
+    """Fail a test that renders a session note from a directory outside the sandbox.
+
+    The note reads real project configs; a fixed path such as ``/p`` would read
+    whatever a host keeps there.  Returns the directories read.
+    """
+    sandbox = tmp_path_factory.getbasetemp().resolve()
+    real = load_hook_config
+    seen: list[str] = []
+
+    def guarded(directory: str) -> object:
+        seen.append(directory)
+        inside = Path(directory).resolve().is_relative_to(sandbox)
+        assert inside, f"config read outside the test sandbox: {directory}"
+        return real(directory)
+
+    monkeypatch.setattr("quarry.governing_marker.load_hook_config", guarded)
+    return seen

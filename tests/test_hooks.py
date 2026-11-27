@@ -2812,6 +2812,21 @@ class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
         assert "does not activate quarry" in report
         assert self._session_syncs(tmp_path, parent, svc) is False
 
+    def test_farther_marker_opted_out_leaves_report_and_hook_agreeing_active(
+        self, tmp_path: Path
+    ) -> None:
+        parent, svc = self._tree(tmp_path, ("team", ""))
+        config = parent / ".punt-labs/quarry/config.md"
+        config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
+        client = FakeRegistryClient([("p", parent)])
+
+        result = disable_project(svc, client)
+        report = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "(session-start sync runs there)" in report
+        assert "session_sync to false does not keep it active" in report
+        assert self._session_syncs(tmp_path, parent, svc) is True
+
     @staticmethod
     def _session_syncs(tmp_path: Path, parent: Path, cwd: Path) -> bool:
         settings = MagicMock()

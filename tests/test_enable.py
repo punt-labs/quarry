@@ -25,6 +25,8 @@ from quarry.marker_search import MarkerSearch
 from quarry.project_config import ProjectConfig
 from tests.conftest import FakeRegistryClient
 
+pytestmark = pytest.mark.usefixtures("confined_config_reads")
+
 _NO_ETHOS = "quarry.home_paths.QuarryHome.ethos_identities"
 
 
@@ -1120,7 +1122,7 @@ class TestDisableCoveredChildCapturedByIntermediateMarker:
 
 
 class TestDisableCoveredChildCapturedByTwoMarkers:
-    """Disabling the nearest of two markers does not stop the capture."""
+    """Disabling the nearest of two markers leaves the next one found."""
 
     def test_intermediate_and_registration_markers_are_both_named(
         self, tmp_path: Path
@@ -1139,7 +1141,7 @@ class TestDisableCoveredChildCapturedByTwoMarkers:
         assert result.capturing_marker == str(mid)
         assert result.also_capturing == (str(parent),)
         assert f"still active through the markers at {mid}, {parent}" in text
-        assert "until all of them are disabled" in text
+        assert "while a marker with session_sync enabled remains" in text
 
         disable_project(mid, client)
         assert MarkerSearch(leaf, str(parent)).found_at() == parent

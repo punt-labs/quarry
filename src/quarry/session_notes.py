@@ -43,10 +43,8 @@ class SessionNote(ABC):
         The hook reads the session directory's config first, then the governing
         marker's, through the same fail-open loader, so this does too.
         """
-        for directory in (result.directory, result.capturing_marker):
-            if not GoverningMarker.syncs_at(directory):
-                return directory
-        return ""
+        directories = (result.directory, result.capturing_marker)
+        return next((d for d in directories if not GoverningMarker.syncs_at(d)), "")
 
     def _active(self, where: str) -> str:
         """Return the sentence saying what keeps the directory active through *where*.
@@ -137,7 +135,7 @@ class AtIntermediate(SessionNote):
 @final
 @dataclass(frozen=True, slots=True)
 class AtSeveralMarkers(SessionNote):
-    """Name every marker: disabling one leaves the next still found."""
+    """Name every marker: the hook reads the nearest one's config, then the next."""
 
     def __str__(self) -> str:
         """Return the note listing each marker and each way to end session start."""
@@ -148,8 +146,9 @@ class AtSeveralMarkers(SessionNote):
         )
         return (
             f"{self._active(f'the markers at {", ".join(markers)}')}; "
-            f"it stays active until all of them are disabled"
-            f"{f' ({commands})' if commands else ''}, or until "
+            f"it stays active while a marker with session_sync enabled remains"
+            f"{f' (disabling each: {commands})' if commands else ''}; a marker "
+            f"whose config sets session_sync to false does not keep it active; "
             f"`{ParentDisableCommand(r.covered_by)}` deregisters {r.covered_by} "
             f"and purges everything indexed for {r.covered_by} "
             f"(add --keep-data to keep the data)"
