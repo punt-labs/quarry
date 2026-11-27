@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
 from quarry.enable_report import EnableReport
+from quarry.parent_disable_command import ParentDisableCommand
 
 if TYPE_CHECKING:
     from quarry.enable import DisableResult
@@ -43,9 +44,8 @@ class DisableOutcome(ABC):
     def of(result: DisableResult, *, keep_data: bool) -> DisableOutcome:
         """Pick the outcome a disable ended in."""
         if result.covered_by:
-            if result.parent_enabled:
-                return CoveredCaptured(result)
-            return CoveredUncaptured(result)
+            covered = CoveredCaptured if result.parent_enabled else CoveredUncaptured
+            return covered(result)
         if result.collection:
             return Deregistered(result, keep_data)
         return AlreadyDisabled(result)
@@ -136,7 +136,7 @@ class CoveredCaptured(_CoveredChild):
         r = self.result
         return (
             f"{r.directory} is still captured by the registration at "
-            f"{r.covered_by}; 'quarry disable {r.covered_by}' stops it but "
+            f"{r.covered_by}; `{ParentDisableCommand(r.covered_by)}` stops it but "
             f"deregisters {r.covered_by} and purges everything indexed for "
             f"{r.covered_by} (add --keep-data to keep the data)"
         )

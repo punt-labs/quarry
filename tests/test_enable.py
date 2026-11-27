@@ -562,7 +562,7 @@ class TestDisableCoveredChildReport:
         text = "\n".join(DisableReport(result, keep_data=False).lines())
 
         assert "Disabled" not in text
-        assert f"'quarry disable {parent}' stops it but deregisters" in text
+        assert f"`quarry disable {parent}` stops it but deregisters" in text
         assert f"purges everything indexed for {parent}" in text
         assert "--keep-data" in text
         assert client.deregistered == []
@@ -613,7 +613,7 @@ class TestDisableCoveredChildReport:
 
         assert "Nothing of its own found" in text
         assert "Config file removed" not in text
-        assert f"'quarry disable {parent}' stops it but deregisters" in text
+        assert f"`quarry disable {parent}` stops it but deregisters" in text
         assert f"purges everything indexed for {parent}" in text
         assert "--keep-data" in text
 

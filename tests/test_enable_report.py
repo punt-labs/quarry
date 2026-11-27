@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import shlex
+from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
+
 from quarry.claude_permissions import PermissionChange
+from quarry.db_pointer import SELECTION
 from quarry.disable_report import DisableReport
 from quarry.enable import DisableResult, EnableResult
 from quarry.enable_report import EnableReport
@@ -139,7 +144,7 @@ def test_disable_report_idempotent_noop() -> None:
 
 _STILL_CAPTURED = (
     "/p/src is still captured by the registration at /p; "
-    "'quarry disable /p' stops it but deregisters /p and purges everything "
+    "`quarry disable /p` stops it but deregisters /p and purges everything "
     "indexed for /p (add --keep-data to keep the data)"
 )
 _NOT_CAPTURED = (
@@ -360,3 +365,44 @@ def test_disable_report_lists_removed_rules_and_omits_noop() -> None:
     assert not any(
         "settings.json" in line for line in DisableReport(noop, keep_data=False).lines()
     )
+
+
+@pytest.fixture
+def db_override() -> Iterator[None]:
+    """Leave the process-wide ``--db`` override cleared after a test sets it."""
+    yield
+    SELECTION.override("")
+
+
+def _captured_command(parent: str, *, keep_data: bool = False) -> list[str]:
+    """Return the argv of the parent-disable command the covered-child note offers."""
+    result = DisableResult(
+        directory=f"{parent}/src",
+        collection="",
+        captures_collection="",
+        covered_by=parent,
+        parent_enabled=True,
+    )
+    note = DisableReport(result, keep_data=keep_data).lines()[-1]
+    return shlex.split(note.split("`")[1])
+
+
+def test_captured_note_command_is_plain_without_a_db_override() -> None:
+    assert _captured_command("/p") == ["quarry", "disable", "/p"]
+
+
+@pytest.mark.usefixtures("db_override")
+def test_captured_note_command_carries_the_db_override() -> None:
+    SELECTION.override("work")
+    assert _captured_command("/p") == ["quarry", "--db", "work", "disable", "/p"]
+
+
+def test_captured_note_command_quotes_a_path_with_spaces_and_a_quote() -> None:
+    parent = "/my proj/it's"
+    assert _captured_command(parent) == ["quarry", "disable", parent]
+
+
+@pytest.mark.usefixtures("db_override")
+def test_captured_note_command_quotes_the_db_name() -> None:
+    SELECTION.override("a b")
+    assert _captured_command("/p") == ["quarry", "--db", "a b", "disable", "/p"]

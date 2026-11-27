@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry.client import TargetResolver
+from quarry.db_pointer import SELECTION
 from quarry.enabled_marker import EnabledMarker
 from tests.conftest import FakeRegistryClient
 
@@ -281,10 +282,24 @@ class TestEnableCLICoveredByParent:
 
         assert result.exit_code == 0, result.output
         assert "Disabled" not in result.output
-        assert f"'quarry disable {parent}' stops it but deregisters" in result.output
+        assert f"`quarry disable {parent}` stops it but deregisters" in result.output
         assert f"purges everything indexed for {parent}" in result.output
         assert "--keep-data" in result.output
         assert seeded.deregistered == []
+
+    def test_disable_child_under_db_names_parent_command_with_that_db(
+        self, tmp_path: Path
+    ) -> None:
+        parent, child, seeded = self._seeded(tmp_path)
+
+        try:
+            with _patch_for_cli(tmp_path, seeded):
+                result = runner.invoke(app, ["--db", "work", "disable", str(child)])
+        finally:
+            SELECTION.override("")
+
+        assert result.exit_code == 0, result.output
+        assert f"`quarry --db work disable {parent}` stops it" in result.output
 
     def test_disable_child_json_carries_covered_by(self, tmp_path: Path) -> None:
         parent, child, seeded = self._seeded(tmp_path)
