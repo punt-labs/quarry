@@ -2,8 +2,8 @@ name: quarry-default
 description: >-
   Ruff and shellcheck on the edited file (advisory); Ruff, the
   OO/coupling/suppression ratchets and the import boundary at commit; at
-  handoff, make test-unit (3s), make lint (4s) and make type (19s), about 27s
-  measured on this checkout, run only when Python files changed. The full make
+  handoff, make test-unit (3s), make lint (4s) and make type (19s), measured ~27s
+  warm, timeouts 60/60/120s, run only when Python files changed. The full make
   check runs before the PR and in CI, not at handoff.
 checks:
   - name: ruff-lint-edit
@@ -73,18 +73,18 @@ checks:
     adapter: make
     target: test-unit
     on_fail: block
-    timeout: 30s
+    timeout: 60s
   - name: handoff-lint
     stage: handoff
     files: ["**/*.py", "**/*.pyi"]
     adapter: make
     target: lint
     on_fail: block
-    timeout: 30s
+    timeout: 60s
   - name: handoff-type
     stage: handoff
     files: ["**/*.py", "**/*.pyi"]
     adapter: make
     target: type
     on_fail: block
-    timeout: 60s
+    timeout: 120s

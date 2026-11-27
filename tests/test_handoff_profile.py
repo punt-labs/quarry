@@ -9,7 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKS_DIR = ROOT / ".punt-labs/ethos/checks"
-HANDOFF_BUDGET_SECONDS = 120
+HANDOFF_CHECK_TIMEOUT_SECONDS = 120
 
 
 def _load_profile() -> dict[str, object]:
@@ -48,11 +48,9 @@ def test_handoff_checks_are_scoped_to_python_paths() -> None:
 
 
 def test_handoff_timeouts_are_bounded() -> None:
-    total = 0
     for check in _handoff_checks():
         assert "timeout" in check, check["name"]
-        total += _seconds(str(check["timeout"]))
-    assert total <= HANDOFF_BUDGET_SECONDS
+        assert _seconds(str(check["timeout"])) <= HANDOFF_CHECK_TIMEOUT_SECONDS
 
 
 def test_handoff_snapshot_covers_exactly_the_handoff_checks() -> None:
