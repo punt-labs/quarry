@@ -85,15 +85,15 @@ def test_captured_note_at_the_registration_names_its_disable_command() -> None:
     note = DisableLines(
         _result(covered_by="/my p", capturing_marker="/my p")
     ).captured()
-    assert "`quarry disable '/my p'` stops it but deregisters" in note
+    assert "`quarry disable '/my p'` ends it but deregisters" in note
 
 
 def test_captured_note_at_an_intermediate_marker_names_that_directory() -> None:
     note = DisableLines(
         _result(covered_by="/p", capturing_marker="/p/my team")
     ).captured()
-    assert "because of the enabled marker at /p/my team" in note
-    assert "`quarry disable '/p/my team'` stops it" in note
+    assert "still active through the marker at /p/my team" in note
+    assert "`quarry disable '/p/my team'` ends it" in note
     assert "purges" not in note
 
 
@@ -101,12 +101,12 @@ def test_captured_note_with_an_intermediate_and_the_registration_lists_both() ->
     note = DisableLines(
         _result(covered_by="/p", capturing_marker="/p/a", also_capturing=("/p",))
     ).captured()
-    assert "enabled markers remain at /p/a, /p" in note
+    assert "still active through the markers at /p/a, /p" in note
     assert "until all of them are disabled" in note
     assert "`quarry disable /p/a`" in note
     assert "`quarry disable /p` deregisters /p and purges everything indexed" in note
     assert "--keep-data" in note
-    assert "stops it, as does" not in note
+    assert "ends it, as does" not in note
 
 
 def test_captured_note_with_two_intermediates_lists_each_command() -> None:
@@ -117,7 +117,7 @@ def test_captured_note_with_two_intermediates_lists_each_command() -> None:
             also_capturing=("/p/my a",),
         )
     ).captured()
-    assert "enabled markers remain at /p/a/b, /p/my a" in note
+    assert "still active through the markers at /p/a/b, /p/my a" in note
     assert "`quarry disable /p/a/b`" in note
     assert "`quarry disable '/p/my a'`" in note
     assert "until all of them are disabled" in note
@@ -125,5 +125,5 @@ def test_captured_note_with_two_intermediates_lists_each_command() -> None:
 
 def test_captured_note_with_one_marker_is_unchanged() -> None:
     note = DisableLines(_result(covered_by="/p", capturing_marker="/p/a")).captured()
-    assert "because of the enabled marker at /p/a" in note
+    assert "still active through the marker at /p/a" in note
     assert "until all" not in note

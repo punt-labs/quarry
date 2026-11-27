@@ -706,13 +706,13 @@ class TestDisableCoveredChildReport:
         text = "\n".join(DisableReport(result, keep_data=False).lines())
 
         assert "Disabled" not in text
-        assert f"`quarry disable {parent}` stops it but deregisters" in text
+        assert f"`quarry disable {parent}` ends it but deregisters" in text
         assert f"purges everything indexed for {parent}" in text
         assert "--keep-data" in text
         assert client.deregistered == []
         assert client.deleted == []
 
-    def test_enabled_then_disabled_child_lists_removals_and_still_captured(
+    def test_enabled_then_disabled_child_lists_removals_and_still_active(
         self, tmp_path: Path
     ) -> None:
         parent, child = self._parent_child(tmp_path, parent_marker=True)
@@ -729,7 +729,7 @@ class TestDisableCoveredChildReport:
         assert "Disabled" not in text
         assert lines[-1].endswith("(add --keep-data to keep the data)")
 
-    def test_parent_registered_without_marker_is_not_captured(
+    def test_parent_registered_without_marker_does_not_activate_session_start(
         self, tmp_path: Path
     ) -> None:
         parent, child = self._parent_child(tmp_path, parent_marker=False)
@@ -741,9 +741,12 @@ class TestDisableCoveredChildReport:
         text = "\n".join(DisableReport(result, keep_data=False).lines())
 
         assert result.capturing_marker == ""
-        assert f"registered under {parent} but not captured" in text
+        assert (
+            f"registered under {parent} but session start does not activate quarry"
+            in text
+        )
         assert f"quarry disable {parent}" not in text
-        assert "still captured" not in text
+        assert "still active" not in text
 
     def test_second_disable_converges_to_nothing_found(self, tmp_path: Path) -> None:
         parent, child = self._parent_child(tmp_path, parent_marker=True)
@@ -757,7 +760,7 @@ class TestDisableCoveredChildReport:
 
         assert "Nothing of its own found" in text
         assert "Config file removed" not in text
-        assert f"`quarry disable {parent}` stops it but deregisters" in text
+        assert f"`quarry disable {parent}` ends it but deregisters" in text
         assert f"purges everything indexed for {parent}" in text
         assert "--keep-data" in text
 
@@ -1108,8 +1111,8 @@ class TestDisableCoveredChildCapturedByIntermediateMarker:
             result = disable_project(svc, client)
         text = "\n".join(DisableReport(result, keep_data=False).lines())
 
-        assert "not captured" not in text
-        assert f"because of the enabled marker at {team}" in text
+        assert "does not activate quarry" not in text
+        assert f"through the marker at {team}" in text
         assert f"`quarry disable {team}`" in text
         assert f"`quarry disable {parent}`" not in text
         assert not EnabledMarker(svc).is_present()
@@ -1135,7 +1138,7 @@ class TestDisableCoveredChildCapturedByTwoMarkers:
 
         assert result.capturing_marker == str(mid)
         assert result.also_capturing == (str(parent),)
-        assert f"enabled markers remain at {mid}, {parent}" in text
+        assert f"still active through the markers at {mid}, {parent}" in text
         assert "until all of them are disabled" in text
 
         disable_project(mid, client)

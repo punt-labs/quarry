@@ -282,7 +282,7 @@ class TestEnableCLICoveredByParent:
 
         assert result.exit_code == 0, result.output
         assert "Disabled" not in result.output
-        assert f"`quarry disable {parent}` stops it but deregisters" in result.output
+        assert f"`quarry disable {parent}` ends it but deregisters" in result.output
         assert f"purges everything indexed for {parent}" in result.output
         assert "--keep-data" in result.output
         assert seeded.deregistered == []
@@ -299,7 +299,7 @@ class TestEnableCLICoveredByParent:
             SELECTION.override("")
 
         assert result.exit_code == 0, result.output
-        assert f"`quarry --db work disable {parent}` stops it" in result.output
+        assert f"`quarry --db work disable {parent}` ends it" in result.output
 
     def test_disable_child_json_carries_covered_by(self, tmp_path: Path) -> None:
         parent, child, seeded = self._seeded(tmp_path)

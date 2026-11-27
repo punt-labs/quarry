@@ -2351,6 +2351,66 @@ class TestSessionStartCoveredChildMarker(_ReachableDaemonEmptyCatalog):
 
         assert ctx.startswith(self._ACTIVE)
 
+    @staticmethod
+    def _sync_config(directory: Path, *, on: bool) -> None:
+        config = directory / ".punt-labs" / "quarry" / "config.md"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(
+            f"---\nauto_capture:\n  session_sync: {'true' if on else 'false'}\n---\n"
+        )
+
+    def _sync_reply(
+        self, tmp_path: Path, parent: Path, cwd: Path
+    ) -> tuple[dict[str, object], MagicMock]:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "work")
+        conn.close()
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ) as launch,
+        ):
+            result = handle_session_start({"cwd": str(cwd)})
+        return result, launch
+
+    @pytest.mark.parametrize("sub", ["src", "src/deep"])
+    def test_child_opt_out_governs_a_nested_cwd_without_its_own_config(
+        self, tmp_path: Path, sub: str
+    ) -> None:
+        parent = self._tree(tmp_path, parent_marker=False, child_marker=True)
+        self._sync_config(parent / "app", on=False)
+
+        result, launch = self._sync_reply(tmp_path, parent, parent / "app" / sub)
+
+        assert result == {}
+        launch.assert_not_called()
+
+    def test_child_opt_in_still_syncs_from_a_nested_cwd(self, tmp_path: Path) -> None:
+        parent = self._tree(tmp_path, parent_marker=False, child_marker=True)
+        self._sync_config(parent / "app", on=True)
+
+        result, launch = self._sync_reply(tmp_path, parent, parent / "app" / "src")
+
+        assert result != {}
+        launch.assert_called_once()
+
+    def test_marker_at_cwd_keeps_its_own_config(self, tmp_path: Path) -> None:
+        parent = self._tree(tmp_path, parent_marker=False, child_marker=True)
+        self._sync_config(parent / "app", on=False)
+
+        result, launch = self._sync_reply(tmp_path, parent, parent / "app")
+
+        assert result == {}
+        launch.assert_not_called()
+
     def test_marker_above_an_unregistered_cwd_is_not_consulted(
         self, tmp_path: Path
     ) -> None:
@@ -2653,7 +2713,7 @@ class TestSessionCoverageFailure:
 
 
 class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
-    """``quarry disable`` on a covered child says "captured" iff session-start syncs."""
+    """``quarry disable`` says session start is inactive iff the hook does not sync."""
 
     _ACTIVE = "Quarry semantic search is active for this project."
 
@@ -2716,5 +2776,5 @@ class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
         result = disable_project(svc, client)
         report = "\n".join(DisableReport(result, keep_data=False).lines())
 
-        assert ("not captured" not in report) is captured
+        assert ("does not activate quarry" not in report) is captured
         assert self._session_captures(tmp_path, parent, svc) is captured

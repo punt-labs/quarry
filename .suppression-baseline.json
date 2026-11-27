@@ -1,7 +1,7 @@
 {
-  "total": 184,
+  "total": 183,
   "by_category": {
-    "noqa": 144,
+    "noqa": 143,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -121,7 +121,7 @@
       "file_level": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 6
+      "noqa": 5
     },
     "src/quarry/hooks_agent.py": {
       "noqa": 2
@@ -245,5 +245,5 @@
       "per_file_ignores": 1
     }
   },
-  "updated_at": "2026-11-27T08:43:51Z"
+  "updated_at": "2026-11-27T09:14:29Z"
 }

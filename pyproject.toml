@@ -360,7 +360,7 @@ entry = [
     "quarry.daemon.routes.*",
 ]
 adapters = [
-    "quarry.captured_notes",
+    "quarry.session_notes",
     "quarry.config_discard",
     "quarry.config_verdict",
     "quarry.disable_lines",
@@ -369,6 +369,7 @@ adapters = [
     "quarry.disable_report",
     "quarry.doctor_enable_status",
     "quarry.fd_config",
+    "quarry.governing_marker",
     "quarry.installed_stop_timeout",
     "quarry.local_disable",
     "quarry.marker_search",

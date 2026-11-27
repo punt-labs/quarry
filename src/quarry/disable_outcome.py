@@ -13,8 +13,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AlreadyDisabled",
-    "CoveredCaptured",
-    "CoveredUncaptured",
+    "Covered",
     "Deregistered",
     "DisableOutcome",
 ]
@@ -43,8 +42,7 @@ class DisableOutcome(ABC):
     def of(result: DisableResult, *, keep_data: bool) -> DisableOutcome:
         """Pick the outcome a disable ended in."""
         if result.covered_by:
-            covered = CoveredCaptured if result.capturing_marker else CoveredUncaptured
-            return covered(result)
+            return Covered(result)
         if result.collection:
             return Deregistered(result, keep_data)
         return AlreadyDisabled(result)
@@ -103,10 +101,13 @@ class _CoveredChild(DisableOutcome):
 
     def heading(self) -> str:
         """Return what was removed from the child, or that nothing was."""
-        where = self.result.directory
         # Real removals only: a permissions error renders a line but removes nothing.
         if self._changes().removed():
-            return f"Removed quarry's own settings from {where}"
+            return f"Removed quarry's own settings from {self.result.directory}"
+        return self._nothing_removed()
+
+    def _nothing_removed(self) -> str:
+        where = self.result.directory
         if self.result.config_kept:
             return f"Nothing removed from {where}"
         return f"Nothing of its own found in {where}"
@@ -114,27 +115,11 @@ class _CoveredChild(DisableOutcome):
 
 @final
 @dataclass(frozen=True, slots=True)
-class CoveredCaptured(_CoveredChild):
-    """An enabled marker, at the registration or below it, keeps capture live."""
+class Covered(_CoveredChild):
+    """A child under a parent registration: what keeps session start active, if any."""
 
     result: DisableResult
 
     def note(self) -> str:
-        """Return the marker that still captures here and the command that stops it."""
+        """Return the marker that still activates session start, or that none does."""
         return self._changes().captured()
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class CoveredUncaptured(_CoveredChild):
-    """The parent is registered but has no marker, so nothing is captured."""
-
-    result: DisableResult
-
-    def note(self) -> str:
-        """Return why no capture runs here, without suggesting a parent disable."""
-        r = self.result
-        return (
-            f"{r.directory} is registered under {r.covered_by} but not captured: "
-            f"no readable enabled marker from {r.directory} up to {r.covered_by}"
-        )

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.captured_notes import CapturedAt
 from quarry.config_verdict import ConfigVerdict
+from quarry.session_notes import SessionNote
 
 if TYPE_CHECKING:
     from quarry.enable import DisableResult
@@ -31,7 +31,7 @@ _WHY = {
 class CapturedNote:
     """Say which markers keep a covered child captured and what stops it.
 
-    The note is chosen by the marker layout (:meth:`CapturedAt.of`).
+    The note is chosen by the marker layout (:meth:`SessionNote.of`).
     """
 
     __slots__ = ("_r",)
@@ -46,7 +46,7 @@ class CapturedNote:
 
     def __str__(self) -> str:
         """Return the one-line note for this result's marker layout."""
-        return str(CapturedAt.of(self._r))
+        return str(SessionNote.of(self._r))
 
 
 @final

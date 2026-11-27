@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._hook_trace import HookPayload, HookTrace
-from quarry._stdlib import load_hook_config
 from quarry.active_session_context import ActiveSessionContext
+from quarry.governing_marker import GoverningMarker
 from quarry.pre_compact_hook import PreCompactHook
 from quarry.session_start_reply import SessionStartReply
 
@@ -64,7 +64,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     if not cwd:
         trace.reject()
         return {}
-    on = load_hook_config(cwd).session_sync
+    on = GoverningMarker.syncs_at(cwd)
     trace.mark_config(on=on)
     if not on:
         trace.skip("config")
@@ -117,20 +117,18 @@ class _SessionStartContext:
         try:
             registration = self._resolver.covering_registration(str(self._directory))
             collection = registration.collection if registration is not None else None
-            if self._marker_present(registration):
-                return self._path_a(collection)
+            marker = self._governing(registration)
+            if marker.present():
+                return marker.run(self._path_a, collection)
             if collection is not None:
                 return self._path_c(collection)
             return self._path_b()
         finally:
             self._conn.close()
 
-    def _marker_present(self, registration: DirectoryRegistration | None) -> bool:
-        """Return whether an enabled marker governs cwd, at it or above it."""
-        from quarry.marker_search import MarkerSearch  # noqa: PLC0415
-
-        covering = registration.directory if registration else ""
-        return MarkerSearch(self._directory, covering).found_at() is not None
+    def _governing(self, registration: DirectoryRegistration | None) -> GoverningMarker:
+        """Return the enabled marker that governs cwd, at it or above it."""
+        return GoverningMarker(self._directory, registration)
 
     def _path_a(self, collection: str | None) -> SessionStartReply:
         """Marker present: run the active flow (auto-register if needed, sync)."""

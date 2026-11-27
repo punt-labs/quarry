@@ -143,12 +143,15 @@ def test_disable_report_idempotent_noop() -> None:
 
 
 _STILL_CAPTURED = (
-    "/p/src is still captured by the registration at /p; "
-    "`quarry disable /p` stops it but deregisters /p and purges everything "
+    "/p/src is still active through the marker at /p "
+    "(session-start sync runs there); web, transcript and other capture hooks "
+    "follow their own auto_capture settings; "
+    "`quarry disable /p` ends it but deregisters /p and purges everything "
     "indexed for /p (add --keep-data to keep the data)"
 )
 _NOT_CAPTURED = (
-    "/p/src is registered under /p but not captured: "
+    "/p/src is registered under /p but session start does not activate "
+    "quarry there: "
     "no readable enabled marker from /p/src up to /p"
 )
 
@@ -220,7 +223,7 @@ def test_disable_report_covered_child_parent_not_capturing_does_not_suggest_it()
     lines = DisableReport(result, keep_data=False).lines()
     assert lines[-1] == _NOT_CAPTURED
     assert "quarry disable /p" not in "\n".join(lines)
-    assert "still captured" not in "\n".join(lines)
+    assert "still active" not in "\n".join(lines)
 
 
 def test_disable_report_covered_child_nested_marker_names_it() -> None:
@@ -233,9 +236,10 @@ def test_disable_report_covered_child_nested_marker_names_it() -> None:
         enabled_marker_removed=True,
     )
     assert DisableReport(result, keep_data=False).lines()[-1] == (
-        "/p/team/svc is still captured by the registration at /p because of "
-        "the enabled marker at /p/team; `quarry disable /p/team` stops it, "
-        "as does disabling /p"
+        "/p/team/svc is still active through the marker at /p/team "
+        "(session-start sync runs there); web, transcript and other capture "
+        "hooks follow their own auto_capture settings; "
+        "`quarry disable /p/team` ends it, as does disabling /p"
     )
 
 
