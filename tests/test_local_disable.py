@@ -228,3 +228,14 @@ def test_import_alone_counts(tmp_path: Path) -> None:
 def test_unreadable_claude_md_errs_toward_present(tmp_path: Path) -> None:
     (tmp_path / "CLAUDE.md").write_bytes(b"\xff\xfe\x00")
     assert GuardedDisable(tmp_path).present() is True
+
+
+def test_guard_names_every_marker_on_the_path(tmp_path: Path) -> None:
+    root = tmp_path / "p"
+    mid = root / "a"
+    leaf = mid / "b"
+    leaf.mkdir(parents=True)
+    EnabledMarker(root).write()
+    EnabledMarker(mid).write()
+    assert GuardedDisable(leaf).capturing_markers(str(root)) == (str(mid), str(root))
+    assert GuardedDisable(leaf).capturing_markers("") == ()

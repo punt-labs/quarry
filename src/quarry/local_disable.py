@@ -41,14 +41,16 @@ class ConfigDisposal:
 
         A symlinked ``.punt-labs`` ancestor makes the unlink refuse; that is not
         a real in-repo config, so it counts as absent and the disable goes on to
-        prune the ``@``-import a prior teardown already acted on.
+        prune the ``@``-import a prior teardown already acted on.  A directory
+        the process cannot search holds no config it can act on, so it is the
+        same.
         """
         verdict = ConfigVerdict.of(directory) if covered else ConfigVerdict.ABSENT
         if verdict.left_in_place:
             return cls(removed=False, kept=True, why=verdict.value)
         try:
             return cls(removed=ConfigVerdict.discard(directory), kept=False)
-        except ValueError:
+        except (OSError, ValueError):
             return cls(removed=False, kept=False)
 
 
@@ -79,14 +81,15 @@ class GuardedDisable:
             return self._enablement.disable()
         return DisablementResult(import_pruned=False, enabled_marker_removed=False)
 
-    def capturing_marker(self, registered: str) -> str:
-        """Return the directory whose marker still captures the root, or empty.
+    def capturing_markers(self, registered: str) -> tuple[str, ...]:
+        """Return every directory whose marker still captures the root, nearest first.
 
-        The search is the session-start hook's own, so the answer is what the
-        next session in the root will find; ask it after :meth:`run`.
+        The search is the session-start hook's own, so the nearest is what the
+        next session in the root will find; ask it after :meth:`run`. Empty
+        when nothing captures the root.
         """
-        found = MarkerSearch(self._root, registered).found_at() if registered else None
-        return str(found or "")
+        found = MarkerSearch(self._root, registered).markers() if registered else ()
+        return tuple(map(str, found))
 
     def present(self) -> bool:
         """Return whether a marker or the import line may be there to remove.

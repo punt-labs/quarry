@@ -21,16 +21,19 @@ class MarkerSearch:
     that directory. With no registration only the directory itself is checked.
     """
 
-    __slots__ = ("_directory", "_root")
+    __slots__ = ("_trail",)
 
-    _directory: Path
-    _root: Path | None  # None: the directory is not under any registration
+    _trail: tuple[Path, ...]  # the directories to check, nearest first
 
     def __new__(cls, directory: Path, registered: str) -> Self:
         """Bind a search to *directory* and its covering registration, if any."""
         self = super().__new__(cls)
-        self._directory = directory
-        self._root = Path(registered) if registered else None
+        root = Path(registered or directory)  # no registration: its own root
+        # The root is always checked, even if the paths disagree on symlinks and
+        # it is not found above the directory.
+        ancestry = (directory, *directory.parents)
+        climbed = ancestry[: ancestry.index(root) + 1] if root in ancestry else ()
+        self._trail = tuple(dict.fromkeys((directory, *climbed, root)))
         return self
 
     def found_at(self) -> Path | None:
@@ -38,15 +41,12 @@ class MarkerSearch:
 
         None is the contract for "no marker anywhere on the path".
         """
-        return next(filter(lambda d: EnabledMarker(d).is_present(), self._path()), None)
+        return next((d for d in self._trail if EnabledMarker(d).is_present()), None)
 
-    def _path(self) -> tuple[Path, ...]:
-        """Return the directories to check, nearest first."""
-        root = self._root
-        if root is None:
-            return (self._directory,)
-        ancestry = (self._directory, *self._directory.parents)
-        # The root is always checked, even if the paths disagree on symlinks and
-        # it is not found above the directory.
-        climbed = ancestry[: ancestry.index(root) + 1] if root in ancestry else ()
-        return (self._directory, *climbed, root)
+    def markers(self) -> tuple[Path, ...]:
+        """Return every directory on the search path holding the marker, nearest first.
+
+        A disable that must say what keeps a directory captured needs all of
+        them: disabling the nearest leaves the next one still found.
+        """
+        return tuple(d for d in self._trail if EnabledMarker(d).is_present())

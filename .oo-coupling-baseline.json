@@ -384,6 +384,13 @@
     "max_lcom": 0.0,
     "public_names": 1.0
   },
+  "src/quarry/captured_notes.py": {
+    "efferent_coupling": 1.0,
+    "public_names": 1.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
+  },
   "src/quarry/captures_collection.py": {
     "efferent_coupling": 1.0,
     "public_names": 1.0,
@@ -2565,8 +2572,8 @@
     "efferent_coupling": 1.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.667,
-    "avg_lcom": 0.667
+    "max_lcom": 0.0,
+    "avg_lcom": 0.0
   },
   "src/quarry/mcp_catalog.py": {
     "efferent_coupling": 4.0,

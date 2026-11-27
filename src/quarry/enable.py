@@ -98,11 +98,14 @@ class DisableResult:
     was only covered by it (nothing of the parent's is deregistered or purged).
     ``capturing_marker`` is the directory whose ``enabled`` marker still keeps
     capture live under the child once its own marker is gone (empty when none
-    does); it is found by the session-start hook's own search.  ``config_kept`` is
+    does); it is found by the session-start hook's own search.  ``also_capturing``
+    holds the markers beyond it, nearest first: disabling the nearest leaves the
+    next one still found.  ``config_kept`` is
     whether the child's ``config.md`` was left in place: it changes what the
     hooks do, so removing it would discard the user's opt-outs.
     ``config_why`` refines a kept config: ``"unreadable"`` (the hooks cannot read
-    it and apply nothing from it) or ``"linked"`` (it is behind a symlink).
+    it and apply nothing from it) or ``"linked"`` (it, or a directory above it, is
+    a symlink).
     """
 
     directory: str
@@ -115,6 +118,7 @@ class DisableResult:
     permissions: PermissionChange = field(default_factory=PermissionChange)
     covered_by: str = ""
     capturing_marker: str = ""
+    also_capturing: tuple[str, ...] = ()
     config_kept: bool = False
     config_why: str = ""
 
@@ -248,7 +252,7 @@ class _DisableOrchestrator:
     def run(self) -> DisableResult:
         """Drive the ordered steps and assemble the result."""
         config = self._settle_config()
-        claudemd, capturing_marker = self._disable_enablement()
+        claudemd, markers = self._disable_enablement()
         permissions = ProjectPermissions(self._directory).revoke()
         removed = self._deregister_covering()
         self._purge_captures()
@@ -265,26 +269,28 @@ class _DisableOrchestrator:
             enabled_marker_removed=claudemd.enabled_marker_removed,
             permissions=permissions,
             covered_by=self._parent,
-            capturing_marker=capturing_marker,
+            capturing_marker=next(iter(markers), ""),
+            also_capturing=markers[1:],
         )
 
     def _settle_config(self) -> ConfigDisposal:
         """Remove ``config.md``, or keep it when the covering parent still reads it."""
         return ConfigDisposal.settle(self._directory, covered=bool(self._parent))
 
-    def _disable_enablement(self) -> tuple[DisablementResult, str]:
+    def _disable_enablement(self) -> tuple[DisablementResult, tuple[str, ...]]:
         """Remove the marker and prune the ``@``-import under one FileLock.
 
         The § 2.11 commit point: marker-absent + import-present is the only
         recoverable failure state; ``Enablement.disable`` guarantees the
         biconditional.
 
-        Also returns the directory whose marker still captures the child, or
-        empty. The search is the session-start hook's own, run after this
-        directory's marker is gone, so the report cannot disagree with the hook.
+        Also returns the directories whose markers still capture the child,
+        nearest first, or none. The search is the session-start hook's own, run
+        after this directory's marker is gone, so the report cannot disagree
+        with the hook.
         """
         guard = GuardedDisable(self._directory)
-        return guard.run(), guard.capturing_marker(self._parent)
+        return guard.run(), guard.capturing_markers(self._parent)
 
     def _deregister_covering(self) -> int:
         """Deregister the covering collection via the daemon; return removed row count.

@@ -2660,7 +2660,7 @@ class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
     @staticmethod
     def _tree(tmp_path: Path, markers: tuple[str, ...]) -> tuple[Path, Path]:
         parent = tmp_path / "p"
-        svc = parent / "team" / "svc"
+        svc = parent / "team" / "sub" / "svc"
         svc.mkdir(parents=True)
         for relative in markers:
             _opt_in(parent / relative)
@@ -2695,8 +2695,17 @@ class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
             (("",), True),
             (("team",), True),
             (("", "team"), True),
+            (("team", "team/sub"), True),
+            (("", "team", "team/sub"), True),
         ],
-        ids=["no-marker", "parent-marker", "intermediate-marker", "both"],
+        ids=[
+            "no-marker",
+            "parent-marker",
+            "intermediate-marker",
+            "both",
+            "two-intermediates",
+            "parent-and-two-intermediates",
+        ],
     )
     def test_report_verdict_equals_session_start_verdict(
         self, tmp_path: Path, markers: tuple[str, ...], *, captured: bool

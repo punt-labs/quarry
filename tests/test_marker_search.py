@@ -60,3 +60,39 @@ def test_found_at_names_the_nearest_marker(tmp_path: Path) -> None:
 def test_found_at_is_none_without_a_marker(tmp_path: Path) -> None:
     root, _, deep = _dirs(tmp_path)
     assert MarkerSearch(deep, str(root)).found_at() is None
+
+
+def test_markers_lists_every_marker_nearest_first(tmp_path: Path) -> None:
+    root, child, deep = _dirs(tmp_path)
+    assert MarkerSearch(deep, str(root)).markers() == ()
+    EnabledMarker(root).write()
+    assert MarkerSearch(deep, str(root)).markers() == (root,)
+    EnabledMarker(child).write()
+    assert MarkerSearch(deep, str(root)).markers() == (child, root)
+
+
+def test_markers_lists_two_intermediates_and_names_no_directory_twice(
+    tmp_path: Path,
+) -> None:
+    root, child, deep = _dirs(tmp_path)
+    middle = child / "src"
+    EnabledMarker(child).write()
+    EnabledMarker(middle).write()
+    assert MarkerSearch(deep, str(root)).markers() == (middle, child)
+
+
+def test_markers_without_a_registration_checks_only_the_directory(
+    tmp_path: Path,
+) -> None:
+    _, child, deep = _dirs(tmp_path)
+    EnabledMarker(child).write()
+    assert MarkerSearch(deep, "").markers() == ()
+    assert MarkerSearch(child, "").markers() == (child,)
+
+
+def test_markers_starts_with_found_at(tmp_path: Path) -> None:
+    root, child, deep = _dirs(tmp_path)
+    EnabledMarker(root).write()
+    EnabledMarker(child).write()
+    search = MarkerSearch(deep, str(root))
+    assert search.markers()[0] == search.found_at()

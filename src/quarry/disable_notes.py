@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.captured_notes import CapturedAt
 from quarry.config_verdict import ConfigVerdict
-from quarry.parent_disable_command import ParentDisableCommand
 
 if TYPE_CHECKING:
     from quarry.enable import DisableResult
@@ -17,7 +17,10 @@ _UNREADABLE = (
     "  Config file kept (it could not be read, so it is not applied; "
     "delete it if it is stale)"
 )
-_LINKED = "  config.md is a symlink and was left in place"
+_LINKED = (
+    "  config.md is behind a symlink (the file or a parent directory) "
+    "and was left in place"
+)
 _WHY = {
     ConfigVerdict.UNREADABLE.value: _UNREADABLE,
     ConfigVerdict.LINKED.value: _LINKED,
@@ -26,12 +29,9 @@ _WHY = {
 
 @final
 class CapturedNote:
-    """Say which marker keeps a covered child captured and what stops it.
+    """Say which markers keep a covered child captured and what stops it.
 
-    The marker is at the registration's directory, where disabling means
-    deregistering and purging the registration, or at a directory between the
-    child and the registration, where disabling touches only that directory's
-    own files.
+    The note is chosen by the marker layout (:meth:`CapturedAt.of`).
     """
 
     __slots__ = ("_r",)
@@ -45,21 +45,8 @@ class CapturedNote:
         return self
 
     def __str__(self) -> str:
-        """Return the one-line note."""
-        r = self._r
-        if r.capturing_marker == r.covered_by:
-            return (
-                f"{r.directory} is still captured by the registration at "
-                f"{r.covered_by}; `{ParentDisableCommand(r.covered_by)}` stops it "
-                f"but deregisters {r.covered_by} and purges everything indexed "
-                f"for {r.covered_by} (add --keep-data to keep the data)"
-            )
-        return (
-            f"{r.directory} is still captured by the registration at "
-            f"{r.covered_by} because of the enabled marker at "
-            f"{r.capturing_marker}; `{ParentDisableCommand(r.capturing_marker)}` "
-            f"stops it, as does disabling {r.covered_by}"
-        )
+        """Return the one-line note for this result's marker layout."""
+        return str(CapturedAt.of(self._r))
 
 
 @final

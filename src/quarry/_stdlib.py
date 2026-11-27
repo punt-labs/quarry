@@ -90,15 +90,22 @@ def load_hook_config(cwd: str) -> HookConfig:
     depend on PyYAML or support arbitrary YAML.  Returns defaults if the file
     is missing, malformed, or the expected structure is absent.
     """
+    path = Path(cwd) / _CONFIG_FILENAME
     try:
-        return HookConfig.parse((Path(cwd) / _CONFIG_FILENAME).read_text())
+        # A FIFO or device would block or never end; is_file raises on an
+        # unsearchable parent, which is the same "no config" to a hook.
+        if not path.is_file():
+            return HookConfig()
+        return HookConfig.parse(path.read_text())
     except (OSError, UnicodeDecodeError):
         return HookConfig()
 
 
 # YAML 1.1 boolean aliases (case-insensitive).
-_YAML_TRUE = frozenset({"true", "yes", "on"})
-_YAML_FALSE = frozenset({"false", "no", "off"})
+_YAML_BOOLEANS: dict[str, bool] = {
+    **dict.fromkeys(("true", "yes", "on"), True),
+    **dict.fromkeys(("false", "no", "off"), False),
+}
 
 
 def _bool_field(data: dict[str, str], key: str, *, default: bool) -> bool:
@@ -113,11 +120,8 @@ def _bool_field(data: dict[str, str], key: str, *, default: bool) -> bool:
     val = data.get(key)
     if val is None:
         return default
-    normalized = val.lower()
-    if normalized in _YAML_TRUE:
-        return True
-    if normalized in _YAML_FALSE:
-        return False
+    if (parsed := _YAML_BOOLEANS.get(val.lower())) is not None:
+        return parsed
     # Present but unrecognized — fail closed to respect user intent.
     logger.warning(
         "hook-config: unrecognized boolean %r for %s, defaulting to False",
@@ -293,12 +297,9 @@ class _SessionSetup:
         plugin_json = plugin_root / ".claude-plugin" / "plugin.json"
         with plugin_json.open() as f:
             data = json.load(f)
-        if not isinstance(data, dict):
-            msg = f"plugin.json top-level is not an object: {plugin_json}"
-            raise ValueError(msg)
-        name = data.get("name")
+        name = data.get("name") if isinstance(data, dict) else None
         if not isinstance(name, str):
-            msg = f"plugin.json 'name' is not a string: {plugin_json}"
+            msg = f"plugin.json is not an object with a string 'name': {plugin_json}"
             raise ValueError(msg)
         if not _PLUGIN_NAME_PATTERN.fullmatch(name):
             msg = f"plugin.json 'name' is not a safe slug: {name!r}"

@@ -20,6 +20,7 @@ from quarry.enable import DisableResult, EnableResult, disable_project, enable_p
 from quarry.enabled_marker import EnabledMarker
 from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
 from quarry.guidance import REPO_IMPORT_LINE
+from quarry.marker_search import MarkerSearch
 from quarry.project_config import ProjectConfig
 from tests.conftest import FakeRegistryClient
 
@@ -1092,6 +1093,32 @@ class TestDisableCoveredChildCapturedByIntermediateMarker:
         assert EnabledMarker(team).is_present()
 
 
+class TestDisableCoveredChildCapturedByTwoMarkers:
+    """Disabling the nearest of two markers does not stop the capture."""
+
+    def test_intermediate_and_registration_markers_are_both_named(
+        self, tmp_path: Path
+    ) -> None:
+        parent = tmp_path / "p"
+        mid = parent / "a"
+        leaf = mid / "b"
+        leaf.mkdir(parents=True)
+        EnabledMarker(parent).write()
+        EnabledMarker(mid).write()
+        client = FakeRegistryClient([("p", parent)])
+
+        result = disable_project(leaf, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert result.capturing_marker == str(mid)
+        assert result.also_capturing == (str(parent),)
+        assert f"enabled markers remain at {mid}, {parent}" in text
+        assert "until all of them are disabled" in text
+
+        disable_project(mid, client)
+        assert MarkerSearch(leaf, str(parent)).found_at() == parent
+
+
 class TestDisableCoveredChildConfigReport:
     """What the disable report says about a covered child's config.md."""
 
@@ -1148,6 +1175,30 @@ class TestDisableCoveredChildConfigReport:
         lines = self._disable_with_config(tmp_path, str(target))
         text = "\n".join(lines)
 
-        assert "config.md is a symlink and was left in place" in text
+        assert (
+            "config.md is behind a symlink (the file or a parent directory) "
+            "and was left in place"
+        ) in text
         assert "Nothing of its own found" not in text
         assert target.exists()
+
+    def test_symlinked_parent_directory_is_reported_as_behind_a_symlink(
+        self, tmp_path: Path
+    ) -> None:
+        parent = tmp_path / "project"
+        child = parent / "src"
+        child.mkdir(parents=True)
+        EnabledMarker(parent).write()
+        shared = tmp_path / "shared" / "quarry"
+        shared.mkdir(parents=True)
+        (shared / "config.md").write_text(ProjectConfig().text)
+        (child / ".punt-labs").mkdir()
+        (child / ".punt-labs" / "quarry").symlink_to(shared)
+        client = FakeRegistryClient([("project", parent)])
+
+        result = disable_project(child, client)
+        text = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "config.md is behind a symlink" in text
+        assert "config.md is a symlink" not in text
+        assert (shared / "config.md").exists()

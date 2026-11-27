@@ -51,7 +51,7 @@ class ConfigVerdict(Enum):
         """
         config = SafeRepoPath(directory, _RELATIVE)
         if not config.is_regular_file():
-            return cls.LINKED if config.path.is_file() else cls.ABSENT
+            return cls.LINKED if cls._leads_to_file(config.path) else cls.ABSENT
         try:
             text = config.read_text()
         except (OSError, ValueError):
@@ -59,11 +59,19 @@ class ConfigVerdict(Enum):
         return cls.CUSTOMISED if cls._changes_behaviour(text) else cls.DEFAULT
 
     @staticmethod
+    def _leads_to_file(path: Path) -> bool:
+        """Return whether *path* resolves to a file; an unsearchable ancestor is no."""
+        try:
+            return path.is_file()
+        except OSError:
+            return False
+
+    @staticmethod
     def discard(directory: Path) -> bool:
         """Remove ``directory``'s config if it is a regular file; return whether it was.
 
         Raises ``ValueError`` when a symlinked ``.punt-labs`` ancestor refuses
-        the unlink.
+        the unlink, and ``OSError`` when a directory on the path cannot be searched.
         """
         return SafeRepoPath(directory, _RELATIVE).remove()
 

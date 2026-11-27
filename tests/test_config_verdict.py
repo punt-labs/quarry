@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from quarry.config_verdict import ConfigVerdict
+from quarry.local_disable import ConfigDisposal
 from quarry.project_config import ProjectConfig
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 
 def _config(root: Path) -> Path:
@@ -76,3 +82,38 @@ def test_discard_refuses_a_symlinked_ancestor(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="symlinked"):
         ConfigVerdict.discard(repo)
     assert (outside / ".punt-labs" / "quarry" / "config.md").exists()
+
+
+@pytest.fixture
+def locked() -> Iterator[Callable[[Path, int], None]]:
+    """Chmod a directory to *mode*; restore it so tmp cleanup works."""
+    touched: list[Path] = []
+
+    def lock(directory: Path, mode: int) -> None:
+        touched.append(directory)
+        directory.chmod(mode)
+
+    yield lock
+    for directory in touched:
+        directory.chmod(0o755)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+@pytest.mark.parametrize("level", [".punt-labs", ".punt-labs/quarry"])
+def test_an_unsearchable_directory_is_absent(
+    tmp_path: Path, locked: Callable[[Path, int], None], level: str
+) -> None:
+    _config(tmp_path).write_text("---\nauto_capture:\n  web_fetch: false\n---\n")
+    locked(tmp_path / level, 0o000)
+    assert ConfigVerdict.of(tmp_path) is ConfigVerdict.ABSENT
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+@pytest.mark.parametrize("mode", [0o000, 0o400])
+def test_discard_and_settle_never_raise_on_an_unsearchable_directory(
+    tmp_path: Path, locked: Callable[[Path, int], None], mode: int
+) -> None:
+    _config(tmp_path).write_text("x")
+    locked(tmp_path / ".punt-labs" / "quarry", mode)
+    disposal = ConfigDisposal.settle(tmp_path, covered=True)
+    assert (disposal.removed, disposal.kept) == (False, False)
