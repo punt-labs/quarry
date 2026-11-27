@@ -15,6 +15,11 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_HANDOFF_RUNTIME = REPO_ROOT / "scripts" / "install-handoff-runtime.sh"
+SNAPSHOT = REPO_ROOT / ".punt-labs/ethos/checks/snapshots/quarry-default.yaml"
+
+
+def _snapshot_check_names() -> list[str]:
+    return list(json.loads(SNAPSHOT.read_text())["checks"])
 
 
 @pytest.mark.skipif(
@@ -40,10 +45,9 @@ def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
     )
     if case not in {"cached-no-url", "unpublished"}:
         pin["url"] = url
+    entry = {"runtime": {"platforms": {"linux-amd64": pin}}}
     profile.write_text(
-        json.dumps(
-            {"checks": {"full-gate": {"runtime": {"platforms": {"linux-amd64": pin}}}}}
-        )
+        json.dumps({"checks": dict.fromkeys(_snapshot_check_names(), entry)})
     )
     home = tmp_path / "home"
     home.mkdir()
@@ -88,6 +92,70 @@ def test_install_handoff_runtime(tmp_path: Path, case: str) -> None:
         expected = "checksum mismatch" if case == "mismatch" else "No published"
         assert expected in result.stderr
         assert not installed.exists()
+
+
+def _run_installer(
+    tmp_path: Path, snapshot_text: str
+) -> subprocess.CompletedProcess[str]:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / INSTALL_HANDOFF_RUNTIME.name
+    shutil.copy2(INSTALL_HANDOFF_RUNTIME, script)
+    profile = tmp_path / ".punt-labs/ethos/checks/snapshots/quarry-default.yaml"
+    profile.parent.mkdir(parents=True)
+    profile.write_text(snapshot_text)
+    home = tmp_path / "home"
+    home.mkdir()
+    source = tmp_path / "release.tar.gz"
+    source.write_bytes(b"unverified bytes")
+    curl = scripts / "curl"
+    curl.write_text(
+        '#!/bin/sh\nwhile [ "$1" != --output ]; do shift; done\n'
+        'cp "$RELEASE_ARCHIVE" "$2"\n'
+    )
+    curl.chmod(0o755)
+    return subprocess.run(
+        ["bash", str(script)],
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "PATH": f"{scripts}:{os.environ['PATH']}",
+            "RELEASE_ARCHIVE": str(source),
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or os.uname().machine != "x86_64",
+    reason="the Quarry handoff runtime is Linux x86_64 only",
+)
+def test_installer_reads_the_committed_snapshot(tmp_path: Path) -> None:
+    result = _run_installer(tmp_path, SNAPSHOT.read_text())
+    assert "Invalid" not in result.stderr, result.stderr
+    assert "checksum mismatch" in result.stderr
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or os.uname().machine != "x86_64",
+    reason="the Quarry handoff runtime is Linux x86_64 only",
+)
+@pytest.mark.parametrize("case", ["differing-pins", "no-handoff-keys"])
+def test_installer_rejects_an_inconsistent_snapshot(tmp_path: Path, case: str) -> None:
+    checks = json.loads(SNAPSHOT.read_text())["checks"]
+    names = list(checks)
+    if case == "differing-pins":
+        entry = json.loads(json.dumps(checks[names[0]]))
+        entry["runtime"]["platforms"]["linux-amd64"]["sha256"] = "0" * 64
+        checks[names[0]] = entry
+    else:
+        checks = {"other-check": checks[names[0]]}
+    result = _run_installer(tmp_path, json.dumps({"checks": checks}))
+    assert result.returncode == 1
+    assert "Invalid Quarry handoff runtime profile" in result.stderr
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the release job runs on Linux")

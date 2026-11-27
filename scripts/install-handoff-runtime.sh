@@ -15,7 +15,16 @@ import sys
 
 try:
     with open(sys.argv[1], encoding="utf-8") as profile:
-        entry = json.load(profile)["checks"]["full-gate"]["runtime"]["platforms"]["linux-amd64"]
+        checks = json.load(profile)["checks"]
+    # Every handoff-* check carries the same runtime pin; differing pins are an error.
+    entries = [
+        json.dumps(check["runtime"]["platforms"]["linux-amd64"], sort_keys=True)
+        for name, check in checks.items()
+        if name.startswith("handoff-")
+    ]
+    if len(entries) == 0 or len(set(entries)) != 1:
+        raise ValueError("handoff runtime pins missing or differing")
+    entry = json.loads(entries[0])
     url, sha = entry.get("url"), entry["sha256"]
 except (AttributeError, OSError, KeyError, TypeError, ValueError):
     sys.exit("Invalid Quarry handoff runtime profile.")

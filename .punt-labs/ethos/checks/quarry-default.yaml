@@ -1,8 +1,14 @@
 name: quarry-default
 description: >-
   Ruff and shellcheck on the edited file (advisory); Ruff, the
-  OO/coupling/suppression ratchets and the import boundary at commit; the full
-  make check at handoff.
+  OO/coupling/suppression ratchets and the import boundary at commit. At
+  handoff, handoff-fast runs make check-handoff (test-unit and lint, about 8s
+  warm) on every handoff, including an empty path list, and handoff-type runs
+  make type (about 19s warm) when Python, pyproject.toml, uv.lock or the
+  Makefile changed. The make targets total about 27s warm, excluding any
+  per-check sandbox setup; the first real hook run decides the true cost.
+  Timeouts are 120s each. The full make check runs before the PR and in CI,
+  not at handoff.
 checks:
   - name: ruff-lint-edit
     stage: edit
@@ -65,10 +71,17 @@ checks:
     adapter: make
     target: check-imports
     on_fail: block
-  - name: full-gate
+  - name: handoff-fast
     stage: handoff
     files: all
     adapter: make
-    target: check
+    target: check-handoff
     on_fail: block
-    timeout: 30m
+    timeout: 120s
+  - name: handoff-type
+    stage: handoff
+    files: ["**/*.py", "**/*.pyi", "pyproject.toml", "uv.lock", "Makefile"]
+    adapter: make
+    target: type
+    on_fail: block
+    timeout: 120s
