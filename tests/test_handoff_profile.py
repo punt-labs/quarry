@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -38,48 +39,60 @@ def test_handoff_stage_does_not_run_the_full_gate() -> None:
     assert offenders == []
 
 
-def _matches(check: dict[str, object], path: str) -> bool:
+def _selects(check: dict[str, object], paths: list[str]) -> bool:
+    """Mirror ethos selection: ``all`` runs on any path list, even an empty one."""
     files = check["files"]
+    if files == "all":
+        return True
     assert isinstance(files, list), check["name"]
-    return any(PurePosixPath(path).full_match(str(glob)) for glob in files)
+    return any(
+        PurePosixPath(path).full_match(str(glob)) for path in paths for glob in files
+    )
 
 
-def _matching(path: str) -> set[str]:
-    return {str(c["name"]) for c in _handoff_checks() if _matches(c, path)}
+def _selected(paths: list[str]) -> set[str]:
+    return {str(c["name"]) for c in _handoff_checks() if _selects(c, paths)}
 
 
-def test_handoff_checks_list_their_files() -> None:
-    assert _handoff_checks(), "the profile must keep a handoff check"
-    for check in _handoff_checks():
-        assert isinstance(check["files"], list), check["name"]
+def test_handoff_check_names_are_fast_and_type() -> None:
+    assert [c["name"] for c in _handoff_checks()] == ["handoff-fast", "handoff-type"]
 
 
-def test_docs_only_change_runs_lint_but_not_tests_or_types() -> None:
-    matched = _matching("README.md")
-    assert "handoff-lint" in matched
-    assert "handoff-unit" not in matched
-    assert "handoff-type" not in matched
-
-
-def test_python_change_runs_every_handoff_check() -> None:
-    assert _matching("src/quarry/client.py") == {
-        "handoff-unit",
-        "handoff-lint",
-        "handoff-type",
-    }
-
-
-def test_lint_inputs_outside_python_trigger_lint() -> None:
-    for path in (
-        "plugin/commands/find.md",
-        "plugin/hooks/hooks.json",
-        "pyproject.toml",
+def test_handoff_fast_runs_on_every_handoff() -> None:
+    fast = next(c for c in _handoff_checks() if c["name"] == "handoff-fast")
+    assert fast["files"] == "all"
+    for paths in (
+        [],
+        ["README.md"],
+        ["Makefile"],
+        ["uv.lock"],
+        [".markdownlint-cli2.jsonc"],
+        ["src/quarry/client.py"],
     ):
-        assert "handoff-lint" in _matching(path), path
+        assert "handoff-fast" in _selected(paths), paths
 
 
-def test_type_checker_settings_trigger_type() -> None:
-    assert "handoff-type" in _matching("pyproject.toml")
+def test_handoff_type_runs_for_type_inputs_only() -> None:
+    for path in ("src/quarry/client.py", "pyproject.toml", "uv.lock", "Makefile"):
+        assert "handoff-type" in _selected([path]), path
+    assert "handoff-type" not in _selected(["README.md"])
+    assert "handoff-type" not in _selected([])
+
+
+def test_check_handoff_target_expands_to_unit_tests_and_lint() -> None:
+    result = subprocess.run(
+        ["make", "-n", "check-handoff"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "pytest tests/test_client.py" in result.stdout
+    assert "markdownlint-cli2" in result.stdout
+    assert "ruff check ." in result.stdout
+    assert "mypy" not in result.stdout
 
 
 def test_handoff_timeouts_are_bounded() -> None:
