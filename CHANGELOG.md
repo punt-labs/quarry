@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-11-27
+
 ### Changed
 
 - **Breaking (FS-4, FS-7):** Quarry now caches the embedding model in
