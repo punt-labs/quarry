@@ -117,16 +117,16 @@ class _ExecutingQueue:
 
     __slots__ = (
         "_ctx",
+        "_file_jobs",
+        "_finalizes",
         "_gates",
+        "_on_index",
+        "_on_scan",
         "_pending",
         "_serial",
+        "_shed",
+        "_shed_count",
         "_workers",
-        "file_jobs",
-        "finalizes",
-        "on_index",
-        "on_scan",
-        "shed",
-        "shed_count",
     )
 
     _ctx: DaemonContext | None
@@ -134,27 +134,64 @@ class _ExecutingQueue:
     _workers: list[asyncio.Task[None]]
     _gates: dict[str | None, asyncio.Event]
     _serial: asyncio.Semaphore
-    on_scan: Callable[[], None]
-    on_index: Callable[[], None]
-    finalizes: int
-    file_jobs: Counter[str]
-    shed: bool
-    shed_count: int
+    _on_scan: Callable[[], None]
+    _on_index: Callable[[], None]
+    _finalizes: int
+    _file_jobs: Counter[str]
+    _shed: bool
+    _shed_count: int
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
-        self.finalizes = 0
-        self.file_jobs = Counter()
+        self._finalizes = 0
+        self._file_jobs = Counter()
         self._ctx = None
         self._pending = {}
         self._workers = []
         self._gates = {}
         self._serial = asyncio.Semaphore(1)
-        self.on_scan = lambda: None
-        self.on_index = lambda: None
-        self.shed = False
-        self.shed_count = 0
+        self._on_scan = lambda: None
+        self._on_index = lambda: None
+        self._shed = False
+        self._shed_count = 0
         return self
+
+    @property
+    def finalizes(self) -> int:
+        """Return how many finalize jobs have run."""
+        return self._finalizes
+
+    @property
+    def shed_count(self) -> int:
+        """Return how many submissions were shed because the queue was full."""
+        return self._shed_count
+
+    @property
+    def shed(self) -> bool:
+        return self._shed
+
+    @shed.setter
+    def shed(self, value: bool) -> None:
+        """Make the queue shed every submission while true."""
+        self._shed = value
+
+    @property
+    def on_scan(self) -> Callable[[], None]:
+        return self._on_scan
+
+    @on_scan.setter
+    def on_scan(self, hook: Callable[[], None]) -> None:
+        """Run *hook* each time a sync job runs."""
+        self._on_scan = hook
+
+    @property
+    def on_index(self) -> Callable[[], None]:
+        return self._on_index
+
+    @on_index.setter
+    def on_index(self, hook: Callable[[], None]) -> None:
+        """Run *hook* each time a file-index job runs."""
+        self._on_index = hook
 
     def bind(self, ctx: DaemonContext) -> None:
         self._ctx = ctx
@@ -167,12 +204,12 @@ class _ExecutingQueue:
         self._gates[collection].set()
 
     def try_submit(self, key: RouteKey, job: IngestUnit, state: TaskState) -> bool:
-        if self.shed:
-            self.shed_count += 1
+        if self._shed:
+            self._shed_count += 1
             state.fail("ingest queue full")
             return False
         if isinstance(job, FileIndexJob):
-            self.file_jobs[key.collection] += 1
+            self._file_jobs[key.collection] += 1
         if key not in self._pending:
             self._pending[key] = asyncio.Queue()
             self._workers.append(
@@ -183,7 +220,7 @@ class _ExecutingQueue:
 
     def has_file_job(self, collection: str) -> bool:
         """Return whether a file-index job was admitted for *collection*."""
-        return self.file_jobs[collection] >= 1
+        return self._file_jobs[collection] >= 1
 
     async def settled(self) -> None:
         """Wait until every admitted job has run."""
@@ -210,13 +247,13 @@ class _ExecutingQueue:
     async def _run(self, job: IngestUnit, state: TaskState) -> None:
         assert self._ctx is not None
         if isinstance(job, CollectionFinalizeJob):
-            self.finalizes += 1
+            self._finalizes += 1
             await job.run(self._ctx, state)
             return
         if isinstance(job, CollectionSyncJob):
-            self.on_scan()
+            self._on_scan()
         elif isinstance(job, FileIndexJob):
-            self.on_index()
+            self._on_index()
         state.complete({})
 
 
@@ -258,7 +295,7 @@ class _Daemon:
     """A started WatchLoop over real databases and an executing queue."""
 
     __slots__ = (
-        "clock",
+        "_clock",
         "collections",
         "ctx",
         "loop",
@@ -268,7 +305,7 @@ class _Daemon:
         "source",
     )
 
-    clock: ManualLoop | None
+    _clock: ManualLoop | None
     ctx: DaemonContext
     loop: WatchLoop
     queue: _ExecutingQueue
@@ -289,12 +326,12 @@ class _Daemon:
         manual_clock: bool = False,
     ) -> Self:
         self = super().__new__(cls)
-        self.clock = ManualLoop() if manual_clock else None
-        if self.clock is not None:
+        self._clock = ManualLoop() if manual_clock else None
+        if self._clock is not None:
             # The throttle's interval and trailing timers and the finalize retry
             # run on this clock, so when a timer fires is the test's decision,
             # not the scheduler's.
-            clock = self.clock.as_loop
+            clock = self._clock.as_loop
             monkeypatch.setattr(
                 "quarry.daemon.watch_submit.FinalizeThrottle",
                 lambda _loop, interval_s: FinalizeThrottle(clock, interval_s),
@@ -352,6 +389,11 @@ class _Daemon:
         self.rewrites = _Rewrites(monkeypatch)
         self.collections = collections
         return self
+
+    @property
+    def clock(self) -> ManualLoop | None:
+        """Return the manual clock, or ``None`` on the real loop."""
+        return self._clock
 
     @property
     def database(self) -> Database:
@@ -1191,8 +1233,13 @@ def test_a_shed_retry_is_armed_again_when_a_write_armed_the_trailing_timer(
         await _until(lambda: _armed_trailing(d))
         assert _armed_trailing(d)
         d.queue.shed = True
-        d.clock.advance(4.5)  # the retry coalesces; the trailing fire is shed
-        assert d.queue.shed_count >= 1
+        d.clock.advance(1.5)  # the retry comes due inside the interval
+        assert d.queue.shed_count == 0  # it coalesced; a bypass would have been shed
+        assert _armed_trailing(d)  # the write's trailing timer is still the only one
+        d.clock.advance(1.4)  # at 2.9, still short of the trailing deadline
+        assert d.queue.shed_count == 0
+        d.clock.advance(0.15)  # at 3.05, the trailing timer fired and was shed
+        assert d.queue.shed_count == 1  # exactly one submission, before the re-arm
         assert d.rewrites.optimizes == 1
         d.queue.shed = False
         d.clock.advance(0.2)  # the shed finalize's retry comes due
@@ -1368,6 +1415,7 @@ def test_a_finalize_on_another_collection_can_overtake_a_queued_index_job(
         submitter = d.loop._submitter
         assert submitter is not None
         assert submitter._rearm._timers == set()  # no shed event waits to re-feed
+        assert d.queue.shed_count == 0  # a shed arms a re-arm timer, even a spent one
         assert d.queue.finalizes == finalizes + 1
         assert d.rewrites.optimizes == base
         await d.safety_scan()
