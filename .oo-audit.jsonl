@@ -2451,3 +2451,9 @@
 {"ts":"2026-11-27T09:34:41Z","commit":"975fb96","source":null,"files_scored":507,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
 {"ts":"2026-11-27T09:34:53Z","commit":"975fb96","source":null,"files_scored":507,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
 {"ts":"2026-11-27T09:35:01Z","commit":"975fb96","source":null,"files_scored":507,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/session_notes.py":{"module_size":[100.0,99.0]}},"removed":[]}
+{"ts":"2026-11-27T09:59:44Z","commit":"228198d","source":null,"files_scored":508,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/session_notes.py":{"max_complexity":[4.0,3.0],"avg_complexity":[1.78,1.67],"module_size":[99.0,98.0]}},"removed":[],"backfilled":["src/quarry/marker_chain.py"]}
+{"ts":"2026-11-27T09:59:52Z","commit":"228198d","source":null,"files_scored":508,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/session_notes.py":{"avg_complexity":[1.67,1.44],"module_size":[98.0,96.0]}},"removed":[]}
+{"ts":"2026-11-27T09:59:56Z","commit":"228198d","source":null,"files_scored":508,"files_improved":0,"files_regressed":0,"verdict":"pass","deltas":{},"removed":[]}
+{"ts":"2026-11-27T10:00:32Z","commit":"228198d","source":null,"files_scored":508,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
+{"ts":"2026-11-27T10:00:43Z","commit":"228198d","source":null,"files_scored":508,"files_improved":0,"files_regressed":1,"verdict":"fail","deltas":{},"removed":[]}
+{"ts":"2026-11-27T10:00:52Z","commit":"228198d","source":null,"files_scored":508,"files_improved":1,"files_regressed":0,"verdict":"pass","deltas":{"src/quarry/marker_chain.py":{"max_complexity":[6.0,4.0],"avg_complexity":[3.5,2.67]}},"removed":[]}

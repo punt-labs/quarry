@@ -112,12 +112,11 @@ def test_captured_note_with_an_intermediate_and_the_registration_lists_both(
         _result(p, covered_by=p, capturing_marker=f"{p}/a", also_capturing=(p,))
     ).captured()
     assert f"still active through the markers at {p}/a, {p}" in note
-    assert "while a marker with session_sync enabled remains" in note
+    assert "until all of them are disabled" in note
     assert f"`quarry disable {p}/a`" in note
     assert f"`quarry disable {p}` deregisters {p} and purges everything indexed" in note
     assert "--keep-data" in note
     assert "ends it, as does" not in note
-    assert "until all of them are disabled" not in note
 
 
 def test_captured_note_with_two_intermediates_lists_each_command(p: str) -> None:
@@ -132,28 +131,22 @@ def test_captured_note_with_two_intermediates_lists_each_command(p: str) -> None
     assert f"still active through the markers at {p}/a/b, {p}/my a" in note
     assert f"`quarry disable {p}/a/b`" in note
     assert f"`quarry disable '{p}/my a'`" in note
-    assert "while a marker with session_sync enabled remains" in note
+    assert "until all of them are disabled" in note
 
 
-def test_captured_note_says_a_marker_that_opts_out_does_not_keep_it_active(
-    p: str,
-) -> None:
+def test_captured_note_names_the_marker_whose_opt_out_stops_it(p: str) -> None:
+    _opt_out(Path(p) / "b")
     note = DisableLines(
-        _result(p, covered_by=p, capturing_marker=f"{p}/a", also_capturing=(p,))
+        _result(p, covered_by=p, capturing_marker=f"{p}/a", also_capturing=(f"{p}/b",))
     ).captured()
-    assert "session_sync to false does not keep it active" in note
+    assert f"session_sync is false in the config at {p}/b, so once" in note
+    assert "until all of them are disabled" not in note
 
 
 def test_captured_note_with_one_marker_is_unchanged(p: str) -> None:
     note = DisableLines(_result(p, covered_by=p, capturing_marker=f"{p}/a")).captured()
     assert f"still active through the marker at {p}/a" in note
-    assert "while a marker" not in note
-
-
-@pytest.fixture
-def p(tmp_path: Path) -> str:
-    """Return a project root under the test sandbox, never a fixed path."""
-    return str(tmp_path / "p")
+    assert "until all" not in note
 
 
 def _opt_out(directory: Path) -> None:
@@ -225,6 +218,17 @@ def test_several_markers_none_opted_out_names_every_marker(tmp_path: Path) -> No
     note = str(SessionNote.of(result))
     assert f"the markers at {parent / 'team'}, {parent}" in note
     assert "(session-start sync runs there)" in note
+
+
+def test_next_marker_opt_out_ends_it_whatever_a_farther_marker_allows(
+    tmp_path: Path,
+) -> None:
+    parent, result = _covered(tmp_path, "team/svc", "team", "")
+    _opt_out(parent / "team")
+    note = str(SessionNote.of(result))
+    assert "while a marker with session_sync enabled remains" not in note
+    assert f"session_sync is false in the config at {parent / 'team'}" in note
+    assert "whatever a farther marker allows" in note
 
 
 def test_unreadable_config_is_fail_open_and_sync_stays_on(tmp_path: Path) -> None:

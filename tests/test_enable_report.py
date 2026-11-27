@@ -152,12 +152,6 @@ def _still_captured(p: str) -> str:
     )
 
 
-@pytest.fixture
-def p(tmp_path: Path) -> str:
-    """Return a project root under the test sandbox, never a fixed path."""
-    return str(tmp_path / "p")
-
-
 def test_disable_report_deregistered_output_is_exact(p: str) -> None:
     result = DisableResult(
         directory=p,

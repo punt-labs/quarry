@@ -1141,7 +1141,7 @@ class TestDisableCoveredChildCapturedByTwoMarkers:
         assert result.capturing_marker == str(mid)
         assert result.also_capturing == (str(parent),)
         assert f"still active through the markers at {mid}, {parent}" in text
-        assert "while a marker with session_sync enabled remains" in text
+        assert "until all of them are disabled" in text
 
         disable_project(mid, client)
         assert MarkerSearch(leaf, str(parent)).found_at() == parent

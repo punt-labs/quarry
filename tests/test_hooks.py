@@ -2824,7 +2824,7 @@ class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
         report = "\n".join(DisableReport(result, keep_data=False).lines())
 
         assert "(session-start sync runs there)" in report
-        assert "session_sync to false does not keep it active" in report
+        assert f"session_sync is false in the config at {parent}, so once" in report
         assert self._session_syncs(tmp_path, parent, svc) is True
 
     @staticmethod

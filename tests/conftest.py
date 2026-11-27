@@ -656,3 +656,9 @@ def confined_config_reads(
 
     monkeypatch.setattr("quarry.governing_marker.load_hook_config", guarded)
     return seen
+
+
+@pytest.fixture
+def p(tmp_path: Path) -> str:
+    """Return a project root under the test sandbox, never a fixed path."""
+    return str(tmp_path / "p")

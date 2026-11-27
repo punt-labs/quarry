@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
-from quarry.governing_marker import GoverningMarker
+from quarry.marker_chain import MarkerChain
 from quarry.parent_disable_command import ParentDisableCommand
 
 if TYPE_CHECKING:
@@ -43,8 +43,7 @@ class SessionNote(ABC):
         The hook reads the session directory's config first, then the governing
         marker's, through the same fail-open loader, so this does too.
         """
-        directories = (result.directory, result.capturing_marker)
-        return next((d for d in directories if not GoverningMarker.syncs_at(d)), "")
+        return MarkerChain((result.directory, result.capturing_marker), "").opt_out()
 
     def _active(self, where: str) -> str:
         """Return the sentence saying what keeps the directory active through *where*.
@@ -146,9 +145,7 @@ class AtSeveralMarkers(SessionNote):
         )
         return (
             f"{self._active(f'the markers at {", ".join(markers)}')}; "
-            f"it stays active while a marker with session_sync enabled remains"
-            f"{f' (disabling each: {commands})' if commands else ''}; a marker "
-            f"whose config sets session_sync to false does not keep it active; "
+            f"{MarkerChain(markers, commands).duration()}; "
             f"`{ParentDisableCommand(r.covered_by)}` deregisters {r.covered_by} "
             f"and purges everything indexed for {r.covered_by} "
             f"(add --keep-data to keep the data)"
