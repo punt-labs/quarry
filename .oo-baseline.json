@@ -2625,19 +2625,6 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
-  "src/quarry/db/connection.py": {
-    "method_ratio": 1.0,
-    "encapsulation_ratio": 1.0,
-    "avg_params": 1.06,
-    "max_complexity": 3.0,
-    "avg_complexity": 1.17,
-    "module_size": 103.0,
-    "classes_per_module": 2.0,
-    "class_to_func_ratio": 1.0,
-    "init_violations": 0.0,
-    "public_attr_violations": 0.0,
-    "future_annotations": 1.0
-  },
   "src/quarry/db/document_ref.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -2683,7 +2670,20 @@
     "avg_params": 0.2,
     "max_complexity": 1.0,
     "avg_complexity": 1.0,
-    "module_size": 56.0,
+    "module_size": 55.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/db/lance_connection.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.11,
+    "max_complexity": 1.0,
+    "avg_complexity": 1.0,
+    "module_size": 61.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
@@ -2768,6 +2768,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/db/reconnector.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.5,
+    "max_complexity": 3.0,
+    "avg_complexity": 2.0,
+    "module_size": 30.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/db/recycle_gate.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -2775,6 +2788,19 @@
     "max_complexity": 3.0,
     "avg_complexity": 1.5,
     "module_size": 40.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/db/recycling_table.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.87,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.07,
+    "module_size": 72.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
@@ -2816,6 +2842,19 @@
     "module_size": 10.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/db/table_changes.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.38,
+    "max_complexity": 3.0,
+    "avg_complexity": 1.5,
+    "module_size": 53.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0

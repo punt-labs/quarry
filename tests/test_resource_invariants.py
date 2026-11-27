@@ -41,8 +41,10 @@ from quarry.backfill import Backfill, BackfillConfig
 from quarry.backfill_mapping import ProjectMappingResolver
 from quarry.config import Settings
 from quarry.db import Database
-from quarry.db.connection import LanceConnection, RecyclingTable
+from quarry.db.lance_connection import LanceConnection
+from quarry.db.recycling_table import RecyclingTable
 from quarry.db.storage import get_db
+from quarry.db.table_changes import TableChanges
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.models import Chunk
 from quarry.sync_finalize import SyncFinalizer
@@ -486,7 +488,9 @@ _DAEMON_SCALE_SLACK = 40
 def _daemon_scale_connect(path: Path) -> Database:
     """Connect at the reduced recycle cap so N connections cover all phases."""
     conn = LanceConnection(
-        partial(get_db, path), recycle_after=_DAEMON_SCALE_RECYCLE_AFTER
+        partial(get_db, path),
+        changes=TableChanges.for_path(path),
+        recycle_after=_DAEMON_SCALE_RECYCLE_AFTER,
     )
     return Database(conn)
 

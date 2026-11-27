@@ -4,7 +4,7 @@ The long-lived daemon can leak descriptors: handles to deleted LanceDB index
 files accumulate until the count reaches ``RLIMIT_NOFILE``, the kernel returns
 EMFILE, and requests start failing with HTTP 500. Sampling the count on a fixed
 cadence makes a climbing trend visible in the logs long before exhaustion. The
-leak fix lives elsewhere (``db/connection.py``); this is the observability side.
+leak fix lives elsewhere (``db/lance_connection.py``); this is the observability side.
 """
 
 from __future__ import annotations

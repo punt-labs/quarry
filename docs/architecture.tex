@@ -194,7 +194,7 @@ Schema        & \modpath{db/schema.py}         & Chunks-table schema and
                 idempotent migration (agent-memory columns, FTS index). \\
 Storage       & \modpath{db/storage.py}        & LanceDB connection
                 management (discovery and size reporting removed --- DES-049). \\
-Connection    & \modpath{db/connection.py}     & Self-recycling LanceDB
+Connection    & \modpath{db/lance_connection.py}     & Self-recycling LanceDB
                 connection that bounds file-descriptor growth. \\
 Chunk table   & \modpath{db/chunk\_table.py}   & Chunks-table lifecycle:
                 open, migrate, create-on-demand. \\
