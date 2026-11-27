@@ -2778,3 +2778,86 @@ class TestDisableReportMatchesSessionStart(_ReachableDaemonEmptyCatalog):
 
         assert ("does not activate quarry" not in report) is captured
         assert self._session_captures(tmp_path, parent, svc) is captured
+
+    @pytest.mark.parametrize(
+        ("markers", "opt_out"),
+        [
+            (("",), ""),
+            (("team",), "team"),
+            (("", "team"), "team"),
+            (("team",), "team/sub/svc"),
+            (("",), "team/sub/svc"),
+        ],
+        ids=[
+            "parent-marker-opted-out",
+            "intermediate-opted-out",
+            "nearest-of-two-opted-out",
+            "child-opted-out-under-intermediate",
+            "child-opted-out-under-parent",
+        ],
+    )
+    def test_opt_out_makes_report_and_hook_agree_it_is_not_active(
+        self, tmp_path: Path, markers: tuple[str, ...], opt_out: str
+    ) -> None:
+        parent, svc = self._tree(tmp_path, markers)
+        config = parent / opt_out / ".punt-labs/quarry/config.md"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
+        client = FakeRegistryClient([("p", parent)])
+
+        result = disable_project(svc, client)
+        report = "\n".join(DisableReport(result, keep_data=False).lines())
+
+        assert "sync runs there" not in report
+        assert "does not activate quarry" in report
+        assert self._session_syncs(tmp_path, parent, svc) is False
+
+    @staticmethod
+    def _session_syncs(tmp_path: Path, parent: Path, cwd: Path) -> bool:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "p")
+        conn.close()
+        with (
+            patch(
+                "quarry.hooks._SessionStartContext._resolve_settings",
+                return_value=settings,
+            ),
+            patch(
+                "quarry.active_session_context.SyncLock.launch_background_sync",
+                return_value="launched",
+            ) as launch,
+        ):
+            handle_session_start({"cwd": str(cwd)})
+        return launch.called
+
+
+class TestGoverningConfigSkipTrace(_ReachableDaemonEmptyCatalog):
+    """A skip decided by a governing directory's config names that directory."""
+
+    def test_nested_opt_out_logs_the_governing_directory(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        parent = tmp_path / "p"
+        child = parent / "team" / "svc"
+        child.mkdir(parents=True)
+        _opt_in(parent / "team")
+        config = parent / "team/.punt-labs/quarry/config.md"
+        config.write_text("---\nauto_capture:\n  session_sync: false\n---\n")
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(parent, "p")
+        conn.close()
+        caplog.set_level(logging.INFO, logger="quarry.hooks")
+        with patch(
+            "quarry.hooks._SessionStartContext._resolve_settings",
+            return_value=settings,
+        ):
+            reply = handle_session_start({"cwd": str(child)})
+        assert reply == {}
+        [line] = [m for m in caplog.messages if m.startswith("session-start:")]
+        assert line.endswith(f"-> skip:config@{parent / 'team'}")

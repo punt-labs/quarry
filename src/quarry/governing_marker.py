@@ -63,4 +63,4 @@ class GoverningMarker:
             return active(collection)
         if self.syncs_at(str(self._found)):
             return active(collection)
-        return SessionStartReply({}, "skip", "config")
+        return SessionStartReply({}, "skip", f"config@{self._found}")

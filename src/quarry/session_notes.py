@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
+from quarry.governing_marker import GoverningMarker
 from quarry.parent_disable_command import ParentDisableCommand
 
 if TYPE_CHECKING:
@@ -30,8 +31,22 @@ class SessionNote(ABC):
         """
         if not result.capturing_marker:
             return NotActive(result)
+        if opted_out := SessionNote._opted_out_at(result):
+            return OptedOut(result, opted_out)
         at_registration = result.capturing_marker == result.covered_by
         return _CASES[(bool(result.also_capturing), at_registration)](result)
+
+    @staticmethod
+    def _opted_out_at(result: DisableResult) -> str:
+        """Return the directory whose config turns session sync off, or ``""``.
+
+        The hook reads the session directory's config first, then the governing
+        marker's, through the same fail-open loader, so this does too.
+        """
+        for directory in (result.directory, result.capturing_marker):
+            if not GoverningMarker.syncs_at(directory):
+                return directory
+        return ""
 
     def _active(self, where: str) -> str:
         """Return the sentence saying what keeps the directory active through *where*.
@@ -61,6 +76,24 @@ class NotActive(SessionNote):
             f"{r.directory} is registered under {r.covered_by} but session start "
             f"does not activate quarry there: no readable enabled marker from "
             f"{r.directory} up to {r.covered_by}"
+        )
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class OptedOut(SessionNote):
+    """A config on the session's path sets ``session_sync: false``."""
+
+    directory: str
+
+    def __str__(self) -> str:
+        """Return the note naming the config that opts session start out."""
+        r = self.result
+        return (
+            f"{r.directory} is registered under {r.covered_by} but session start "
+            f"does not activate quarry there: session_sync is false in the config "
+            f"at {self.directory}; web, transcript and other capture hooks follow "
+            f"their own auto_capture settings"
         )
 
 
