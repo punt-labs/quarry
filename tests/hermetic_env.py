@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
 
 if TYPE_CHECKING:
+    from collections.abc import MutableMapping
+
     import pytest
 
 # LanceDB reads ``LANCE_CPU_THREADS`` once, when it builds its compute runtime,
@@ -83,27 +85,37 @@ def _drop_ambient_codex_home() -> None:
     os.environ.pop("CODEX_HOME", None)
 
 
-def _drop_ambient_git_config() -> None:
-    """Remove the shell's ``GIT_CONFIG_*`` injection for this process.
+def _drop_ambient_plugin_root(environ: MutableMapping[str, str] = os.environ) -> None:
+    """Remove the host harness's ``CLAUDE_PLUGIN_ROOT`` from *environ*.
 
-    The workspace exports ``commit.gpgsign=true`` and a signing key through
-    these variables, so every throwaway repository a test builds would try to
-    sign -- and fail, because the redirected ``HOME`` moves ``GNUPGHOME`` away
-    from the operator's keyring.  Signing a sandbox commit is meaningless in any
-    case; dropping the injection makes the git-driven tests depend on the
-    repository they create and nothing else.
+    A suite run under a plugin hook (the ethos handoff gate) would otherwise
+    send ``handle_session_setup`` down the real deploy path.  Tests that need a
+    plugin root set their own.
     """
-    count = os.environ.pop("GIT_CONFIG_COUNT", "")
-    if count.isdigit():
-        for index in range(int(count)):
-            os.environ.pop(f"GIT_CONFIG_KEY_{index}", None)
-            os.environ.pop(f"GIT_CONFIG_VALUE_{index}", None)
+    environ.pop("CLAUDE_PLUGIN_ROOT", None)
+
+
+def _drop_ambient_git_config(environ: MutableMapping[str, str] = os.environ) -> None:
+    """Remove injected git config (``COUNT``, ``KEY_n``, ``VALUE_n``) from *environ*.
+
+    The workspace injects ``commit.gpgsign=true``, which would make sandbox
+    commits try to sign with a keyring the redirected ``HOME`` hides.  Dropped
+    by prefix, not by walking indexes below ``GIT_CONFIG_COUNT``: the ethos
+    handoff gate strips the count and forwards the ``KEY_n``/``VALUE_n`` pairs.
+    ``GIT_CONFIG_NOSYSTEM`` and ``GIT_CONFIG_GLOBAL`` are guards, not injections,
+    and stay: dropping them would re-expose ``/etc/gitconfig``.
+    """
+    environ.pop("GIT_CONFIG_COUNT", None)
+    for name in [
+        n for n in environ if n.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+    ]:
+        del environ[name]
     if git := shutil.which("git"):
         local_keys = subprocess.check_output(
             [git, "rev-parse", "--local-env-vars"], text=True
         )
         for key in local_keys.splitlines():
-            os.environ.pop(key, None)
+            environ.pop(key, None)
 
 
 @final
@@ -138,6 +150,7 @@ class HermeticEnv:
         os.environ.update(_NETWORK_PINS)
         _drop_ambient_git_config()
         _drop_ambient_codex_home()
+        _drop_ambient_plugin_root()
 
         return cls(home, real_tree)
 

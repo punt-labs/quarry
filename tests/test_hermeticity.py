@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +22,12 @@ from quarry.home_paths import QuarryHome
 from quarry.logging_config import LoggingConfig
 from quarry.url_admission import UrlAdmission
 from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
-from tests.hermetic_env import ENV, ProductionTreeGuard
+from tests.hermetic_env import (
+    ENV,
+    ProductionTreeGuard,
+    _drop_ambient_git_config,
+    _drop_ambient_plugin_root,
+)
 
 
 class TestHomeRedirect:
@@ -140,8 +147,110 @@ class TestAmbientGitConfig:
 
     def test_signing_key_and_program_are_dropped_with_it(self) -> None:
         """The count is the index; leaving the pairs behind would be half a job."""
-        leftovers = [k for k in os.environ if k.startswith("GIT_CONFIG_")]
+        leftovers = [
+            k
+            for k in os.environ
+            if k == "GIT_CONFIG_COUNT"
+            or k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+        ]
         assert leftovers == []
+
+
+class TestAmbientGitConfigScrub:
+    """The scrub works with ``GIT_CONFIG_COUNT`` absent."""
+
+    _AMBIENT: ClassVar[dict[str, str]] = {
+        "GIT_CONFIG_KEY_0": "commit.gpgsign",
+        "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_KEY_1": "user.signingkey",
+        "GIT_CONFIG_VALUE_1": "ABCD",
+        "GIT_CONFIG_PARAMETERS": "'commit.gpgsign=true'",
+        "GIT_CONFIG_GLOBAL": "/somewhere/gitconfig",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_DIR": "/somewhere/.git",
+        "HOME": "/kept",
+    }
+
+    @staticmethod
+    def _scrubbed(**extra: str) -> dict[str, str]:
+        environ = {**TestAmbientGitConfigScrub._AMBIENT, **extra}
+        _drop_ambient_git_config(environ)
+        return environ
+
+    def test_pairs_are_dropped_when_the_count_is_absent(self) -> None:
+        environ = self._scrubbed()
+        assert [k for k in environ if k.startswith("GIT_CONFIG_KEY_")] == []
+        assert [k for k in environ if k.startswith("GIT_CONFIG_VALUE_")] == []
+
+    def test_pairs_beyond_the_count_are_dropped(self) -> None:
+        environ = self._scrubbed(GIT_CONFIG_COUNT="1")
+        assert "GIT_CONFIG_COUNT" not in environ
+        assert [k for k in environ if k.startswith("GIT_CONFIG_KEY_")] == []
+
+    def test_repository_local_variables_are_dropped(self) -> None:
+        assert "GIT_DIR" not in self._scrubbed()
+
+    def test_system_config_guard_is_kept(self) -> None:
+        """Dropping it would let /etc/gitconfig signing reach fixture commits."""
+        assert self._scrubbed()["GIT_CONFIG_NOSYSTEM"] == "1"
+
+    def test_unrelated_variables_are_kept(self) -> None:
+        assert self._scrubbed() == {
+            "GIT_CONFIG_GLOBAL": "/somewhere/gitconfig",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "HOME": "/kept",
+        }
+
+
+class TestAmbientPluginRoot:
+    """``CLAUDE_PLUGIN_ROOT`` is scrubbed from an injected environment."""
+
+    def test_plugin_root_is_dropped_from_an_injected_environment(self) -> None:
+        environ = {"CLAUDE_PLUGIN_ROOT": "/plugins/ethos", "HOME": "/kept"}
+        _drop_ambient_plugin_root(environ)
+        assert environ == {"HOME": "/kept"}
+
+
+class TestInstallScrubsTheGateEnvironment:
+    """``HermeticEnv.install`` applies the scrubs, proven in a child process.
+
+    The gate's variables are absent from a developer shell, so the parent's own
+    environment cannot show that ``install`` calls them.
+    """
+
+    _GATE: ClassVar[dict[str, str]] = {
+        "CLAUDE_PLUGIN_ROOT": "/x",
+        "GIT_CONFIG_KEY_0": "commit.gpgsign",
+        "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_KEY_1": "gpg.format",
+        "GIT_CONFIG_VALUE_1": "ssh",
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+    _PROBE: ClassVar[str] = (
+        "import os, tests.hermetic_env\n"
+        "print(sorted(k for k in os.environ"
+        " if k.startswith('GIT_CONFIG_') or k == 'CLAUDE_PLUGIN_ROOT'))"
+    )
+
+    def test_import_leaves_no_gate_variable_behind(self, tmp_path: Path) -> None:
+        root = Path(__file__).resolve().parents[1]
+        env = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "PYTHONPATH": str(root),
+            **self._GATE,
+        }
+        proc = subprocess.run(
+            [sys.executable, "-c", self._PROBE],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == "['GIT_CONFIG_NOSYSTEM']"
 
 
 class TestAmbientCodexHome:
