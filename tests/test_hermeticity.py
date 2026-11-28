@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
@@ -151,13 +152,7 @@ class TestAmbientGitConfig:
 
 
 class TestAmbientGitConfigScrub:
-    """The scrub does not depend on ``GIT_CONFIG_COUNT`` surviving to be read.
-
-    The ethos handoff gate launches ``make check`` with ``GIT_CONFIG_COUNT``
-    removed and every ``GIT_CONFIG_KEY_n``/``GIT_CONFIG_VALUE_n`` pair still
-    exported.  A scrub that walks indexes below the count finds no count and
-    leaves the pairs behind.
-    """
+    """The scrub works with ``GIT_CONFIG_COUNT`` absent."""
 
     _AMBIENT: ClassVar[dict[str, str]] = {
         "GIT_CONFIG_KEY_0": "commit.gpgsign",
@@ -193,21 +188,53 @@ class TestAmbientGitConfigScrub:
 
 
 class TestAmbientPluginRoot:
-    """A hook's ``CLAUDE_PLUGIN_ROOT`` does not follow the suite in.
-
-    Claude Code sets it for every plugin hook.  The ethos handoff gate runs
-    ``make check`` under that hook, and quarry's session-setup handler reads
-    the variable from the process environment, so a leaked value made the
-    no-home hook test run a real deploy and exit 1.
-    """
-
-    def test_plugin_root_is_dropped_from_this_process(self) -> None:
-        assert "CLAUDE_PLUGIN_ROOT" not in os.environ
+    """``CLAUDE_PLUGIN_ROOT`` is scrubbed from an injected environment."""
 
     def test_plugin_root_is_dropped_from_an_injected_environment(self) -> None:
         environ = {"CLAUDE_PLUGIN_ROOT": "/plugins/ethos", "HOME": "/kept"}
         _drop_ambient_plugin_root(environ)
         assert environ == {"HOME": "/kept"}
+
+
+class TestInstallScrubsTheGateEnvironment:
+    """``HermeticEnv.install`` applies the scrubs, proven in a child process.
+
+    The gate's variables are absent from a developer shell, so the parent's own
+    environment cannot show that ``install`` calls them.
+    """
+
+    _GATE: ClassVar[dict[str, str]] = {
+        "CLAUDE_PLUGIN_ROOT": "/x",
+        "GIT_CONFIG_KEY_0": "commit.gpgsign",
+        "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_KEY_1": "gpg.format",
+        "GIT_CONFIG_VALUE_1": "ssh",
+    }
+    _PROBE: ClassVar[str] = (
+        "import os, tests.hermetic_env\n"
+        "print(sorted(k for k in os.environ"
+        " if k.startswith('GIT_CONFIG_') or k == 'CLAUDE_PLUGIN_ROOT'))"
+    )
+
+    def test_import_leaves_no_gate_variable_behind(self, tmp_path: Path) -> None:
+        root = Path(__file__).resolve().parents[1]
+        env = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "PYTHONPATH": str(root),
+            **self._GATE,
+        }
+        proc = subprocess.run(
+            [sys.executable, "-c", self._PROBE],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == "[]"
 
 
 class TestAmbientCodexHome:

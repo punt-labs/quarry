@@ -88,13 +88,9 @@ def _drop_ambient_codex_home() -> None:
 def _drop_ambient_plugin_root(environ: MutableMapping[str, str] = os.environ) -> None:
     """Remove the host harness's ``CLAUDE_PLUGIN_ROOT`` from *environ*.
 
-    Claude Code exports it to every plugin hook, naming that plugin's install
-    directory.  ``handle_session_setup`` reads it from the process environment
-    and, when it is set, deploys that plugin's commands -- so a suite run from
-    inside another plugin's hook (the ethos handoff gate runs ``make check``
-    under one) sends every subprocess that runs the hook down the real deploy
-    path instead of the "no plugin root" path the tests mean to exercise.
-    Tests that need a plugin root set their own.
+    A suite run under a plugin hook (the ethos handoff gate) would otherwise
+    send ``handle_session_setup`` down the real deploy path.  Tests that need a
+    plugin root set their own.
     """
     environ.pop("CLAUDE_PLUGIN_ROOT", None)
 
@@ -102,18 +98,10 @@ def _drop_ambient_plugin_root(environ: MutableMapping[str, str] = os.environ) ->
 def _drop_ambient_git_config(environ: MutableMapping[str, str] = os.environ) -> None:
     """Remove every ``GIT_CONFIG_*`` variable from *environ*.
 
-    The workspace exports ``commit.gpgsign=true`` and a signing key through
-    ``GIT_CONFIG_COUNT`` and its ``KEY_n``/``VALUE_n`` pairs, so every throwaway
-    repository a test builds would try to sign -- and fail, because the
-    redirected ``HOME`` moves ``GNUPGHOME`` away from the operator's keyring.
-    Signing a sandbox commit is meaningless in any case; dropping the injection
-    makes the git-driven tests depend on the repository they create and nothing
-    else.
-
-    The pairs are dropped by prefix, not by walking indexes below the count.
-    A parent that strips ``GIT_CONFIG_COUNT`` and forwards the rest -- the
-    ethos handoff gate does exactly that -- leaves no count to walk, and an
-    index walk would then leave every pair behind.
+    The workspace injects ``commit.gpgsign=true``, which would make sandbox
+    commits try to sign with a keyring the redirected ``HOME`` hides.  Dropped
+    by prefix, not by walking indexes below ``GIT_CONFIG_COUNT``: the ethos
+    handoff gate strips the count and forwards the ``KEY_n``/``VALUE_n`` pairs.
     """
     for name in [n for n in environ if n.startswith("GIT_CONFIG_")]:
         del environ[name]
