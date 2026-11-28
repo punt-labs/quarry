@@ -147,7 +147,12 @@ class TestAmbientGitConfig:
 
     def test_signing_key_and_program_are_dropped_with_it(self) -> None:
         """The count is the index; leaving the pairs behind would be half a job."""
-        leftovers = [k for k in os.environ if k.startswith("GIT_CONFIG_")]
+        leftovers = [
+            k
+            for k in os.environ
+            if k == "GIT_CONFIG_COUNT"
+            or k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+        ]
         assert leftovers == []
 
 
@@ -166,25 +171,35 @@ class TestAmbientGitConfigScrub:
         "HOME": "/kept",
     }
 
-    def test_pairs_are_dropped_when_the_count_is_absent(self) -> None:
-        environ = dict(self._AMBIENT)
+    @staticmethod
+    def _scrubbed(**extra: str) -> dict[str, str]:
+        environ = {**TestAmbientGitConfigScrub._AMBIENT, **extra}
         _drop_ambient_git_config(environ)
-        assert [k for k in environ if k.startswith("GIT_CONFIG_")] == []
+        return environ
+
+    def test_pairs_are_dropped_when_the_count_is_absent(self) -> None:
+        environ = self._scrubbed()
+        assert [k for k in environ if k.startswith("GIT_CONFIG_KEY_")] == []
+        assert [k for k in environ if k.startswith("GIT_CONFIG_VALUE_")] == []
 
     def test_pairs_beyond_the_count_are_dropped(self) -> None:
-        environ = {**self._AMBIENT, "GIT_CONFIG_COUNT": "1"}
-        _drop_ambient_git_config(environ)
-        assert [k for k in environ if k.startswith("GIT_CONFIG_")] == []
+        environ = self._scrubbed(GIT_CONFIG_COUNT="1")
+        assert "GIT_CONFIG_COUNT" not in environ
+        assert [k for k in environ if k.startswith("GIT_CONFIG_KEY_")] == []
 
     def test_repository_local_variables_are_dropped(self) -> None:
-        environ = dict(self._AMBIENT)
-        _drop_ambient_git_config(environ)
-        assert "GIT_DIR" not in environ
+        assert "GIT_DIR" not in self._scrubbed()
+
+    def test_system_config_guard_is_kept(self) -> None:
+        """Dropping it would let /etc/gitconfig signing reach fixture commits."""
+        assert self._scrubbed()["GIT_CONFIG_NOSYSTEM"] == "1"
 
     def test_unrelated_variables_are_kept(self) -> None:
-        environ = dict(self._AMBIENT)
-        _drop_ambient_git_config(environ)
-        assert environ == {"HOME": "/kept"}
+        assert self._scrubbed() == {
+            "GIT_CONFIG_GLOBAL": "/somewhere/gitconfig",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "HOME": "/kept",
+        }
 
 
 class TestAmbientPluginRoot:
@@ -209,6 +224,7 @@ class TestInstallScrubsTheGateEnvironment:
         "GIT_CONFIG_VALUE_0": "true",
         "GIT_CONFIG_KEY_1": "gpg.format",
         "GIT_CONFIG_VALUE_1": "ssh",
+        "GIT_CONFIG_NOSYSTEM": "1",
     }
     _PROBE: ClassVar[str] = (
         "import os, tests.hermetic_env\n"
@@ -234,7 +250,7 @@ class TestInstallScrubsTheGateEnvironment:
             timeout=60,
         )
         assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.strip() == "[]"
+        assert proc.stdout.strip() == "['GIT_CONFIG_NOSYSTEM']"
 
 
 class TestAmbientCodexHome:

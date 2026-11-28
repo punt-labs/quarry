@@ -96,14 +96,19 @@ def _drop_ambient_plugin_root(environ: MutableMapping[str, str] = os.environ) ->
 
 
 def _drop_ambient_git_config(environ: MutableMapping[str, str] = os.environ) -> None:
-    """Remove every ``GIT_CONFIG_*`` variable from *environ*.
+    """Remove injected git config (``COUNT``, ``KEY_n``, ``VALUE_n``) from *environ*.
 
     The workspace injects ``commit.gpgsign=true``, which would make sandbox
     commits try to sign with a keyring the redirected ``HOME`` hides.  Dropped
     by prefix, not by walking indexes below ``GIT_CONFIG_COUNT``: the ethos
     handoff gate strips the count and forwards the ``KEY_n``/``VALUE_n`` pairs.
+    ``GIT_CONFIG_NOSYSTEM`` and ``GIT_CONFIG_GLOBAL`` are guards, not injections,
+    and stay: dropping them would re-expose ``/etc/gitconfig``.
     """
-    for name in [n for n in environ if n.startswith("GIT_CONFIG_")]:
+    environ.pop("GIT_CONFIG_COUNT", None)
+    for name in [
+        n for n in environ if n.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+    ]:
         del environ[name]
     if git := shutil.which("git"):
         local_keys = subprocess.check_output(
